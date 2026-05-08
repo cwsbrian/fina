@@ -1041,6 +1041,7 @@ fina/
 9. **Daily ritual idempotency**: 같은 날짜에 두 번 트리거되어도 중복 메시지 안 나가게 — `daily_briefs(workspace_id, date) UNIQUE` 또는 audit 기반 dedupe.
 10. **Multi-currency 트랜잭션**: 캐나다 사용자가 USD 카드도 가짐 (해외 결제). v1 은 "환산해서 CAD 로 보고" or "그대로 표기 + 환산 안 함" 둘 중 결정 필요.
 11. **PIPEDA 컨플라이언스 검토**: 베타 직전 변호사 검토. Privacy policy / ToS 초안 마련.
+12. **Auth provider migration (Clerk → self-built)**: Clerk 무료 50K MAU 한도 도달 전 (~30K MAU 시점) self-hosted OAuth 으로 migration 계획 시작. `libs/api-auth` 가 이미 추상 layer 라 cutover 시 한 곳만 수정. Migration target 후보: Better Auth, Lucia, 직접 구현. Cutover UX (기존 사용자 magic-link 재인증) 별도 설계 필요.
 
 ---
 
