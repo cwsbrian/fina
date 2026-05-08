@@ -349,6 +349,19 @@ audit_events (id, workspace_id, actor_type: user/agent/system, actor_user_id?,
               before jsonb?, after jsonb?,
               chat_message_id?, tool_call_id?, action_intent_id?,
               ip?, user_agent?, created_at)
+
+subscriptions (id, user_id, tier: free/lite/pro,
+               source: iap_apple/iap_google/stripe,
+               source_subscription_id,        ← Apple original_transaction_id, Stripe sub_xxx
+               status: active/grace/canceled/expired,
+               current_period_start, current_period_end,
+               billing_period: monthly,        ← annual = v1.5+
+               cancel_at_period_end: bool,
+               created_at, updated_at,
+               UNIQUE(source, source_subscription_id))
+                 ↑ user 에 attach (workspace 아님). 한 user 가 여러 workspace
+                   owner 인 v2 대비. 같은 user 가 IAP+Web 동시 결제 가능 →
+                   higher tier 가 effective tier (Section 13 참조).
 ```
 
 ### 주요 디자인 결정
@@ -364,6 +377,7 @@ audit_events (id, workspace_id, actor_type: user/agent/system, actor_user_id?,
 - **`chat_messages.blocks` JSONB** + 내부 `schema_version` — UI 컴포넌트 evolve 시 옛 메시지 깨지지 않게
 - **`action_intents`** = `confirm_card` accept 시 클라이언트가 보낸 raw ToolCall 을 그대로 실행하지 않음. 서버가 발급한 intent ID 만 받아 lookup → 만료/소비 체크 → 실행. (Section "Tool Execution Safety" 참조)
 - **`audit_events`** = AI 가 mutate 한 모든 변경의 durable record. before/after, originating tool_call, actor 다 추적. (디버깅 + 감사 + 사용자 신뢰 + privacy review 용)
+- **`subscriptions`** = 결제 source-agnostic. 같은 user 가 IAP + Web 양쪽 다 결제 가능 (drift / 마이그레이션). 효과적 tier 는 active subscriptions 중 최상위. 자세한 룰은 Section 13.
 - **Plaid 안 쓰는 사용자**: `plaid_items` 0개 + manual account 1개로 작동.
 
 ### 주요 indexes
@@ -604,7 +618,140 @@ Merchant raw, note, chat user input 모두 통과. Sentry/log 도 동일 redacti
 
 ---
 
-## 13. Tech Stack
+## 13. Pricing & Billing
+
+비즈니스 모델: **Freemium + Hybrid IAP/Web subscription**. 가계부는 무료, advisor (chat + ritual + 깊은 분석) 가 paid.
+
+### 13.1 Tier 구조
+
+| Tier | Web / IAP | 대상 | 핵심 가치 |
+|---|---|---|---|
+| **Free** | $0 | 가계부 사용자 | Mint 후계자 — 자동 분류 + 예산 + 요약 |
+| **Lite** | **$8 / $9.99** | Advisor 입문 | 제한된 advisor + Daily ritual |
+| **Pro** | **$14 / $17.99** | Power 사용자 | 무제한 advisor + 깊은 분석 |
+| Family | TBD | 가족 공유 | 4 멤버 워크스페이스 (v1.5+) |
+
+### 13.2 Free tier 스코프
+
+가계부 핵심 기능 전체 무료:
+- Bank account 1개 (Plaid Item 1)
+- 무제한 트랜잭션 + 자동 분류 + 머천트 매핑 학습
+- 카테고리 + 예산 + 스케줄 + recurring
+- Daily summary push (텍스트 only, cheap model 짧은 요약)
+- 채팅 10 msg/월 (cheap model, conversion funnel 용 맛보기)
+- CSV 내보내기
+
+**의도**: Mint 가 죽고 빈자리 채우는 포지션. Free 가 진짜 쓸 만해야 conversion funnel 작동 + 입소문 양산.
+
+### 13.3 Lite tier ($8 web / $9.99 IAP)
+
+- Bank accounts 2개
+- 채팅 200 msg/월 (cheap default + Sonnet escalation pool 월 20회)
+- Daily morning ritual 전체 (rich blocks: categorize_card, confirm_card 등)
+- 챗으로 트랜잭션 / 카테고리 / 예산 변경
+
+### 13.4 Pro tier ($14 web / $17.99 IAP)
+
+Lite + **Pro-only 기능들** (이 기능들이 frontier model 을 정당화):
+
+- 채팅 1000 msg/월 + Sonnet 무제한 escalation
+- **Plan generation**: 다년 / 다목표 시나리오 ("3년 안에 집", "빚 갚기 plan")
+- **Deep audit mode**: "지난 N개월 어디서 새고 있어?" 다량 트랜잭션 reasoning
+- **Proactive monitoring**: 비정상 패턴 자동 감지 + push (백엔드 agent daily 백그라운드 분석)
+- **Goal tracking**: 목표 등록 + 주간 진척도 자동 분석
+- **Receipt OCR** (vision)
+- Bank accounts 무제한
+- CSV 대량 import
+- Historical comparison 깊은 버전 (작년 같은 달 + 트렌드)
+
+**원칙**: "Pro 는 더 똑똑한 모델" 으로 팔지 말고, **"Pro 는 이런 일들을 가능하게 해줘"** 로 팔기. Frontier model 은 그 수단.
+
+### 13.5 Distribution — Hybrid IAP + Web
+
+| 경로 | 가격 | Net | 비중 |
+|---|---|---|---|
+| **IAP** (Apple/Google) | $9.99 / $17.99 | $8.49 / $15.29 (Apple SBP 15%) | Primary (App Store funnel) |
+| **Web** (Stripe) | $8 / $14 | $7.47 / $13.30 (Stripe 2.9%+$0.30) | Anchor pricing + power user 채널 |
+
+**Note**: Web 이 IAP 보다 절대 마진은 살짝 낮음 (Stripe $0.30 fixed fee 가 small transaction 에서 큰 비율). Web 의 진짜 가치는 **marketing anchor** (ChatGPT Plus $20 비교용, YNAB $15 대비 매력) + **power user retention** (sticky 채널).
+
+### 13.6 Apple App Store 컴플라이언스 (Reader app 패턴)
+
+**앱 안에서 허용**:
+- IAP 결제 ($9.99 / $17.99)
+- "이미 계정 있으세요? 로그인" — Web 가입자 sign-in
+- Apple subscription manage 링크
+
+**앱 안에서 금지** (default — 캐나다 + 미국):
+- 웹 가격 표시 ($8, $14)
+- 웹 결제 페이지 링크
+- "웹에서 더 싸요" 류 hint
+
+**미국 only** (2025 Epic v. Apple 판결 후) — External Link Account entitlement 신청 시 외부 결제 링크 1개 허용 + Apple 수수료 0% (현재, 항소 변동 가능). **v1.5+ 검토** — 즉시 도입 시 정책 risk.
+
+**v1 운영**: 앱 = IAP UI only, Web 가입자는 sign-in 만. 마찰 받아들이고 정책 risk 0. Spotify / Netflix / Notion 패턴.
+
+### 13.7 Subscription state — multi-source 룰
+
+`subscriptions` 테이블은 user 에 attach (workspace 아님 — Section 8). 한 user 에게 동시에 여러 source 의 active subscription 가능 (IAP + Web 동시 결제, 또는 마이그레이션 중).
+
+**Effective tier 결정 룰**:
+1. Active subscriptions 중 **higher tier 가 effective tier** (Pro > Lite > Free)
+2. 같은 tier 동시 결제 → 사용자에게 안내 + lower-cost (web) 유지 권장
+3. 한 source 의 cancel/expire 후 다른 source 만 남으면 자동 전환
+
+**Receipt 검증 endpoints (3종)**:
+- `POST /billing/apple/verify` — Apple `original_transaction_id` 기반, App Store Server API
+- `POST /billing/google/verify` — Google Play Developer API
+- `POST /webhooks/stripe` — Stripe webhook (signature 검증 필수)
+
+각 endpoint 는 idempotent + audit_events 기록. Subscription state 변경은 무조건 server-side 검증 거침 (클라이언트 self-reported 절대 신뢰 안 함).
+
+### 13.8 Per-user economics (월 가정)
+
+| Tier | 결제 net | LLM | Plaid | 인프라 | 마진 |
+|---|---|---|---|---|---|
+| Free | $0 | $0.05 | $0.30 | $0.20 | -$0.55 (funnel cost) |
+| Lite IAP $8.49 | $8.49 | $3 | $0.60 | $0.50 | **~$4.4** |
+| Lite Web $7.47 | $7.47 | $3 | $0.60 | $0.50 | **~$3.4** |
+| Pro IAP $15.29 | $15.29 | $7 | $1.20 | $0.80 | **~$6.3** |
+| Pro Web $13.30 | $13.30 | $7 | $1.20 | $0.80 | **~$4.3** |
+
+**가정**:
+- Cheap default LLM (4o-mini 또는 Gemini Flash) — 4o-mini per-turn ~$0.0018, Flash ~$0.0009
+- Routing: 70% cheap / 30% Sonnet escalation
+- Aggressive prompt caching (system + tools cached, financial context fresh)
+- Plaid pay-as-you-go transactions product (~$0.30/Item/월)
+- 인프라 = Postgres + hosting + push + Sentry 등 amortized
+
+**Quota guardrails**:
+- Lite 200 msg/월 hard cap → 도달 시 cheap-only 다운그레이드 (advisor 못 쓰는 게 아니라 escalation 멈춤)
+- Pro Sonnet escalation 무제한이지만 **per-query cost cap** (단일 advisor 호출 최대 N개 round-trip + 토큰 한도)
+- Free 10 msg 도달 시 hard stop + Lite 업그레이드 prompt
+
+### 13.9 단계화
+
+| 항목 | V1 dogfood | V1 public | V1.5+ |
+|---|---|---|---|
+| 결제 구현 | ❌ (Brian + 가족 무료) | ✅ Stripe + IAP 둘 다 | Apple/Google receipt 검증 자동화 |
+| Tier UI gating | DB 컬럼만 | feature-level | per-feature 세밀 |
+| Annual 결제 | ❌ | ❌ | ✅ ($80/년 web, $99/년 IAP) |
+| Family | ❌ | ❌ | ✅ |
+| US External Link entitlement | ❌ | TBD | Optional |
+
+**V1 dogfood 기간 동안**: 모든 사용자 = 자동 Pro (DB seed). 결제 구현은 v1 public 직전 phase 에서 한 번에. 단, schema 는 처음부터 박아둠 (Section 8).
+
+### 13.10 Open issues (Pricing 관련)
+
+- Free tier 채팅 10 msg 가 맛보기로 충분한지 / 너무 적은지 dogfooding 검증
+- Pro 의 deep audit / plan gen 도구가 Sonnet 다회 round-trip 시 단일 query $0.20+ 가능 — per-query quota 설계 필요
+- Family $20 가 매력적인지 vs 개별 Lite × 4 = $32 비교 검증
+- Annual 가격 ($80/년 web, $99/년 IAP) elasticity 검증
+- Web 가입 funnel 에서 IAP 로의 cannibalization 측정 (IAP 마진 더 높음)
+
+---
+
+## 14. Tech Stack
 
 | Layer | 선택 | 이유 |
 |---|---|---|
@@ -637,7 +784,7 @@ Merchant raw, note, chat user input 모두 통과. Sentry/log 도 동일 redacti
 
 ---
 
-## 14. MVP Roadmap
+## 15. MVP Roadmap
 
 > **Note**: 원래 Phase 1 (4~6주) 로 묶었으나 codex review 가 over-scope 지적 — Plaid sync 정확성 + auth + chat tool loop 만 해도 그 시간 다 먹음. **Phase 1 을 1A/1B/1C 로 나눔**.
 
@@ -734,19 +881,20 @@ Merchant raw, note, chat user input 모두 통과. Sentry/log 도 동일 redacti
 
 ---
 
-## 15. Out of Scope (v1.5 / v2+)
+## 16. Out of Scope (v1.5 / v2+)
 
 - Multi-workspace + 초대 + role 권한 (4~6주 작업)
 - Email 거래 알림 파싱 (가치 보고 결정)
-- Goals (저축 목표, 디버트 페이오프)
+- Goals (저축 목표, 디버트 페이오프) — Pro tier 의 일부로 v1 후반 도입 검토
 - Investments tracking (Plaid Investments)
 - Python AI service 분리 (호출량 + 복잡도 임계 넘으면)
-- Stripe 결제 / 구독
+- Annual 결제 + Family tier (Section 13 참조)
+- US External Link Account entitlement (Section 13.6)
 - Flinks 추가 (Plaid Canada 커버리지 부족할 시)
 
 ---
 
-## 16. Open Questions / Risks
+## 17. Open Questions / Risks
 
 1. **Plaid Canada 커버리지**: 사용자 메인 은행이 미지원이면 manual + CSV 로 시작. 사전에 커버 은행 list 확인 필요.
 2. **LLM 비용**: Daily ritual + adhoc chat 사용량 monitoring 필요. Prompt caching + sliding window + aggregation-first 로 관리하지만, 사용자당 월 cost 가 수익 모델보다 높으면 quota 강제.
@@ -762,7 +910,7 @@ Merchant raw, note, chat user input 모두 통과. Sentry/log 도 동일 redacti
 
 ---
 
-## 17. 다음 단계
+## 18. 다음 단계
 
 이 spec 검토 완료 후:
 1. Implementation plan 작성 (`writing-plans` skill)
