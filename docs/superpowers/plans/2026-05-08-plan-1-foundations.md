@@ -1,37 +1,37 @@
-# Plan 1 — Foundations (Nx + API + Mobile + Web + Auth)
+# Plan 1 — Foundations (Nx + API + Mobile + Web + Better Auth)
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bootstrap an Nx monorepo containing a Fastify API, an Expo (React Native) mobile app, and a Next.js web app, all sharing TypeScript types via a `libs/shared` package. A user can sign up via Clerk on either client; the backend creates a User + personal Workspace + owner Membership tuple via a Clerk webhook on `user.created` and starts a 30-day Pro trial. Both clients display the authenticated user's workspace via a shared `/me` endpoint. Service-layer authorization patterns from spec §10 are baked in from day one.
+**Goal:** Bootstrap an Nx monorepo with a Fastify API, Expo (React Native) mobile app, and Next.js web app. **Better Auth** (self-hosted OSS) handles email magic-link + Google OAuth on both clients. On signup, an in-process post-creation hook creates a User row, a personal Workspace, an owner Membership, and starts a 30-day Pro trial. Both clients display the authenticated user's workspace via `/me`. Service-layer authorization patterns from spec §10 are baked in from day one.
 
-**Architecture:** Nx 19+ workspace, pnpm package manager, Postgres 16 (Docker for dev), Prisma ORM. Backend uses Fastify with a Clerk JWT verification middleware and an `assertMembership(user, workspace, role)` helper that gates every authenticated route. Webhook signed with Svix verifies the `user.created` event and calls a transactional `createPersonalWorkspaceWithTrial` service. Both mobile and web register the same Clerk publishable key and call the same backend `/me` endpoint to render workspace info.
+**Architecture:** Nx 19+ workspace, pnpm package manager, Postgres 16 (Docker for dev), Prisma ORM. Better Auth is mounted as a sub-router on Fastify (`/api/auth/*`) and its `User` / `Session` / `Account` tables live alongside our `Workspace` / `Membership` tables in the same Postgres. A Better Auth `databaseHooks.user.create.after` hook runs `createPersonalWorkspaceWithTrial` in the same transaction context. Both mobile (`@better-auth/expo`) and web (`better-auth/next-js`) use Better Auth's TypeScript clients to manage sessions; the backend exposes `/me` which the clients call with the session cookie / bearer token attached automatically.
 
-**Tech Stack:** Nx 19+, pnpm 9.12+, TypeScript 5.6+, Node 20.18+, Postgres 16, Prisma 5.22+, Fastify 5, Clerk (`@clerk/clerk-expo`, `@clerk/nextjs`, `@clerk/backend`), Expo SDK 53, Expo Router, Next.js 15 (App Router), Vitest, Zod, GitHub Actions. **No LLM yet** — Gemini Flash arrives in Plan 3. **No Plaid yet** — arrives in Plan 1B (after sharing). **No subscriptions table yet** — only trial fields on User.
+**Tech Stack:** Nx 19+, pnpm 9.12+, TypeScript 5.6+, Node 20.18+, Postgres 16, Prisma 5.22+, Fastify 5, **Better Auth 1.x** (`better-auth`, `@better-auth/expo`), Expo SDK 53, Expo Router, Next.js 15 (App Router), Vitest, Zod, Resend (email), GitHub Actions. **No LLM yet** — Gemini Flash-Lite arrives in Plan 3. **No Plaid yet** — Plan 4. **No subscription billing** — Plan 7.
 
 **Spec reference:** `docs/superpowers/specs/2026-05-07-fina-design.md`
 - §4 Multi-tenancy
 - §10 Authorization & Service Layer Rules
-- §13 Pricing & Billing (specifically §13.5 30-day trial mechanics)
-- §14 Tech Stack (Nx repo structure)
+- §13.5 30-day Pro trial mechanics
+- §14 Tech Stack (Nx + Better Auth + Resend)
 - §15 Phase 1A — Foundations
 
-**Out of scope for this plan (later plans cover them):**
+**Out of scope for this plan:**
 - Workspace sharing / invites / role transitions — Plan 2 (Phase 1.5)
 - Categories, accounts, transactions, budgets — Plan 3
-- Plaid integration + tier gating — Plan 4 (Phase 1B)
+- Plaid integration + tier gating — Plan 4
 - Chat threads/messages, LLM, redaction layer — Plan 5
-- Tool execution + action_intents — Plan 6 (Phase 1C)
-- Daily ritual + push + Stripe + IAP — Plan 7 (Phase 2)
-- Forecasting/advisor — Plan 8 (Phase 3)
+- Tool execution + action_intents — Plan 6
+- Daily ritual + push + Stripe + IAP — Plan 7
+- Forecasting/advisor — Plan 8
 
 ---
 
-## File Structure (created during this plan)
+## File Structure
 
 ```
 fina/
-├── nx.json                        # Nx workspace config
-├── package.json                   # workspace root
+├── nx.json
+├── package.json
 ├── pnpm-workspace.yaml
 ├── tsconfig.base.json
 ├── .editorconfig
@@ -39,59 +39,56 @@ fina/
 ├── .nvmrc
 ├── .prettierrc.json
 ├── .eslintrc.cjs
-├── docker-compose.yml             # Postgres for dev
+├── docker-compose.yml
 ├── .env.example
 ├── README.md
 ├── scripts/
-│   └── init-db.sh                 # creates fina_test DB inside the container
+│   └── init-db.sh
 ├── .github/
 │   └── workflows/
 │       └── ci.yml
 ├── apps/
 │   ├── api/                       # @nx/node Fastify
 │   │   ├── project.json
-│   │   ├── tsconfig.json
-│   │   ├── tsconfig.app.json
-│   │   ├── tsconfig.spec.json
+│   │   ├── tsconfig*.json
 │   │   ├── vitest.config.ts
 │   │   ├── .env.test
 │   │   ├── prisma/
-│   │   │   ├── schema.prisma      # User, Workspace, Membership, trial fields
-│   │   │   └── seed.ts            # placeholder
+│   │   │   ├── schema.prisma      # Better Auth tables + Workspace/Membership
+│   │   │   └── seed.ts
 │   │   ├── src/
 │   │   │   ├── env.ts
 │   │   │   ├── db.ts
+│   │   │   ├── auth.ts            # better-auth instance + onCreate hook
 │   │   │   ├── server.ts
-│   │   │   ├── main.ts            # entrypoint
+│   │   │   ├── main.ts
 │   │   │   ├── auth/
-│   │   │   │   ├── clerk.ts
-│   │   │   │   └── membership.ts
+│   │   │   │   └── membership.ts  # assertMembership helper
 │   │   │   ├── routes/
 │   │   │   │   ├── health.ts
 │   │   │   │   └── me.ts
-│   │   │   ├── webhooks/
-│   │   │   │   └── clerk.ts
+│   │   │   ├── email/
+│   │   │   │   └── send.ts        # Resend wrapper used by Better Auth
 │   │   │   └── workspaces/
-│   │   │       └── bootstrap.ts
+│   │   │       └── bootstrap.ts   # createPersonalWorkspaceWithTrial
 │   │   └── tests/
 │   │       ├── helpers/
 │   │       │   ├── db.ts
 │   │       │   ├── migrate.ts
 │   │       │   ├── global-setup.ts
-│   │       │   └── auth.ts
+│   │       │   └── auth.ts        # creates Better Auth session for tests
 │   │       ├── health.test.ts
-│   │       ├── auth.clerk.test.ts
+│   │       ├── auth.session.test.ts
 │   │       ├── membership.test.ts
 │   │       ├── workspaces.bootstrap.test.ts
-│   │       ├── me.test.ts
-│   │       └── webhooks.clerk.test.ts
+│   │       └── me.test.ts
 │   ├── mobile/                    # @nx/expo
 │   │   ├── project.json
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   ├── app.json
 │   │   ├── babel.config.js
-│   │   ├── app/                   # Expo Router
+│   │   ├── app/
 │   │   │   ├── _layout.tsx
 │   │   │   ├── index.tsx
 │   │   │   ├── (auth)/
@@ -101,70 +98,60 @@ fina/
 │   │   │       └── index.tsx
 │   │   └── src/
 │   │       ├── env.ts
+│   │       ├── auth/
+│   │       │   └── client.ts      # better-auth/expo client
 │   │       └── api/
-│   │           └── client.ts
+│   │           └── client.ts      # apiFetch
 │   └── web/                       # @nx/next App Router
 │       ├── project.json
 │       ├── package.json
 │       ├── tsconfig.json
 │       ├── next.config.js
-│       ├── middleware.ts          # Clerk authMiddleware
+│       ├── middleware.ts          # session-protected routes
 │       └── src/
 │           ├── env.ts
+│           ├── auth/
+│           │   └── client.ts      # better-auth/react client
 │           └── app/
-│               ├── layout.tsx     # ClerkProvider
-│               ├── page.tsx       # marketing landing (signed-out) → home (signed-in)
+│               ├── layout.tsx
+│               ├── page.tsx       # marketing → /home redirect
 │               ├── sign-in/
-│               │   └── [[...sign-in]]/page.tsx
-│               ├── sign-up/
-│               │   └── [[...sign-up]]/page.tsx
+│               │   └── page.tsx
 │               └── (app)/
 │                   └── home/
 │                       └── page.tsx
 └── libs/
-    └── shared/                    # @nx/js
+    └── shared/
         ├── project.json
         ├── tsconfig.json
         └── src/
             ├── index.ts
             ├── ids.ts
             ├── roles.ts
-            └── tier.ts            # Free/Lite/Pro enum + helper guards
+            └── tier.ts
 ```
-
-**Why this layout:**
-- One Nx workspace, three apps, one library. Easy to add `libs/api-auth`, `libs/chat-blocks` later without restructure.
-- Mobile and web both consume `libs/shared` (types only — no runtime deps that break in RN).
-- All tests live next to their app under `apps/<app>/tests/` to keep affected detection accurate.
 
 ---
 
 ## Task 1: Nx workspace bootstrap
 
-**Files:**
-- Create: `package.json`, `pnpm-workspace.yaml`, `nx.json`, `tsconfig.base.json`, `.editorconfig`, `.gitignore`, `.nvmrc`, `.prettierrc.json`, `.eslintrc.cjs`, `README.md`
+**Files:** root `package.json`, `pnpm-workspace.yaml`, `nx.json`, `tsconfig.base.json`, `.gitignore`, `.nvmrc`, `.editorconfig`, `.prettierrc.json`, `.eslintrc.cjs`, `README.md`
 
-- [ ] **Step 1: Initialize an empty Nx workspace via the official CLI**
-
-From the `fina/` directory (already a git repo):
+- [ ] **Step 1: Run the official Nx generator**
 
 ```bash
 pnpm dlx create-nx-workspace@19 --preset=apps --packageManager=pnpm --interactive=false --name=fina --workspaceType=integrated .
 ```
 
-Notes:
-- `.` puts the workspace in the current directory.
-- `--preset=apps` creates an empty workspace with `apps/` and `libs/` directories and no preinstalled apps; we add them by hand for clarity.
-- After this runs, you'll see `nx.json`, root `package.json`, `pnpm-workspace.yaml`, `tsconfig.base.json` already created.
+If it tries to init a fresh git repo on top of the existing one, discard the resulting `.git` and keep the original.
 
-If `create-nx-workspace` insists on initializing a new git repo, decline (we already have one). Pass `--skip-git` if available, otherwise discard the `.git` it creates and rely on the existing one.
-
-- [ ] **Step 2: Verify and adjust the generated `package.json`**
-
-Open the root `package.json`. Confirm `"packageManager": "pnpm@9.x.x"` and `"private": true`. Add or merge:
+- [ ] **Step 2: Replace the generated `package.json` scripts block**
 
 ```json
 {
+  "name": "fina",
+  "private": true,
+  "packageManager": "pnpm@9.12.3",
   "engines": { "node": ">=20.18.0", "pnpm": ">=9.12.0" },
   "scripts": {
     "build": "nx run-many -t build",
@@ -176,9 +163,9 @@ Open the root `package.json`. Confirm `"packageManager": "pnpm@9.x.x"` and `"pri
 }
 ```
 
-- [ ] **Step 3: Verify `nx.json`**
+Keep the devDependencies the generator added (TypeScript, Nx, ESLint, Prettier, etc.).
 
-The generated `nx.json` should already include `targetDefaults` for build/lint/test. Confirm or replace with:
+- [ ] **Step 3: Replace `nx.json`**
 
 ```json
 {
@@ -231,7 +218,7 @@ The generated `nx.json` should already include `targetDefaults` for build/lint/t
 }
 ```
 
-- [ ] **Step 5: Create root `.gitignore`, `.editorconfig`, `.nvmrc`, `.prettierrc.json`, `.eslintrc.cjs`**
+- [ ] **Step 5: Create `.gitignore`, `.nvmrc`, `.editorconfig`, `.prettierrc.json`, `.eslintrc.cjs`**
 
 `.gitignore`:
 ```
@@ -257,6 +244,11 @@ android/app/build/
 .idea/
 ```
 
+`.nvmrc`:
+```
+20.18.0
+```
+
 `.editorconfig`:
 ```
 root = true
@@ -270,20 +262,9 @@ trim_trailing_whitespace = true
 insert_final_newline = true
 ```
 
-`.nvmrc`:
-```
-20.18.0
-```
-
 `.prettierrc.json`:
 ```json
-{
-  "semi": true,
-  "singleQuote": false,
-  "trailingComma": "all",
-  "printWidth": 100,
-  "tabWidth": 2
-}
+{ "semi": true, "singleQuote": false, "trailingComma": "all", "printWidth": 100, "tabWidth": 2 }
 ```
 
 `.eslintrc.cjs`:
@@ -316,14 +297,14 @@ Requires Node 20.18+, pnpm 9.12+, Docker.
 nvm use
 pnpm install
 docker compose up -d
-cp .env.example .env       # fill in CLERK_* keys
+cp .env.example .env       # fill in BETTER_AUTH_SECRET, GOOGLE_*, RESEND_API_KEY
 pnpm nx run api:db:migrate
 pnpm nx run-many -t dev --projects=api,mobile,web --parallel=3
 ```
 
 ## Workspaces
 
-- `apps/api` — Fastify backend
+- `apps/api` — Fastify backend with Better Auth mounted at `/api/auth`
 - `apps/mobile` — Expo React Native app
 - `apps/web` — Next.js (App Router)
 - `libs/shared` — shared TypeScript types
@@ -336,7 +317,7 @@ pnpm install
 pnpm nx graph --file=/tmp/nx-graph.json
 ```
 
-Expected: install succeeds. `nx graph` outputs JSON with no projects yet (apps come in later tasks). No errors.
+Expected: install succeeds, `nx graph` outputs JSON without errors (no projects yet).
 
 - [ ] **Step 8: Commit**
 
@@ -349,24 +330,19 @@ git commit -m "chore: bootstrap Nx workspace with pnpm"
 
 ---
 
-## Task 2: `libs/shared` library
+## Task 2: `libs/shared`
 
-**Files:**
-- Create via Nx generator: `libs/shared/`
-- Create: `libs/shared/src/ids.ts`, `roles.ts`, `tier.ts`, `index.ts`
+**Files:** `libs/shared/{src/{index.ts,ids.ts,roles.ts,tier.ts},tsconfig*.json,project.json,package.json}`
 
-- [ ] **Step 1: Add Nx JS plugin and generate the library**
+- [ ] **Step 1: Generate the JS library**
 
 ```bash
 pnpm add -Dw @nx/js@19
 pnpm nx g @nx/js:lib shared --directory=libs/shared --projectNameAndRootFormat=as-provided --bundler=tsc --unitTestRunner=vitest --linter=eslint --importPath=@fina/shared --no-interactive
 ```
 
-This creates `libs/shared/{project.json,package.json,tsconfig.json,tsconfig.lib.json,src/index.ts}` and registers the project.
+- [ ] **Step 2: Create `libs/shared/src/ids.ts`**
 
-- [ ] **Step 2: Replace `libs/shared/src/index.ts` and add modules**
-
-`libs/shared/src/ids.ts`:
 ```ts
 type Brand<T, B> = T & { readonly __brand: B };
 
@@ -379,7 +355,8 @@ export const workspaceId = (s: string): WorkspaceId => s as WorkspaceId;
 export const membershipId = (s: string): MembershipId => s as MembershipId;
 ```
 
-`libs/shared/src/roles.ts`:
+- [ ] **Step 3: Create `libs/shared/src/roles.ts`**
+
 ```ts
 export const ROLES = ["owner", "editor", "viewer"] as const;
 export type Role = (typeof ROLES)[number];
@@ -391,7 +368,8 @@ export function hasAtLeast(actual: Role, required: Role): boolean {
 }
 ```
 
-`libs/shared/src/tier.ts`:
+- [ ] **Step 4: Create `libs/shared/src/tier.ts`**
+
 ```ts
 export const TIERS = ["free", "lite", "pro"] as const;
 export type Tier = (typeof TIERS)[number];
@@ -410,44 +388,42 @@ export type EffectiveTier = {
 };
 ```
 
-`libs/shared/src/index.ts`:
+- [ ] **Step 5: Replace `libs/shared/src/index.ts`**
+
 ```ts
 export * from "./ids.js";
 export * from "./roles.js";
 export * from "./tier.js";
 ```
 
-- [ ] **Step 3: Verify lib builds and lints**
+- [ ] **Step 6: Verify**
 
 ```bash
 pnpm nx run shared:build
 pnpm nx run shared:lint
-pnpm nx run shared:typecheck
 ```
 
-If `typecheck` target was not generated, add to `libs/shared/project.json`:
+If a `typecheck` target wasn't generated, add to `libs/shared/project.json` under `"targets"`:
 ```json
 "typecheck": {
   "executor": "nx:run-commands",
   "options": { "command": "tsc --noEmit -p libs/shared/tsconfig.lib.json" }
 }
 ```
+Then `pnpm nx run shared:typecheck` should pass.
 
-All three commands should succeed.
-
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add libs/shared/ pnpm-lock.yaml package.json
-git commit -m "feat(shared): add ids, roles, and tier types"
+git commit -m "feat(shared): add ids, roles, tier types"
 ```
 
 ---
 
 ## Task 3: Postgres dev container
 
-**Files:**
-- Create: `docker-compose.yml`, `.env.example`, `scripts/init-db.sh`
+**Files:** `docker-compose.yml`, `.env.example`, `scripts/init-db.sh`
 
 - [ ] **Step 1: Create `docker-compose.yml`**
 
@@ -476,7 +452,7 @@ volumes:
   fina-postgres:
 ```
 
-- [ ] **Step 2: Create `scripts/init-db.sh` and make executable**
+- [ ] **Step 2: Create `scripts/init-db.sh`**
 
 ```bash
 mkdir -p scripts
@@ -498,49 +474,55 @@ DATABASE_URL=postgresql://fina:fina@localhost:5432/fina
 NODE_ENV=development
 PORT=4000
 
-# Clerk (https://dashboard.clerk.com)
-CLERK_PUBLISHABLE_KEY=pk_test_...
-CLERK_SECRET_KEY=sk_test_...
-CLERK_WEBHOOK_SECRET=whsec_...
+# Better Auth — required
+BETTER_AUTH_SECRET=replace-with-32+-char-random-string-from-openssl-rand-base64-32
+BETTER_AUTH_URL=http://localhost:4000
+
+# OAuth providers — optional but recommended
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+APPLE_CLIENT_ID=
+APPLE_CLIENT_SECRET=
+APPLE_KEY_ID=
+APPLE_TEAM_ID=
+
+# Email (Resend)
+RESEND_API_KEY=re_...
+EMAIL_FROM=Fina <noreply@fina.app>
 
 # Mobile (Expo public)
-EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 EXPO_PUBLIC_API_URL=http://localhost:4000
 
 # Web (Next.js public)
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
 NEXT_PUBLIC_API_URL=http://localhost:4000
-CLERK_SIGN_IN_URL=/sign-in
-CLERK_SIGN_UP_URL=/sign-up
-CLERK_AFTER_SIGN_IN_URL=/home
-CLERK_AFTER_SIGN_UP_URL=/home
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+```
+
+Generate a real `BETTER_AUTH_SECRET` for the actual `.env` you'll fill in:
+```bash
+openssl rand -base64 32
 ```
 
 - [ ] **Step 4: Smoke test**
 
 ```bash
 docker compose up -d
-docker compose ps
 docker compose exec postgres psql -U fina -l
 ```
-
-Expected: container healthy; `psql -l` shows both `fina` and `fina_test` databases.
+Expected: `fina` and `fina_test` databases listed.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add docker-compose.yml .env.example scripts/init-db.sh
-git commit -m "chore: add Postgres 16 dev container with test DB"
+git commit -m "chore: add Postgres dev container with test DB"
 ```
 
 ---
 
 ## Task 4: `apps/api` Fastify scaffold + `/health`
 
-**Files:**
-- Create via generator: `apps/api/`
-- Create: `apps/api/src/env.ts`, `routes/health.ts`, `server.ts`, `main.ts`
-- Create: `apps/api/tests/health.test.ts`, `vitest.config.ts`, `.env.test`
+**Files:** `apps/api/{src/{env.ts,server.ts,main.ts,routes/health.ts},tests/health.test.ts,vitest.config.ts,.env.test,project.json,tsconfig*.json}`
 
 - [ ] **Step 1: Generate the Node app**
 
@@ -549,16 +531,12 @@ pnpm add -Dw @nx/node@19 @nx/vite@19
 pnpm nx g @nx/node:application api --directory=apps/api --framework=fastify --bundler=esbuild --unitTestRunner=vitest --e2eTestRunner=none --no-interactive
 ```
 
-This produces `apps/api/{src,project.json,tsconfig.app.json,tsconfig.json,tsconfig.spec.json}` and a generated `src/main.ts`. Replace its body in later steps.
-
-- [ ] **Step 2: Add deps**
+- [ ] **Step 2: Add backend deps**
 
 ```bash
 pnpm add -F @fina/api fastify@^5.0.0 @fastify/sensible@^6.0.1 zod@^3.23.8
-pnpm add -DF @fina/api tsx@^4.19.2 vitest@^2.1.5
+pnpm add -DF @fina/api tsx@^4.19.2 vitest@^2.1.5 dotenv@^16.4.5
 ```
-
-`-F` is pnpm shorthand for `--filter` and targets the `@fina/api` workspace package.
 
 - [ ] **Step 3: Replace `apps/api/src/env.ts`**
 
@@ -569,9 +547,12 @@ const Schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().default(4000),
   DATABASE_URL: z.string().url(),
-  CLERK_SECRET_KEY: z.string().min(1),
-  CLERK_PUBLISHABLE_KEY: z.string().min(1),
-  CLERK_WEBHOOK_SECRET: z.string().min(1),
+  BETTER_AUTH_SECRET: z.string().min(32),
+  BETTER_AUTH_URL: z.string().url(),
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  RESEND_API_KEY: z.string().optional(),
+  EMAIL_FROM: z.string().default("Fina <noreply@fina.app>"),
 });
 
 export type Env = z.infer<typeof Schema>;
@@ -634,7 +615,20 @@ start().catch((err) => {
 });
 ```
 
-- [ ] **Step 7: Create `apps/api/vitest.config.ts`**
+- [ ] **Step 7: Create `apps/api/.env.test`**
+
+```bash
+NODE_ENV=test
+DATABASE_URL=postgresql://fina:fina@localhost:5432/fina_test
+PORT=0
+BETTER_AUTH_SECRET=test-secret-at-least-32-characters-long-for-tests-only
+BETTER_AUTH_URL=http://localhost:0
+EMAIL_FROM=test@fina.app
+```
+
+Add `!apps/api/.env.test` to root `.gitignore` exception block.
+
+- [ ] **Step 8: Create `apps/api/vitest.config.ts`**
 
 ```ts
 import { defineConfig } from "vitest/config";
@@ -657,40 +651,20 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 8: Create `apps/api/.env.test`**
+- [ ] **Step 9: Create test helpers stub**
 
 ```bash
-NODE_ENV=test
-DATABASE_URL=postgresql://fina:fina@localhost:5432/fina_test
-PORT=0
-CLERK_SECRET_KEY=sk_test_unused_in_tests
-CLERK_PUBLISHABLE_KEY=pk_test_unused_in_tests
-CLERK_WEBHOOK_SECRET=whsec_dGVzdHNlY3JldGZvcndlYmhvb2tzaWduYXR1cmV2ZXJpZmllcg==
-```
-
-The webhook secret decodes to `testsecretforwebhooksignatureverifier` (svix requires base64 after the `whsec_` prefix).
-
-Append to root `.gitignore` exception:
-```
-!apps/api/.env.test
-```
-
-- [ ] **Step 9: Add `dotenv` and create tests folder structure**
-
-```bash
-pnpm add -DF @fina/api dotenv@^16.4.5
 mkdir -p apps/api/tests/helpers
 ```
 
-- [ ] **Step 10: Create `apps/api/tests/helpers/global-setup.ts` (no-op for now; fills in Task 6)**
-
+`apps/api/tests/helpers/global-setup.ts`:
 ```ts
 export default function setup(): void {
-  // Migrations applied per-test-process by ensureMigrationsApplied (Task 6).
+  // Migrations applied per-process via ensureMigrationsApplied() (Task 6).
 }
 ```
 
-- [ ] **Step 11: Write `apps/api/tests/health.test.ts`**
+- [ ] **Step 10: Write `apps/api/tests/health.test.ts`**
 
 ```ts
 import { describe, it, expect } from "vitest";
@@ -700,9 +674,9 @@ const env = {
   NODE_ENV: "test" as const,
   PORT: 0,
   DATABASE_URL: "postgresql://test",
-  CLERK_SECRET_KEY: "sk_test",
-  CLERK_PUBLISHABLE_KEY: "pk_test",
-  CLERK_WEBHOOK_SECRET: "whsec_test",
+  BETTER_AUTH_SECRET: "x".repeat(32),
+  BETTER_AUTH_URL: "http://localhost:0",
+  EMAIL_FROM: "test@fina.app",
 };
 
 describe("GET /health", () => {
@@ -718,10 +692,9 @@ describe("GET /health", () => {
 });
 ```
 
-- [ ] **Step 12: Wire test target in `apps/api/project.json`**
+- [ ] **Step 11: Confirm test target uses `apps/api/vitest.config.ts`**
 
-The `@nx/node` generator creates a `test` target via Vite by default. Confirm the entry looks like:
-
+Open `apps/api/project.json` and verify (or add) the `test` target:
 ```json
 "test": {
   "executor": "@nx/vite:test",
@@ -734,17 +707,15 @@ The `@nx/node` generator creates a `test` target via Vite by default. Confirm th
 }
 ```
 
-If it points to a different config or uses a different executor, replace the target with the block above.
-
-- [ ] **Step 13: Run the test**
+- [ ] **Step 12: Run the test**
 
 ```bash
 pnpm nx run api:test
 ```
 
-Expected: PASS. Health test exercises the just-implemented route.
+Expected: PASS.
 
-- [ ] **Step 14: Commit**
+- [ ] **Step 13: Commit**
 
 ```bash
 git add apps/api/ pnpm-lock.yaml package.json .gitignore
@@ -753,24 +724,20 @@ git commit -m "feat(api): scaffold Fastify with /health and zod env validation"
 
 ---
 
-## Task 5: Prisma schema (User, Workspace, Membership, trial fields)
+## Task 5: Prisma schema (Better Auth tables + Workspace/Membership/trial fields)
 
-**Files:**
-- Create: `apps/api/prisma/schema.prisma`, `prisma/seed.ts`
-- Create: `apps/api/src/db.ts`
-- Modify: `apps/api/package.json` (Prisma scripts), `project.json` (custom targets)
+**Files:** `apps/api/prisma/schema.prisma`, `prisma/seed.ts`, `apps/api/src/db.ts`, modifications to `apps/api/package.json` and `project.json`
 
-- [ ] **Step 1: Add Prisma**
+- [ ] **Step 1: Add deps**
 
 ```bash
-pnpm add -F @fina/api @prisma/client@^5.22.0
+pnpm add -F @fina/api @prisma/client@^5.22.0 better-auth@^1.0.0
 pnpm add -DF @fina/api prisma@^5.22.0
 ```
 
-- [ ] **Step 2: Add Prisma scripts to `apps/api/package.json`**
+- [ ] **Step 2: Add Prisma config to `apps/api/package.json`**
 
-The Nx-generated `package.json` for the api app may be minimal. Add:
-
+Merge into `apps/api/package.json`:
 ```json
 {
   "name": "@fina/api",
@@ -782,7 +749,6 @@ The Nx-generated `package.json` for the api app may be minimal. Add:
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:push": "prisma db push",
     "db:studio": "prisma studio"
   },
   "prisma": {
@@ -792,26 +758,18 @@ The Nx-generated `package.json` for the api app may be minimal. Add:
 }
 ```
 
-- [ ] **Step 3: Add custom Nx targets to `apps/api/project.json`**
+- [ ] **Step 3: Add Nx wrapper targets to `apps/api/project.json`**
 
-Inside `"targets"`, add:
-
+Inside `"targets"`:
 ```json
-"db:generate": {
-  "executor": "nx:run-commands",
-  "options": { "command": "pnpm --filter @fina/api db:generate" }
-},
-"db:migrate": {
-  "executor": "nx:run-commands",
-  "options": { "command": "pnpm --filter @fina/api db:migrate" }
-},
-"db:deploy": {
-  "executor": "nx:run-commands",
-  "options": { "command": "pnpm --filter @fina/api db:deploy" }
-}
+"db:generate": { "executor": "nx:run-commands", "options": { "command": "pnpm --filter @fina/api db:generate" } },
+"db:migrate":  { "executor": "nx:run-commands", "options": { "command": "pnpm --filter @fina/api db:migrate" } },
+"db:deploy":   { "executor": "nx:run-commands", "options": { "command": "pnpm --filter @fina/api db:deploy" } }
 ```
 
 - [ ] **Step 4: Create `apps/api/prisma/schema.prisma`**
+
+The Better Auth core schema requires `User`, `Session`, `Account`, `Verification` tables. We extend `User` with our trial and locale fields and add our own `Workspace` + `Membership`.
 
 ```prisma
 generator client {
@@ -823,39 +781,99 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ----- Better Auth -----
 model User {
-  id              String   @id @default(cuid())
-  clerkId         String   @unique
-  email           String   @unique
-  tz              String   @default("America/Toronto")
-  locale          String   @default("en-CA")
+  id              String       @id
+  email           String       @unique
+  emailVerified   Boolean      @default(false)
+  name            String?
+  image           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // Fina extensions
+  tz              String       @default("America/Toronto")
+  locale          String       @default("en-CA")
   trialStartedAt  DateTime?
   trialEndsAt     DateTime?
-  trialConsumed   Boolean  @default(false)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  trialConsumed   Boolean      @default(false)
+
+  // Better Auth relations
+  sessions        Session[]
+  accounts        Account[]
+
+  // Fina relations
   memberships     Membership[]
 
   @@map("users")
 }
 
+model Session {
+  id           String   @id
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String   @id
+  userId                String
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  idToken               String?
+  password              String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verifications")
+}
+
+// ----- Fina core -----
 model Workspace {
-  id          String   @id @default(cuid())
+  id          String       @id @default(cuid())
   name        String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
   memberships Membership[]
 
   @@map("workspaces")
 }
 
 model Membership {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   userId      String
   workspaceId String
   role        Role
-  createdAt   DateTime @default(now())
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
   @@unique([userId, workspaceId])
@@ -869,6 +887,8 @@ enum Role {
   viewer
 }
 ```
+
+The exact column set for Better Auth tables follows the official Better Auth Prisma adapter schema. If any field name differs in the version you install, run `pnpm dlx @better-auth/cli generate --schema prisma` after installation to regenerate the canonical schema, then merge with the Fina-specific fields above.
 
 - [ ] **Step 5: Create `apps/api/prisma/seed.ts`**
 
@@ -904,36 +924,31 @@ if (process.env.NODE_ENV !== "production") {
 }
 ```
 
-- [ ] **Step 7: Apply migration**
+- [ ] **Step 7: Apply initial migration**
 
-Make sure `.env` exists at the workspace root (copied from `.env.example` and filled). Then:
-
+With `.env` populated (real `BETTER_AUTH_SECRET` + `DATABASE_URL`):
 ```bash
-pnpm nx run api:db:migrate -- --name init_users_workspaces_memberships
+pnpm nx run api:db:migrate -- --name init_better_auth_users_workspaces
 ```
-
-Expected: migration created in `apps/api/prisma/migrations/<ts>_init_users_workspaces_memberships/`, schema applied, client generated.
 
 Verify:
 ```bash
 docker compose exec postgres psql -U fina -d fina -c "\dt"
 ```
-Should list `users`, `workspaces`, `memberships`, `_prisma_migrations`.
+Expected: `users`, `sessions`, `accounts`, `verifications`, `workspaces`, `memberships`, `_prisma_migrations`.
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add apps/api/prisma/ apps/api/src/db.ts apps/api/package.json apps/api/project.json pnpm-lock.yaml
-git commit -m "feat(api): add Prisma schema for users, workspaces, memberships, trial fields"
+git commit -m "feat(api): Prisma schema with Better Auth tables + Workspace/Membership/trial fields"
 ```
 
 ---
 
-## Task 6: Test database helpers + migrations
+## Task 6: Test DB helpers + migrations
 
-**Files:**
-- Create: `apps/api/tests/helpers/db.ts`, `migrate.ts`
-- Modify: `apps/api/tests/helpers/global-setup.ts`
+**Files:** `apps/api/tests/helpers/{db.ts,migrate.ts,global-setup.ts}`
 
 - [ ] **Step 1: Create `apps/api/tests/helpers/db.ts`**
 
@@ -941,9 +956,12 @@ git commit -m "feat(api): add Prisma schema for users, workspaces, memberships, 
 import { prisma } from "../../src/db.js";
 
 export async function truncateAll(): Promise<void> {
-  await prisma.$executeRawUnsafe(
-    'TRUNCATE TABLE "memberships", "workspaces", "users" RESTART IDENTITY CASCADE;',
-  );
+  // Order: leaf → root.
+  await prisma.$executeRawUnsafe(`
+    TRUNCATE TABLE "memberships", "workspaces", "verifications", "sessions",
+                   "accounts", "users"
+    RESTART IDENTITY CASCADE;
+  `);
 }
 
 export async function disconnect(): Promise<void> {
@@ -982,28 +1000,26 @@ export default function setup(): void {
 }
 ```
 
-- [ ] **Step 4: Run health test (verifies migrations don't break unrelated tests)**
+- [ ] **Step 4: Run health test (verifies migrations don't break)**
 
 ```bash
 pnpm nx run api:test
 ```
 
-Expected: health test still passes, migrations apply silently against `fina_test`.
+Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/api/tests/helpers/
-git commit -m "test(api): set up Postgres test DB helpers with migrate-once"
+git commit -m "test(api): Postgres test DB helpers with migrate-once"
 ```
 
 ---
 
 ## Task 7: Workspace bootstrap service (with trial)
 
-**Files:**
-- Create: `apps/api/src/workspaces/bootstrap.ts`
-- Create: `apps/api/tests/workspaces.bootstrap.test.ts`
+**Files:** `apps/api/src/workspaces/bootstrap.ts`, `apps/api/tests/workspaces.bootstrap.test.ts`
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1011,77 +1027,70 @@ git commit -m "test(api): set up Postgres test DB helpers with migrate-once"
 // apps/api/tests/workspaces.bootstrap.test.ts
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
-import { createPersonalWorkspaceWithTrial } from "../src/workspaces/bootstrap.js";
+import { startTrialAndBootstrapWorkspace } from "../src/workspaces/bootstrap.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 
-describe("createPersonalWorkspaceWithTrial", () => {
+describe("startTrialAndBootstrapWorkspace", () => {
   beforeEach(async () => {
     await truncateAll();
   });
-
   afterAll(async () => {
     await disconnect();
   });
 
-  it("creates user, workspace, owner membership, and starts a 30-day Pro trial", async () => {
-    const before = Date.now();
-    const result = await createPersonalWorkspaceWithTrial({
-      clerkId: "user_clerk_123",
-      email: "brian@example.com",
-      displayName: "Brian",
+  it("creates workspace + owner membership + 30d trial for an existing user", async () => {
+    // Better Auth creates the user; this hook runs after that.
+    const u = await prisma.user.create({
+      data: { id: "user_1", email: "brian@example.com", emailVerified: true, name: "Brian" },
     });
+
+    const before = Date.now();
+    const result = await startTrialAndBootstrapWorkspace({ userId: u.id });
     const after = Date.now();
 
-    expect(result.user.clerkId).toBe("user_clerk_123");
     expect(result.workspace.name).toBe("Brian's workspace");
     expect(result.membership.role).toBe("owner");
 
-    const trialStart = result.user.trialStartedAt!.getTime();
-    const trialEnd = result.user.trialEndsAt!.getTime();
+    const userAfter = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    expect(userAfter.trialStartedAt).not.toBeNull();
+    expect(userAfter.trialEndsAt).not.toBeNull();
+    const trialStart = userAfter.trialStartedAt!.getTime();
+    const trialEnd = userAfter.trialEndsAt!.getTime();
     expect(trialStart).toBeGreaterThanOrEqual(before);
     expect(trialStart).toBeLessThanOrEqual(after);
-    // 30 days ± 1s
     expect(trialEnd - trialStart).toBeGreaterThan(30 * 24 * 60 * 60 * 1000 - 1000);
     expect(trialEnd - trialStart).toBeLessThan(30 * 24 * 60 * 60 * 1000 + 1000);
-    expect(result.user.trialConsumed).toBe(false);
+    expect(userAfter.trialConsumed).toBe(false);
 
-    const memberships = await prisma.membership.findMany({
-      where: { userId: result.user.id },
-    });
+    const memberships = await prisma.membership.findMany({ where: { userId: u.id } });
     expect(memberships).toHaveLength(1);
     expect(memberships[0]?.workspaceId).toBe(result.workspace.id);
-    expect(memberships[0]?.role).toBe("owner");
   });
 
-  it("is idempotent on duplicate clerkId — returns existing tuple, does not restart trial", async () => {
-    const first = await createPersonalWorkspaceWithTrial({
-      clerkId: "user_dup",
-      email: "dup@example.com",
-      displayName: "Dup",
+  it("is idempotent — running twice does not create extra workspace or restart trial", async () => {
+    const u = await prisma.user.create({
+      data: { id: "user_dup", email: "dup@example.com", emailVerified: true, name: "Dup" },
     });
-    const firstTrialStart = first.user.trialStartedAt!.getTime();
+    const first = await startTrialAndBootstrapWorkspace({ userId: u.id });
+    const firstUser = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    const firstStart = firstUser.trialStartedAt!.getTime();
 
     await new Promise((r) => setTimeout(r, 5));
 
-    const second = await createPersonalWorkspaceWithTrial({
-      clerkId: "user_dup",
-      email: "dup@example.com",
-      displayName: "Dup",
-    });
-    expect(second.user.id).toBe(first.user.id);
+    const second = await startTrialAndBootstrapWorkspace({ userId: u.id });
     expect(second.workspace.id).toBe(first.workspace.id);
-    expect(second.user.trialStartedAt!.getTime()).toBe(firstTrialStart);
 
-    const userCount = await prisma.user.count();
-    expect(userCount).toBe(1);
+    const secondUser = await prisma.user.findUniqueOrThrow({ where: { id: u.id } });
+    expect(secondUser.trialStartedAt!.getTime()).toBe(firstStart);
+    expect(await prisma.workspace.count()).toBe(1);
+    expect(await prisma.membership.count()).toBe(1);
   });
 
-  it("falls back to email-derived name if displayName is empty", async () => {
-    const result = await createPersonalWorkspaceWithTrial({
-      clerkId: "user_no_name",
-      email: "alice@example.com",
-      displayName: "",
+  it("falls back to email-derived workspace name when name is null", async () => {
+    const u = await prisma.user.create({
+      data: { id: "user_no_name", email: "alice@example.com", emailVerified: true, name: null },
     });
+    const result = await startTrialAndBootstrapWorkspace({ userId: u.id });
     expect(result.workspace.name).toBe("alice's workspace");
   });
 });
@@ -1092,80 +1101,72 @@ describe("createPersonalWorkspaceWithTrial", () => {
 ```bash
 pnpm nx run api:test --testPathPattern=workspaces.bootstrap
 ```
-
-Expected: FAIL — module `../src/workspaces/bootstrap` does not exist.
+FAIL — module does not exist yet.
 
 - [ ] **Step 3: Implement `apps/api/src/workspaces/bootstrap.ts`**
 
 ```ts
-import { Prisma, type User } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 
 const TRIAL_DAYS = 30;
 
-export type BootstrapInput = {
-  clerkId: string;
-  email: string;
-  displayName: string;
-};
+export type BootstrapInput = { userId: string };
 
 export type BootstrapResult = {
-  user: User;
   workspace: { id: string; name: string };
   membership: { id: string; userId: string; workspaceId: string; role: "owner" };
 };
 
-function deriveWorkspaceName(displayName: string, email: string): string {
-  const name = displayName.trim();
-  if (name.length > 0) return `${name}'s workspace`;
+function deriveWorkspaceName(name: string | null, email: string): string {
+  const trimmed = (name ?? "").trim();
+  if (trimmed.length > 0) return `${trimmed}'s workspace`;
   const local = email.split("@")[0] ?? "personal";
   return `${local}'s workspace`;
 }
 
-export async function createPersonalWorkspaceWithTrial(
+export async function startTrialAndBootstrapWorkspace(
   input: BootstrapInput,
 ): Promise<BootstrapResult> {
   return await prisma.$transaction(
     async (tx) => {
-      const existing = await tx.user.findUnique({ where: { clerkId: input.clerkId } });
+      const user = await tx.user.findUniqueOrThrow({ where: { id: input.userId } });
+
+      // Check for existing owner membership — idempotent path.
+      const existing = await tx.membership.findFirst({
+        where: { userId: user.id, role: "owner" },
+        include: { workspace: true },
+      });
       if (existing) {
-        const m = await tx.membership.findFirstOrThrow({
-          where: { userId: existing.id, role: "owner" },
-          include: { workspace: true },
-        });
         return {
-          user: existing,
-          workspace: { id: m.workspace.id, name: m.workspace.name },
+          workspace: { id: existing.workspace.id, name: existing.workspace.name },
           membership: {
-            id: m.id,
-            userId: m.userId,
-            workspaceId: m.workspaceId,
+            id: existing.id,
+            userId: existing.userId,
+            workspaceId: existing.workspaceId,
             role: "owner",
           },
         };
       }
 
-      const now = new Date();
-      const trialEnd = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
-
-      const user = await tx.user.create({
-        data: {
-          clerkId: input.clerkId,
-          email: input.email,
-          trialStartedAt: now,
-          trialEndsAt: trialEnd,
-          trialConsumed: false,
-        },
-      });
       const workspace = await tx.workspace.create({
-        data: { name: deriveWorkspaceName(input.displayName, input.email) },
+        data: { name: deriveWorkspaceName(user.name, user.email) },
       });
       const membership = await tx.membership.create({
         data: { userId: user.id, workspaceId: workspace.id, role: "owner" },
       });
 
+      // Start trial only if not already started.
+      if (!user.trialStartedAt) {
+        const now = new Date();
+        const trialEnd = new Date(now.getTime() + TRIAL_DAYS * 24 * 60 * 60 * 1000);
+        await tx.user.update({
+          where: { id: user.id },
+          data: { trialStartedAt: now, trialEndsAt: trialEnd, trialConsumed: false },
+        });
+      }
+
       return {
-        user,
         workspace: { id: workspace.id, name: workspace.name },
         membership: {
           id: membership.id,
@@ -1185,68 +1186,244 @@ export async function createPersonalWorkspaceWithTrial(
 ```bash
 pnpm nx run api:test --testPathPattern=workspaces.bootstrap
 ```
-
-Expected: all 3 cases PASS.
+Expected: 3 cases PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/workspaces/ apps/api/tests/workspaces.bootstrap.test.ts
-git commit -m "feat(api): add createPersonalWorkspaceWithTrial service (30d Pro trial)"
+git commit -m "feat(api): startTrialAndBootstrapWorkspace service (30d Pro trial, idempotent)"
 ```
 
 ---
 
-## Task 8: Clerk JWT verification middleware
+## Task 8: Better Auth integration (server)
 
-**Files:**
-- Create: `apps/api/src/auth/clerk.ts`, `tests/helpers/auth.ts`, `tests/auth.clerk.test.ts`
-- Modify: `apps/api/src/server.ts`
+**Files:** `apps/api/src/auth.ts`, `apps/api/src/email/send.ts`, modifications to `apps/api/src/server.ts`, `apps/api/tests/auth.session.test.ts`, `apps/api/tests/helpers/auth.ts`
 
-- [ ] **Step 1: Add Clerk backend SDK and JWT helper for tests**
+This is the biggest task. Better Auth needs:
+- A configured server instance with the Prisma adapter.
+- Email sending (Resend) for magic-link verifications and password resets.
+- A post-create hook that runs `startTrialAndBootstrapWorkspace` in the same DB transaction.
+- A handler mounted on Fastify at `/api/auth/*`.
+
+- [ ] **Step 1: Add deps**
 
 ```bash
-pnpm add -F @fina/api @clerk/backend@^1.21.0
-pnpm add -DF @fina/api jsonwebtoken@^9.0.2 @types/jsonwebtoken@^9.0.7
+pnpm add -F @fina/api resend@^4.0.0
 ```
 
-- [ ] **Step 2: Create `apps/api/tests/helpers/auth.ts`**
+(`better-auth` itself was added in Task 5.)
+
+- [ ] **Step 2: Create `apps/api/src/email/send.ts`**
 
 ```ts
-import jwt from "jsonwebtoken";
+import { Resend } from "resend";
 
-export const TEST_JWT_SECRET = "test-secret-do-not-use-in-prod";
+let client: Resend | null = null;
 
-export type FakeClaims = {
-  sub: string;
-  email?: string;
-  name?: string;
+function getClient(apiKey: string | undefined): Resend | null {
+  if (!apiKey) return null;
+  if (!client) client = new Resend(apiKey);
+  return client;
+}
+
+export type EmailInput = {
+  to: string;
+  subject: string;
+  text: string;
+  html?: string;
 };
 
-export function makeFakeJwt(claims: FakeClaims): string {
-  return jwt.sign(claims, TEST_JWT_SECRET, { algorithm: "HS256", expiresIn: "1h" });
+export async function sendEmail(
+  apiKey: string | undefined,
+  from: string,
+  input: EmailInput,
+): Promise<void> {
+  const c = getClient(apiKey);
+  if (!c) {
+    // Dev fallback: log the email so the magic link is still usable.
+    // eslint-disable-next-line no-console
+    console.log(`[dev email] to=${input.to} subject="${input.subject}"\n${input.text}`);
+    return;
+  }
+  await c.emails.send({ from, to: input.to, subject: input.subject, text: input.text, html: input.html });
 }
 ```
 
-- [ ] **Step 3: Write the failing test**
+- [ ] **Step 3: Create `apps/api/src/auth.ts`**
 
 ```ts
-// apps/api/tests/auth.clerk.test.ts
+import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { magicLink } from "better-auth/plugins";
+import { prisma } from "./db.js";
+import type { Env } from "./env.js";
+import { sendEmail } from "./email/send.js";
+import { startTrialAndBootstrapWorkspace } from "./workspaces/bootstrap.js";
+
+export type FinaAuth = ReturnType<typeof createAuth>;
+
+export function createAuth(env: Env) {
+  const oauthProviders: Record<string, { clientId: string; clientSecret: string }> = {};
+  if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
+    oauthProviders.google = {
+      clientId: env.GOOGLE_CLIENT_ID,
+      clientSecret: env.GOOGLE_CLIENT_SECRET,
+    };
+  }
+
+  return betterAuth({
+    secret: env.BETTER_AUTH_SECRET,
+    baseURL: env.BETTER_AUTH_URL,
+    database: prismaAdapter(prisma, { provider: "postgresql" }),
+    emailAndPassword: { enabled: true, requireEmailVerification: false },
+    socialProviders: oauthProviders,
+    plugins: [
+      magicLink({
+        sendMagicLink: async ({ email, url }) => {
+          await sendEmail(env.RESEND_API_KEY, env.EMAIL_FROM, {
+            to: email,
+            subject: "Your Fina sign-in link",
+            text: `Click to sign in: ${url}\n\nThis link expires in 10 minutes.`,
+          });
+        },
+      }),
+    ],
+    databaseHooks: {
+      user: {
+        create: {
+          after: async (user) => {
+            // Run in the same transaction context as Better Auth's create.
+            await startTrialAndBootstrapWorkspace({ userId: user.id });
+          },
+        },
+      },
+    },
+  });
+}
+```
+
+If this version of Better Auth's API names a hook differently (e.g. `databaseHooks.user.create` is named `databaseHooks.user.afterCreate`), adjust to the version's name. The behavior — fire after the user row is committed — is what matters.
+
+- [ ] **Step 4: Mount Better Auth on Fastify and write the failing test**
+
+Update `apps/api/src/server.ts`:
+
+```ts
+import Fastify, { type FastifyInstance } from "fastify";
+import sensible from "@fastify/sensible";
+import type { Env } from "./env.js";
+import { healthRoutes } from "./routes/health.js";
+import { createAuth, type FinaAuth } from "./auth.js";
+
+export type AppCtx = { env: Env; auth: FinaAuth };
+
+declare module "fastify" {
+  interface FastifyInstance {
+    fina: AppCtx;
+  }
+}
+
+export async function buildApp(env: Env): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: env.NODE_ENV === "test" ? false : { level: "info" },
+  });
+  const auth = createAuth(env);
+  app.decorate("fina", { env, auth });
+
+  await app.register(sensible);
+
+  // Better Auth's request handler is a Web Fetch handler; bridge to Fastify.
+  app.all("/api/auth/*", async (req, reply) => {
+    const url = new URL(req.url, env.BETTER_AUTH_URL);
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (typeof v === "string") headers.set(k, v);
+      else if (Array.isArray(v)) headers.set(k, v.join(", "));
+    }
+    const init: RequestInit = {
+      method: req.method,
+      headers,
+      body: req.method === "GET" || req.method === "HEAD" ? undefined :
+        typeof req.body === "string" ? req.body : JSON.stringify(req.body ?? {}),
+    };
+    const response = await auth.handler(new Request(url, init));
+
+    reply.code(response.status);
+    response.headers.forEach((value, key) => reply.header(key, value));
+    const buf = Buffer.from(await response.arrayBuffer());
+    return reply.send(buf);
+  });
+
+  await app.register(healthRoutes);
+
+  return app;
+}
+```
+
+- [ ] **Step 5: Create `apps/api/tests/helpers/auth.ts`**
+
+This helper signs up a user via the Better Auth HTTP endpoints and returns the resulting session cookie. Tests use this instead of fabricating sessions.
+
+```ts
+import type { FastifyInstance } from "fastify";
+
+export type SignedUpUser = {
+  userId: string;
+  email: string;
+  cookie: string;
+};
+
+let counter = 0;
+
+export async function signUpAndGetCookie(app: FastifyInstance, opts?: {
+  name?: string;
+  email?: string;
+  password?: string;
+}): Promise<SignedUpUser> {
+  const id = ++counter;
+  const email = opts?.email ?? `user${id}@example.com`;
+  const password = opts?.password ?? "password-1234567890";
+  const name = opts?.name ?? `User ${id}`;
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/api/auth/sign-up/email",
+    headers: { "content-type": "application/json" },
+    payload: JSON.stringify({ email, password, name }),
+  });
+  if (res.statusCode !== 200) {
+    throw new Error(`sign-up failed: ${res.statusCode} ${res.body}`);
+  }
+  const body = res.json();
+  const cookie = res.headers["set-cookie"];
+  const cookieStr = Array.isArray(cookie) ? cookie.join("; ") : cookie ?? "";
+  return { userId: body.user.id as string, email, cookie: cookieStr };
+}
+```
+
+The exact endpoint path and response shape follow Better Auth's email+password sign-up route. If your Better Auth version uses different paths, adjust here only — the rest of the tests stay stable.
+
+- [ ] **Step 6: Write `apps/api/tests/auth.session.test.ts`**
+
+```ts
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { buildApp } from "../src/server.js";
+import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { makeFakeJwt } from "./helpers/auth.js";
+import { signUpAndGetCookie } from "./helpers/auth.js";
 
 const env = {
   NODE_ENV: "test" as const,
   PORT: 0,
   DATABASE_URL: process.env.DATABASE_URL!,
-  CLERK_SECRET_KEY: "sk_test_dummy",
-  CLERK_PUBLISHABLE_KEY: "pk_test_dummy",
-  CLERK_WEBHOOK_SECRET: "whsec_dummy",
+  BETTER_AUTH_SECRET: "x".repeat(48),
+  BETTER_AUTH_URL: "http://localhost:0",
+  EMAIL_FROM: "test@fina.app",
 };
 
-describe("Clerk auth middleware", () => {
+describe("Better Auth integration", () => {
   beforeEach(async () => {
     await truncateAll();
   });
@@ -1254,180 +1431,88 @@ describe("Clerk auth middleware", () => {
     await disconnect();
   });
 
-  it("rejects request with no Authorization header on protected route", async () => {
+  it("sign-up creates user + workspace + owner membership + trial via post-create hook", async () => {
     const app = await buildApp(env);
-    const res = await app.inject({ method: "GET", url: "/__test/whoami" });
-    expect(res.statusCode).toBe(401);
+    const { userId, email } = await signUpAndGetCookie(app, { email: "hook@example.com", name: "Hook" });
+
+    const u = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(u.email).toBe(email);
+    expect(u.trialStartedAt).not.toBeNull();
+    expect(u.trialEndsAt).not.toBeNull();
+
+    const memberships = await prisma.membership.findMany({ where: { userId } });
+    expect(memberships).toHaveLength(1);
+    expect(memberships[0]?.role).toBe("owner");
     await app.close();
   });
 
-  it("rejects request with invalid JWT", async () => {
+  it("session cookie authenticates subsequent requests", async () => {
     const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "ses@example.com", name: "Ses" });
     const res = await app.inject({
       method: "GET",
-      url: "/__test/whoami",
-      headers: { authorization: "Bearer not.a.real.jwt" },
+      url: "/api/auth/get-session",
+      headers: { cookie: user.cookie },
     });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user?.id).toBe(user.userId);
+    await app.close();
+  });
+
+  it("rejects /me without a session", async () => {
+    const app = await buildApp(env);
+    const res = await app.inject({ method: "GET", url: "/me" });
     expect(res.statusCode).toBe(401);
-    await app.close();
-  });
-
-  it("decorates request.auth with clerkId from valid JWT", async () => {
-    const app = await buildApp(env);
-    const token = makeFakeJwt({ sub: "user_clerk_test", email: "t@example.com", name: "T" });
-    const res = await app.inject({
-      method: "GET",
-      url: "/__test/whoami",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ clerkId: "user_clerk_test" });
-    await app.close();
-  });
-
-  it("allows public routes (/health, /webhooks/*) without token", async () => {
-    const app = await buildApp(env);
-    const res = await app.inject({ method: "GET", url: "/health" });
-    expect(res.statusCode).toBe(200);
     await app.close();
   });
 });
 ```
 
-- [ ] **Step 4: Implement `apps/api/src/auth/clerk.ts`**
-
-```ts
-import type { FastifyInstance, FastifyRequest } from "fastify";
-import jwt from "jsonwebtoken";
-import { verifyToken } from "@clerk/backend";
-
-declare module "fastify" {
-  interface FastifyRequest {
-    auth?: { clerkId: string; email?: string };
-  }
-}
-
-export type AuthOptions = {
-  clerkSecretKey: string;
-  testJwtSecret?: string;
-};
-
-const PUBLIC_PREFIXES = ["/health", "/webhooks/"] as const;
-
-function isPublic(url: string | undefined): boolean {
-  if (!url) return false;
-  return PUBLIC_PREFIXES.some((p) => url === p || url.startsWith(p));
-}
-
-export function authPlugin(opts: AuthOptions) {
-  return async function (app: FastifyInstance): Promise<void> {
-    app.decorateRequest("auth", undefined);
-
-    app.addHook("onRequest", async (req: FastifyRequest, reply) => {
-      const url = req.routeOptions.url ?? req.url;
-      if (isPublic(url)) return;
-
-      const auth = req.headers.authorization;
-      if (!auth || !auth.startsWith("Bearer ")) {
-        return reply.code(401).send({ error: "missing_token" });
-      }
-      const token = auth.slice("Bearer ".length).trim();
-
-      try {
-        if (opts.testJwtSecret) {
-          const claims = jwt.verify(token, opts.testJwtSecret, {
-            algorithms: ["HS256"],
-          }) as { sub: string; email?: string };
-          req.auth = { clerkId: claims.sub, email: claims.email };
-          return;
-        }
-        const payload = await verifyToken(token, { secretKey: opts.clerkSecretKey });
-        if (!payload.sub) {
-          return reply.code(401).send({ error: "invalid_token" });
-        }
-        req.auth = {
-          clerkId: payload.sub,
-          email: typeof payload.email === "string" ? payload.email : undefined,
-        };
-      } catch {
-        return reply.code(401).send({ error: "invalid_token" });
-      }
-    });
-
-    if (process.env.NODE_ENV === "test") {
-      app.get("/__test/whoami", async (req, reply) => {
-        if (!req.auth) return reply.code(401).send({ error: "unauthenticated" });
-        return { clerkId: req.auth.clerkId };
-      });
-    }
-  };
-}
-```
-
-- [ ] **Step 5: Wire into `apps/api/src/server.ts`**
-
-Replace the `buildApp` body:
-
-```ts
-import Fastify, { type FastifyInstance } from "fastify";
-import sensible from "@fastify/sensible";
-import type { Env } from "./env.js";
-import { healthRoutes } from "./routes/health.js";
-import { authPlugin } from "./auth/clerk.js";
-
-export async function buildApp(env: Env): Promise<FastifyInstance> {
-  const app = Fastify({
-    logger: env.NODE_ENV === "test" ? false : { level: "info" },
-  });
-
-  await app.register(sensible);
-  await app.register(
-    authPlugin({
-      clerkSecretKey: env.CLERK_SECRET_KEY,
-      testJwtSecret: env.NODE_ENV === "test" ? "test-secret-do-not-use-in-prod" : undefined,
-    }),
-  );
-  await app.register(healthRoutes);
-
-  return app;
-}
-```
-
-- [ ] **Step 6: Run tests**
+- [ ] **Step 7: Run the suite**
 
 ```bash
-pnpm nx run api:test --testPathPattern=auth.clerk
+pnpm nx run api:test --testPathPattern=auth.session
 ```
+Expected: first 2 cases PASS. Third (`/me` rejection) PASSes only after `/me` is added in Task 9 — for now it will fail with `404 not found` which is acceptable as TODO; comment it out or use `it.todo` if the runner is strict, then re-enable in Task 9.
 
-Expected: all 4 cases PASS.
+A simple workaround: change that third test to `it.todo("rejects /me without a session — see Task 9")` for now.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add apps/api/src/auth/clerk.ts apps/api/src/server.ts \
-  apps/api/tests/auth.clerk.test.ts apps/api/tests/helpers/auth.ts \
+git add apps/api/src/auth.ts apps/api/src/email/ apps/api/src/server.ts \
+  apps/api/tests/auth.session.test.ts apps/api/tests/helpers/auth.ts \
   pnpm-lock.yaml
-git commit -m "feat(api): Clerk JWT middleware with test HS256 bypass"
+git commit -m "feat(api): integrate Better Auth with email/password + magic link + Resend + trial bootstrap"
 ```
 
 ---
 
-## Task 9: assertMembership helper + GET /me
+## Task 9: assertMembership helper + `/me` route
 
-**Files:**
-- Create: `apps/api/src/auth/membership.ts`, `routes/me.ts`
-- Create: `apps/api/tests/membership.test.ts`, `me.test.ts`
-- Modify: `apps/api/src/server.ts`
+**Files:** `apps/api/src/auth/membership.ts`, `apps/api/src/routes/me.ts`, modifications to `apps/api/src/server.ts`, `apps/api/tests/membership.test.ts`, `apps/api/tests/me.test.ts`
 
-- [ ] **Step 1: Write membership test**
+This task introduces the session-aware helper that resolves the calling user from the Better Auth session and the `/me` route both clients call.
+
+- [ ] **Step 1: Write the membership test**
 
 ```ts
 // apps/api/tests/membership.test.ts
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { assertMembership, MembershipError } from "../src/auth/membership.js";
-import { createPersonalWorkspaceWithTrial } from "../src/workspaces/bootstrap.js";
+import { buildApp } from "../src/server.js";
+import { signUpAndGetCookie } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
+
+const env = {
+  NODE_ENV: "test" as const,
+  PORT: 0,
+  DATABASE_URL: process.env.DATABASE_URL!,
+  BETTER_AUTH_SECRET: "x".repeat(48),
+  BETTER_AUTH_URL: "http://localhost:0",
+  EMAIL_FROM: "test@fina.app",
+};
 
 describe("assertMembership", () => {
   beforeEach(async () => {
@@ -1438,39 +1523,37 @@ describe("assertMembership", () => {
   });
 
   it("returns membership when user is owner of workspace", async () => {
-    const { user, workspace } = await createPersonalWorkspaceWithTrial({
-      clerkId: "u1",
-      email: "u1@x.com",
-      displayName: "U1",
-    });
-    const m = await assertMembership({
-      userId: user.id,
-      workspaceId: workspace.id,
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "u1@x.com", name: "U1" });
+    const m = await prisma.membership.findFirstOrThrow({ where: { userId: user.userId } });
+
+    const result = await assertMembership({
+      userId: user.userId,
+      workspaceId: m.workspaceId,
       requiredRole: "owner",
     });
-    expect(m.role).toBe("owner");
+    expect(result.role).toBe("owner");
+    await app.close();
   });
 
-  it("throws when user is not a member of the workspace", async () => {
-    const { user } = await createPersonalWorkspaceWithTrial({
-      clerkId: "u2",
-      email: "u2@x.com",
-      displayName: "U2",
-    });
+  it("throws when user is not a member", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "u2@x.com", name: "U2" });
     const otherWs = await prisma.workspace.create({ data: { name: "Other" } });
     await expect(
       assertMembership({
-        userId: user.id,
+        userId: user.userId,
         workspaceId: otherWs.id,
         requiredRole: "viewer",
       }),
     ).rejects.toThrow(MembershipError);
+    await app.close();
   });
 
-  it("throws when role is below required (owner-only on viewer)", async () => {
+  it("throws when role is below required", async () => {
     const ws = await prisma.workspace.create({ data: { name: "Shared" } });
     const u = await prisma.user.create({
-      data: { clerkId: "u3", email: "u3@x.com" },
+      data: { id: "u3", email: "u3@x.com", emailVerified: true, name: "U3" },
     });
     await prisma.membership.create({
       data: { userId: u.id, workspaceId: ws.id, role: "viewer" },
@@ -1491,8 +1574,7 @@ describe("assertMembership", () => {
 ```bash
 pnpm nx run api:test --testPathPattern=membership
 ```
-
-Expected: FAIL — module not found.
+FAIL — module missing.
 
 - [ ] **Step 3: Implement `apps/api/src/auth/membership.ts`**
 
@@ -1545,26 +1627,25 @@ export async function assertMembership(input: AssertInput): Promise<AssertedMemb
 ```bash
 pnpm nx run api:test --testPathPattern=membership
 ```
+Expected: 3 cases PASS.
 
-Expected: all 3 cases PASS.
-
-- [ ] **Step 5: Write /me test**
+- [ ] **Step 5: Write `/me` test**
 
 ```ts
 // apps/api/tests/me.test.ts
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { buildApp } from "../src/server.js";
+import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { makeFakeJwt } from "./helpers/auth.js";
-import { createPersonalWorkspaceWithTrial } from "../src/workspaces/bootstrap.js";
+import { signUpAndGetCookie } from "./helpers/auth.js";
 
 const env = {
   NODE_ENV: "test" as const,
   PORT: 0,
   DATABASE_URL: process.env.DATABASE_URL!,
-  CLERK_SECRET_KEY: "sk_test_dummy",
-  CLERK_PUBLISHABLE_KEY: "pk_test_dummy",
-  CLERK_WEBHOOK_SECRET: "whsec_dummy",
+  BETTER_AUTH_SECRET: "x".repeat(48),
+  BETTER_AUTH_URL: "http://localhost:0",
+  EMAIL_FROM: "test@fina.app",
 };
 
 describe("GET /me", () => {
@@ -1575,74 +1656,49 @@ describe("GET /me", () => {
     await disconnect();
   });
 
-  it("returns user, workspace, role, and trial state for authenticated user", async () => {
-    const { user, workspace } = await createPersonalWorkspaceWithTrial({
-      clerkId: "user_me_1",
-      email: "me1@example.com",
-      displayName: "Me One",
-    });
+  it("returns user + workspace + role + tier=pro + trial active for fresh signup", async () => {
     const app = await buildApp(env);
-    const token = makeFakeJwt({ sub: "user_me_1", email: "me1@example.com" });
+    const user = await signUpAndGetCookie(app, { email: "me1@example.com", name: "Me One" });
+
     const res = await app.inject({
       method: "GET",
       url: "/me",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { cookie: user.cookie },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.user).toEqual({
-      id: user.id,
-      email: "me1@example.com",
-      tz: "America/Toronto",
-      locale: "en-CA",
-    });
-    expect(body.workspace).toEqual({
-      id: workspace.id,
-      name: "Me One's workspace",
-      role: "owner",
-    });
-    expect(body.tier).toBe("pro"); // trial active
+    expect(body.user.email).toBe("me1@example.com");
+    expect(body.workspace.name).toBe("Me One's workspace");
+    expect(body.workspace.role).toBe("owner");
+    expect(body.tier).toBe("pro");
     expect(body.trial.active).toBe(true);
     expect(typeof body.trial.endsAt).toBe("string");
     await app.close();
   });
 
-  it("returns tier=free when trial has ended and user has no paid subscription", async () => {
-    const { user } = await createPersonalWorkspaceWithTrial({
-      clerkId: "user_expired",
-      email: "exp@example.com",
-      displayName: "Exp",
-    });
-    // Force trial expiry by writing past endsAt.
-    const { prisma } = await import("../src/db.js");
+  it("returns tier=free when trial has ended", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "exp@example.com", name: "Exp" });
     await prisma.user.update({
-      where: { id: user.id },
+      where: { id: user.userId },
       data: { trialEndsAt: new Date(Date.now() - 1000), trialConsumed: true },
     });
-
-    const app = await buildApp(env);
-    const token = makeFakeJwt({ sub: "user_expired", email: "exp@example.com" });
     const res = await app.inject({
       method: "GET",
       url: "/me",
-      headers: { authorization: `Bearer ${token}` },
+      headers: { cookie: user.cookie },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().tier).toBe("free");
-    expect(res.json().trial.active).toBe(false);
+    const body = res.json();
+    expect(body.tier).toBe("free");
+    expect(body.trial.active).toBe(false);
     await app.close();
   });
 
-  it("returns 404 when authenticated user has no workspace yet", async () => {
+  it("returns 401 without a session", async () => {
     const app = await buildApp(env);
-    const token = makeFakeJwt({ sub: "user_orphan", email: "orphan@example.com" });
-    const res = await app.inject({
-      method: "GET",
-      url: "/me",
-      headers: { authorization: `Bearer ${token}` },
-    });
-    expect(res.statusCode).toBe(404);
-    expect(res.json()).toEqual({ error: "no_workspace" });
+    const res = await app.inject({ method: "GET", url: "/me" });
+    expect(res.statusCode).toBe(401);
     await app.close();
   });
 });
@@ -1657,22 +1713,27 @@ import { prisma } from "../db.js";
 
 function effectiveTier(user: {
   trialEndsAt: Date | null;
-  trialConsumed: boolean;
 }): { tier: Tier; trialActive: boolean; trialEndsAt: Date | null } {
   const now = new Date();
   if (user.trialEndsAt && user.trialEndsAt > now) {
     return { tier: "pro", trialActive: true, trialEndsAt: user.trialEndsAt };
   }
-  // Plan 7 (Phase 2) wires real subscriptions; for now, post-trial = free.
   return { tier: "free", trialActive: false, trialEndsAt: user.trialEndsAt };
 }
 
 export async function meRoutes(app: FastifyInstance): Promise<void> {
   app.get("/me", async (req, reply) => {
-    if (!req.auth) return reply.code(401).send({ error: "unauthenticated" });
+    // Convert Fastify headers to a Web Headers for Better Auth.
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (typeof v === "string") headers.set(k, v);
+      else if (Array.isArray(v)) headers.set(k, v.join(", "));
+    }
+    const session = await app.fina.auth.api.getSession({ headers });
+    if (!session?.user) return reply.code(401).send({ error: "unauthenticated" });
 
     const user = await prisma.user.findUnique({
-      where: { clerkId: req.auth.clerkId },
+      where: { id: session.user.id },
       include: {
         memberships: { include: { workspace: true }, where: { role: "owner" }, take: 1 },
       },
@@ -1682,7 +1743,6 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
     if (!m) return reply.code(404).send({ error: "no_workspace" });
 
     const { tier, trialActive, trialEndsAt } = effectiveTier(user);
-
     return {
       user: { id: user.id, email: user.email, tz: user.tz, locale: user.locale },
       workspace: { id: m.workspace.id, name: m.workspace.name, role: m.role },
@@ -1702,297 +1762,44 @@ Add import:
 ```ts
 import { meRoutes } from "./routes/me.js";
 ```
-
 Register after `healthRoutes`:
 ```ts
 await app.register(meRoutes);
 ```
 
-- [ ] **Step 8: Run /me test**
+- [ ] **Step 8: Re-enable the rejection assertion in `auth.session.test.ts`**
 
-```bash
-pnpm nx run api:test --testPathPattern=me
+Change `it.todo("rejects /me without a session — see Task 9")` back to a real test:
+```ts
+it("rejects /me without a session", async () => {
+  const app = await buildApp(env);
+  const res = await app.inject({ method: "GET", url: "/me" });
+  expect(res.statusCode).toBe(401);
+  await app.close();
+});
 ```
-
-Expected: 3 cases PASS.
 
 - [ ] **Step 9: Run full api suite**
 
 ```bash
 pnpm nx run api:test
 ```
-
-Expected: all tests PASS (`health`, `auth.clerk`, `membership`, `workspaces.bootstrap`, `me`).
+Expected: all PASS — `health`, `auth.session`, `membership`, `workspaces.bootstrap`, `me`.
 
 - [ ] **Step 10: Commit**
 
 ```bash
 git add apps/api/src/auth/membership.ts apps/api/src/routes/me.ts \
-  apps/api/src/server.ts apps/api/tests/membership.test.ts apps/api/tests/me.test.ts
-git commit -m "feat(api): assertMembership + GET /me with effective tier and trial state"
+  apps/api/src/server.ts apps/api/tests/membership.test.ts apps/api/tests/me.test.ts \
+  apps/api/tests/auth.session.test.ts
+git commit -m "feat(api): assertMembership + GET /me with effective tier from session"
 ```
 
 ---
 
-## Task 10: Clerk webhook → workspace bootstrap
+## Task 10: Mobile app scaffold (Expo + Better Auth)
 
-**Files:**
-- Create: `apps/api/src/webhooks/clerk.ts`, `tests/webhooks.clerk.test.ts`
-- Modify: `apps/api/src/server.ts`
-
-- [ ] **Step 1: Add svix**
-
-```bash
-pnpm add -F @fina/api svix@^1.40.0
-```
-
-- [ ] **Step 2: Write the failing test**
-
-```ts
-// apps/api/tests/webhooks.clerk.test.ts
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
-import { Webhook } from "svix";
-import { buildApp } from "../src/server.js";
-import { prisma } from "../src/db.js";
-import { truncateAll, disconnect } from "./helpers/db.js";
-
-const WEBHOOK_SECRET = "whsec_dGVzdHNlY3JldGZvcndlYmhvb2tzaWduYXR1cmV2ZXJpZmllcg==";
-
-const env = {
-  NODE_ENV: "test" as const,
-  PORT: 0,
-  DATABASE_URL: process.env.DATABASE_URL!,
-  CLERK_SECRET_KEY: "sk_test_dummy",
-  CLERK_PUBLISHABLE_KEY: "pk_test_dummy",
-  CLERK_WEBHOOK_SECRET: WEBHOOK_SECRET,
-};
-
-function signWebhook(body: object): { headers: Record<string, string>; raw: string } {
-  const wh = new Webhook(WEBHOOK_SECRET);
-  const id = "msg_test_" + Date.now();
-  const timestamp = Math.floor(Date.now() / 1000).toString();
-  const raw = JSON.stringify(body);
-  const signature = wh.sign(id, new Date(Number(timestamp) * 1000), raw);
-  return {
-    headers: {
-      "svix-id": id,
-      "svix-timestamp": timestamp,
-      "svix-signature": signature,
-      "content-type": "application/json",
-    },
-    raw,
-  };
-}
-
-describe("POST /webhooks/clerk", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-  afterAll(async () => {
-    await disconnect();
-  });
-
-  it("creates user + workspace + owner membership + 30d trial on user.created", async () => {
-    const app = await buildApp(env);
-    const body = {
-      type: "user.created",
-      data: {
-        id: "user_clerk_webhook_1",
-        email_addresses: [{ email_address: "wh@example.com" }],
-        first_name: "WH",
-        last_name: "User",
-      },
-    };
-    const { headers, raw } = signWebhook(body);
-    const res = await app.inject({
-      method: "POST",
-      url: "/webhooks/clerk",
-      headers,
-      payload: raw,
-    });
-    expect(res.statusCode).toBe(200);
-    const u = await prisma.user.findUnique({ where: { clerkId: "user_clerk_webhook_1" } });
-    expect(u?.email).toBe("wh@example.com");
-    expect(u?.trialStartedAt).not.toBeNull();
-    expect(u?.trialEndsAt).not.toBeNull();
-    const memberships = await prisma.membership.findMany({ where: { userId: u!.id } });
-    expect(memberships).toHaveLength(1);
-    expect(memberships[0]?.role).toBe("owner");
-    await app.close();
-  });
-
-  it("rejects request with invalid signature", async () => {
-    const app = await buildApp(env);
-    const res = await app.inject({
-      method: "POST",
-      url: "/webhooks/clerk",
-      headers: {
-        "svix-id": "msg_bad",
-        "svix-timestamp": Math.floor(Date.now() / 1000).toString(),
-        "svix-signature": "v1,wrongsignature",
-        "content-type": "application/json",
-      },
-      payload: JSON.stringify({ type: "user.created", data: { id: "x" } }),
-    });
-    expect(res.statusCode).toBe(401);
-    await app.close();
-  });
-
-  it("ignores non-user.created event types", async () => {
-    const app = await buildApp(env);
-    const body = { type: "user.updated", data: { id: "x" } };
-    const { headers, raw } = signWebhook(body);
-    const res = await app.inject({
-      method: "POST",
-      url: "/webhooks/clerk",
-      headers,
-      payload: raw,
-    });
-    expect(res.statusCode).toBe(200);
-    expect(await prisma.user.count()).toBe(0);
-    await app.close();
-  });
-});
-```
-
-- [ ] **Step 3: Run test (expect failure)**
-
-```bash
-pnpm nx run api:test --testPathPattern=webhooks.clerk
-```
-
-Expected: FAIL — route not found.
-
-- [ ] **Step 4: Implement `apps/api/src/webhooks/clerk.ts`**
-
-```ts
-import type { FastifyInstance } from "fastify";
-import { Webhook } from "svix";
-import { z } from "zod";
-import { createPersonalWorkspaceWithTrial } from "../workspaces/bootstrap.js";
-
-const UserCreated = z.object({
-  type: z.literal("user.created"),
-  data: z.object({
-    id: z.string(),
-    email_addresses: z
-      .array(z.object({ email_address: z.string().email() }))
-      .min(1),
-    first_name: z.string().nullable().optional(),
-    last_name: z.string().nullable().optional(),
-  }),
-});
-
-const AnyEvent = z.object({ type: z.string() });
-
-export function clerkWebhookRoutes(secret: string) {
-  return async function (app: FastifyInstance): Promise<void> {
-    app.addContentTypeParser(
-      "application/json",
-      { parseAs: "string" },
-      (_req, body, done) => {
-        try {
-          done(null, body);
-        } catch (err) {
-          done(err as Error);
-        }
-      },
-    );
-
-    app.post("/webhooks/clerk", async (req, reply) => {
-      const id = req.headers["svix-id"];
-      const timestamp = req.headers["svix-timestamp"];
-      const signature = req.headers["svix-signature"];
-      if (typeof id !== "string" || typeof timestamp !== "string" || typeof signature !== "string") {
-        return reply.code(401).send({ error: "missing_signature_headers" });
-      }
-      const raw = typeof req.body === "string" ? req.body : JSON.stringify(req.body);
-      let parsed: unknown;
-      try {
-        parsed = new Webhook(secret).verify(raw, {
-          "svix-id": id,
-          "svix-timestamp": timestamp,
-          "svix-signature": signature,
-        });
-      } catch {
-        return reply.code(401).send({ error: "invalid_signature" });
-      }
-
-      const head = AnyEvent.safeParse(parsed);
-      if (!head.success) return reply.code(400).send({ error: "bad_payload" });
-
-      if (head.data.type !== "user.created") {
-        return { ignored: true };
-      }
-
-      const event = UserCreated.safeParse(parsed);
-      if (!event.success) {
-        return reply.code(400).send({ error: "bad_user_created_payload" });
-      }
-      const { id: clerkId, email_addresses, first_name, last_name } = event.data.data;
-      const email = email_addresses[0]!.email_address;
-      const displayName = [first_name ?? "", last_name ?? ""].join(" ").trim();
-
-      await createPersonalWorkspaceWithTrial({ clerkId, email, displayName });
-      return { ok: true };
-    });
-  };
-}
-```
-
-- [ ] **Step 5: Register in `apps/api/src/server.ts`**
-
-Add import:
-```ts
-import { clerkWebhookRoutes } from "./webhooks/clerk.js";
-```
-
-Register before `authPlugin` so the order is explicit (auth plugin already exempts `/webhooks/*`):
-
-```ts
-await app.register(sensible);
-await app.register(clerkWebhookRoutes(env.CLERK_WEBHOOK_SECRET));
-await app.register(
-  authPlugin({
-    clerkSecretKey: env.CLERK_SECRET_KEY,
-    testJwtSecret: env.NODE_ENV === "test" ? "test-secret-do-not-use-in-prod" : undefined,
-  }),
-);
-await app.register(healthRoutes);
-await app.register(meRoutes);
-```
-
-- [ ] **Step 6: Run webhook test**
-
-```bash
-pnpm nx run api:test --testPathPattern=webhooks.clerk
-```
-
-Expected: 3 cases PASS.
-
-- [ ] **Step 7: Run full api suite**
-
-```bash
-pnpm nx run api:test
-```
-
-Expected: all PASS.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add apps/api/src/webhooks/ apps/api/src/server.ts \
-  apps/api/tests/webhooks.clerk.test.ts pnpm-lock.yaml
-git commit -m "feat(api): Clerk user.created webhook with svix verification + trial start"
-```
-
----
-
-## Task 11: Mobile app scaffold (Expo + Clerk)
-
-**Files:**
-- Create via generator: `apps/mobile/`
-- Replace: app router files, env, api client
+**Files:** `apps/mobile/{app/{_layout.tsx,index.tsx,(auth)/sign-in.tsx,(tabs)/_layout.tsx,(tabs)/index.tsx},src/{env.ts,api/client.ts,auth/client.ts}}`, `package.json`, `app.json`, `babel.config.js`, `tsconfig.json`, `project.json`
 
 - [ ] **Step 1: Generate the Expo app**
 
@@ -2001,23 +1808,22 @@ pnpm add -Dw @nx/expo@19
 pnpm nx g @nx/expo:application mobile --directory=apps/mobile --e2eTestRunner=none --linter=eslint --no-interactive
 ```
 
-This creates `apps/mobile/{App.tsx,app.json,babel.config.js,project.json,tsconfig.*.json}`.
-
 - [ ] **Step 2: Add deps**
 
 ```bash
-pnpm add -F @fina/mobile @clerk/clerk-expo@^2.6.0 expo-router@~5.0.0 \
-  expo-secure-store@~14.0.0 expo-status-bar@~2.0.0 \
-  react-native-safe-area-context@5.4.0 react-native-screens@~4.4.0 zod@^3.23.8
-pnpm add -F @fina/mobile @fina/shared@workspace:*
+pnpm add -F @fina/mobile better-auth@^1.0.0 @better-auth/expo@^1.0.0 \
+  expo-router@~5.0.0 expo-secure-store@~14.0.0 expo-status-bar@~2.0.0 \
+  react-native-safe-area-context@5.4.0 react-native-screens@~4.4.0 zod@^3.23.8 \
+  @fina/shared@workspace:*
 ```
 
-- [ ] **Step 3: Switch to Expo Router**
+- [ ] **Step 3: Switch to Expo Router and update `apps/mobile/package.json`**
 
-Edit `apps/mobile/package.json` — set `"main": "expo-router/entry"` (replacing the default Expo entry).
+Set `"main": "expo-router/entry"` in `apps/mobile/package.json`.
 
-Update `apps/mobile/app.json` — within `"expo"`, ensure:
+- [ ] **Step 4: Update `apps/mobile/app.json`**
 
+Within the `expo` block, ensure:
 ```json
 {
   "expo": {
@@ -2034,43 +1840,51 @@ Update `apps/mobile/app.json` — within `"expo"`, ensure:
   }
 }
 ```
+Delete the generated `App.tsx` (Expo Router takes over).
 
-Delete the generated `App.tsx` (Expo Router replaces it).
-
-- [ ] **Step 4: Create `apps/mobile/src/env.ts`**
+- [ ] **Step 5: Create `apps/mobile/src/env.ts`**
 
 ```ts
 import { z } from "zod";
 
 const Schema = z.object({
-  EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
   EXPO_PUBLIC_API_URL: z.string().url(),
 });
 
 export const env = Schema.parse({
-  EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY,
   EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
 });
 ```
 
-- [ ] **Step 5: Create `apps/mobile/src/api/client.ts`**
+- [ ] **Step 6: Create `apps/mobile/src/auth/client.ts`**
 
 ```ts
+import { createAuthClient } from "better-auth/react";
+import { expoClient } from "@better-auth/expo/client";
+import * as SecureStore from "expo-secure-store";
 import { env } from "../env";
 
-export type FetchAuth = { getToken: () => Promise<string | null> };
+export const authClient = createAuthClient({
+  baseURL: `${env.EXPO_PUBLIC_API_URL}/api/auth`,
+  plugins: [expoClient({ scheme: "fina", storagePrefix: "fina", storage: SecureStore })],
+});
 
-export async function apiFetch<T>(
-  auth: FetchAuth,
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
-  const token = await auth.getToken();
+export const { useSession, signIn, signUp, signOut } = authClient;
+```
+
+- [ ] **Step 7: Create `apps/mobile/src/api/client.ts`**
+
+```ts
+import { authClient } from "../auth/client";
+import { env } from "../env";
+
+export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const cookie = authClient.getCookie?.() ?? "";
   const res = await fetch(`${env.EXPO_PUBLIC_API_URL}${path}`, {
     ...init,
     headers: {
       "content-type": "application/json",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
+      ...(cookie ? { cookie } : {}),
       ...init.headers,
     },
   });
@@ -2081,104 +1895,67 @@ export async function apiFetch<T>(
 }
 ```
 
-- [ ] **Step 6: Create router files**
+If `getCookie` is not the actual exported helper in this version of `@better-auth/expo` (the API has been stabilizing), substitute the version's documented session-header helper — the call site stays the same.
 
-`apps/mobile/app/_layout.tsx`:
+- [ ] **Step 8: Create `apps/mobile/app/_layout.tsx`**
+
 ```tsx
-import { ClerkProvider, ClerkLoaded } from "@clerk/clerk-expo";
-import { tokenCache } from "@clerk/clerk-expo/token-cache";
 import { Stack } from "expo-router";
-import { env } from "../src/env";
 
 export default function RootLayout() {
   return (
-    <ClerkProvider tokenCache={tokenCache} publishableKey={env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY}>
-      <ClerkLoaded>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" />
-          <Stack.Screen name="(auth)/sign-in" />
-        </Stack>
-      </ClerkLoaded>
-    </ClerkProvider>
+    <Stack screenOptions={{ headerShown: false }}>
+      <Stack.Screen name="(tabs)" />
+      <Stack.Screen name="(auth)/sign-in" />
+    </Stack>
   );
 }
 ```
 
-`apps/mobile/app/index.tsx`:
+- [ ] **Step 9: Create `apps/mobile/app/index.tsx`**
+
 ```tsx
 import { Redirect } from "expo-router";
-import { useAuth } from "@clerk/clerk-expo";
+import { useSession } from "../src/auth/client";
 
 export default function Index() {
-  const { isSignedIn, isLoaded } = useAuth();
-  if (!isLoaded) return null;
-  return isSignedIn ? <Redirect href="/(tabs)" /> : <Redirect href="/(auth)/sign-in" />;
+  const { data, isPending } = useSession();
+  if (isPending) return null;
+  return data?.user ? <Redirect href="/(tabs)" /> : <Redirect href="/(auth)/sign-in" />;
 }
 ```
 
-`apps/mobile/app/(auth)/sign-in.tsx`:
+- [ ] **Step 10: Create `apps/mobile/app/(auth)/sign-in.tsx`**
+
 ```tsx
 import { useState } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
-import { useSignIn, useSignUp } from "@clerk/clerk-expo";
 import { useRouter } from "expo-router";
+import { signIn, signUp } from "../../src/auth/client";
 
 export default function SignInScreen() {
-  const { signIn, setActive: setSignInActive, isLoaded: signInLoaded } = useSignIn();
-  const { signUp, setActive: setSignUpActive, isLoaded: signUpLoaded } = useSignUp();
   const router = useRouter();
   const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [stage, setStage] = useState<"email" | "code">("email");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState<"signIn" | "signUp">("signUp");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function startEmail() {
-    if (!signInLoaded || !signUpLoaded) return;
+  async function submit() {
     setBusy(true);
     setErr(null);
     try {
-      try {
-        const su = await signUp.create({ emailAddress: email });
-        await su.prepareEmailAddressVerification({ strategy: "email_code" });
-        setStage("code");
-      } catch {
-        const si = await signIn.create({ identifier: email });
-        const factor = si.supportedFirstFactors?.find((f) => f.strategy === "email_code");
-        if (!factor) throw new Error("Email not supported on this account");
-        await si.prepareFirstFactor({ strategy: "email_code", emailAddressId: factor.emailAddressId });
-        setStage("code");
+      if (mode === "signUp") {
+        const result = await signUp.email({ email, password, name: name || email.split("@")[0] });
+        if (result.error) throw new Error(result.error.message ?? "Sign up failed");
+      } else {
+        const result = await signIn.email({ email, password });
+        if (result.error) throw new Error(result.error.message ?? "Sign in failed");
       }
+      router.replace("/(tabs)");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Failed to start sign-in");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function verify() {
-    setBusy(true);
-    setErr(null);
-    try {
-      if (signUp?.status === "missing_requirements") {
-        const result = await signUp.attemptEmailAddressVerification({ code });
-        if (result.status === "complete") {
-          await setSignUpActive({ session: result.createdSessionId! });
-          router.replace("/(tabs)");
-          return;
-        }
-      }
-      if (signIn) {
-        const result = await signIn.attemptFirstFactor({ strategy: "email_code", code });
-        if (result.status === "complete") {
-          await setSignInActive({ session: result.createdSessionId! });
-          router.replace("/(tabs)");
-          return;
-        }
-      }
-      throw new Error("Verification incomplete");
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Verification failed");
+      setErr(e instanceof Error ? e.message : "Auth failed");
     } finally {
       setBusy(false);
     }
@@ -2188,35 +1965,47 @@ export default function SignInScreen() {
     <View style={styles.root}>
       <Text style={styles.title}>Fina</Text>
       <Text style={styles.subtitle}>Your AI financial advisor</Text>
-      {stage === "email" ? (
-        <>
-          <TextInput
-            style={styles.input}
-            placeholder="email@example.com"
-            autoCapitalize="none"
-            keyboardType="email-address"
-            value={email}
-            onChangeText={setEmail}
-          />
-          <Pressable style={styles.button} disabled={busy || !email} onPress={startEmail}>
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Continue</Text>}
-          </Pressable>
-        </>
-      ) : (
-        <>
-          <Text style={styles.hint}>We sent a code to {email}</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="6-digit code"
-            keyboardType="number-pad"
-            value={code}
-            onChangeText={setCode}
-          />
-          <Pressable style={styles.button} disabled={busy || code.length < 4} onPress={verify}>
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Verify</Text>}
-          </Pressable>
-        </>
+
+      <Pressable onPress={() => setMode(mode === "signUp" ? "signIn" : "signUp")}>
+        <Text style={styles.toggle}>
+          {mode === "signUp" ? "Already have an account? Sign in" : "New here? Sign up"}
+        </Text>
+      </Pressable>
+
+      {mode === "signUp" && (
+        <TextInput
+          style={styles.input}
+          placeholder="Your name"
+          value={name}
+          onChangeText={setName}
+        />
       )}
+      <TextInput
+        style={styles.input}
+        placeholder="email@example.com"
+        autoCapitalize="none"
+        keyboardType="email-address"
+        value={email}
+        onChangeText={setEmail}
+      />
+      <TextInput
+        style={styles.input}
+        placeholder="Password (8+ characters)"
+        secureTextEntry
+        value={password}
+        onChangeText={setPassword}
+      />
+      <Pressable
+        style={styles.button}
+        disabled={busy || !email || password.length < 8}
+        onPress={submit}
+      >
+        {busy ? (
+          <ActivityIndicator color="#fff" />
+        ) : (
+          <Text style={styles.buttonText}>{mode === "signUp" ? "Create account" : "Sign in"}</Text>
+        )}
+      </Pressable>
       {err && <Text style={styles.error}>{err}</Text>}
     </View>
   );
@@ -2225,8 +2014,8 @@ export default function SignInScreen() {
 const styles = StyleSheet.create({
   root: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#fff" },
   title: { fontSize: 36, fontWeight: "700", marginBottom: 4 },
-  subtitle: { fontSize: 14, opacity: 0.6, marginBottom: 32 },
-  hint: { fontSize: 14, marginBottom: 12, opacity: 0.7 },
+  subtitle: { fontSize: 14, opacity: 0.6, marginBottom: 24 },
+  toggle: { fontSize: 14, color: "#06f", marginBottom: 16 },
   input: { borderWidth: 1, borderColor: "#ddd", borderRadius: 8, padding: 14, fontSize: 16, marginBottom: 12 },
   button: { backgroundColor: "#111", borderRadius: 8, padding: 14, alignItems: "center" },
   buttonText: { color: "#fff", fontWeight: "600", fontSize: 16 },
@@ -2234,7 +2023,8 @@ const styles = StyleSheet.create({
 });
 ```
 
-`apps/mobile/app/(tabs)/_layout.tsx`:
+- [ ] **Step 11: Create `apps/mobile/app/(tabs)/_layout.tsx`**
+
 ```tsx
 import { Tabs } from "expo-router";
 
@@ -2247,11 +2037,12 @@ export default function TabsLayout() {
 }
 ```
 
-`apps/mobile/app/(tabs)/index.tsx`:
+- [ ] **Step 12: Create `apps/mobile/app/(tabs)/index.tsx`**
+
 ```tsx
 import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
-import { useAuth, useUser } from "@clerk/clerk-expo";
+import { useSession, signOut } from "../../src/auth/client";
 import { apiFetch } from "../../src/api/client";
 
 type Me = {
@@ -2262,22 +2053,23 @@ type Me = {
 };
 
 export default function Home() {
-  const { signOut, getToken } = useAuth();
-  const { user } = useUser();
+  const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    apiFetch<Me>({ getToken: () => getToken() }, "/me")
+    apiFetch<Me>("/me")
       .then((m) => { if (!cancelled) setMe(m); })
       .catch((e) => { if (!cancelled) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
-  }, [getToken]);
+  }, []);
 
   return (
     <View style={styles.root}>
-      <Text style={styles.h1}>Welcome{user?.firstName ? `, ${user.firstName}` : ""}</Text>
+      <Text style={styles.h1}>
+        Welcome{session?.user?.name ? `, ${session.user.name}` : ""}
+      </Text>
       {!me && !err && <ActivityIndicator />}
       {err && <Text style={styles.err}>Could not reach API: {err}</Text>}
       {me && (
@@ -2315,56 +2107,47 @@ const styles = StyleSheet.create({
 });
 ```
 
-- [ ] **Step 7: Install workspace**
+- [ ] **Step 13: Install workspace**
 
 ```bash
 pnpm install
 ```
 
-- [ ] **Step 8: Manual smoke test**
+- [ ] **Step 14: Manual smoke test**
 
-Prereqs:
-1. Clerk dev project at clerk.com — copy `pk_test_...` into both `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY` and `CLERK_PUBLISHABLE_KEY`. Copy `sk_test_...` into `CLERK_SECRET_KEY`.
-2. Add a Clerk webhook (`user.created` event) pointing at `https://YOUR_TUNNEL/webhooks/clerk`. Use ngrok or cloudflared:
-   ```bash
-   ngrok http 4000
-   ```
-   Update Clerk webhook URL with the tunnel URL. Copy webhook signing secret into `CLERK_WEBHOOK_SECRET`.
+Prereqs in `.env`:
+- Real `BETTER_AUTH_SECRET` (32+ chars, openssl rand -base64 32).
+- `BETTER_AUTH_URL=http://YOUR_LAN_IP:4000` (so the device can reach it).
+- `EXPO_PUBLIC_API_URL=http://YOUR_LAN_IP:4000` (same).
+- For dev with no `RESEND_API_KEY`, the email fallback logs the magic link to the API console — useful for testing.
 
 Run:
 ```bash
-# terminal 1
 pnpm nx run api:dev
-
-# terminal 2 (different port for tunnel) — see Prereq 2
-
-# terminal 3
 pnpm nx run mobile:start
-# press 'i' for iOS sim or 'a' for Android, or scan QR with Expo Go
+# 'i' iOS sim or 'a' Android, or scan QR with Expo Go
 ```
 
-Verify:
-1. Mobile app opens to sign-in.
-2. Enter email → receive 6-digit code → verify.
-3. Lands on home, displays workspace name + role `owner` + tier `PRO` + "Pro trial active — ends ..." line.
-4. Backend logs show `/webhooks/clerk` 200 followed by `/me` 200.
+Verify on the device:
+1. App opens on sign-in.
+2. Switch to "Sign up", fill name + email + password, tap Create account.
+3. Lands on home. Card shows workspace name, role `owner`, tier `PRO`, "Pro trial active" line.
+4. Sign out, sign back in (use the same email + password) — same workspace.
 
-If tier shows `FREE` and trial.active is false, the webhook didn't fire — check ngrok URL in Clerk dashboard.
+If the card never loads, check API logs for `databaseHooks.user.create` errors and confirm the migrations were applied.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 15: Commit**
 
 ```bash
 git add apps/mobile/ pnpm-lock.yaml package.json
-git commit -m "feat(mobile): scaffold Expo app with Clerk + /me home screen"
+git commit -m "feat(mobile): Expo + Better Auth sign-up/sign-in + /me home screen"
 ```
 
 ---
 
-## Task 12: Web app scaffold (Next.js + Clerk)
+## Task 11: Web app scaffold (Next.js + Better Auth)
 
-**Files:**
-- Create via generator: `apps/web/`
-- Create router files, middleware, env, api client
+**Files:** `apps/web/{src/{env.ts,auth/client.ts,app/{layout.tsx,page.tsx,sign-in/page.tsx,(app)/home/page.tsx}},middleware.ts}`, generator-created config files
 
 - [ ] **Step 1: Generate the Next.js app**
 
@@ -2373,13 +2156,10 @@ pnpm add -Dw @nx/next@19
 pnpm nx g @nx/next:application web --directory=apps/web --appDir=true --src=true --style=css --linter=eslint --unitTestRunner=none --e2eTestRunner=none --no-interactive
 ```
 
-This creates `apps/web/{src/app/{layout.tsx,page.tsx},next.config.js,project.json,tsconfig*.json}`.
-
-- [ ] **Step 2: Add Clerk + shared deps**
+- [ ] **Step 2: Add deps**
 
 ```bash
-pnpm add -F @fina/web @clerk/nextjs@^6.0.0 zod@^3.23.8
-pnpm add -F @fina/web @fina/shared@workspace:*
+pnpm add -F @fina/web better-auth@^1.0.0 zod@^3.23.8 @fina/shared@workspace:*
 ```
 
 - [ ] **Step 3: Create `apps/web/src/env.ts`**
@@ -2388,38 +2168,58 @@ pnpm add -F @fina/web @fina/shared@workspace:*
 import { z } from "zod";
 
 const Schema = z.object({
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: z.string().min(1),
   NEXT_PUBLIC_API_URL: z.string().url(),
 });
 
 export const env = Schema.parse({
-  NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY,
   NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
 });
 ```
 
-- [ ] **Step 4: Create `apps/web/middleware.ts`**
+- [ ] **Step 4: Create `apps/web/src/auth/client.ts`**
 
 ```ts
-import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { createAuthClient } from "better-auth/react";
+import { env } from "../env";
 
-const isProtectedRoute = createRouteMatcher(["/home(.*)"]);
-
-export default clerkMiddleware(async (auth, req) => {
-  if (isProtectedRoute(req)) {
-    await auth.protect();
-  }
+export const authClient = createAuthClient({
+  baseURL: `${env.NEXT_PUBLIC_API_URL}/api/auth`,
 });
 
+export const { useSession, signIn, signUp, signOut } = authClient;
+```
+
+- [ ] **Step 5: Create `apps/web/middleware.ts`**
+
+```ts
+import { NextRequest, NextResponse } from "next/server";
+
+const PROTECTED_PREFIXES = ["/home"];
+
+export async function middleware(req: NextRequest) {
+  if (!PROTECTED_PREFIXES.some((p) => req.nextUrl.pathname.startsWith(p))) {
+    return NextResponse.next();
+  }
+  // Better Auth's default cookie name is "better-auth.session_token".
+  const sessionCookie = req.cookies.get("better-auth.session_token");
+  if (!sessionCookie) {
+    const signInUrl = new URL("/sign-in", req.url);
+    signInUrl.searchParams.set("from", req.nextUrl.pathname);
+    return NextResponse.redirect(signInUrl);
+  }
+  return NextResponse.next();
+}
+
 export const config = {
-  matcher: ["/((?!_next|.*\\..*).*)", "/(api|trpc)(.*)"],
+  matcher: ["/((?!_next|.*\\..*|api).*)"],
 };
 ```
 
-- [ ] **Step 5: Replace `apps/web/src/app/layout.tsx`**
+If your Better Auth version uses a different default cookie name, adjust it here. The simpler path: use Better Auth's helper in `next-js` integration if available in your version.
+
+- [ ] **Step 6: Replace `apps/web/src/app/layout.tsx`**
 
 ```tsx
-import { ClerkProvider } from "@clerk/nextjs";
 import "./global.css";
 
 export const metadata = {
@@ -2429,27 +2229,33 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <ClerkProvider>
-      <html lang="en">
-        <body>{children}</body>
-      </html>
-    </ClerkProvider>
+    <html lang="en">
+      <body>{children}</body>
+    </html>
   );
 }
 ```
 
-(If the generator created `apps/web/src/app/global.css` already, leave it. If not, create an empty one.)
+(The generator may have created `apps/web/src/app/global.css` already. If not, create an empty file.)
 
-- [ ] **Step 6: Replace `apps/web/src/app/page.tsx` (marketing landing → /home redirect for signed-in)**
+- [ ] **Step 7: Replace `apps/web/src/app/page.tsx` (landing)**
 
 ```tsx
-import { auth } from "@clerk/nextjs/server";
-import { redirect } from "next/navigation";
+"use client";
 import Link from "next/link";
+import { useSession } from "../auth/client";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
-export default async function Landing() {
-  const { userId } = await auth();
-  if (userId) redirect("/home");
+export default function Landing() {
+  const { data, isPending } = useSession();
+  const router = useRouter();
+
+  useEffect(() => {
+    if (data?.user) router.replace("/home");
+  }, [data, router]);
+
+  if (isPending) return null;
   return (
     <main style={{ padding: 32, fontFamily: "system-ui" }}>
       <h1 style={{ fontSize: 48, marginBottom: 16 }}>Fina</h1>
@@ -2474,40 +2280,77 @@ export default async function Landing() {
 }
 ```
 
-- [ ] **Step 7: Create sign-in / sign-up route stubs**
+- [ ] **Step 8: Create `apps/web/src/app/sign-in/page.tsx`**
 
-`apps/web/src/app/sign-in/[[...sign-in]]/page.tsx`:
 ```tsx
-import { SignIn } from "@clerk/nextjs";
+"use client";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { signIn, signUp } from "../../auth/client";
 
-export default function Page() {
+export default function SignInPage() {
+  const router = useRouter();
+  const [mode, setMode] = useState<"signIn" | "signUp">("signUp");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      if (mode === "signUp") {
+        const r = await signUp.email({ email, password, name: name || email.split("@")[0]! });
+        if (r.error) throw new Error(r.error.message ?? "Sign up failed");
+      } else {
+        const r = await signIn.email({ email, password });
+        if (r.error) throw new Error(r.error.message ?? "Sign in failed");
+      }
+      router.replace("/home");
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : "Auth failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <main style={{ display: "flex", justifyContent: "center", padding: 64 }}>
-      <SignIn signUpUrl="/sign-up" forceRedirectUrl="/home" />
+    <main style={{ display: "flex", justifyContent: "center", padding: 64, fontFamily: "system-ui" }}>
+      <form onSubmit={submit} style={{ width: 360, display: "flex", flexDirection: "column", gap: 12 }}>
+        <h1 style={{ fontSize: 32, marginBottom: 8 }}>{mode === "signUp" ? "Create account" : "Sign in"}</h1>
+        <button type="button" onClick={() => setMode(mode === "signUp" ? "signIn" : "signUp")}
+          style={{ background: "none", border: "none", color: "#06f", textAlign: "left", cursor: "pointer", padding: 0, marginBottom: 8 }}>
+          {mode === "signUp" ? "Already have an account? Sign in" : "New here? Sign up"}
+        </button>
+        {mode === "signUp" && (
+          <input type="text" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)}
+            style={{ padding: 12, border: "1px solid #ddd", borderRadius: 8 }} />
+        )}
+        <input type="email" placeholder="email@example.com" required value={email} onChange={(e) => setEmail(e.target.value)}
+          style={{ padding: 12, border: "1px solid #ddd", borderRadius: 8 }} />
+        <input type="password" placeholder="Password (8+ chars)" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)}
+          style={{ padding: 12, border: "1px solid #ddd", borderRadius: 8 }} />
+        <button type="submit" disabled={busy || !email || password.length < 8}
+          style={{ padding: 12, background: "#111", color: "#fff", borderRadius: 8, border: "none", cursor: "pointer" }}>
+          {busy ? "..." : mode === "signUp" ? "Create account" : "Sign in"}
+        </button>
+        {err && <div style={{ color: "#c00" }}>{err}</div>}
+      </form>
     </main>
   );
 }
 ```
 
-`apps/web/src/app/sign-up/[[...sign-up]]/page.tsx`:
-```tsx
-import { SignUp } from "@clerk/nextjs";
-
-export default function Page() {
-  return (
-    <main style={{ display: "flex", justifyContent: "center", padding: 64 }}>
-      <SignUp signInUrl="/sign-in" forceRedirectUrl="/home" />
-    </main>
-  );
-}
-```
-
-- [ ] **Step 8: Create `apps/web/src/app/(app)/home/page.tsx`**
+- [ ] **Step 9: Create `apps/web/src/app/(app)/home/page.tsx`**
 
 ```tsx
-import { auth } from "@clerk/nextjs/server";
+"use client";
+import { useEffect, useState } from "react";
+import { signOut } from "../../../auth/client";
 import { env } from "../../../env";
-import { SignOutButton } from "@clerk/nextjs";
 
 type Me = {
   user: { id: string; email: string; tz: string; locale: string };
@@ -2516,98 +2359,90 @@ type Me = {
   trial: { active: boolean; endsAt: string | null };
 };
 
-async function fetchMe(token: string): Promise<Me> {
+async function fetchMe(): Promise<Me> {
   const res = await fetch(`${env.NEXT_PUBLIC_API_URL}/me`, {
-    headers: { authorization: `Bearer ${token}` },
+    credentials: "include",
     cache: "no-store",
   });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
-export default async function HomePage() {
-  const { getToken } = await auth();
-  const token = await getToken();
-  if (!token) {
-    return <main style={{ padding: 32 }}>Not signed in.</main>;
-  }
-  let me: Me;
-  try {
-    me = await fetchMe(token);
-  } catch (e) {
-    return (
-      <main style={{ padding: 32 }}>
-        <p style={{ color: "#c00" }}>Could not reach API: {e instanceof Error ? e.message : String(e)}</p>
-      </main>
-    );
-  }
+export default function HomePage() {
+  const [me, setMe] = useState<Me | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMe().then(setMe).catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+  }, []);
+
   return (
     <main style={{ padding: 32, fontFamily: "system-ui", maxWidth: 600 }}>
       <h1 style={{ fontSize: 32, marginBottom: 24 }}>Welcome</h1>
-      <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 16, marginBottom: 24 }}>
-        <div style={{ fontSize: 12, opacity: 0.5 }}>Workspace</div>
-        <div style={{ fontSize: 18, fontWeight: 600 }}>{me.workspace.name}</div>
-        <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8 }}>Role</div>
-        <div style={{ fontSize: 18, fontWeight: 600 }}>{me.workspace.role}</div>
-        <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8 }}>Tier</div>
-        <div style={{ fontSize: 18, fontWeight: 600 }}>{me.tier.toUpperCase()}</div>
-        {me.trial.active && (
-          <div style={{ fontSize: 12, marginTop: 12, color: "#0a7" }}>
-            Pro trial active — ends {new Date(me.trial.endsAt!).toLocaleDateString()}
-          </div>
-        )}
-      </div>
-      <SignOutButton>
-        <button style={{ padding: "12px 24px", borderRadius: 8, border: "1px solid #ddd" }}>
-          Sign out
-        </button>
-      </SignOutButton>
+      {err && <p style={{ color: "#c00" }}>Could not reach API: {err}</p>}
+      {!me && !err && <p>Loading…</p>}
+      {me && (
+        <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 16, marginBottom: 24 }}>
+          <div style={{ fontSize: 12, opacity: 0.5 }}>Workspace</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{me.workspace.name}</div>
+          <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8 }}>Role</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{me.workspace.role}</div>
+          <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8 }}>Tier</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{me.tier.toUpperCase()}</div>
+          {me.trial.active && (
+            <div style={{ fontSize: 12, marginTop: 12, color: "#0a7" }}>
+              Pro trial active — ends {new Date(me.trial.endsAt!).toLocaleDateString()}
+            </div>
+          )}
+        </div>
+      )}
+      <button onClick={() => signOut()}
+        style={{ padding: "12px 24px", borderRadius: 8, border: "1px solid #ddd", background: "#fff", cursor: "pointer" }}>
+        Sign out
+      </button>
     </main>
   );
 }
 ```
 
-- [ ] **Step 9: Add Clerk redirect env vars to `apps/web/.env.local.example`**
-
-If Nx's generator already created `apps/web/.env.local`, add to it (and also document in root `.env.example`):
-
-```
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_...
-NEXT_PUBLIC_API_URL=http://localhost:4000
-```
-
-The redirect URLs (`/sign-in`, `/sign-up`, `/home`) are passed inline via Clerk component props above; no env required.
-
 - [ ] **Step 10: Smoke test**
+
+Make sure CORS on the API allows `http://localhost:3000` and `credentials: include`. By default, Better Auth's handler emits the right CORS headers for its endpoints; the `/me` route uses the same origin policy so adding `@fastify/cors` registered with `origin: ["http://localhost:3000"], credentials: true` is required. If not yet added, add it now in `apps/api/src/server.ts`:
+
+```ts
+import cors from "@fastify/cors";
+// ... inside buildApp:
+await app.register(cors, {
+  origin: env.NODE_ENV === "production" ? false : ["http://localhost:3000"],
+  credentials: true,
+});
+```
+and `pnpm add -F @fina/api @fastify/cors@^10.0.0`. Re-run api tests to ensure nothing broke.
 
 ```bash
 pnpm install
-pnpm nx run web:dev
-# open http://localhost:3000 in a browser
+pnpm nx run api:dev   # terminal 1
+pnpm nx run web:dev   # terminal 2 — browse http://localhost:3000
 ```
 
-Verify:
-1. Landing page shows "Sign in" link.
-2. Click sign-in → Clerk-hosted form.
-3. Sign up with a new email → 6-digit code → verify.
-4. Lands on `/home` showing workspace name + role + tier `PRO` + trial active line.
-5. Sign-out button returns to landing.
-
-If Clerk webhook is configured (from Task 11 manual smoke test), the same backend records show through both clients.
+Verify in browser:
+1. Landing page → click Sign in.
+2. Sign up with email + name + password → land on `/home`.
+3. Card shows workspace + role `owner` + tier `PRO` + trial active line.
+4. Sign out returns to landing.
 
 - [ ] **Step 11: Commit**
 
 ```bash
-git add apps/web/ pnpm-lock.yaml package.json
-git commit -m "feat(web): scaffold Next.js with Clerk + /home showing /me"
+git add apps/web/ apps/api/src/server.ts apps/api/package.json pnpm-lock.yaml
+git commit -m "feat(web): Next.js + Better Auth sign-up/sign-in + /home + CORS"
 ```
 
 ---
 
-## Task 13: GitHub Actions CI
+## Task 12: GitHub Actions CI
 
-**Files:**
-- Create: `.github/workflows/ci.yml`
+**Files:** `.github/workflows/ci.yml`
 
 - [ ] **Step 1: Create the workflow**
 
@@ -2637,12 +2472,10 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgresql://fina:fina@localhost:5432/fina_test
-      CLERK_SECRET_KEY: sk_test_dummy
-      CLERK_PUBLISHABLE_KEY: pk_test_dummy
-      CLERK_WEBHOOK_SECRET: whsec_dGVzdHNlY3JldGZvcndlYmhvb2tzaWduYXR1cmV2ZXJpZmllcg==
-      EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_dummy
+      BETTER_AUTH_SECRET: ci-secret-at-least-32-characters-long-for-tests-only
+      BETTER_AUTH_URL: http://localhost:4000
+      EMAIL_FROM: ci@fina.app
       EXPO_PUBLIC_API_URL: http://localhost:4000
-      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: pk_test_dummy
       NEXT_PUBLIC_API_URL: http://localhost:4000
 
     steps:
@@ -2675,24 +2508,23 @@ jobs:
         run: pnpm nx run-many -t test --base=origin/main --head=HEAD
 ```
 
-For pushes to `main` (no diff base), Nx falls back to running across all projects.
+For pushes to `main` (no diff base) Nx falls back to all projects.
 
 - [ ] **Step 2: Commit and push**
 
 ```bash
 git add .github/
-git commit -m "ci: add Nx affected lint + typecheck + test workflow"
+git commit -m "ci: Nx affected lint + typecheck + test workflow"
 ```
 
-After pushing to GitHub (a remote must already be set up by the user), confirm the workflow is green on the first run.
+After pushing to GitHub, confirm the workflow is green.
 
 ---
 
-## Task 14: Final verification
+## Task 13: Final verification
 
 - [ ] **Step 1: Local end-to-end**
 
-Fresh checkout simulation:
 ```bash
 docker compose down -v
 docker compose up -d
@@ -2703,32 +2535,35 @@ pnpm nx run-many -t typecheck
 pnpm nx run-many -t lint
 pnpm nx run-many -t test
 ```
-
 All steps pass.
 
 - [ ] **Step 2: Manual e2e on both clients**
 
-Run the manual smoke test from Task 11 Step 8 (mobile) and Task 12 Step 10 (web). Sign up with a fresh email; verify on each client:
-1. Workspace name correct.
+Run the smoke tests from Task 10 Step 14 (mobile) and Task 11 Step 10 (web). Sign up with a fresh email, confirm:
+1. Workspace name correct (derived from name → email).
 2. Role = `owner`.
 3. Tier = `PRO` and trial active line visible.
-4. Sign out, sign back in (same email) → same workspace.
+4. Sign out, sign back in (same email + password) → same workspace.
 
-Confirm in Postgres:
+Check Postgres:
 ```sql
 SELECT id, email, "trialEndsAt", "trialConsumed" FROM users;
 SELECT * FROM memberships;
+SELECT id, "userId", "providerId", "accountId" FROM accounts;
+SELECT id, "userId", "expiresAt" FROM sessions;
 ```
-- One User row per signup; `trialEndsAt` ~30 days from now; `trialConsumed` = false.
-- One Membership with `role = 'owner'` per user.
+- One User per signup (`trialEndsAt` ~30 days out, `trialConsumed=false`).
+- One Membership with `role=owner` per user.
+- Account row(s) linking the credential / OAuth providers used.
+- Session rows live until expiry.
 
 - [ ] **Step 3: Update root README with status**
 
-Append to `README.md`:
+Append:
 ```markdown
 ## Status — 2026-05-08
 
-- ✅ Plan 1 complete: Nx workspace, Postgres, Fastify API with Clerk JWT, workspace bootstrap with 30-day Pro trial, Expo mobile + Next.js web both rendering /me, CI green.
+- ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI green.
 - 🚧 Next: Plan 2 — workspace sharing (invites + roles + switcher).
 ```
 
@@ -2743,13 +2578,13 @@ git commit -m "docs: mark Plan 1 complete and roadmap pointer"
 
 ## Done — Plan 1 Exit Criteria
 
-- [ ] `pnpm nx run-many -t test` green: api tests cover health, auth.clerk, membership, workspaces.bootstrap, me, webhooks.clerk.
+- [ ] `pnpm nx run-many -t test` green: api tests cover health, auth.session, membership, workspaces.bootstrap, me.
 - [ ] `pnpm nx run-many -t typecheck` green across api, mobile, web, shared.
 - [ ] `pnpm nx run-many -t lint` green.
 - [ ] CI green on push.
-- [ ] Mobile app: email sign-up → home displays workspace + role + tier `PRO` + trial active line.
+- [ ] Mobile app: email + password sign-up → home displays workspace + role + tier `PRO` + trial active line.
 - [ ] Web app: same flow at `localhost:3000`.
-- [ ] DB: every signed-up Clerk user has exactly one User row (with non-null trial fields), one Workspace row, one Membership row with role=owner.
+- [ ] DB: every signed-up user has a User row (with non-null trial fields), Account row(s) for the credential they used, Session row(s) for active sessions, exactly one Workspace row, one Membership row with role=owner.
 - [ ] Re-sign-in does not duplicate User/Workspace and does not restart the trial.
 
 When all checked, move to **Plan 2: Workspace Sharing (Phase 1.5)**.

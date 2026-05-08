@@ -825,7 +825,8 @@ V1 dogfood 동안: 모두 자동 Pro. 결제 구현은 v1 public beta 직전 pha
 | **백엔드** | **Fastify + TypeScript** | TS 친화, 빠름, 작음 |
 | ORM | **Prisma** | TS-first, schema 한 파일, migration |
 | DB | **Postgres (managed)** | Render / Neon / Supabase / Railway 중 택 1 |
-| Auth | **Clerk** | RN SDK + Next.js SDK + Node SDK 모두 1급 지원, social login. **Free 50k MAU** (2026 상향), 초과 $0.02/MAU + $20/월 base. v1 + v1.5 동안 비용 0. |
+| Auth | **Better Auth** (self-hosted OSS) | TS-first, Expo + Next.js + Node 모두 1급 지원 (`@better-auth/expo`, Better Auth Next.js 통합). Email/password + OAuth (Google/Apple) + Magic Link + MFA 빌트인. 우리 Postgres+Prisma 에 schema 통합 → 데이터 100% 소유. **Free forever**, vendor lock-in 없음. |
+| Email 발송 | **Resend** (또는 AWS SES) | Magic link, 비밀번호 재설정, OTP 등. Resend free 3K/월, 이후 $10/월. |
 | **LLM** | **Gemini 2.5 Flash-Lite** (단일 모델) | $0.10/M in + $0.40/M out — Fina 의 단순 use case (categorize, daily brief, basic query, plan generation) 에 충분. Thinking budget 미지원이지만 not needed. Frontier (Flash 또는 Sonnet) escalation 은 v1.5+ 검토. |
 | LLM client | **Vercel AI SDK** | Provider-agnostic 추상화 (나중에 multi-provider/model 가도 인터페이스 유지) |
 | Plaid | `plaid-node` + `react-native-plaid-link-sdk` + `react-plaid-link` (web) | 표준 |
@@ -1041,7 +1042,6 @@ fina/
 9. **Daily ritual idempotency**: 같은 날짜에 두 번 트리거되어도 중복 메시지 안 나가게 — `daily_briefs(workspace_id, date) UNIQUE` 또는 audit 기반 dedupe.
 10. **Multi-currency 트랜잭션**: 캐나다 사용자가 USD 카드도 가짐 (해외 결제). v1 은 "환산해서 CAD 로 보고" or "그대로 표기 + 환산 안 함" 둘 중 결정 필요.
 11. **PIPEDA 컨플라이언스 검토**: 베타 직전 변호사 검토. Privacy policy / ToS 초안 마련.
-12. **Auth provider migration (Clerk → self-built)**: Clerk 무료 50K MAU 한도 도달 전 (~30K MAU 시점) self-hosted OAuth 으로 migration 계획 시작. `libs/api-auth` 가 이미 추상 layer 라 cutover 시 한 곳만 수정. Migration target 후보: Better Auth, Lucia, 직접 구현. Cutover UX (기존 사용자 magic-link 재인증) 별도 설계 필요.
 
 ---
 
