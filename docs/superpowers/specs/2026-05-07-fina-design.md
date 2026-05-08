@@ -825,7 +825,7 @@ V1 dogfood 동안: 모두 자동 Pro. 결제 구현은 v1 public beta 직전 pha
 | **백엔드** | **Fastify + TypeScript** | TS 친화, 빠름, 작음 |
 | ORM | **Prisma** | TS-first, schema 한 파일, migration |
 | DB | **Postgres (managed)** | Render / Neon / Supabase / Railway 중 택 1 |
-| Auth | **Clerk** | RN SDK + Next.js SDK + Node SDK 모두 1급 지원, social login, 무료 티어 10k MAU |
+| Auth | **Clerk** | RN SDK + Next.js SDK + Node SDK 모두 1급 지원, social login. **Free 50k MAU** (2026 상향), 초과 $0.02/MAU + $20/월 base. v1 + v1.5 동안 비용 0. |
 | **LLM** | **Gemini 2.5 Flash-Lite** (단일 모델) | $0.10/M in + $0.40/M out — Fina 의 단순 use case (categorize, daily brief, basic query, plan generation) 에 충분. Thinking budget 미지원이지만 not needed. Frontier (Flash 또는 Sonnet) escalation 은 v1.5+ 검토. |
 | LLM client | **Vercel AI SDK** | Provider-agnostic 추상화 (나중에 multi-provider/model 가도 인터페이스 유지) |
 | Plaid | `plaid-node` + `react-native-plaid-link-sdk` + `react-plaid-link` (web) | 표준 |
