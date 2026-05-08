@@ -673,7 +673,7 @@ Lite + **풀 양방향 advisor**:
   - "지난 6개월 어디서 새고 있어?"
   - "Walmart 트랜잭션 다 시장 카테고리로 옮겨줘"
 - **Plan generation**: 다년/다목표 시나리오 ("3년 안에 집", "빚 갚기 plan")
-- **Deep audit mode**: 다량 트랜잭션 reasoning (Flash thinking budget high + chunked analysis)
+- **Deep audit mode**: 다량 트랜잭션 reasoning (chunked analysis + structured prompt 으로 Flash-Lite 에서 처리)
 - **Proactive monitoring**: 비정상 패턴 자동 감지 + push (background agent daily)
 - **Goal tracking**: 목표 등록 + 주간 진척도
 - **Receipt OCR** (vision)
@@ -745,53 +745,51 @@ Web 의 추가 가치: **Pro chat 은 데스크탑 키보드 경험이 모바일
 
 각 endpoint idempotent + audit_events 기록. Server-side 검증 only (클라이언트 self-report 신뢰 X).
 
-### 13.10 Per-user economics (월 가정, Gemini 2.5 Flash only)
+### 13.10 Per-user economics (월 가정, Gemini 2.5 Flash-Lite only)
 
-**Gemini 2.5 Flash 실제 가격** (May 2026): $0.30/M input + $2.50/M output. Per-turn cost 는 토큰 사이즈에 크게 의존:
+**Gemini 2.5 Flash-Lite 가격** (May 2026): $0.10/M input + $0.40/M output. Thinking mode 미지원 (also not needed for Fina). Per-turn cost:
 
 | 호출 타입 | 토큰 (in + out) | Per-turn |
 |---|---|---|
-| Categorize confirm (단순) | 1.5K + 100 | ~$0.0007 |
-| Free-form chat (평균) | 3K + 400 | ~$0.0019 |
-| Deep audit / plan gen (thinking on) | 5K + 2K | ~$0.0065 |
-| Background 분석 (Pro proactive) | 10K + 500 | ~$0.0043 |
+| Categorize confirm (단순) | 1.5K + 100 | ~$0.00019 |
+| Daily brief 생성 | 2K + 300 | ~$0.00032 |
+| Free-form chat (평균) | 3K + 400 | ~$0.00046 |
+| Deep audit / plan gen | 5K + 1.5K | ~$0.00110 |
+| Background 분석 (Pro proactive) | 10K + 500 | ~$0.00120 |
 
 **월 economics**:
 
 | Tier | Net 결제 | LLM | Plaid | 인프라 | **마진** |
 |---|---|---|---|---|---|
 | Free | $0 | $0 | $0 | $0.30 | **-$0.30** (funnel) |
-| Lite IAP ~$5.94 | $5.94 | ~$0.15 (ritual 30 + categorize ~50) | $0.30 | $0.40 | **~$5.09** |
-| Lite Web ~$6.50 | $6.50 | ~$0.15 | $0.30 | $0.40 | **~$5.65** |
-| Pro IAP ~$12.74 | $12.74 | **~$5 (hard cap)** | $1.50 | $0.80 | **~$5.44** (worst case) |
-| Pro Web ~$14.27 | $14.27 | ~$5 | $1.50 | $0.80 | **~$6.97** |
-| **Pro 평균 사용자** (실제 quota 안 건드림) | $12.74 | ~$1.50 | $1.50 | $0.80 | **~$8.94** |
-| **Trial 사용자** (월) | $0 | ~$5 | $1.50 | $0.80 | **-$7.30** (worst case CAC) |
+| Lite IAP ~$5.94 | $5.94 | ~$0.04 (ritual 30 + categorize ~50, all Flash-Lite) | $0.30 | $0.40 | **~$5.20** |
+| Lite Web ~$6.50 | $6.50 | ~$0.04 | $0.30 | $0.40 | **~$5.76** |
+| **Pro 평균 사용자** | $12.74 | ~$0.50 | $1.50 | $0.80 | **~$9.94** |
+| **Pro 헤비 사용자** (1,000 chat + 200 deep/월) | $12.74 | ~$0.70 | $1.50 | $0.80 | **~$9.74** |
+| **Pro hard cap 도달** (worst case 이론치) | $12.74 | $5 | $1.50 | $0.80 | **~$5.44** |
+| Pro Web 평균 | $14.27 | ~$0.50 | $1.50 | $0.80 | **~$11.47** |
+| **Trial 사용자** (월 평균) | $0 | ~$0.50 | $1.50 | $0.80 | **-$2.80** (CAC) |
 
-**Pro $5 LLM hard cap quota** (사용자당, 월):
+Flash-Lite 의 단가가 낮아서 **평균 Pro 사용자는 월 $1 미만 LLM cost**. $5 hard cap 은 사실상 안전망 — 도달하려면 월 ~10,000 chat turn (=일 333 turn) 필요한데 인간 사용자 비현실적.
 
-| 항목 | 한도 | Cost |
-|---|---|---|
-| Free-form chat turns (avg) | 1,500/월 soft cap | $2.85 |
-| Thinking-mode turns (deep audit, plan gen) | 300/월 soft cap | $1.95 |
-| Daily ritual + categorize + background | cron auto, ~$0.15 | $0.15 |
-| **Total worst case** | | **~$4.95** ✓ under $5 |
+**Pro $5 LLM hard cap (안전망)**:
+- 누적 cost 추적 + $5 도달 시 advisor 일시 중지 → 다음 청구일 자동 해제
+- soft quota UX 따로 안 만듦 (사실상 unlimited 처럼 동작)
+- Background "proactive monitoring" 은 daily 1회 + 트랜잭션 100건 이상 시 sampling
 
-**Quota 도달 시 동작**:
-- 1,500 chat turn → thinking budget 강제 off (cheap turn 만, chat 계속)
-- 300 thinking turn → 깊은 분석 / plan gen 다음 청구일까지 잠금
-- 둘 다 도달 → "이번달 quota 다 썼어, X일 후 reset" 안내
-- **Hard $5 dollar cap**: 어떤 이유로든 도달 시 advisor 일시 중지 → 다음 청구일 자동 해제
-
-**Lite quota**: 사용자 trigger 없는 cron 만 LLM 호출 (~$0.15/월), 따로 노출 X.
+**Lite**: cron driven (ritual + categorize) 만, 사용자 quota 노출 unnecessary.
 
 **가정**:
-- Routing: 일반 대화 80%, deep audit / plan gen 20%
-- Plaid pay-as-you-go (~$0.30/Item/월)
+- Plaid pay-as-you-go (~$0.30/Item/월). Pro 평균 3 items.
 - 인프라 = Postgres + hosting + push + Sentry amortized
-- Trial CAC worst case: $7.30 (heavy 사용자가 quota 다 채울 시). 평균 사용자 ~$3.50.
+- Trial CAC: 평균 $2.80/사용자, 10% conversion 시 paying 사용자 1명당 trial 비용 $28. Lite 5달 / Pro 3달 payback.
 
-**Quality 노트**: Frontier (Sonnet/Opus) 없이 deep audit / plan generation 의 품질이 v1 에서 충분한지 dogfooding 검증. 부족하면 v1.5+ 에서 frontier escalation 도입 검토. Cost 가 너무 빠듯하면 v2.5 Flash-Lite ($0.10/$0.40) 로 down-shift 옵션 (같은 단일 provider).
+**Quality 노트**: Flash-Lite 가 plan generation / deep audit 품질에서 부족하면 (dogfooding 검증) — 옵션:
+1. 같은 작업을 chunked + structured prompt 로 나누기
+2. Pro 의 deep 작업만 2.5 Flash 로 escalate (provider 동일, $0.30/$2.50)
+3. v1.5+ 에 frontier model (Sonnet/Opus) 도입
+
+지금은 단일 Flash-Lite 로 운영 단순화 우선.
 
 ### 13.11 단계화
 
@@ -828,8 +826,8 @@ V1 dogfood 동안: 모두 자동 Pro. 결제 구현은 v1 public beta 직전 pha
 | ORM | **Prisma** | TS-first, schema 한 파일, migration |
 | DB | **Postgres (managed)** | Render / Neon / Supabase / Railway 중 택 1 |
 | Auth | **Clerk** | RN SDK + Next.js SDK + Node SDK 모두 1급 지원, social login, 무료 티어 10k MAU |
-| **LLM** | **Gemini 2.5 Flash** (단일 provider) | 1M context, multilingual, thinking budget (off/low/medium/high 로 quality dial), low cost. Frontier escalation 은 v1.5+ 에서 필요시 검토. |
-| LLM client | **Vercel AI SDK** | Provider-agnostic 추상화 (나중에 multi-provider 가도 인터페이스 유지) |
+| **LLM** | **Gemini 2.5 Flash-Lite** (단일 모델) | $0.10/M in + $0.40/M out — Fina 의 단순 use case (categorize, daily brief, basic query, plan generation) 에 충분. Thinking budget 미지원이지만 not needed. Frontier (Flash 또는 Sonnet) escalation 은 v1.5+ 검토. |
+| LLM client | **Vercel AI SDK** | Provider-agnostic 추상화 (나중에 multi-provider/model 가도 인터페이스 유지) |
 | Plaid | `plaid-node` + `react-native-plaid-link-sdk` + `react-plaid-link` (web) | 표준 |
 | **Billing** | **Stripe** (web) + **react-native-iap** + **Apple/Google receipt 검증 SDK** | Hybrid IAP+Web (Section 13.7) |
 | Push | **Expo Push Notifications** | iOS/Android abstract |
