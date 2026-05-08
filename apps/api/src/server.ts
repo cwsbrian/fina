@@ -35,16 +35,16 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
       if (typeof v === "string") headers.set(k, v);
       else if (Array.isArray(v)) headers.set(k, v.join(", "));
     }
-    const init: RequestInit = {
-      method: req.method,
-      headers,
-      body:
-        req.method === "GET" || req.method === "HEAD"
-          ? undefined
-          : typeof req.body === "string"
-            ? req.body
-            : JSON.stringify(req.body ?? {}),
-    };
+    const body =
+      req.method === "GET" || req.method === "HEAD"
+        ? undefined
+        : typeof req.body === "string"
+          ? req.body
+          : JSON.stringify(req.body ?? {});
+    const init: RequestInit =
+      body === undefined
+        ? { method: req.method, headers }
+        : { method: req.method, headers, body };
     const response = await auth.handler(new Request(url, init));
 
     reply.code(response.status);

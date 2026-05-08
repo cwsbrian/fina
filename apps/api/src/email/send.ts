@@ -32,6 +32,6 @@ export async function sendEmail(
     to: input.to,
     subject: input.subject,
     text: input.text,
-    html: input.html,
+    ...(input.html !== undefined ? { html: input.html } : {}),
   });
 }

@@ -20,6 +20,10 @@ export function createAuth(env: Env) {
   return betterAuth({
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
+    trustedOrigins:
+      env.NODE_ENV === "production"
+        ? []
+        : ["http://localhost:3000", "fina://"],
     database: prismaAdapter(prisma, { provider: "postgresql" }),
     emailAndPassword: { enabled: true, requireEmailVerification: false },
     socialProviders,

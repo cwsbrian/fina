@@ -57,7 +57,8 @@
     "dev": {
       "executor": "nx:run-commands",
       "options": {
-        "command": "tsx watch apps/api/src/main.ts"
+        "command": "pnpm --filter @fina/api exec tsx watch src/main.ts",
+        "cwd": "{workspaceRoot}"
       }
     },
     "test": {
