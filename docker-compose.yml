@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: fina-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fina
+      POSTGRES_PASSWORD: fina
+      POSTGRES_DB: fina
+    ports:
+      - "5432:5432"
+    volumes:
+      - fina-postgres:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fina"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  fina-postgres:

@@ -1,0 +1,25 @@
+node_modules/
+.nx/cache
+.nx/workspace-data
+dist/
+build/
+coverage/
+.next/
+.expo/
+.expo-shared/
+.env
+.env.local
+.env.*.local
+!.env.example
+!apps/api/.env.test
+*.log
+.DS_Store
+ios/Pods/
+android/build/
+android/app/build/
+.vscode/
+.idea/
+
+# Next.js
+.next
+out

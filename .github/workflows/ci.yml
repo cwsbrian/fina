@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  affected:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: fina
+          POSTGRES_PASSWORD: fina
+          POSTGRES_DB: fina
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U fina"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://fina:fina@localhost:5432/fina_test
+      BETTER_AUTH_SECRET: ci-secret-at-least-32-characters-long-for-tests-only
+      BETTER_AUTH_URL: http://localhost:4000
+      EMAIL_FROM: ci@fina.app
+      EXPO_PUBLIC_API_URL: http://localhost:4000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.12.3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.18.0
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Create test DB
+        run: PGPASSWORD=fina psql -h localhost -U fina -c "CREATE DATABASE fina_test;" postgres
+
+      - run: pnpm nx run api:db:generate
+      - run: pnpm nx run api:db:deploy
+
+      - name: Lint
+        run: pnpm nx run-many -t lint --base=origin/main --head=HEAD
+      - name: Typecheck
+        run: pnpm nx run-many -t typecheck --base=origin/main --head=HEAD
+      - name: Test
+        run: pnpm nx run-many -t test --base=origin/main --head=HEAD

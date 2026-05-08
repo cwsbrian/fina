@@ -1,0 +1,26 @@
+{
+  "name": "@fina/mobile",
+  "version": "0.0.1",
+  "private": true,
+  "main": "expo-router/entry",
+  "dependencies": {
+    "@better-auth/expo": "^1.6.9",
+    "@testing-library/jest-native": "*",
+    "@testing-library/react-native": "*",
+    "better-auth": "^1.6.9",
+    "expo": "*",
+    "expo-router": "^55.0.14",
+    "expo-secure-store": "^55.0.13",
+    "expo-status-bar": "~1.12.1",
+    "metro-config": "*",
+    "react-native": "*",
+    "react-native-safe-area-context": "^5.7.0",
+    "react-native-screens": "^4.24.0",
+    "react-native-svg": "*",
+    "react-native-web": "*",
+    "zod": "^3.23.8"
+  },
+  "scripts": {
+    "eas-build-post-install": "cd ../../ && node tools/scripts/eas-build-post-install.mjs . apps/mobile"
+  }
+}

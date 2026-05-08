@@ -1,0 +1,32 @@
+{
+  "name": "@fina/api",
+  "version": "0.0.0",
+  "private": true,
+  "main": "src/main.ts",
+  "scripts": {
+    "prisma": "prisma",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:studio": "prisma studio"
+  },
+  "prisma": {
+    "schema": "prisma/schema.prisma",
+    "seed": "tsx prisma/seed.ts"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.2.0",
+    "@fastify/sensible": "^6.0.1",
+    "@prisma/client": "^5.22.0",
+    "better-auth": "^1.6.9",
+    "fastify": "^5.0.0",
+    "resend": "^6.12.3",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "dotenv": "^16.4.5",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.5"
+  }
+}
