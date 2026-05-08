@@ -271,10 +271,10 @@ RN 클라이언트는 각 block type 에 대응하는 컴포넌트 렌더러 보
 
 1. **DB 에 모든 메시지 누적 저장** (`chat_messages` 테이블)
 2. **호출 시 sliding window** — 최근 20~30 메시지만 LLM 한테
-3. **Anthropic prompt caching — 정적인 부분만**:
+3. **Gemini context caching — 정적인 부분만**:
    - **Cacheable**: system prompt, tool definitions, 사용자의 stable 프로필 (locale, timezone, 카테고리 list 같은 거)
    - **NOT cacheable**: financial context (budget 진행도, 최근 트랜잭션, plan) — 매 호출마다 변하니 cache hit 0%, 차라리 별도 message block 으로 분리해서 cache breakpoint 뒤에 둠
-   - 결과: input cost 의 정적 부분만 ~90% 절감, dynamic 부분은 정상 과금. 그래도 system + tools 가 input 토큰의 큰 비중이라 의미 있음.
+   - Gemini 의 implicit + explicit caching 활용. system + tools 가 input 토큰의 큰 비중이라 의미 있음.
 4. **각 chat session 너무 길게 끌지 않기** — daily ritual 마다 새 thread 시작
 
 ### "컨텍스트" 두 종류
@@ -582,13 +582,12 @@ Merchant raw, note, chat user input 모두 통과. Sentry/log 도 동일 redacti
 
 ### 12.4 Provider 설정
 
-- **Anthropic Claude API**: training-에-안-쓰임 default. 30일 abuse retention. 베타 진입 시 ZDR (Zero Data Retention) + DPA 신청.
-- **OpenAI**: 동일 정책 (2023.03 이후 default no-training). 베타 시 ZDR.
+- **Google Gemini API (paid tier)**: training-에-안-쓰임 default. 데이터 유럽/미국 region 선택 가능. 베타 진입 시 DPA + Vertex AI Enterprise 옵션 검토 (data residency + ZDR-equivalent).
 - API key 는 server-side only. 클라이언트에 절대 노출 X.
 
 ### 12.5 사용자 동의 / privacy policy
 
-- Onboarding 에 명시 동의: "Fina 는 너의 financial data 일부 (금액, 카테고리, 머천트, 채팅 내용) 를 AI 분석을 위해 Anthropic / OpenAI 에 보냅니다. 이 데이터는 모델 훈련에 사용되지 않으며 30일 후 삭제됩니다."
+- Onboarding 에 명시 동의: "Fina 는 너의 financial data 일부 (금액, 카테고리, 머천트, 채팅 내용) 를 AI 분석을 위해 Google Gemini API 에 보냅니다. 이 데이터는 모델 훈련에 사용되지 않으며 Google 에 retention 되지 않습니다 (paid tier 정책)."
 - Settings → "AI 처리 일시 중지" 토글 (chat / daily ritual 만 비활성, 나머지 가계부 기능 유지)
 - Privacy Policy 문서 별도 (legal 검토 권장)
 
@@ -674,7 +673,7 @@ Lite + **풀 양방향 advisor**:
   - "지난 6개월 어디서 새고 있어?"
   - "Walmart 트랜잭션 다 시장 카테고리로 옮겨줘"
 - **Plan generation**: 다년/다목표 시나리오 ("3년 안에 집", "빚 갚기 plan")
-- **Deep audit mode**: 다량 트랜잭션 reasoning (Sonnet escalation)
+- **Deep audit mode**: 다량 트랜잭션 reasoning (Flash thinking budget high + chunked analysis)
 - **Proactive monitoring**: 비정상 패턴 자동 감지 + push (background agent daily)
 - **Goal tracking**: 목표 등록 + 주간 진척도
 - **Receipt OCR** (vision)
@@ -746,28 +745,33 @@ Web 의 추가 가치: **Pro chat 은 데스크탑 키보드 경험이 모바일
 
 각 endpoint idempotent + audit_events 기록. Server-side 검증 only (클라이언트 self-report 신뢰 X).
 
-### 13.10 Per-user economics (월 가정, Gemini 2.5 Flash + Sonnet escalation)
+### 13.10 Per-user economics (월 가정, Gemini 2.5 Flash only)
 
 | Tier | Net 결제 | LLM | Plaid | 인프라 | **마진** |
 |---|---|---|---|---|---|
 | Free | $0 | $0 (LLM 호출 0) | $0 (Plaid 없음) | $0.30 | **-$0.30** (funnel cost) |
-| Lite IAP ~$5.94 | $5.94 | ~$0.30 (daily ritual 30회 × Flash + 약간 Sonnet) | $0.30 | $0.40 | **~$4.94** |
-| Lite Web ~$6.50 | $6.50 | ~$0.30 | $0.30 | $0.40 | **~$5.50** |
-| Pro IAP ~$12.74 | $12.74 | ~$3.50 (200 turns × 90% Flash + 10% Sonnet + background analysis) | $1.50 (avg 3 items) | $0.80 | **~$6.94** |
-| Pro Web ~$14.27 | $14.27 | ~$3.50 | $1.50 | $0.80 | **~$8.47** |
-| **Trial 사용자** (월 평균) | $0 | ~$3.50 | $1.50 | $0.80 | **-$5.80** (CAC 부담) |
+| Lite IAP ~$5.94 | $5.94 | ~$0.15 (daily ritual 30회 + categorize cards, Flash thinking-low) | $0.30 | $0.40 | **~$5.09** |
+| Lite Web ~$6.50 | $6.50 | ~$0.15 | $0.30 | $0.40 | **~$5.65** |
+| Pro IAP ~$12.74 | $12.74 | ~$1.20 (200 turns Flash 평균 + ritual + 백그라운드 analysis with thinking-high) | $1.50 (avg 3 items) | $0.80 | **~$9.24** |
+| Pro Web ~$14.27 | $14.27 | ~$1.20 | $1.50 | $0.80 | **~$10.77** |
+| **Trial 사용자** (월 평균) | $0 | ~$1.20 | $1.50 | $0.80 | **-$3.50** (CAC 부담) |
 
 **가정**:
-- Gemini 2.5 Flash per-turn ~$0.0008, Sonnet 4.6 with caching ~$0.05
-- Routing: 90% Flash / 10% Sonnet (Pro), Lite 는 거의 100% Flash (단순 categorize)
+- Gemini 2.5 Flash per-turn:
+  - Thinking off: ~$0.0008
+  - Thinking medium: ~$0.003
+  - Thinking high (deep audit): ~$0.008
+- Routing within Flash: 80% thinking-off (정형 작업) / 15% medium / 5% high
 - Plaid pay-as-you-go (~$0.30/Item/월)
 - 인프라 = Postgres + hosting + push + Sentry amortized
-- Trial CAC: 30일 × Pro cost ≈ $5.80. 10% conversion 시 paying user 1명당 trial 비용 $58. Lite 5달 / Pro 7달 payback.
+- Trial CAC: 30일 × Pro cost ≈ $3.50. 10% conversion 시 paying user 1명당 trial 비용 $35. Lite 7달 / Pro 4달 payback.
 
 **Quota guardrails**:
 - Lite: daily ritual + 미분류 처리 외 LLM 호출 안 됨 (그래서 quota 노출 unnecessary)
-- Pro: per-query cost cap (단일 advisor query 최대 N round-trip + 토큰 한도). 월 LLM cost > $10 인 사용자는 Sonnet 잠시 throttling.
+- Pro: per-query cost cap (단일 advisor query 최대 N round-trip + 토큰 한도). 월 LLM cost > $5 인 사용자는 thinking-high 잠시 throttling.
 - Background "proactive monitoring" (Pro): daily run 1회 한정, 트랜잭션 50건 이상이면 sampling.
+
+**Quality 노트**: Sonnet 같은 frontier model 없이 deep audit / plan generation 의 출력 품질이 v1 에서 충분한지 dogfooding 으로 검증. 부족하면 v1.5+ 에서 frontier escalation 다시 검토.
 
 ### 13.11 단계화
 
@@ -804,9 +808,8 @@ V1 dogfood 동안: 모두 자동 Pro. 결제 구현은 v1 public beta 직전 pha
 | ORM | **Prisma** | TS-first, schema 한 파일, migration |
 | DB | **Postgres (managed)** | Render / Neon / Supabase / Railway 중 택 1 |
 | Auth | **Clerk** | RN SDK + Next.js SDK + Node SDK 모두 1급 지원, social login, 무료 티어 10k MAU |
-| **LLM (cheap default)** | **Gemini 2.5 Flash** | 1M context, multilingual, thinking budget, low cost (~$0.0008/turn) |
-| **LLM (escalation)** | **Anthropic Claude Sonnet 4.6** | Prompt caching, strict tool use, complex reasoning |
-| LLM client | **Vercel AI SDK** | provider-agnostic + tool-use 통합 (Flash + Anthropic 동시 사용) |
+| **LLM** | **Gemini 2.5 Flash** (단일 provider) | 1M context, multilingual, thinking budget (off/low/medium/high 로 quality dial), low cost. Frontier escalation 은 v1.5+ 에서 필요시 검토. |
+| LLM client | **Vercel AI SDK** | Provider-agnostic 추상화 (나중에 multi-provider 가도 인터페이스 유지) |
 | Plaid | `plaid-node` + `react-native-plaid-link-sdk` + `react-plaid-link` (web) | 표준 |
 | **Billing** | **Stripe** (web) + **react-native-iap** + **Apple/Google receipt 검증 SDK** | Hybrid IAP+Web (Section 13.7) |
 | Push | **Expo Push Notifications** | iOS/Android abstract |
@@ -960,7 +963,7 @@ fina/
 - Push notifications + 탭 시 chat thread 열기
 - Settings: morning_time, timezone, snooze
 - 추가 tool: `getSpendingSummary`, `listScheduledSpend`, `getRecurring`
-- Anthropic prompt caching 적용
+- Gemini context caching 적용 (system + tools)
 
 **Exit criteria**: 매일 아침 푸시 → 미분류 카드 1탭 정리. **이때 family/베타 1~2명 dogfooding 시작.**
 
