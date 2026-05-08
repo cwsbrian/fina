@@ -620,134 +620,176 @@ Merchant raw, note, chat user input 모두 통과. Sentry/log 도 동일 redacti
 
 ## 13. Pricing & Billing
 
-비즈니스 모델: **Freemium + Hybrid IAP/Web subscription**. 가계부는 무료, advisor (chat + ritual + 깊은 분석) 가 paid.
+비즈니스 모델: **Freemium + per-user paid subscription** (IAP + Web). 핵심 gating axes:
+
+1. **Bank 자동 import (Plaid)** — Free 는 manual/CSV 만, Lite 1개, Pro 무제한
+2. **AI 기능** — Free 없음, Lite "AI 가 말 거는 구조" (read-only), Pro 풀 양방향 chat
+3. **Workspace sharing** — **Free 부터 무료** (multi-workspace + invite + role)
 
 ### 13.1 Tier 구조
 
-| Tier | Web / IAP | 대상 | 핵심 가치 |
-|---|---|---|---|
-| **Free** | $0 | 가계부 사용자 | Mint 후계자 — 자동 분류 + 예산 + 요약 |
-| **Lite** | **$8 / $9.99** | Advisor 입문 | 제한된 advisor + Daily ritual |
-| **Pro** | **$14 / $17.99** | Power 사용자 | 무제한 advisor + 깊은 분석 |
-| Family | TBD | 가족 공유 | 4 멤버 워크스페이스 (v1.5+) |
+| Tier | 가격 (CAD) | Plaid | AI | Workspace Sharing |
+|---|---|---|---|---|
+| **Free** | $0 | ❌ (manual + CSV only) | ❌ | ✅ owner / editor / viewer + invite |
+| **Lite** | **$7/월** | 1개 | "AI 가 말 거는" daily ritual + categorize_card 응답만 (free-form input X) | ✅ |
+| **Pro** | **$15/월** | 무제한 | 풀 양방향 chat (plan generation, deep audit, anomaly alert 등 포함) | ✅ |
+| Family | — (v1.5+) | — | — | (현재 Free 의 sharing 으로 가족이 한 워크스페이스 공유 가능) |
+
+**가격 세부**: $7 / $15 는 web 헤드라인 (CAD). IAP 는 Apple/Google 의 가장 가까운 price tier (대략 $6.99 / $14.99 CAD) 적용. Annual 은 v1.5+.
 
 ### 13.2 Free tier 스코프
 
-가계부 핵심 기능 전체 무료:
-- Bank account 1개 (Plaid Item 1)
-- 무제한 트랜잭션 + 자동 분류 + 머천트 매핑 학습
-- 카테고리 + 예산 + 스케줄 + recurring
-- Daily summary push (텍스트 only, cheap model 짧은 요약)
-- 채팅 10 msg/월 (cheap model, conversion funnel 용 맛보기)
-- CSV 내보내기
+**의도**: 시장 진입 hook. Sharing 이 핵심 — 가족/친구 그룹 분담 정산 같은 use case 를 cover 해서 입소문/뱀파이어 효과.
 
-**의도**: Mint 가 죽고 빈자리 채우는 포지션. Free 가 진짜 쓸 만해야 conversion funnel 작동 + 입소문 양산.
+- Manual transaction 입력 (UI form + 미래 chat 입력 — Pro 만 가능)
+- CSV import / export
+- 카테고리 + 예산 + 스케줄 + recurring expenses
+- **Workspace sharing**: 무제한 invite, role (owner / editor / viewer)
+- Daily summary push (앱 자체 생성, LLM 호출 0 — 단순 stats: "어제 X달러 썼어, 이번 주 예산 Y% 사용")
+- Category 자동 매핑 (heuristic only, LLM 호출 X)
 
-### 13.3 Lite tier ($8 web / $9.99 IAP)
+**Free 에 없음**: Plaid 자동 import, AI 채팅, AI 카테고리 제안, AI ritual, OCR, plan generation, deep audit.
 
-- Bank accounts 2개
-- 채팅 200 msg/월 (cheap default + Sonnet escalation pool 월 20회)
-- Daily morning ritual 전체 (rich blocks: categorize_card, confirm_card 등)
-- 챗으로 트랜잭션 / 카테고리 / 예산 변경
+### 13.3 Lite tier ($7/월 CAD)
 
-### 13.4 Pro tier ($14 web / $17.99 IAP)
+Free + **자동 import + AI ritual (read-only mode)**:
 
-Lite + **Pro-only 기능들** (이 기능들이 frontier model 을 정당화):
+- Plaid Link 1개 — 1개 은행/카드 자동 sync
+- **Daily AI ritual**: 매일 아침 morning brief push (Section 6)
+  - AI 가 categorize_card 들 + text 로 메시지 emit
+  - 사용자는 카드 탭으로 카테고리 confirm / 변경 가능
+  - **Free-form chat input 비활성화** (UI 레벨 gating)
+- AI categorize suggestion (uncategorized 트랜잭션 자동 제안)
+- Anomaly alert 푸시 (간단한 룰 + Flash 분석)
 
-- 채팅 1000 msg/월 + Sonnet 무제한 escalation
-- **Plan generation**: 다년 / 다목표 시나리오 ("3년 안에 집", "빚 갚기 plan")
-- **Deep audit mode**: "지난 N개월 어디서 새고 있어?" 다량 트랜잭션 reasoning
-- **Proactive monitoring**: 비정상 패턴 자동 감지 + push (백엔드 agent daily 백그라운드 분석)
-- **Goal tracking**: 목표 등록 + 주간 진척도 자동 분석
+**Lite UX 핵심**: 사용자는 chat 화면을 가지고 있지만 input bar 는 잠겨있음. AI 가 일방향으로 정보 + 카드 보내고 사용자는 카드 탭으로만 응답. "내가 일 안 하고도 가계부가 굴러가는" 자동화 가치.
+
+### 13.4 Pro tier ($15/월 CAD)
+
+Lite + **풀 양방향 advisor**:
+
+- Plaid 무제한 (모든 은행/카드)
+- **Free-form chat input 활성화** — 사용자가 자유롭게 질문/명령 가능
+  - "이번 달 외식 줄이려는데 plan 짜줘"
+  - "지난 6개월 어디서 새고 있어?"
+  - "Walmart 트랜잭션 다 시장 카테고리로 옮겨줘"
+- **Plan generation**: 다년/다목표 시나리오 ("3년 안에 집", "빚 갚기 plan")
+- **Deep audit mode**: 다량 트랜잭션 reasoning (Sonnet escalation)
+- **Proactive monitoring**: 비정상 패턴 자동 감지 + push (background agent daily)
+- **Goal tracking**: 목표 등록 + 주간 진척도
 - **Receipt OCR** (vision)
-- Bank accounts 무제한
-- CSV 대량 import
 - Historical comparison 깊은 버전 (작년 같은 달 + 트렌드)
 
-**원칙**: "Pro 는 더 똑똑한 모델" 으로 팔지 말고, **"Pro 는 이런 일들을 가능하게 해줘"** 로 팔기. Frontier model 은 그 수단.
+**판매 메시지**: "Pro 는 더 똑똑한 모델" 이 아니라 **"Pro 는 이런 일들을 chat 으로 가능"**.
 
-### 13.5 Distribution — Hybrid IAP + Web
+### 13.5 30일 Pro Trial
+
+가입 시 자동 적용:
+- 30일간 Pro 모든 기능 unlock
+- **Card upfront 불필요** (가입 → 즉시 사용)
+- 만료 시 **Free 로 자동 다운그레이드** (Plaid 연결은 read-only 잠김, AI 잠김, 데이터 + workspace sharing 그대로 보존)
+- **계정당 1회** (clerkId/email 기준 dedupe)
+- DB: `users.trial_started_at`, `users.trial_ended_at`, `users.trial_consumed: bool`
+
+만료 5일 전 push + 만료 당일 in-app 배너로 upgrade prompt. 압박 안 하지만 가시성 확보.
+
+### 13.6 Mixed-tier workspaces
+
+Subscription 이 per-user 라서 한 workspace 에 다른 tier 멤버 동시 가능. 룰:
+
+- **Plaid items 는 linker 의 tier 가 결정.** Lite 사용자는 자신이 그 workspace 에서 1개까지 link 가능. Pro 는 무제한. Free 는 0 (link 자체 못 함).
+- **AI 기능은 actor 의 tier 가 결정.** Pro 가 owner 인 workspace 에 Free 사용자가 있으면, Free 사용자에게는 AI input bar 비활성. Pro 는 그대로 활성.
+- **데이터 view + 편집권**: 모든 멤버가 자기 role 에 따라 동일 (편집/보기). Tier 와 무관.
+- **Daily ritual**: 각 사용자가 자기 timezone + 자기 tier 의 ritual 받음. Pro 는 풀 ritual, Lite 는 read-only ritual, Free 는 단순 stats summary.
+
+이 모델의 의미: 한 명만 Pro 결제해도 workspace 의 Plaid+AI 자동화 효과를 누리고, 같이 보는 가족은 무료로 view+edit. **자연스러운 viral loop**: 가족 한 명이 Pro 결제 → 다른 멤버 free 가입 + sharing → 그 중 일부가 자기도 Pro 로 업글 (자기 chat 쓰려고).
+
+### 13.7 Distribution — IAP + Web
 
 | 경로 | 가격 | Net | 비중 |
 |---|---|---|---|
-| **IAP** (Apple/Google) | $9.99 / $17.99 | $8.49 / $15.29 (Apple SBP 15%) | Primary (App Store funnel) |
-| **Web** (Stripe) | $8 / $14 | $7.47 / $13.30 (Stripe 2.9%+$0.30) | Anchor pricing + power user 채널 |
+| **IAP** (Apple/Google) | ~$6.99 / $14.99 CAD | Apple SBP 15% 제외 (~$5.94 / $12.74) | Primary (App Store funnel) |
+| **Web** (Stripe) | $7 / $15 CAD | Stripe 2.9% + $0.30 (~$6.50 / $14.27) | Marketing anchor + power user 채널 + Pro chat 데스크탑 경험 |
 
-**Note**: Web 이 IAP 보다 절대 마진은 살짝 낮음 (Stripe $0.30 fixed fee 가 small transaction 에서 큰 비율). Web 의 진짜 가치는 **marketing anchor** (ChatGPT Plus $20 비교용, YNAB $15 대비 매력) + **power user retention** (sticky 채널).
+Web 의 추가 가치: **Pro chat 은 데스크탑 키보드 경험이 모바일 보다 훨씬 우수**. Web 가입 funnel 이 Pro retention 에 유리.
 
-### 13.6 Apple App Store 컴플라이언스 (Reader app 패턴)
+### 13.8 Apple App Store 컴플라이언스 (Reader app 패턴)
 
 **앱 안에서 허용**:
-- IAP 결제 ($9.99 / $17.99)
+- IAP 결제 ($6.99 / $14.99)
 - "이미 계정 있으세요? 로그인" — Web 가입자 sign-in
 - Apple subscription manage 링크
 
 **앱 안에서 금지** (default — 캐나다 + 미국):
-- 웹 가격 표시 ($8, $14)
+- 웹 가격 표시
 - 웹 결제 페이지 링크
 - "웹에서 더 싸요" 류 hint
 
-**미국 only** (2025 Epic v. Apple 판결 후) — External Link Account entitlement 신청 시 외부 결제 링크 1개 허용 + Apple 수수료 0% (현재, 항소 변동 가능). **v1.5+ 검토** — 즉시 도입 시 정책 risk.
+**미국 only** (2025 Epic v. Apple 판결 후) — External Link Account entitlement 신청 시 외부 결제 링크 1개 허용 + Apple 수수료 0%. **v1.5+ 검토** — 즉시 도입 시 정책 risk.
 
-**v1 운영**: 앱 = IAP UI only, Web 가입자는 sign-in 만. 마찰 받아들이고 정책 risk 0. Spotify / Netflix / Notion 패턴.
+**v1 운영**: 앱 = IAP UI only, Web 가입자는 sign-in 만. Spotify / Netflix / Notion 패턴.
 
-### 13.7 Subscription state — multi-source 룰
+### 13.9 Subscription state — multi-source 룰
 
-`subscriptions` 테이블은 user 에 attach (workspace 아님 — Section 8). 한 user 에게 동시에 여러 source 의 active subscription 가능 (IAP + Web 동시 결제, 또는 마이그레이션 중).
+`subscriptions` 테이블은 user 에 attach (workspace 아님 — Section 8). 한 user 에게 동시 여러 source active 가능.
 
 **Effective tier 결정 룰**:
-1. Active subscriptions 중 **higher tier 가 effective tier** (Pro > Lite > Free)
-2. 같은 tier 동시 결제 → 사용자에게 안내 + lower-cost (web) 유지 권장
-3. 한 source 의 cancel/expire 후 다른 source 만 남으면 자동 전환
+1. Trial active (`users.trial_ended_at` > now) → effective = `pro`
+2. 그 외 active subscriptions 중 **higher tier 가 effective tier** (Pro > Lite > Free)
+3. 같은 tier 동시 결제 → 사용자에게 안내 + lower-cost (web) 유지 권장
+4. 한 source 의 cancel/expire 후 다른 source 만 남으면 자동 전환
 
 **Receipt 검증 endpoints (3종)**:
-- `POST /billing/apple/verify` — Apple `original_transaction_id` 기반, App Store Server API
+- `POST /billing/apple/verify` — Apple `original_transaction_id`, App Store Server API
 - `POST /billing/google/verify` — Google Play Developer API
 - `POST /webhooks/stripe` — Stripe webhook (signature 검증 필수)
 
-각 endpoint 는 idempotent + audit_events 기록. Subscription state 변경은 무조건 server-side 검증 거침 (클라이언트 self-reported 절대 신뢰 안 함).
+각 endpoint idempotent + audit_events 기록. Server-side 검증 only (클라이언트 self-report 신뢰 X).
 
-### 13.8 Per-user economics (월 가정)
+### 13.10 Per-user economics (월 가정, Gemini 2.5 Flash + Sonnet escalation)
 
-| Tier | 결제 net | LLM | Plaid | 인프라 | 마진 |
+| Tier | Net 결제 | LLM | Plaid | 인프라 | **마진** |
 |---|---|---|---|---|---|
-| Free | $0 | $0.05 | $0.30 | $0.20 | -$0.55 (funnel cost) |
-| Lite IAP $8.49 | $8.49 | $3 | $0.60 | $0.50 | **~$4.4** |
-| Lite Web $7.47 | $7.47 | $3 | $0.60 | $0.50 | **~$3.4** |
-| Pro IAP $15.29 | $15.29 | $7 | $1.20 | $0.80 | **~$6.3** |
-| Pro Web $13.30 | $13.30 | $7 | $1.20 | $0.80 | **~$4.3** |
+| Free | $0 | $0 (LLM 호출 0) | $0 (Plaid 없음) | $0.30 | **-$0.30** (funnel cost) |
+| Lite IAP ~$5.94 | $5.94 | ~$0.30 (daily ritual 30회 × Flash + 약간 Sonnet) | $0.30 | $0.40 | **~$4.94** |
+| Lite Web ~$6.50 | $6.50 | ~$0.30 | $0.30 | $0.40 | **~$5.50** |
+| Pro IAP ~$12.74 | $12.74 | ~$3.50 (200 turns × 90% Flash + 10% Sonnet + background analysis) | $1.50 (avg 3 items) | $0.80 | **~$6.94** |
+| Pro Web ~$14.27 | $14.27 | ~$3.50 | $1.50 | $0.80 | **~$8.47** |
+| **Trial 사용자** (월 평균) | $0 | ~$3.50 | $1.50 | $0.80 | **-$5.80** (CAC 부담) |
 
 **가정**:
-- Cheap default LLM (4o-mini 또는 Gemini Flash) — 4o-mini per-turn ~$0.0018, Flash ~$0.0009
-- Routing: 70% cheap / 30% Sonnet escalation
-- Aggressive prompt caching (system + tools cached, financial context fresh)
-- Plaid pay-as-you-go transactions product (~$0.30/Item/월)
-- 인프라 = Postgres + hosting + push + Sentry 등 amortized
+- Gemini 2.5 Flash per-turn ~$0.0008, Sonnet 4.6 with caching ~$0.05
+- Routing: 90% Flash / 10% Sonnet (Pro), Lite 는 거의 100% Flash (단순 categorize)
+- Plaid pay-as-you-go (~$0.30/Item/월)
+- 인프라 = Postgres + hosting + push + Sentry amortized
+- Trial CAC: 30일 × Pro cost ≈ $5.80. 10% conversion 시 paying user 1명당 trial 비용 $58. Lite 5달 / Pro 7달 payback.
 
 **Quota guardrails**:
-- Lite 200 msg/월 hard cap → 도달 시 cheap-only 다운그레이드 (advisor 못 쓰는 게 아니라 escalation 멈춤)
-- Pro Sonnet escalation 무제한이지만 **per-query cost cap** (단일 advisor 호출 최대 N개 round-trip + 토큰 한도)
-- Free 10 msg 도달 시 hard stop + Lite 업그레이드 prompt
+- Lite: daily ritual + 미분류 처리 외 LLM 호출 안 됨 (그래서 quota 노출 unnecessary)
+- Pro: per-query cost cap (단일 advisor query 최대 N round-trip + 토큰 한도). 월 LLM cost > $10 인 사용자는 Sonnet 잠시 throttling.
+- Background "proactive monitoring" (Pro): daily run 1회 한정, 트랜잭션 50건 이상이면 sampling.
 
-### 13.9 단계화
+### 13.11 단계화
 
-| 항목 | V1 dogfood | V1 public | V1.5+ |
+| 항목 | V1 dogfood | V1 public beta | V1.5+ |
 |---|---|---|---|
-| 결제 구현 | ❌ (Brian + 가족 무료) | ✅ Stripe + IAP 둘 다 | Apple/Google receipt 검증 자동화 |
-| Tier UI gating | DB 컬럼만 | feature-level | per-feature 세밀 |
-| Annual 결제 | ❌ | ❌ | ✅ ($80/년 web, $99/년 IAP) |
-| Family | ❌ | ❌ | ✅ |
+| 결제 구현 | ❌ (Brian + 가족 자동 Pro) | ✅ Stripe + IAP | Apple/Google receipt 검증 자동화 |
+| 30일 Trial | seed 로 모두 trial 처럼 | ✅ | (refinement) |
+| Tier UI gating | DB 컬럼만 | feature-level (input bar gating 등) | per-feature 세밀 |
+| Annual 결제 | ❌ | ❌ | ✅ |
+| Family tier | ❌ | (current Free sharing 으로 cover) | (가격 차별화 검토) |
 | US External Link entitlement | ❌ | TBD | Optional |
 
-**V1 dogfood 기간 동안**: 모든 사용자 = 자동 Pro (DB seed). 결제 구현은 v1 public 직전 phase 에서 한 번에. 단, schema 는 처음부터 박아둠 (Section 8).
+V1 dogfood 동안: 모두 자동 Pro. 결제 구현은 v1 public beta 직전 phase 에서. Schema 는 처음부터 박아둠 (Section 8).
 
-### 13.10 Open issues (Pricing 관련)
+### 13.12 Open issues
 
-- Free tier 채팅 10 msg 가 맛보기로 충분한지 / 너무 적은지 dogfooding 검증
-- Pro 의 deep audit / plan gen 도구가 Sonnet 다회 round-trip 시 단일 query $0.20+ 가능 — per-query quota 설계 필요
-- Family $20 가 매력적인지 vs 개별 Lite × 4 = $32 비교 검증
-- Annual 가격 ($80/년 web, $99/년 IAP) elasticity 검증
-- Web 가입 funnel 에서 IAP 로의 cannibalization 측정 (IAP 마진 더 높음)
+- **Trial → Free 전환 UX**: 어떤 메시지/타이밍이 conversion 가장 잘 됨?
+- Pro chat free-form 의 LLM cost 폭주 시 throttling 임계값
+- Mixed-tier workspace 에서 "Free 사용자가 Plaid 데이터 어디까지 보고/편집 가능한지" UAT 필요
+- Annual 가격 ($70/년 Lite, $150/년 Pro 가정) elasticity
+- Web 가입 funnel 에서 IAP 로의 cannibalization 측정
+- Family tier 가 별도로 필요한지 vs 현재 sharing 모델로 충분한지
 
 ---
 
@@ -755,56 +797,126 @@ Lite + **Pro-only 기능들** (이 기능들이 frontier model 을 정당화):
 
 | Layer | 선택 | 이유 |
 |---|---|---|
-| 모바일 | **Expo (React Native)** | 푸시/카메라/Plaid SDK native 통합, EAS Build |
-| 백엔드 | **Fastify + TypeScript** | TS 친화, 빠름, 작음 |
+| **Monorepo** | **Nx** | Affected/incremental build, generators, 풍부한 plugin (`@nx/expo`, `@nx/next`, `@nx/node`, `@nx/react`) |
+| **Mobile** | **Expo (React Native)** + TypeScript | 푸시/카메라/Plaid SDK native 통합, EAS Build |
+| **Web** | **Next.js (App Router)** + React + TypeScript | Marketing 페이지 + Stripe 결제 + Pro chat 데스크탑 경험 한 곳. SSR/SEO. |
+| **백엔드** | **Fastify + TypeScript** | TS 친화, 빠름, 작음 |
 | ORM | **Prisma** | TS-first, schema 한 파일, migration |
 | DB | **Postgres (managed)** | Render / Neon / Supabase / Railway 중 택 1 |
-| Auth | **Clerk** | RN SDK, social login, 무료 티어 10k MAU |
-| LLM | **Anthropic Claude default + OpenAI fallback** | Prompt caching, tool use strict |
-| LLM client | **Vercel AI SDK** | provider-agnostic + tool-use 통합 |
-| Plaid | `plaid-node` + `react-native-plaid-link-sdk` | 표준 |
+| Auth | **Clerk** | RN SDK + Next.js SDK + Node SDK 모두 1급 지원, social login, 무료 티어 10k MAU |
+| **LLM (cheap default)** | **Gemini 2.5 Flash** | 1M context, multilingual, thinking budget, low cost (~$0.0008/turn) |
+| **LLM (escalation)** | **Anthropic Claude Sonnet 4.6** | Prompt caching, strict tool use, complex reasoning |
+| LLM client | **Vercel AI SDK** | provider-agnostic + tool-use 통합 (Flash + Anthropic 동시 사용) |
+| Plaid | `plaid-node` + `react-native-plaid-link-sdk` + `react-plaid-link` (web) | 표준 |
+| **Billing** | **Stripe** (web) + **react-native-iap** + **Apple/Google receipt 검증 SDK** | Hybrid IAP+Web (Section 13.7) |
 | Push | **Expo Push Notifications** | iOS/Android abstract |
 | Jobs | **pg-boss** (v1) → BullMQ + Redis (스케일 시) | Postgres 만으로 시작 |
 | Storage | **S3 / R2** | CSV upload, 영수증 |
-| Hosting | **Render** 또는 **Fly.io** | 가격 + 단순함 |
-| Distribution | **EAS** | TestFlight + Play internal |
+| Hosting (API) | **Render** 또는 **Fly.io** | 가격 + 단순함 |
+| Hosting (Web) | **Vercel** | Next.js native, preview deploy, edge |
+| Distribution | **EAS** (모바일) + Vercel (web) | TestFlight + Play internal + web preview |
 | Observability | **Sentry + Logtail/Axiom** | 무료티어 |
-| Secrets | **Doppler 또는 .env + 1Password** | Plaid token, Anthropic key |
+| Secrets | **Doppler 또는 .env + 1Password** | Plaid token, LLM keys, Stripe keys, Apple/Google service account |
 | Encryption | **app-level AES-GCM** (v1) → KMS (v2) | Plaid access_token at-rest |
-| CI | **GitHub Actions** | Lint + typecheck + test |
+| CI | **GitHub Actions** | Nx affected 활용 — lint + typecheck + test 변경된 project 만 |
 
-### Repo 구조
+### Repo 구조 (Nx)
 
-**Monorepo** (pnpm + Turborepo):
-- `apps/mobile` — Expo RN
-- `apps/api` — Fastify + Prisma
-- `packages/shared` — types, validators, tool definitions, block schemas
+```
+fina/
+├── nx.json
+├── package.json (workspace root)
+├── pnpm-workspace.yaml
+├── tsconfig.base.json
+├── apps/
+│   ├── api/                 # @nx/node — Fastify backend
+│   ├── mobile/              # @nx/expo — Expo RN
+│   ├── web/                 # @nx/next — Next.js App Router
+│   └── *-e2e/               # (필요 시) Playwright / Detox
+└── libs/
+    ├── shared/              # 공통 타입, ID brand, role enum
+    ├── api-auth/            # Clerk JWT verify, assertMembership (api 만 import)
+    ├── api-db/              # Prisma client + schema
+    ├── api-billing/         # Stripe + Apple/Google receipt verifier (api 만)
+    ├── ui-tokens/           # 색상, spacing, typography (web + mobile 공유)
+    ├── chat-blocks/         # Block 스키마 (mobile + web + api 공유)
+    └── tool-defs/           # LLM tool definitions (api 가 LLM 한테 노출, mobile/web 가 UI 매핑)
+```
 
-**이유**: Tool 인자 schema 하나 정의 → 백엔드/모바일 양쪽 공유. v1 속도 ↑.
+**왜 libs/ 가 여러 개**: Nx 의 affected 효과 극대화 — schema 만 바뀌면 그 lib 만 rebuild + lib 의존자만 retest. 또한 `api-*` lib 은 클라이언트 import 차단 (분류로 권한 leak 방지). `chat-blocks` / `tool-defs` 같은 cross-platform lib 는 RN 호환 (no Node-specific imports).
+
+**v1 시작 시 최소**: `apps/api`, `apps/mobile`, `apps/web`, `libs/shared`. 나머지 lib 는 자연스럽게 분리되며 추가.
 
 ---
 
 ## 15. MVP Roadmap
 
-> **Note**: 원래 Phase 1 (4~6주) 로 묶었으나 codex review 가 over-scope 지적 — Plaid sync 정확성 + auth + chat tool loop 만 해도 그 시간 다 먹음. **Phase 1 을 1A/1B/1C 로 나눔**.
+> **Note**: 원래 Phase 1 (4~6주) 로 묶었으나 codex review 가 over-scope 지적 + 이후 v1 에 workspace sharing + web 추가로 더 분할 필요. **Phase 1 을 1A → 1.5 → 1B → 1C 로 분할**.
 
 ### Phase 1A — Foundations (2~3주)
 
-**목표**: Auth, workspace, manual entry 로 텍스트 채팅까지 동작.
+**목표**: Auth, single workspace, mobile + web 양쪽 sign-in 동작.
 
-- Monorepo scaffold (pnpm + Turborepo)
-- Expo 앱 + Node API (Fastify) + Postgres + Prisma
-- Clerk 로그인 (이메일 + Google) + Workspace 자동 생성
-- Service layer authorization 패턴 (Section 10) 박기 — middleware + assertMembership
-- 카테고리 CRUD + seed (시장, 외식, 교통, 구독, 기타...)
-- Manual account 자동 생성 ("Cash") + manual transaction (UI form)
-- 단순 budget UI (CRUD)
-- Chat thread + messages (text only blocks, intent layer 미구현 OK)
-- Chat agent 최소 tool 5개 (read-only first): `listTransactions`, `getBudget`, `getUncategorizedTransactions`, `listCategories`, `getSpendingSummary`
-- Audit events 테이블 + 기본 logging
-- LLM redaction layer 기본 구현
+- Nx monorepo scaffold (`apps/api`, `apps/mobile`, `apps/web`, `libs/shared`)
+- Postgres + Prisma 셋업
+- Fastify backend with Clerk JWT 미들웨어
+- Clerk 로그인 — email magic-link + Google
+  - Mobile (Expo + `@clerk/clerk-expo`)
+  - Web (Next.js + `@clerk/nextjs`)
+- User + Workspace + Membership 스키마 (multi-workspace ready, single per user 시작)
+- Workspace 자동 생성 on `user.created` webhook
+- `assertMembership` middleware (Section 10)
+- `/me` endpoint — mobile + web 둘 다 호출, owner workspace 표시
+- GitHub Actions CI (Nx affected lint + typecheck + test)
 
-**Exit criteria**: 본인이 manual 트랜잭션 입력하고, chat 으로 query 가능. Tool 은 read-only 만.
+**Exit criteria**: 사용자 가입 → 모바일 + 웹 양쪽 로그인 → 둘 다 자기 personal workspace 정보 보임.
+
+### Phase 1.5 — Workspace Sharing (Free 의 핵심 기능, 3~4주)
+
+**목표**: Free tier 의 sharing 기능 본격화. Multi-workspace UX, 초대, role enforcement.
+
+- Workspaces switcher UI (mobile + web)
+- Invite flow:
+  - Owner 가 email 로 초대 → invite 토큰 (서버 발급, 만료) + Clerk 의 magic-link
+  - 받는 사람이 가입/로그인 후 accept → membership 생성
+  - 만료된/사용된 invite 거부
+- Role transitions (owner 가 editor/viewer 변경 + remove)
+- Per-row authorization 강화 — 모든 query workspace_id scope, role gate destructive ops
+- 초대 받은 사용자 onboarding: "X 님이 'Y workspace' 로 초대했어요"
+- Free tier 의 sharing limit (현재: 무제한, 추후 abuse 보면 quota 검토)
+
+**Exit criteria**: 본인이 가족 한 명 초대 → 그 사람이 viewer 로 join → 같은 workspace 의 트랜잭션/예산 같이 보기.
+
+### Phase 1B — Plaid + Account Model (2~3주)
+
+**목표**: 자동 트랜잭션 + 카테고라이저. **Lite tier (Plaid 1개) gating 도 포함**.
+
+- Plaid Link (캐나다) — 모바일 + 웹 양쪽 통합
+- `accounts` entity 본격화 (Plaid item → accounts → transactions)
+- `/transactions/sync` cursor 기반 sync (Section 9)
+- Webhook handler + idempotency + signature 검증
+- Pending → posted transition, removed transactions 처리
+- Item error / re-auth 플로우
+- Merchant 정규화 + Gemini Flash 카테고리 제안 (LLM 한 번 호출로 여러 미분류 트랜잭션 카테고리 제안)
+- Merchant → 카테고리 매핑 학습 (manual confirm 시 자동 생성)
+- Daily cron 보강 sync (last_sync_at > 24h)
+- **Tier gate**: `linkBankAccount` 시 user 의 effective tier 체크 — Free 는 막음, Lite 는 1개까지, Pro 무제한
+
+**Exit criteria**: 본인 (자동 Pro trial) Plaid 연결 → 트랜잭션 자동 import → 대부분 자동 카테고리. Free 사용자는 Plaid 시도 시 upgrade prompt.
+
+### Phase 1C — Agent Writes + Confirmation (2~3주)
+
+**목표**: Pro chat 이 mutate 가능 + 안전한 confirmation flow.
+
+- Chat tool write 권한 추가: `addTransaction`, `categorizeTransaction`, `setBudget`, `addScheduledSpend`, `mapMerchantToCategory`
+- `action_intents` 테이블 + intent issue/consume API
+- Block 모델 v1: `text`, `categorize_card`, `confirm_card` (intent 기반)
+- RN + web block renderer (3개 컴포넌트, libs/chat-blocks 공유)
+- Bulk 작업 제한 + destructive op confirm 강제
+- Tool execution audit (모든 mutate → audit_events row)
+- **Tier gate**: chat input bar 활성/비활성 — Free 비활성 (chat 없음), Lite 비활성 (read-only ritual 만), Pro 활성
+
+**Exit criteria**: Pro 사용자가 chat 으로 트랜잭션 카테고리/예산 변경 가능 (confirm 거치는 destructive 포함). Lite 사용자는 daily ritual 카드만 응답 가능.
 
 ### Phase 1B — Plaid + Account Model (2~3주)
 
@@ -870,27 +982,28 @@ Lite + **Pro-only 기능들** (이 기능들이 frontier model 을 정당화):
 
 | Phase | 기간 |
 |---|---|
-| 1A — Foundations | 2~3주 |
-| 1B — Plaid + Account Model | 2~3주 |
+| 1A — Foundations (Nx + auth + single workspace) | 2~3주 |
+| 1.5 — Workspace Sharing | 3~4주 |
+| 1B — Plaid + Account Model + Tier gating | 2~3주 |
 | 1C — Agent Writes + Confirmation | 2~3주 |
-| 2 — Magic Ritual | 3~4주 |
-| 3 — Advisor 깊어짐 | 3~4주 |
-| **총 v1** | **12~17주** (3~4개월) |
+| 2 — Magic Ritual + Billing (Stripe + IAP) | 4~5주 |
+| 3 — Advisor 깊어짐 (Pro 기능들) | 3~4주 |
+| **총 v1** | **16~22주** (4~5개월) |
 
-한 사람 풀타임 기준. 파트타임이면 비례.
+한 사람 풀타임 기준. 파트타임이면 비례. 결제 구현은 v1 public beta 직전 Phase 2 후반에 통합.
 
 ---
 
 ## 16. Out of Scope (v1.5 / v2+)
 
-- Multi-workspace + 초대 + role 권한 (4~6주 작업)
 - Email 거래 알림 파싱 (가치 보고 결정)
 - Goals (저축 목표, 디버트 페이오프) — Pro tier 의 일부로 v1 후반 도입 검토
 - Investments tracking (Plaid Investments)
 - Python AI service 분리 (호출량 + 복잡도 임계 넘으면)
-- Annual 결제 + Family tier (Section 13 참조)
-- US External Link Account entitlement (Section 13.6)
+- Annual 결제 + 별도 Family tier (Section 13 참조 — 현재 Free sharing 으로 가족 use case cover)
+- US External Link Account entitlement (Section 13.8)
 - Flinks 추가 (Plaid Canada 커버리지 부족할 시)
+- Workspace sharing 의 advanced 기능 (per-account/per-category 권한, 활동 history 공유 view)
 
 ---
 
