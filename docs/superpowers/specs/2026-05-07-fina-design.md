@@ -747,31 +747,51 @@ Web 의 추가 가치: **Pro chat 은 데스크탑 키보드 경험이 모바일
 
 ### 13.10 Per-user economics (월 가정, Gemini 2.5 Flash only)
 
+**Gemini 2.5 Flash 실제 가격** (May 2026): $0.30/M input + $2.50/M output. Per-turn cost 는 토큰 사이즈에 크게 의존:
+
+| 호출 타입 | 토큰 (in + out) | Per-turn |
+|---|---|---|
+| Categorize confirm (단순) | 1.5K + 100 | ~$0.0007 |
+| Free-form chat (평균) | 3K + 400 | ~$0.0019 |
+| Deep audit / plan gen (thinking on) | 5K + 2K | ~$0.0065 |
+| Background 분석 (Pro proactive) | 10K + 500 | ~$0.0043 |
+
+**월 economics**:
+
 | Tier | Net 결제 | LLM | Plaid | 인프라 | **마진** |
 |---|---|---|---|---|---|
-| Free | $0 | $0 (LLM 호출 0) | $0 (Plaid 없음) | $0.30 | **-$0.30** (funnel cost) |
-| Lite IAP ~$5.94 | $5.94 | ~$0.15 (daily ritual 30회 + categorize cards, Flash thinking-low) | $0.30 | $0.40 | **~$5.09** |
+| Free | $0 | $0 | $0 | $0.30 | **-$0.30** (funnel) |
+| Lite IAP ~$5.94 | $5.94 | ~$0.15 (ritual 30 + categorize ~50) | $0.30 | $0.40 | **~$5.09** |
 | Lite Web ~$6.50 | $6.50 | ~$0.15 | $0.30 | $0.40 | **~$5.65** |
-| Pro IAP ~$12.74 | $12.74 | ~$1.20 (200 turns Flash 평균 + ritual + 백그라운드 analysis with thinking-high) | $1.50 (avg 3 items) | $0.80 | **~$9.24** |
-| Pro Web ~$14.27 | $14.27 | ~$1.20 | $1.50 | $0.80 | **~$10.77** |
-| **Trial 사용자** (월 평균) | $0 | ~$1.20 | $1.50 | $0.80 | **-$3.50** (CAC 부담) |
+| Pro IAP ~$12.74 | $12.74 | **~$5 (hard cap)** | $1.50 | $0.80 | **~$5.44** (worst case) |
+| Pro Web ~$14.27 | $14.27 | ~$5 | $1.50 | $0.80 | **~$6.97** |
+| **Pro 평균 사용자** (실제 quota 안 건드림) | $12.74 | ~$1.50 | $1.50 | $0.80 | **~$8.94** |
+| **Trial 사용자** (월) | $0 | ~$5 | $1.50 | $0.80 | **-$7.30** (worst case CAC) |
+
+**Pro $5 LLM hard cap quota** (사용자당, 월):
+
+| 항목 | 한도 | Cost |
+|---|---|---|
+| Free-form chat turns (avg) | 1,500/월 soft cap | $2.85 |
+| Thinking-mode turns (deep audit, plan gen) | 300/월 soft cap | $1.95 |
+| Daily ritual + categorize + background | cron auto, ~$0.15 | $0.15 |
+| **Total worst case** | | **~$4.95** ✓ under $5 |
+
+**Quota 도달 시 동작**:
+- 1,500 chat turn → thinking budget 강제 off (cheap turn 만, chat 계속)
+- 300 thinking turn → 깊은 분석 / plan gen 다음 청구일까지 잠금
+- 둘 다 도달 → "이번달 quota 다 썼어, X일 후 reset" 안내
+- **Hard $5 dollar cap**: 어떤 이유로든 도달 시 advisor 일시 중지 → 다음 청구일 자동 해제
+
+**Lite quota**: 사용자 trigger 없는 cron 만 LLM 호출 (~$0.15/월), 따로 노출 X.
 
 **가정**:
-- Gemini 2.5 Flash per-turn:
-  - Thinking off: ~$0.0008
-  - Thinking medium: ~$0.003
-  - Thinking high (deep audit): ~$0.008
-- Routing within Flash: 80% thinking-off (정형 작업) / 15% medium / 5% high
+- Routing: 일반 대화 80%, deep audit / plan gen 20%
 - Plaid pay-as-you-go (~$0.30/Item/월)
 - 인프라 = Postgres + hosting + push + Sentry amortized
-- Trial CAC: 30일 × Pro cost ≈ $3.50. 10% conversion 시 paying user 1명당 trial 비용 $35. Lite 7달 / Pro 4달 payback.
+- Trial CAC worst case: $7.30 (heavy 사용자가 quota 다 채울 시). 평균 사용자 ~$3.50.
 
-**Quota guardrails**:
-- Lite: daily ritual + 미분류 처리 외 LLM 호출 안 됨 (그래서 quota 노출 unnecessary)
-- Pro: per-query cost cap (단일 advisor query 최대 N round-trip + 토큰 한도). 월 LLM cost > $5 인 사용자는 thinking-high 잠시 throttling.
-- Background "proactive monitoring" (Pro): daily run 1회 한정, 트랜잭션 50건 이상이면 sampling.
-
-**Quality 노트**: Sonnet 같은 frontier model 없이 deep audit / plan generation 의 출력 품질이 v1 에서 충분한지 dogfooding 으로 검증. 부족하면 v1.5+ 에서 frontier escalation 다시 검토.
+**Quality 노트**: Frontier (Sonnet/Opus) 없이 deep audit / plan generation 의 품질이 v1 에서 충분한지 dogfooding 검증. 부족하면 v1.5+ 에서 frontier escalation 도입 검토. Cost 가 너무 빠듯하면 v2.5 Flash-Lite ($0.10/$0.40) 로 down-shift 옵션 (같은 단일 provider).
 
 ### 13.11 단계화
 
