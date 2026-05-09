@@ -32,7 +32,7 @@
 
 ## 3. Architecture
 
-### 3-surface 모델
+### Surface 모델 (mobile-first, web entry-only)
 
 ```
                   Backend (Node + TS)
@@ -53,19 +53,42 @@
      └──────────────┘          └──────────────┘
                            ▲
                            │ HTTPS
-                  ┌────────┴────────┐
-                  │  React Native   │
-                  │  (Chat + UI)    │
-                  └─────────────────┘
+              ┌────────────┴───────────────────┐
+              ▼                                ▼
+   ┌─────────────────────┐          ┌──────────────────────┐
+   │  React Native       │          │   Next.js Web        │
+   │  Mobile (MAIN)      │          │   Entry surface      │
+   │  Daily UX:          │          │   Landing / sign-up  │
+   │  chat, ritual,      │          │   Stripe billing     │
+   │  push, browse,      │          │   Invite accept      │
+   │  Plaid Link         │          │   Workspace/account  │
+   │                     │          │   settings           │
+   └─────────────────────┘          └──────────────────────┘
 ```
+
+### Surface 역할 (mobile = main, web = entry-only)
+
+| Surface | 역할 | v1 에 들어가는 것 | v1 에 안 들어가는 것 |
+|---|---|---|---|
+| **Mobile (React Native)** | Main daily UX. 사용자가 매일 여는 곳. | Chat, daily ritual, push, transactions browse/categorize, Plaid Link, settings | — |
+| **Web (Next.js)** | Entry surface. 자주 안 여는 셀프서비스. | Landing/marketing, sign-up + sign-in, Stripe billing (Reader app), invite accept page, workspace/account settings | **Chat / transactions / ritual UI 없음** (v2+ 검토) |
+
+Web 이 살아있는 이유 (셋 다 mobile-only 로는 구조적으로 곤란):
+
+1. **Stripe 결제 채널 유지** — Reader app 패턴으로 Apple IAP 15% 우회 가능 (§13.7-8). Web sign-up funnel 이 죽으면 IAP 100% 가 강제됨.
+2. **Marketing / SEO funnel** — App Store 만으로는 organic discovery 부족.
+3. **Invite accept landing** — 받는 사람이 앱 설치 없이 가입+수락 가능. Mobile-only 면 invitee 도 앱 설치 강제 → conversion 손실.
+
+이 외엔 web 에 기능 추가 안 함 — 새 daily UX 가 생기면 mobile 에 만들고 끝.
 
 ### 핵심 원칙
 
 1. **DB 가 single source of truth.** UI 든 Chat 이든 결국 DB 를 read/write. 두 surface 사이 동기화 따로 안 함.
-2. **Chat agent = LLM + tools.** Chat 에서 명령하면 LLM 이 tool 호출 → 백엔드가 실행 → DB 업데이트 → UI 에도 즉시 반영.
-3. **Cron 은 단 하나 — daily morning ritual.** 다른 알림은 transaction sync 시점이나 daily ritual 안에서 처리.
-4. **Plaid sync 는 backend 가 주관.** Webhook + 초기 backfill. Categorization 은 merchant 매핑 → AI suggest → uncategorized 순.
-5. **Python AI service 분리는 v2+.** 처음엔 Node 모놀리스로 속도 우선. 인터페이스를 깔끔히 두면 나중 분리 쉬움.
+2. **Mobile-first build order.** Daily UX 는 mobile 에서 만든다. 두 surface 다 필요한 기능 (sharing, switcher 등) 은 web 에서 먼저 굳히고 mobile 이 mirror — web 의 빠른 iterate 사이클로 UX 결정 빨리 검증, 그 다음 mobile 이 결정된 UX 를 native 로 구현.
+3. **Chat agent = LLM + tools.** Chat 에서 명령하면 LLM 이 tool 호출 → 백엔드가 실행 → DB 업데이트 → UI 에도 즉시 반영.
+4. **Cron 은 단 하나 — daily morning ritual.** 다른 알림은 transaction sync 시점이나 daily ritual 안에서 처리.
+5. **Plaid sync 는 backend 가 주관.** Webhook + 초기 backfill. Categorization 은 merchant 매핑 → AI suggest → uncategorized 순.
+6. **Python AI service 분리는 v2+.** 처음엔 Node 모놀리스로 속도 우선. 인터페이스를 깔끔히 두면 나중 분리 쉬움.
 
 ---
 
@@ -708,9 +731,9 @@ Subscription 이 per-user 라서 한 workspace 에 다른 tier 멤버 동시 가
 | 경로 | 가격 | Net | 비중 |
 |---|---|---|---|
 | **IAP** (Apple/Google) | ~$6.99 / $14.99 CAD | Apple SBP 15% 제외 (~$5.94 / $12.74) | Primary (App Store funnel) |
-| **Web** (Stripe) | $7 / $15 CAD | Stripe 2.9% + $0.30 (~$6.50 / $14.27) | Marketing anchor + power user 채널 + Pro chat 데스크탑 경험 |
+| **Web** (Stripe) | $7 / $15 CAD | Stripe 2.9% + $0.30 (~$6.50 / $14.27) | Marketing anchor + Reader app 셀프서비스 채널 |
 
-Web 의 추가 가치: **Pro chat 은 데스크탑 키보드 경험이 모바일 보다 훨씬 우수**. Web 가입 funnel 이 Pro retention 에 유리.
+Web 의 추가 가치: **Stripe sign-up funnel 을 살려야 IAP 15% 우회 가능 (Reader app 패턴)**. Web 자체는 entry surface 로 좁게 — daily UX (chat 등) 는 mobile 전용 (§3 surface 모델 참조).
 
 ### 13.8 Apple App Store 컴플라이언스 (Reader app 패턴)
 
@@ -821,7 +844,7 @@ V1 dogfood 동안: 모두 자동 Pro. 결제 구현은 v1 public beta 직전 pha
 |---|---|---|
 | **Monorepo** | **Nx** | Affected/incremental build, generators, 풍부한 plugin (`@nx/expo`, `@nx/next`, `@nx/node`, `@nx/react`) |
 | **Mobile** | **Expo (React Native)** + TypeScript | 푸시/카메라/Plaid SDK native 통합, EAS Build |
-| **Web** | **Next.js (App Router)** + React + TypeScript | Marketing 페이지 + Stripe 결제 + Pro chat 데스크탑 경험 한 곳. SSR/SEO. |
+| **Web** | **Next.js (App Router)** + React + TypeScript | **Entry surface only** — landing/SEO + sign-up/sign-in + Stripe 결제 (Reader app) + invite accept + workspace/account settings. Daily UX (chat/transactions/ritual) 는 mobile-only, web 에 없음. SSR/SEO. |
 | **백엔드** | **Fastify + TypeScript** | TS 친화, 빠름, 작음 |
 | ORM | **Prisma** | TS-first, schema 한 파일, migration |
 | DB | **Postgres (managed)** | Render / Neon / Supabase / Railway 중 택 1 |
@@ -893,21 +916,41 @@ fina/
 
 **Exit criteria**: 사용자 가입 → 모바일 + 웹 양쪽 로그인 → 둘 다 자기 personal workspace 정보 보임.
 
-### Phase 1.5 — Workspace Sharing (Free 의 핵심 기능, 3~4주)
+### Phase 1.5 — Workspace Sharing — Web (Plan 2, 2~3주)
 
-**목표**: Free tier 의 sharing 기능 본격화. Multi-workspace UX, 초대, role enforcement.
+**목표**: Web 에서 sharing 전체 동작 (invite/accept/role/switcher). Mobile sharing UX 는 후속 (Phase 1.5-mobile). 본인이 가족 한 명 web 으로 초대해서 같은 workspace 의 멤버로 보이는 게 끝점.
 
-- Workspaces switcher UI (mobile + web)
-- Invite flow:
-  - Owner 가 email 로 초대 → invite 토큰 (서버 발급, 만료) + Clerk 의 magic-link
-  - 받는 사람이 가입/로그인 후 accept → membership 생성
-  - 만료된/사용된 invite 거부
-- Role transitions (owner 가 editor/viewer 변경 + remove)
-- Per-row authorization 강화 — 모든 query workspace_id scope, role gate destructive ops
-- 초대 받은 사용자 onboarding: "X 님이 'Y workspace' 로 초대했어요"
-- Free tier 의 sharing limit (현재: 무제한, 추후 abuse 보면 quota 검토)
+- `invites` 테이블 + `InviteStatus` enum (pending / accepted / revoked / expired)
+- API 엔드포인트 9 개:
+  - `GET /workspaces`, `GET /workspaces/:id/members`
+  - `POST /workspaces/:id/invites`, `GET /workspaces/:id/invites`, `DELETE /workspaces/:id/invites/:inviteId`
+  - `GET /invites/by-token/:token`, `POST /invites/by-token/:token/accept`
+  - `PATCH /workspaces/:id/members/:userId`, `DELETE /workspaces/:id/members/:userId`
+- `assertMembership` 가 `X-Workspace-Id` header 강제 (없으면 400, 비멤버 404 — info leak 방지)
+- Email-bound invite — owner 가 email + role(editor/viewer) 지정, server-issued token, Resend 로 발송, 7 일 만료
+- Role transitions + owner transfer (atomic, last-owner-cannot-leave/demote invariant 강제)
+- Owner cardinality: workspace 당 owner 정확히 1 명 (transfer 가능)
+- **Web UI only**:
+  - `/invites/[token]` accept 페이지 (session.email == invite.email 검증, 다른 이메일이면 sign out 안내)
+  - `/settings/workspace` — members + role 변경 + remove + pending invites + invite form
+  - 헤더 mini workspace switcher (≥ 2 ws 일 때만 노출)
+  - `X-Workspace-Id` cookie + 매 fetch 첨부 (Next.js middleware 에서 주입)
+- **Mobile 변경 최소** (UI 추가 없음): 로그인 후 `/workspaces` 호출 → 첫 ws ID AsyncStorage 저장 → 이후 모든 요청 header 첨부. Switcher / members / invite UI 없음.
+- Free tier sharing limit: **무제한** 유지 (abuse 발견 시 quota 검토)
+- Per-row authorization 강화 (트랜잭션/예산 등 row 가 workspace_id 로 scope + role gate) 는 데이터 entity 추가될 때 그 PR 에 포함 — 지금은 막을 row 자체가 없음
 
-**Exit criteria**: 본인이 가족 한 명 초대 → 그 사람이 viewer 로 join → 같은 workspace 의 트랜잭션/예산 같이 보기.
+**Exit criteria**: Owner 가 가족 한 명을 web 에서 초대 → 받는 사람이 web 에서 가입+accept → 양쪽 모두 같은 workspace 의 멤버로 보임. Mobile 은 ws 1 개인 사용자에 대해 회귀 없음.
+
+### Phase 1.5-mobile — Workspace Sharing — Mobile (later, 1~2주)
+
+**목표**: Web 에서 굳은 sharing UX 를 mobile 에 mirror. Plaid (Phase 1B) 전후 시점은 시점이 되면 결정.
+
+- Mobile workspace switcher (settings 또는 header)
+- Mobile members view (read + owner 면 role 변경/remove)
+- Mobile invite form (보내기 — accept 자체는 그대로 web)
+- Universal link / `fina://` deep link 로 invite 받기 (선택, 없어도 web 에서 accept 가능)
+
+**Exit criteria**: Mobile 에서 ws 전환 + members 보기 + invite 보내기 가능.
 
 ### Phase 1B — Plaid + Account Model (2~3주)
 
