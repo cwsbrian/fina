@@ -4,7 +4,7 @@
 
 **Goal:** Build email-based workspace sharing — invite create/list/revoke, accept-by-token, role transitions, owner transfer, web UI for all of it. Mobile gets minimal `X-Workspace-Id` header plumbing only; mobile sharing UX is a separate follow-up plan.
 
-**Architecture:** Backend adds an `invites` table + `InviteStatus` enum and ten endpoints. A new `requireWorkspaceContext` helper resolves the Better Auth session, reads the `X-Workspace-Id` header, and runs `assertMembership` — every workspace-scoped route is one line. `/me` is refactored to user/tier/trial only; the new `/workspaces` route returns the user's workspaces. Web stores active workspace id in a non-HttpOnly cookie that JS reads to attach the header on every fetch. Web ships an accept page, a settings/workspace page, and a header switcher that drops onto the existing `(app)` layout group. Mobile only learns to call `/workspaces` once and attach the header.
+**Architecture:** Backend adds an `invites` table + `InviteStatus` enum and nine endpoints. A new `requireWorkspaceContext` helper resolves the Better Auth session, reads the `X-Workspace-Id` header, and runs `assertMembership` — every workspace-scoped route is one line. `/me` is refactored to user/tier/trial only; the new `/workspaces` route returns the user's workspaces. **Hard invariants** (one owner per workspace, one pending invite per `(workspace, email)`) are enforced by Postgres partial unique indexes, not just app-level checks. **Bearer invite tokens** are stored as SHA-256 hashes; only the email recipient ever sees the raw token. **Active workspace** lives in a non-HttpOnly cookie (web) / AsyncStorage (mobile); bootstrap always reconciles the stored id against the live `/workspaces` list, so a stale id (after leaving) is replaced with the first available workspace. Web ships an accept page, a settings/workspace page, and a header switcher that drops onto the existing `(app)` layout group. Mobile only learns to call `/workspaces` once and attach the header.
 
 **Tech Stack:** Prisma 5 + Postgres 16 (existing), Fastify 5 + Better Auth 1.6 + Resend 6 (existing), vitest 2 (server tests), Next.js 14 App Router (web), Expo Router (mobile, minor changes).
 
@@ -16,11 +16,17 @@ This plan implements `docs/superpowers/specs/2026-05-07-fina-design.md` §15 "Ph
 
 Key design decisions already made (frozen by spec/brainstorm):
 
-- **Email-bound invites.** `invites.invitedEmail` is lowercase; `accept` requires `session.user.email.toLowerCase() === invitedEmail`.
-- **Server-issued tokens.** `crypto.randomBytes(32).toString("base64url")`, stored in `invites.token`, unique. 7-day expiry.
-- **Active workspace = client header.** Server is stateless on active workspace; clients keep it in cookie (web) / AsyncStorage (mobile) and attach `X-Workspace-Id` per request.
-- **Owner cardinality = 1 per workspace, transferable.** Application-level invariant (no DB constraint). Last-owner-cannot-leave or self-demote.
-- **Invite roles** = `editor` or `viewer` only. Owner transfer is a separate operation.
+- **Email-bound invites.** `invites.invitedEmail` is lowercase; `accept` requires `session.user.email.toLowerCase() === invitedEmail`. The "already a member" check during invite creation also uses **case-insensitive** email matching, since Better Auth may store mixed case.
+- **Server-issued bearer tokens, stored as SHA-256 hashes.** The raw token (`crypto.randomBytes(32).toString("base64url")`) is sent in the email and used in URLs; the DB column `invites.token` stores `sha256(raw)` only. A DB dump cannot be used to redeem invites. 7-day expiry.
+- **Hard invariants enforced by Postgres partial unique indexes:**
+  - `memberships(workspaceId) WHERE role = 'owner'` — exactly one owner per workspace, even under concurrent transfer.
+  - `invites(workspaceId, invitedEmail) WHERE status = 'pending'` — at most one open invite per (workspace, email).
+  These are added by manually editing the Prisma migration SQL, since Prisma doesn't model partial indexes natively. App-level checks remain (clearer error messages), and `P2002` (Postgres `23505`) collisions are mapped to the same service errors so concurrent collisions degrade gracefully.
+- **Atomic invite accept.** `acceptInviteByToken` claims the row via a single `updateMany({ where: { id, status: "pending" } })` and rejects with `consumed` if `count === 0`. Membership upserts (idempotent) so retries are safe.
+- **Lazy expiry.** A pending invite past its `expiresAt` is treated as `expired` everywhere it's read (lookup, list, duplicate-check), and is flipped to `status = expired` on first sighting. Re-inviting after expiry works.
+- **Active workspace = client header, validated.** Server is stateless on active workspace; clients keep it in cookie (web) / AsyncStorage (mobile) and attach `X-Workspace-Id` per request. **Bootstrap always reconciles** the stored id against the live `/workspaces` list — if missing, replace with the first available; if list is empty, clear.
+- **Owner cardinality = 1 per workspace, transferable** — DB-enforced (above). Last-owner-cannot-leave or self-demote (app-level check returns 409 before hitting the index).
+- **Invite roles** = `editor` or `viewer` only. Owner transfer is a separate operation (PATCH `/members/:id` with `role: "owner"`).
 - **Per-row authz** for transactions/budgets/etc. is **not** in this plan — those tables don't exist yet. They'll be added in Phase 1B with workspace scope baked in at that time.
 
 ---
@@ -45,11 +51,13 @@ Key design decisions already made (frozen by spec/brainstorm):
 | `src/env.ts` | modify | add `WEB_APP_URL` (used in invite email link) |
 | `tests/helpers/db.ts` | modify | extend TRUNCATE to include `invites` |
 | `tests/helpers/auth.ts` | modify | add `getOwnerWorkspaceId(app, userId)` + `signUpWithHeader(app, opts)` (returns cookie + headers helper that attaches X-Workspace-Id) |
-| `tests/me.test.ts` | modify | rewrite for new shape (no workspace; needs X-Workspace-Id no longer required because /me is user-scoped) |
+| `tests/me.test.ts` | modify | rewrite for new shape (no workspace; X-Workspace-Id not required because /me is user-scoped) |
 | `tests/workspaces.test.ts` | new | GET /workspaces |
-| `tests/members.test.ts` | new | members route + transfer |
-| `tests/invites.test.ts` | new | invite create/list/revoke/accept |
 | `tests/auth.context.test.ts` | new | `requireWorkspaceContext` cases |
+| `tests/invites.service.test.ts` | new | service-level: create/list/revoke/lookup + accept (incl. concurrent-claim race) |
+| `tests/invites.routes.test.ts` | new | route-level: workspace-scoped CRUD + by-token GET/accept (incl. email-send-failure compensation) |
+| `tests/members.service.test.ts` | new | service-level: list/update/remove + transferOwner (incl. concurrent transfer) |
+| `tests/members.routes.test.ts` | new | route-level: GET/PATCH/DELETE + transfer via PATCH role=owner |
 | `apps/api/.env.test` | modify | add `WEB_APP_URL=http://localhost:3000` |
 | `apps/api/package.json` | unchanged | (already has needed deps) |
 
@@ -66,7 +74,8 @@ Key design decisions already made (frozen by spec/brainstorm):
 | `src/app/(app)/settings/workspace/_components/invite-form.tsx` | new | owner-only invite form (email + role) |
 | `src/app/(app)/settings/workspace/_components/members-list.tsx` | new | members list with role dropdown / remove |
 | `src/app/(app)/settings/workspace/_components/pending-invites.tsx` | new | pending invites + revoke |
-| `src/app/invites/[token]/page.tsx` | new | accept page (server component) |
+| `src/app/invites/[token]/page.tsx` | new | accept page (client component — uses `useSession` + `useEffect` for the preview fetch) |
+| `src/app/sign-in/page.tsx` | modify | honor `from` search param so the invite page's "Sign in" link returns to the invite after auth |
 | `src/app/invites/[token]/_accept-button.tsx` | new | client form to POST accept |
 | `middleware.ts` | modify | also protect `/settings` |
 
@@ -130,7 +139,7 @@ model Invite {
   invitedEmail  String       // stored lowercase
   invitedRole   Role         // editor | viewer (owner not allowed via API)
   invitedById   String
-  token         String       @unique
+  tokenHash     String       @unique  // SHA-256 hex of the raw bearer token; raw is only sent in the email
   status        InviteStatus @default(pending)
   expiresAt     DateTime
   acceptedAt    DateTime?
@@ -155,22 +164,52 @@ enum InviteStatus {
 }
 ```
 
-> **Note on uniqueness:** we deliberately do **not** put `@@unique([workspaceId, invitedEmail])` because we want to allow re-inviting the same email after a previous invite is revoked/expired. Application-level guard rejects creation when there's an existing `pending` invite for the same `(workspaceId, invitedEmail)`.
+> **Why no `@@unique([workspaceId, invitedEmail])` here:** that would block re-inviting after a previous invite is revoked/expired. Instead we use a **partial unique index scoped to `status = 'pending'`** (added in Step 3 below — Prisma can't express partial indexes in `schema.prisma`).
 
-- [ ] **Step 2: Generate migration**
+- [ ] **Step 2: Generate the migration without applying it**
 
 ```bash
-pnpm --filter @fina/api db:migrate -- --name add_invites
+pnpm --filter @fina/api exec prisma migrate dev --create-only --name add_invites
 ```
 
-Prisma will:
-1. Connect to `fina` (dev DB), generate migration SQL under `apps/api/prisma/migrations/<ts>_add_invites/`.
-2. Apply it.
-3. Regenerate the Prisma client.
+`--create-only` writes the SQL under `apps/api/prisma/migrations/<ts>_add_invites/migration.sql` but does NOT apply it yet — we need to append the partial unique indexes first.
 
-Expected console: "Your database is now in sync with your schema. Done." Inspect the generated SQL — it should `CREATE TYPE "InviteStatus"` and `CREATE TABLE "invites"` with the two indexes.
+- [ ] **Step 3: Append partial unique indexes to the generated SQL**
 
-- [ ] **Step 3: Update test TRUNCATE list**
+Open `apps/api/prisma/migrations/<ts>_add_invites/migration.sql`. At the very end of the file, append:
+
+```sql
+-- Partial unique indexes — Prisma can't express these in schema.prisma.
+-- Invariants:
+--   * exactly one owner per workspace (even under concurrent transferOwner)
+--   * at most one pending invite per (workspace, email)
+CREATE UNIQUE INDEX "memberships_one_owner_per_workspace"
+  ON "memberships" ("workspaceId")
+  WHERE role = 'owner';
+
+CREATE UNIQUE INDEX "invites_one_pending_per_workspace_email"
+  ON "invites" ("workspaceId", "invitedEmail")
+  WHERE status = 'pending';
+```
+
+- [ ] **Step 4: Apply the migration + regenerate Prisma client**
+
+```bash
+pnpm --filter @fina/api db:migrate
+```
+
+Prisma sees the existing un-applied migration, applies it (including our manual SQL), and regenerates the client. Expected: "Your database is now in sync with your schema."
+
+Sanity-check the indexes exist:
+
+```bash
+docker compose exec postgres psql -U fina -d fina -c "\d memberships" | grep one_owner
+docker compose exec postgres psql -U fina -d fina -c "\d invites"     | grep pending
+```
+
+Both grep lines should print the index name.
+
+- [ ] **Step 5: Update test TRUNCATE list**
 
 Edit `apps/api/tests/helpers/db.ts`:
 
@@ -191,7 +230,7 @@ export async function disconnect(): Promise<void> {
 }
 ```
 
-- [ ] **Step 4: Verify existing tests still pass**
+- [ ] **Step 6: Verify existing tests still pass**
 
 ```bash
 pnpm nx run api:test
@@ -199,11 +238,11 @@ pnpm nx run api:test
 
 Expected: existing 13 tests still PASS (no behavior change yet — just schema addition).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add apps/api/prisma/schema.prisma apps/api/prisma/migrations apps/api/tests/helpers/db.ts
-git commit -m "feat(api): add invites table for workspace sharing"
+git commit -m "feat(api): add invites table + partial unique indexes (one-owner, one-pending-invite)"
 ```
 
 ---
@@ -727,15 +766,23 @@ const env = {
   WEB_APP_URL: "http://localhost:3000",
 };
 
-describe("invites service: create / list / revoke / lookup", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-  afterAll(async () => {
-    await disconnect();
-  });
+// File-level hooks so multiple describe blocks (this file gets a second one in Task 5) share them
+// and we disconnect Prisma exactly once per file.
+beforeEach(async () => {
+  await truncateAll();
+});
+afterAll(async () => {
+  await disconnect();
+});
 
-  it("create — happy path", async () => {
+import crypto from "node:crypto";
+
+function sha256(s: string): string {
+  return crypto.createHash("sha256").update(s).digest("hex");
+}
+
+describe("invites service: create / list / revoke / lookup", () => {
+  it("create — happy path; raw token returned, hash stored", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "owner@x.com", name: "O" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -747,9 +794,14 @@ describe("invites service: create / list / revoke / lookup", () => {
     });
     expect(inv.invitedEmail).toBe("guest@x.com");
     expect(inv.invitedRole).toBe("editor");
-    expect(inv.token.length).toBeGreaterThanOrEqual(40);
+    expect(inv.token.length).toBeGreaterThanOrEqual(40); // raw bearer token
     expect(inv.status).toBe("pending");
     expect(inv.expiresAt.getTime()).toBeGreaterThan(Date.now());
+
+    // DB stores only the hash, never the raw.
+    const dbRow = await prisma.invite.findUniqueOrThrow({ where: { id: inv.id } });
+    expect(dbRow.tokenHash).toBe(sha256(inv.token));
+    expect(dbRow.tokenHash).not.toBe(inv.token);
     await app.close();
   });
 
@@ -808,6 +860,66 @@ describe("invites service: create / list / revoke / lookup", () => {
     await app.close();
   });
 
+  it("create — re-invite after the previous one expires succeeds", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "o4b@x.com", name: "O4b" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const first = await createInvite({
+      workspaceId: wsId,
+      invitedById: owner.userId,
+      invitedEmail: "g4b@x.com",
+      invitedRole: "viewer",
+    });
+    // Force the first invite past its TTL.
+    await prisma.invite.update({
+      where: { id: first.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+    // Re-invite should work — the expired pending row gets flipped to expired.
+    const second = await createInvite({
+      workspaceId: wsId,
+      invitedById: owner.userId,
+      invitedEmail: "g4b@x.com",
+      invitedRole: "editor",
+    });
+    expect(second.id).not.toBe(first.id);
+    expect(second.status).toBe("pending");
+    const reread = await prisma.invite.findUniqueOrThrow({ where: { id: first.id } });
+    expect(reread.status).toBe("expired");
+    await app.close();
+  });
+
+  it("create — concurrent calls collide on the partial unique index, second resolves to duplicate_invite", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "o4c@x.com", name: "O4c" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const results = await Promise.allSettled([
+      createInvite({
+        workspaceId: wsId,
+        invitedById: owner.userId,
+        invitedEmail: "race@x.com",
+        invitedRole: "viewer",
+      }),
+      createInvite({
+        workspaceId: wsId,
+        invitedById: owner.userId,
+        invitedEmail: "race@x.com",
+        invitedRole: "viewer",
+      }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled").length;
+    const rejectedDup = results.filter(
+      (r) => r.status === "rejected" && (r as PromiseRejectedResult).reason?.code === "duplicate_invite",
+    ).length;
+    expect(fulfilled).toBe(1);
+    expect(rejectedDup).toBe(1);
+    const dbCount = await prisma.invite.count({
+      where: { workspaceId: wsId, invitedEmail: "race@x.com", status: "pending" },
+    });
+    expect(dbCount).toBe(1);
+    await app.close();
+  });
+
   it("create — rejects inviting yourself", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "self@x.com", name: "Self" });
@@ -823,7 +935,7 @@ describe("invites service: create / list / revoke / lookup", () => {
     await app.close();
   });
 
-  it("list — returns only pending invites for the workspace", async () => {
+  it("list — returns only live pending invites (revoked AND expired excluded)", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o5@x.com", name: "O5" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -840,8 +952,21 @@ describe("invites service: create / list / revoke / lookup", () => {
       invitedRole: "viewer",
     });
     await revokeInvite({ workspaceId: wsId, inviteId: inv2.id });
+    const inv3 = await createInvite({
+      workspaceId: wsId,
+      invitedById: owner.userId,
+      invitedEmail: "c@x.com",
+      invitedRole: "viewer",
+    });
+    await prisma.invite.update({
+      where: { id: inv3.id },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
     const list = await listInvites({ workspaceId: wsId });
     expect(list.map((i) => i.invitedEmail)).toEqual(["a@x.com"]);
+    // The list call should also have flipped the expired row's status.
+    const reread3 = await prisma.invite.findUniqueOrThrow({ where: { id: inv3.id } });
+    expect(reread3.status).toBe("expired");
     await app.close();
   });
 
@@ -927,10 +1052,11 @@ pnpm nx run api:test -- tests/invites.service.test.ts
 
 Expected: FAIL — module missing.
 
-- [ ] **Step 3: Implement `apps/api/src/workspaces/invites.ts` (creation + list + revoke + lookup; accept stub)**
+- [ ] **Step 3: Implement `apps/api/src/workspaces/invites.ts` (creation + list + revoke + lookup; accept added in Task 5)**
 
 ```ts
 import crypto from "node:crypto";
+import { Prisma } from "@prisma/client";
 import type { Role } from "@fina/shared";
 import { prisma } from "../db.js";
 
@@ -955,12 +1081,30 @@ export class InviteServiceError extends Error {
   }
 }
 
-function genToken(): string {
+function genRawToken(): string {
+  // 32 bytes of entropy; base64url is ~43 chars.
   return crypto.randomBytes(32).toString("base64url");
+}
+
+export function hashToken(raw: string): string {
+  return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
 function lower(email: string): string {
   return email.trim().toLowerCase();
+}
+
+/** Flip any pending row past its TTL to `expired`. Returns nothing. */
+async function flipExpiredPending(workspaceId: string, invitedEmail: string): Promise<void> {
+  await prisma.invite.updateMany({
+    where: {
+      workspaceId,
+      invitedEmail,
+      status: "pending",
+      expiresAt: { lte: new Date() },
+    },
+    data: { status: "expired" },
+  });
 }
 
 export type CreateInviteInput = {
@@ -970,13 +1114,16 @@ export type CreateInviteInput = {
   invitedRole: Role;
 };
 
-export type Invite = {
+/**
+ * The DB row stored in `invites`. Note `tokenHash` (not raw token).
+ */
+export type InviteRow = {
   id: string;
   workspaceId: string;
   invitedEmail: string;
   invitedRole: Role;
   invitedById: string;
-  token: string;
+  tokenHash: string;
   status: "pending" | "accepted" | "revoked" | "expired";
   expiresAt: Date;
   acceptedAt: Date | null;
@@ -985,14 +1132,24 @@ export type Invite = {
   createdAt: Date;
 };
 
-export async function createInvite(input: CreateInviteInput): Promise<Invite> {
+/**
+ * Returned only by `createInvite` — includes the raw bearer token so the
+ * route can email it. Not stored anywhere; subsequent reads only ever
+ * return the hash.
+ */
+export type CreatedInvite = InviteRow & { token: string };
+
+export async function createInvite(input: CreateInviteInput): Promise<CreatedInvite> {
   if (input.invitedRole !== "editor" && input.invitedRole !== "viewer") {
     throw new InviteServiceError("invalid_role", "invited role must be editor or viewer");
   }
   const email = lower(input.invitedEmail);
 
-  // Reject if invitee is already a member by email.
-  const existingUser = await prisma.user.findUnique({ where: { email } });
+  // Reject if invitee is already a member. Case-insensitive match because
+  // Better Auth may store mixed-case email.
+  const existingUser = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: "insensitive" } },
+  });
   if (existingUser) {
     const existingMembership = await prisma.membership.findUnique({
       where: {
@@ -1004,7 +1161,12 @@ export async function createInvite(input: CreateInviteInput): Promise<Invite> {
     }
   }
 
-  // Reject if a pending invite already exists.
+  // Flip stale-pending rows for THIS (workspace, email) before duplicate check.
+  await flipExpiredPending(input.workspaceId, email);
+
+  // App-level duplicate check (clearer error message); the partial unique
+  // index `invites_one_pending_per_workspace_email` is the actual safeguard
+  // under concurrency.
   const dup = await prisma.invite.findFirst({
     where: { workspaceId: input.workspaceId, invitedEmail: email, status: "pending" },
   });
@@ -1012,25 +1174,42 @@ export async function createInvite(input: CreateInviteInput): Promise<Invite> {
     throw new InviteServiceError("duplicate_invite", "pending invite already exists");
   }
 
-  const inv = await prisma.invite.create({
-    data: {
-      workspaceId: input.workspaceId,
-      invitedById: input.invitedById,
-      invitedEmail: email,
-      invitedRole: input.invitedRole,
-      token: genToken(),
-      expiresAt: new Date(Date.now() + INVITE_TTL_MS),
-    },
-  });
-  return inv as Invite;
+  const rawToken = genRawToken();
+  try {
+    const inv = await prisma.invite.create({
+      data: {
+        workspaceId: input.workspaceId,
+        invitedById: input.invitedById,
+        invitedEmail: email,
+        invitedRole: input.invitedRole,
+        tokenHash: hashToken(rawToken),
+        expiresAt: new Date(Date.now() + INVITE_TTL_MS),
+      },
+    });
+    return { ...(inv as InviteRow), token: rawToken };
+  } catch (e) {
+    // Concurrent create lost the race against the partial unique index.
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2002"
+    ) {
+      throw new InviteServiceError("duplicate_invite", "pending invite already exists");
+    }
+    throw e;
+  }
 }
 
-export async function listInvites(input: { workspaceId: string }): Promise<Invite[]> {
+export async function listInvites(input: { workspaceId: string }): Promise<InviteRow[]> {
+  // Flip stale-pending rows in this workspace BEFORE listing.
+  await prisma.invite.updateMany({
+    where: { workspaceId: input.workspaceId, status: "pending", expiresAt: { lte: new Date() } },
+    data: { status: "expired" },
+  });
   const rows = await prisma.invite.findMany({
     where: { workspaceId: input.workspaceId, status: "pending" },
     orderBy: { createdAt: "desc" },
   });
-  return rows as Invite[];
+  return rows as InviteRow[];
 }
 
 export async function revokeInvite(input: { workspaceId: string; inviteId: string }): Promise<void> {
@@ -1047,11 +1226,11 @@ export async function revokeInvite(input: { workspaceId: string; inviteId: strin
   });
 }
 
-export type InviteView = Invite & { workspaceName: string; inviterEmail: string };
+export type InviteView = InviteRow & { workspaceName: string; inviterEmail: string };
 
-export async function getInviteByToken(token: string): Promise<InviteView | null> {
+export async function getInviteByToken(rawToken: string): Promise<InviteView | null> {
   const inv = await prisma.invite.findUnique({
-    where: { token },
+    where: { tokenHash: hashToken(rawToken) },
     include: { workspace: true, invitedBy: true },
   });
   if (!inv) return null;
@@ -1067,7 +1246,7 @@ export async function getInviteByToken(token: string): Promise<InviteView | null
   }
 
   return {
-    ...(inv as unknown as Invite),
+    ...(inv as unknown as InviteRow),
     status,
     workspaceName: inv.workspace.name,
     inviterEmail: inv.invitedBy.email,
@@ -1081,13 +1260,13 @@ export async function getInviteByToken(token: string): Promise<InviteView | null
 pnpm nx run api:test -- tests/invites.service.test.ts
 ```
 
-Expected: 11/11 PASS.
+Expected: 13/13 PASS (11 original cases + re-invite-after-expiry + concurrent-create-collision).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/workspaces/invites.ts apps/api/tests/invites.service.test.ts
-git commit -m "feat(api): invites service — create / list / revoke / lookup"
+git commit -m "feat(api): invites service — create / list / revoke / lookup (hashed tokens, lazy-expire)"
 ```
 
 ---
@@ -1100,16 +1279,12 @@ git commit -m "feat(api): invites service — create / list / revoke / lookup"
 
 - [ ] **Step 1: Append acceptance test cases**
 
-Append to `apps/api/tests/invites.service.test.ts` (inside the same file, after the existing `describe`):
+Append to `apps/api/tests/invites.service.test.ts` (after the existing `describe`). The file-level `beforeEach` / `afterAll` declared in Task 4 are inherited — do NOT re-declare them.
 
 ```ts
 import { acceptInviteByToken } from "../src/workspaces/invites.js";
 
 describe("invites service: accept", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-
   it("happy path — creates membership, marks invite consumed", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "ow@x.com", name: "OW" });
@@ -1236,6 +1411,43 @@ describe("invites service: accept", () => {
     await app.close();
   });
 
+  it("concurrent double-submit — exactly one succeeds, other reports consumed", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ow5b@x.com", name: "OW5b" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const inv = await createInvite({
+      workspaceId: wsId,
+      invitedById: owner.userId,
+      invitedEmail: "g5b@x.com",
+      invitedRole: "viewer",
+    });
+    const guest = await signUpAndGetCookie(app, { email: "g5b@x.com", name: "G5b" });
+    const results = await Promise.allSettled([
+      acceptInviteByToken({
+        token: inv.token,
+        acceptingUserId: guest.userId,
+        acceptingEmail: "g5b@x.com",
+      }),
+      acceptInviteByToken({
+        token: inv.token,
+        acceptingUserId: guest.userId,
+        acceptingEmail: "g5b@x.com",
+      }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled").length;
+    const rejectedConsumed = results.filter(
+      (r) => r.status === "rejected" && (r as PromiseRejectedResult).reason?.code === "consumed",
+    ).length;
+    expect(fulfilled).toBe(1);
+    expect(rejectedConsumed).toBe(1);
+    // Exactly one membership was created.
+    const m = await prisma.membership.count({
+      where: { userId: guest.userId, workspaceId: wsId },
+    });
+    expect(m).toBe(1);
+    await app.close();
+  });
+
   it("404 for unknown token", async () => {
     await expect(
       acceptInviteByToken({
@@ -1258,6 +1470,8 @@ Expected: 6 new FAILures (`acceptInviteByToken not exported`).
 
 - [ ] **Step 3: Append `acceptInviteByToken` to `apps/api/src/workspaces/invites.ts`**
 
+The implementation **atomically claims** the row via a conditional `updateMany({ where: { id, status: "pending" } })`. If the claim's `count` is 0, someone else already accepted (or the row was revoked/expired between read and claim) — we re-read to report a precise error. The membership is created via `upsert` so a retry of an interrupted operation doesn't violate the `(userId, workspaceId)` unique key.
+
 Append at the end of the file:
 
 ```ts
@@ -1273,41 +1487,60 @@ export type AcceptResult = {
 };
 
 export async function acceptInviteByToken(input: AcceptInput): Promise<AcceptResult> {
+  const tokenHash = hashToken(input.token);
+
   return await prisma.$transaction(async (tx) => {
-    const inv = await tx.invite.findUnique({ where: { token: input.token } });
+    // Read the row (gives us workspaceId + invitedEmail + invitedRole + status).
+    const inv = await tx.invite.findUnique({ where: { tokenHash } });
     if (!inv) throw new InviteServiceError("not_found", "invite not found");
+
+    // Email mismatch is checked BEFORE the claim — we don't want a wrong-email
+    // request to even attempt to consume the invite.
+    if (lower(input.acceptingEmail) !== inv.invitedEmail) {
+      throw new InviteServiceError("wrong_email", "session email does not match invited email");
+    }
+
+    // Pre-flight status checks for clearer errors.
     if (inv.status === "revoked") throw new InviteServiceError("revoked", "invite revoked");
     if (inv.status === "accepted") throw new InviteServiceError("consumed", "invite already accepted");
     if (inv.status === "expired" || inv.expiresAt.getTime() <= Date.now()) {
-      // Flip if needed, then reject.
       if (inv.status === "pending") {
         await tx.invite.update({ where: { id: inv.id }, data: { status: "expired" } });
       }
       throw new InviteServiceError("expired", "invite expired");
     }
-    if (lower(input.acceptingEmail) !== inv.invitedEmail) {
-      throw new InviteServiceError("wrong_email", "session email does not match invited email");
+
+    // Atomic claim — only succeeds if the row is STILL pending. Two concurrent
+    // requests will see exactly one count=1 here.
+    const claim = await tx.invite.updateMany({
+      where: { id: inv.id, status: "pending", expiresAt: { gt: new Date() } },
+      data: {
+        status: "accepted",
+        acceptedAt: new Date(),
+        acceptedById: input.acceptingUserId,
+      },
+    });
+    if (claim.count === 0) {
+      // Re-read to figure out the precise reason.
+      const after = await tx.invite.findUniqueOrThrow({ where: { id: inv.id } });
+      if (after.status === "accepted") throw new InviteServiceError("consumed", "invite already accepted");
+      if (after.status === "revoked") throw new InviteServiceError("revoked", "invite revoked");
+      throw new InviteServiceError("expired", "invite expired");
     }
 
-    // Idempotent membership creation.
-    const existing = await tx.membership.findUnique({
+    // Idempotent membership creation. If the user is somehow already a member
+    // (e.g. accepted then re-invited and accepted again from a stale tab),
+    // upsert avoids a unique-violation.
+    await tx.membership.upsert({
       where: {
         userId_workspaceId: { userId: input.acceptingUserId, workspaceId: inv.workspaceId },
       },
-    });
-    if (!existing) {
-      await tx.membership.create({
-        data: {
-          userId: input.acceptingUserId,
-          workspaceId: inv.workspaceId,
-          role: inv.invitedRole,
-        },
-      });
-    }
-
-    await tx.invite.update({
-      where: { id: inv.id },
-      data: { status: "accepted", acceptedAt: new Date(), acceptedById: input.acceptingUserId },
+      update: {}, // existing role is preserved
+      create: {
+        userId: input.acceptingUserId,
+        workspaceId: inv.workspaceId,
+        role: inv.invitedRole,
+      },
     });
 
     return { workspaceId: inv.workspaceId, role: inv.invitedRole as Role };
@@ -1321,13 +1554,13 @@ export async function acceptInviteByToken(input: AcceptInput): Promise<AcceptRes
 pnpm nx run api:test -- tests/invites.service.test.ts
 ```
 
-Expected: 17/17 PASS in this file (11 prior + 6 accept).
+Expected: 20/20 PASS in this file (13 prior + 7 accept including concurrent-double-submit).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/workspaces/invites.ts apps/api/tests/invites.service.test.ts
-git commit -m "feat(api): invites service — accept by token (atomic)"
+git commit -m "feat(api): invites service — accept by token (atomic claim, idempotent membership)"
 ```
 
 ---
@@ -1385,14 +1618,15 @@ async function addMember(opts: {
   return u.id;
 }
 
-describe("members service: list / update / remove", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-  afterAll(async () => {
-    await disconnect();
-  });
+// File-level hooks shared with the second describe block (added in Task 7).
+beforeEach(async () => {
+  await truncateAll();
+});
+afterAll(async () => {
+  await disconnect();
+});
 
+describe("members service: list / update / remove", () => {
   it("list — returns owner first, then editor, then viewer; sorted by role then email", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "owner@x.com", name: "Owner" });
@@ -1623,16 +1857,12 @@ Owner is exactly 1 per workspace (application invariant). Transfer atomically: t
 
 - [ ] **Step 1: Append failing transfer tests**
 
-Append to `apps/api/tests/members.service.test.ts`:
+Append to `apps/api/tests/members.service.test.ts`. The file-level `beforeEach` / `afterAll` declared in Task 6 are inherited — do NOT re-declare them.
 
 ```ts
 import { transferOwner } from "../src/workspaces/members.js";
 
 describe("members service: transferOwner", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-
   it("happy path — atomically promotes target, demotes current owner to editor", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "ow@x.com", name: "OW" });
@@ -1705,10 +1935,42 @@ describe("members service: transferOwner", () => {
     ).rejects.toMatchObject({ code: "same_user" });
     await app.close();
   });
+
+  it("concurrent transfers — partial unique index keeps owner cardinality at 1", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ow5@x.com", name: "OW5" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const candidateA = await addMember({
+      workspaceId: wsId,
+      email: "ca@x.com",
+      role: "editor",
+    });
+    const candidateB = await addMember({
+      workspaceId: wsId,
+      email: "cb@x.com",
+      role: "editor",
+    });
+    const results = await Promise.allSettled([
+      transferOwner({ workspaceId: wsId, currentOwnerId: owner.userId, newOwnerId: candidateA }),
+      transferOwner({ workspaceId: wsId, currentOwnerId: owner.userId, newOwnerId: candidateB }),
+    ]);
+    const fulfilled = results.filter((r) => r.status === "fulfilled").length;
+    const rejected = results.filter((r) => r.status === "rejected").length;
+    expect(fulfilled).toBe(1);
+    expect(rejected).toBe(1);
+    // Either "conflict" (lost the partial-unique race) or "not_owner" (snapshot
+    // saw the original owner already demoted) is acceptable.
+    const failure = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+    expect(["conflict", "not_owner"]).toContain(failure.reason?.code);
+
+    const owners = await prisma.membership.count({
+      where: { workspaceId: wsId, role: "owner" },
+    });
+    expect(owners).toBe(1);
+    await app.close();
+  });
 });
 ```
-
-Also extend the `MembersCode` type usage in tests by extending the union — already covered: the implementation will add `not_owner` and `same_user` codes (see Step 3).
 
 - [ ] **Step 2: Run transfer tests (expect failure)**
 
@@ -1720,7 +1982,11 @@ Expected: 4 new FAILures.
 
 - [ ] **Step 3: Append `transferOwner` to `apps/api/src/workspaces/members.ts`**
 
-First, extend the `MembersCode` type (replace its declaration):
+First, extend the `MembersCode` type (replace its declaration) and add a Prisma import at the top of the file (next to the existing `import { prisma } from "../db.js";`):
+
+```ts
+import { Prisma } from "@prisma/client";
+```
 
 ```ts
 export type MembersCode =
@@ -1728,7 +1994,8 @@ export type MembersCode =
   | "last_owner"
   | "use_transfer"
   | "not_owner"
-  | "same_user";
+  | "same_user"
+  | "conflict";
 ```
 
 Then append at the bottom of the file:
@@ -1740,36 +2007,51 @@ export type TransferInput = {
   newOwnerId: string;
 };
 
+/**
+ * Atomically swap owner. Race safety comes from the partial unique index
+ * `memberships_one_owner_per_workspace`: any concurrent transfer that tries
+ * to insert a second owner row triggers P2002, which we surface as `conflict`.
+ * Demote-then-promote order is intentional — it never leaves the table with
+ * two owners (the demote happens first, then the promote claims the index).
+ */
 export async function transferOwner(input: TransferInput): Promise<void> {
   if (input.currentOwnerId === input.newOwnerId) {
     throw new MembersServiceError("same_user", "cannot transfer ownership to yourself");
   }
-  await prisma.$transaction(async (tx) => {
-    const current = await tx.membership.findUnique({
-      where: {
-        userId_workspaceId: { userId: input.currentOwnerId, workspaceId: input.workspaceId },
-      },
+  try {
+    await prisma.$transaction(async (tx) => {
+      const current = await tx.membership.findUnique({
+        where: {
+          userId_workspaceId: { userId: input.currentOwnerId, workspaceId: input.workspaceId },
+        },
+      });
+      if (!current || current.role !== "owner") {
+        throw new MembersServiceError("not_owner", "caller is not the owner of this workspace");
+      }
+      const next = await tx.membership.findUnique({
+        where: {
+          userId_workspaceId: { userId: input.newOwnerId, workspaceId: input.workspaceId },
+        },
+      });
+      if (!next) {
+        throw new MembersServiceError("not_found", "target user is not a member");
+      }
+      await tx.membership.update({
+        where: { id: current.id },
+        data: { role: "editor" },
+      });
+      await tx.membership.update({
+        where: { id: next.id },
+        data: { role: "owner" },
+      });
     });
-    if (!current || current.role !== "owner") {
-      throw new MembersServiceError("not_owner", "caller is not the owner of this workspace");
+  } catch (e) {
+    // Concurrent transfer raced us and won the partial-unique index.
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      throw new MembersServiceError("conflict", "another owner change is in flight");
     }
-    const next = await tx.membership.findUnique({
-      where: {
-        userId_workspaceId: { userId: input.newOwnerId, workspaceId: input.workspaceId },
-      },
-    });
-    if (!next) {
-      throw new MembersServiceError("not_found", "target user is not a member");
-    }
-    await tx.membership.update({
-      where: { id: current.id },
-      data: { role: "editor" },
-    });
-    await tx.membership.update({
-      where: { id: next.id },
-      data: { role: "owner" },
-    });
-  });
+    throw e;
+  }
 }
 ```
 
@@ -1779,13 +2061,13 @@ export async function transferOwner(input: TransferInput): Promise<void> {
 pnpm nx run api:test -- tests/members.service.test.ts
 ```
 
-Expected: 12/12 PASS in this file (8 prior + 4 transfer).
+Expected: 13/13 PASS in this file (8 prior + 5 transfer including concurrent race).
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add apps/api/src/workspaces/members.ts apps/api/tests/members.service.test.ts
-git commit -m "feat(api): transferOwner — atomic owner role swap"
+git commit -m "feat(api): transferOwner — race-safe via partial unique index"
 ```
 
 ---
@@ -2136,7 +2418,8 @@ function mapMembersError(e: unknown): { statusCode: number; code: string } {
       case "not_found":
         return { statusCode: 404, code: "not_found" };
       case "last_owner":
-        return { statusCode: 409, code: "last_owner" };
+      case "conflict":
+        return { statusCode: 409, code: e.code };
       case "use_transfer":
       case "same_user":
         return { statusCode: 400, code: e.code };
@@ -2353,6 +2636,50 @@ describe("invites routes", () => {
       payload: JSON.stringify({ email: "g@x.com", role: "viewer" }),
     });
     expect(res.statusCode).toBe(403);
+    await app.close();
+  });
+
+  it("POST — email send failure compensates (invite revoked, 502 returned)", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "o2b@x.com", name: "O2b" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+
+    const fail = inviteEmailModule.sendInviteEmail as ReturnType<typeof vi.fn>;
+    fail.mockImplementationOnce(async () => {
+      throw new Error("Resend down");
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/invites`,
+      headers: {
+        cookie: owner.cookie,
+        "x-workspace-id": wsId,
+        "content-type": "application/json",
+      },
+      payload: JSON.stringify({ email: "g2b@x.com", role: "viewer" }),
+    });
+    expect(res.statusCode).toBe(502);
+    expect(res.json().error).toBe("email_send_failed");
+
+    // No pending invite should remain — retry should be possible.
+    const pending = await prisma.invite.count({
+      where: { workspaceId: wsId, invitedEmail: "g2b@x.com", status: "pending" },
+    });
+    expect(pending).toBe(0);
+
+    // Retry with same email succeeds (no duplicate_invite block).
+    const retry = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/invites`,
+      headers: {
+        cookie: owner.cookie,
+        "x-workspace-id": wsId,
+        "content-type": "application/json",
+      },
+      payload: JSON.stringify({ email: "g2b@x.com", role: "viewer" }),
+    });
+    expect(retry.statusCode).toBe(201);
     await app.close();
   });
 
@@ -2651,16 +2978,32 @@ export async function inviteRoutes(app: FastifyInstance): Promise<void> {
         where: { id: ctx.membership.workspaceId },
       });
       const inviter = await prisma.user.findUniqueOrThrow({ where: { id: ctx.session.userId } });
-      await sendInviteEmail({
-        apiKey: app.fina.env.RESEND_API_KEY,
-        from: app.fina.env.EMAIL_FROM,
-        to: invite.invitedEmail,
-        inviterEmail: inviter.email,
-        inviterName: inviter.name,
-        workspaceName: ws.name,
-        token: invite.token,
-        webAppUrl: app.fina.env.WEB_APP_URL,
-      });
+      try {
+        await sendInviteEmail({
+          apiKey: app.fina.env.RESEND_API_KEY,
+          from: app.fina.env.EMAIL_FROM,
+          to: invite.invitedEmail,
+          inviterEmail: inviter.email,
+          inviterName: inviter.name,
+          workspaceName: ws.name,
+          token: invite.token,
+          webAppUrl: app.fina.env.WEB_APP_URL,
+        });
+      } catch (sendErr) {
+        // Compensating action: revoke the freshly-created invite so the user
+        // can retry with the same email instead of getting `duplicate_invite`
+        // forever. Best-effort — log but don't shadow the original error.
+        try {
+          await revokeInvite({
+            workspaceId: ctx.membership.workspaceId,
+            inviteId: invite.id,
+          });
+        } catch (revokeErr) {
+          app.log.error({ err: revokeErr, inviteId: invite.id }, "failed to revoke invite after email send failure");
+        }
+        app.log.error({ err: sendErr, inviteId: invite.id }, "invite email send failed");
+        return reply.code(502).send({ error: "email_send_failed" });
+      }
       return reply.code(201).send({
         invite: {
           id: invite.id,
@@ -2778,7 +3121,7 @@ After `await app.register(workspacesRoutes);`:
 pnpm nx run api:test
 ```
 
-Expected: every previous test still PASSes + 11 new invite-route tests PASS.
+Expected: every previous test still PASSes + 12 new invite-route tests PASS (11 base + email-send-failure compensation).
 
 - [ ] **Step 6: Commit**
 
@@ -2821,6 +3164,11 @@ export async function setActiveWorkspaceId(id: string): Promise<void> {
   await AsyncStorage.setItem(KEY, id);
 }
 
+export async function clearActiveWorkspaceId(): Promise<void> {
+  cached = null;
+  await AsyncStorage.removeItem(KEY);
+}
+
 export function clearActiveWorkspaceCache(): void {
   cached = null;
 }
@@ -2860,15 +3208,20 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 }
 
 export async function bootstrapActiveWorkspace(): Promise<string | null> {
-  const existing = await getActiveWorkspaceId();
-  if (existing) return existing;
+  // Always reconcile against the live list — a stored id from a workspace the
+  // user has since left would otherwise return 404 forever.
   const data = await apiFetch<{ workspaces: { id: string; name: string; role: string }[] }>(
     "/workspaces",
   );
+  const ids = new Set(data.workspaces.map((w) => w.id));
+  const existing = await getActiveWorkspaceId();
+  const { setActiveWorkspaceId, clearActiveWorkspaceId } = await import("../workspace/active");
+  if (existing && ids.has(existing)) return existing;
   const first = data.workspaces[0]?.id ?? null;
   if (first) {
-    const { setActiveWorkspaceId } = await import("../workspace/active");
     await setActiveWorkspaceId(first);
+  } else {
+    await clearActiveWorkspaceId();
   }
   return first;
 }
@@ -3068,15 +3421,20 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
 }
 
 export async function bootstrapActiveWorkspace(): Promise<string | null> {
-  const existing = getActiveWorkspaceId();
-  if (existing) return existing;
+  // Always reconcile against the live list — a stored id from a workspace the
+  // user has since left would otherwise return 404 forever.
   const data = await apiFetch<{ workspaces: { id: string; name: string; role: string }[] }>(
     "/workspaces",
   );
+  const ids = new Set(data.workspaces.map((w) => w.id));
+  const existing = getActiveWorkspaceId();
+  const { setActiveWorkspaceId, clearActiveWorkspaceId } = await import("./active-workspace");
+  if (existing && ids.has(existing)) return existing;
   const first = data.workspaces[0]?.id ?? null;
   if (first) {
-    const { setActiveWorkspaceId } = await import("./active-workspace");
     setActiveWorkspaceId(first);
+  } else {
+    clearActiveWorkspaceId();
   }
   return first;
 }
@@ -3099,14 +3457,42 @@ git commit -m "feat(web): apiFetch wrapper + active-workspace cookie helpers"
 
 ---
 
-## Task 13: Web — `/invites/[token]` accept page
+## Task 13: Web — `/invites/[token]` accept page + sign-in `from` redirect
 
 **Files:**
 - Create: `apps/web/src/app/invites/[token]/page.tsx`
 - Create: `apps/web/src/app/invites/[token]/_accept-button.tsx`
+- Modify: `apps/web/src/app/sign-in/page.tsx` (honor `from` search param; default `/home`)
 - Modify: `apps/web/middleware.ts` (DO NOT protect `/invites/*` — accept page must be reachable while signed-out so we can route to sign-in)
 
 Page is a client component (it uses session + window APIs). It fetches the invite preview, shows status, and either renders the accept button or sign-in/sign-out hints.
+
+The existing sign-in page hardcodes `router.replace("/home")` — that breaks the "click invite link → sign in → return to invite" flow because the middleware's `?from=/invites/<token>` query is ignored. We update it here to read `from` and redirect there, with `/home` as the default.
+
+- [ ] **Step 0: Update sign-in to honor the `from` search param**
+
+Replace the body of `submit()` in `apps/web/src/app/sign-in/page.tsx`. First, add an import for `useSearchParams` next to `useRouter`:
+
+```ts
+import { useRouter, useSearchParams } from "next/navigation";
+```
+
+Then, inside the component, just under `const router = useRouter();`, add:
+
+```ts
+const search = useSearchParams();
+const fromParam = search?.get("from") ?? "";
+// Only honor internal paths (defense against open-redirect via crafted query).
+const safeFrom = fromParam.startsWith("/") && !fromParam.startsWith("//") ? fromParam : null;
+```
+
+Replace the `router.replace("/home");` line with:
+
+```ts
+router.replace(safeFrom ?? "/home");
+```
+
+That's the entire sign-in page change.
 
 - [ ] **Step 1: Implement the accept button (client component)**
 
@@ -3313,8 +3699,8 @@ pnpm nx run-many -t dev --projects=api,web --parallel=2
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/web/src/app/invites
-git commit -m "feat(web): /invites/[token] accept page"
+git add apps/web/src/app/invites apps/web/src/app/sign-in/page.tsx
+git commit -m "feat(web): /invites/[token] accept page + sign-in honors ?from"
 ```
 
 ---
@@ -3374,6 +3760,10 @@ export function MembersList({
   const [err, setErr] = useState<string | null>(null);
 
   async function patchRole(userId: string, role: Member["role"]) {
+    // Transfer is a one-way demotion of the current user — confirm before firing.
+    if (role === "owner" && !window.confirm("Transfer ownership? You will become an editor.")) {
+      return;
+    }
     setBusyId(userId);
     setErr(null);
     try {
@@ -3982,12 +4372,60 @@ git commit -m "feat(web): (app) layout + workspace switcher + home consumes new 
 
 ---
 
-## Task 16: Final verification + README + commit
+## Task 16: Add missing typecheck targets + final verification + README + commit
 
 **Files:**
+- Modify: `apps/web/project.json` (add `typecheck` target)
+- Modify: `apps/mobile/project.json` (add `typecheck` target)
+- Modify: `libs/shared/project.json` (add `typecheck` target if absent)
 - Modify: `README.md`
 
-- [ ] **Step 1: Run the full test suite**
+The plan-wide verification command is `pnpm nx run-many -t typecheck`, but right now only `apps/api` has a `typecheck` target — `apps/web/project.json` only has `dev`, and `apps/mobile/project.json` has no targets at all. Add the missing ones first.
+
+- [ ] **Step 1: Add `typecheck` target to `apps/web/project.json`**
+
+Inside the `"targets"` object, add:
+
+```json
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/web/tsconfig.json"
+      }
+    }
+```
+
+- [ ] **Step 2: Add `typecheck` target to `apps/mobile/project.json`**
+
+Inside the `"targets"` object (currently empty), add:
+
+```json
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p apps/mobile/tsconfig.app.json"
+      }
+    }
+```
+
+- [ ] **Step 3: Confirm `libs/shared/project.json` has a `typecheck` target**
+
+```bash
+cat libs/shared/project.json
+```
+
+If absent, add (inside `"targets"`):
+
+```json
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p libs/shared/tsconfig.lib.json"
+      }
+    }
+```
+
+- [ ] **Step 4: Run the full test + typecheck + lint sweep**
 
 ```bash
 pnpm nx run-many -t test
@@ -3995,9 +4433,9 @@ pnpm nx run-many -t typecheck
 pnpm nx run-many -t lint
 ```
 
-Expected: all green. Tests added in Plan 2: `auth.context` (4), `workspaces` (3), `members.service` (12), `invites.service` (17), `members.routes` (9), `invites.routes` (11), plus rewritten `me` (3). Total **59 server tests** vs. 13 from Plan 1.
+Expected: all green. Tests added in Plan 2: `auth.context` (4), `workspaces` (3), `members.service` (13), `invites.service` (20), `members.routes` (9), `invites.routes` (12), plus rewritten `me` (3). Total **64 server tests** vs. 13 from Plan 1.
 
-- [ ] **Step 2: Update README status block**
+- [ ] **Step 5: Update README status block**
 
 Edit the `## Status` section near the bottom of `README.md`. Replace it with:
 
@@ -4005,18 +4443,18 @@ Edit the `## Status` section near the bottom of `README.md`. Replace it with:
 ## Status — 2026-05-08
 
 - ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready.
-- ✅ Plan 2 complete: workspace sharing on web — invites table + 10 endpoints, web UI for accept page, /settings/workspace, header switcher. Mobile gets X-Workspace-Id plumbing only. **API: 59 tests passing.**
+- ✅ Plan 2 complete: workspace sharing on web — invites table (hashed bearer tokens, partial-unique-index invariants for one-owner-per-workspace and one-pending-invite-per-email) + 9 endpoints, web UI for accept page, /settings/workspace, header switcher. Mobile gets X-Workspace-Id plumbing only. **API: 64 tests passing.**
 - 🚧 Next: Plan 1B — Plaid + Account model (mobile-first), or Plan 2-mobile — mirror sharing UX onto mobile (TBD).
 ```
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add README.md
-git commit -m "docs: mark Plan 2 complete + roadmap pointer"
+git add README.md apps/web/project.json apps/mobile/project.json libs/shared/project.json
+git commit -m "docs: mark Plan 2 complete + add missing typecheck targets"
 ```
 
-- [ ] **Step 4: Push + open PR if branched**
+- [ ] **Step 7: Push + open PR if branched**
 
 ```bash
 git push origin HEAD
@@ -4028,13 +4466,16 @@ If working on a feature branch, open a PR using the standard tooling.
 
 ## Done — Plan 2 Exit Criteria
 
-- [ ] `pnpm nx run-many -t test` green: 59 API tests across health, auth.session, membership, workspaces.bootstrap, me, workspaces (list), auth.context, members.service, members.routes, invites.service, invites.routes.
+- [ ] `pnpm nx run-many -t test` green: 64 API tests across health, auth.session, membership, workspaces.bootstrap, me, workspaces (list), auth.context, members.service, members.routes, invites.service, invites.routes.
 - [ ] `pnpm nx run-many -t typecheck` green across api, mobile, web, shared.
 - [ ] `pnpm nx run-many -t lint` green.
 - [ ] CI green on push.
-- [ ] Web flow: owner signs up → invites editor by email → editor signs up via the link → editor accepts → both see same workspace via `/settings/workspace`. Owner can promote/demote/transfer/remove. Last-owner-leave returns 409.
-- [ ] `/invites/<token>` rejects logged-in users with the wrong email (sign-out hint shown). `/invites/<token>` for an unknown/expired/revoked token shows the right state. 7-day expiry honored.
-- [ ] Header switcher appears only when the user has ≥ 2 workspaces. Switching changes the cookie and reloads — every subsequent fetch carries the new `X-Workspace-Id`.
+- [ ] Web flow: owner signs up → invites editor by email → editor signs up via the link → editor accepts → both see same workspace via `/settings/workspace`. Owner can promote/demote/transfer/remove. Last-owner-leave returns 409. Sign-in via the invite link returns the user to the invite (not `/home`).
+- [ ] `/invites/<token>` rejects logged-in users with the wrong email (sign-out hint shown). `/invites/<token>` for an unknown/expired/revoked token shows the right state. 7-day expiry honored. Re-invite after expiry succeeds.
+- [ ] Header switcher appears only when the user has ≥ 2 workspaces. Switching changes the cookie and reloads — every subsequent fetch carries the new `X-Workspace-Id`. Stale stored ids are reconciled on bootstrap (no permanent 404 after leaving a workspace).
 - [ ] Mobile: solo user with one workspace still sees the same `/home` UI. Header `X-Workspace-Id` is sent on every API call (verify in Fastify logs).
-- [ ] DB: every accepted invite creates exactly one new `memberships` row + flips `invites.status` to `accepted` with `acceptedAt` and `acceptedById` set. Revoked invites stay around with `status = revoked`.
+- [ ] DB: every accepted invite creates exactly one new `memberships` row + flips `invites.status` to `accepted` with `acceptedAt` and `acceptedById` set. Revoked invites stay around with `status = revoked`. The DB column `invites.tokenHash` never matches the URL token (it's a SHA-256 hex).
 - [ ] Re-invite of a previously accepted email is rejected (`already_member`).
+- [ ] Concurrency: two simultaneous owner-transfers (different new owners) leave exactly one owner; two simultaneous accepts of the same token produce exactly one membership; two simultaneous invites for the same email produce exactly one pending row.
+- [ ] Owner-role change requires confirmation in the web UI (the `<select>` does not silently transfer).
+- [ ] If Resend send fails, the `POST /workspaces/:id/invites` route returns 502 + revokes the freshly-created invite (retry succeeds with the same email).
