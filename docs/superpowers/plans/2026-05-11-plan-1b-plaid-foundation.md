@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Pro-tier user on web clicks "Connect a bank", completes the Plaid Link **sandbox** flow, and ends up with `plaid_items` + `accounts` + `transactions` rows in the DB. Manual "Refresh" re-runs `/transactions/sync` from the stored cursor; "Disconnect" removes the item but keeps transactions for history. Free-tier users see an upgrade prompt instead of Connect.
+**Goal:** Pro-tier user on web clicks "Connect a bank", completes the Plaid Link **sandbox** flow, and ends up with `plaid_items` + `bank_accounts` + `transactions` rows in the DB. Manual "Refresh" re-runs `/transactions/sync` from the stored cursor; "Disconnect" removes the item but keeps transactions for history. Free-tier users see an upgrade prompt instead of Connect.
 
-**Architecture:** Backend grows four Prisma models (`PlaidItem`, `Account`, `Transaction`, `Category` — last is empty), an AES-256-GCM encryption layer for `access_token` at rest with `workspaceId` as AAD, a `requireProTier` helper, a per-item Postgres advisory lock around `transactionsSync`, and seven endpoints all under `/workspaces/:id/...`. Sync uses a setup-tx → per-page-tx → status-persist-tx structure so error/relink_required state survives Plaid failures, plus mutation-during-pagination loop restart per Plaid's requirement. Web ships a single `/settings/banks` page with `react-plaid-link` for the Connect flow. Mobile is unchanged.
+**Architecture:** Backend grows four Prisma models (`PlaidItem`, `BankAccount`, `Transaction`, `Category` — last is empty), an AES-256-GCM encryption layer for `access_token` at rest with `workspaceId` as AAD, a `requireProTier` helper, a per-item Postgres row lock (`SELECT ... FOR UPDATE NOWAIT`) around the `transactionsSync` page tx, and seven endpoints all under `/workspaces/:id/...`. The Plaid model is named `BankAccount` (not `Account`) to avoid colliding with Better Auth's `Account` table. Sync uses a per-page-tx + status-persist-tx structure so error/relink_required state survives Plaid failures, with `lastCursor` / `lastSyncAt` advanced ONLY after `has_more === false` so partial failures re-fetch idempotently from the original cursor. Mutation-during-pagination is detected via the Plaid error code `TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION` and restarts the page loop from the original cursor. Web ships a single `/settings/banks` page with `react-plaid-link` for the Connect flow. Mobile is unchanged.
 
 **Tech Stack:** Prisma 5 + Postgres 16 (existing), Fastify 5 + Better Auth 1.6 (existing), `plaid` Node SDK 42, `react-plaid-link` 4 (web), vitest 2.
 
@@ -19,11 +19,11 @@ This plan implements `docs/superpowers/specs/2026-05-11-plan-1b-plaid-foundation
 - **Web only.** No mobile UI in this plan. No webhook handler. No cron. No LLM categorize. (See spec §11 for follow-ups.)
 - **Sandbox env.** `PLAID_ENV=sandbox`. Code accepts the env var so future promotion to development/production is one config change.
 - **Pro tier only.** No Lite-1-Item logic until billing/`subscriptions` exists. `requireProTier` rejects with `402 upgrade_required`.
-- **All Plaid-mutating routes are owner-only.** Pro check fires on the **requesting** user. Reads are members-only with no tier gate.
+- **All Plaid-mutating routes are owner-only.** Pro check fires on the **requesting** user for `link-token`, `exchange`, `sync`. Reads are members-only with no tier gate. **Disconnect (`DELETE /plaid-items/:itemId`) is the deliberate exception:** owner-only but NOT Pro-gated, so a user whose trial expired can still revoke Plaid's access to their bank rather than being trapped by the paywall.
 - **AES-256-GCM at rest.** `accessTokenCiphertext` (Bytes, 16-byte tag appended) + `accessTokenIv` (12 Bytes). AAD = `workspaceId`. Key from `ENCRYPTION_KEY` env (base64 32 bytes).
-- **Cursor-based sync per spec §9.2.** Per-page commit. Per-item Postgres advisory lock. Mutation-during-pagination → restart from `originalCursor`. Status writes happen in a separate transaction so they survive failures.
+- **Cursor-based sync per spec §9.2.** Per-page commit. Per-item row-level lock via `SELECT ... FOR UPDATE NOWAIT` on `plaid_items` inside each page-tx (originally drafted as `pg_try_advisory_xact_lock`, but that lock releases at commit and would let two concurrent refreshes both read the same cursor — caught in plan review). `lastCursor`+`lastSyncAt` only commit on `has_more=false`. Mutation-during-pagination → restart from `originalCursor`. Status writes happen in a separate transaction so they survive failures.
 - **Pending → posted promotion lookup key:** `plaidTransactionId == t.pending_transaction_id` (NOT `plaidPendingTransactionId`). Promotion clears `removedAt: null` if the pending row was already soft-removed in an earlier page.
-- **Disconnect is strict.** Plaid `/item/remove` MUST succeed (or return ITEM_NOT_FOUND) before the local row is deleted. Same advisory lock as sync.
+- **Disconnect is strict.** Plaid `/item/remove` MUST succeed (or return ITEM_NOT_FOUND) before the local row is deleted. Same row-level lock as sync (it acquires `FOR UPDATE NOWAIT` before the Plaid call, returns 409 `sync_in_progress` if held).
 - **Initial sync inside `/exchange` is split-tx.** Item + accounts commit first; sync runs separately; on sync failure the response is still 200 with `syncOk: false` and the item is durable.
 - **Endpoint shape: `/workspaces/:id/plaid/...`** to match Plan 2 conventions, with header/path mismatch guard.
 
@@ -35,15 +35,16 @@ This plan implements `docs/superpowers/specs/2026-05-11-plan-1b-plaid-foundation
 
 | File | Status | Responsibility |
 |---|---|---|
-| `prisma/schema.prisma` | modify | add 4 models (`PlaidItem`, `Account`, `Transaction`, `Category`) + 4 enums (`PlaidItemStatus`, `AccountStatus`, `TransactionSource`, no enum for Category) + Workspace relations |
+| `prisma/schema.prisma` | modify | add 4 models (`PlaidItem`, `BankAccount` — name avoids the Better Auth `Account` collision, `Transaction`, `Category`) + 3 enums (`PlaidItemStatus`, `AccountStatus`, `TransactionSource`) + Workspace relations |
 | `prisma/migrations/<ts>_add_plaid/migration.sql` | new | generated migration with 2 partial indexes appended manually |
 | `src/env.ts` | modify | add `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_ENV`, `ENCRYPTION_KEY` |
 | `src/crypto/aes-gcm.ts` | new | `encrypt(env, plaintext, aad)` / `decrypt(env, ciphertext, iv, aad)` — pure Node `crypto` |
 | `src/auth/tier.ts` | new | `effectiveTier(userId)`, `requireProTier(userId)` — Pro from trial only in this plan |
 | `src/routes/me.ts` | modify | drop inline `effectiveTier`; import from `auth/tier.ts` |
 | `src/plaid/client.ts` | new | `plaidClient(env)` + `PLAID_PRODUCTS` + `PLAID_COUNTRY_CODES` + `sanitizePlaidError(e)` + `isPlaidErrorCode(e, code)` |
-| `src/plaid/items.ts` | new | service: `storeAccessToken(env, wsId, plaidItemId, raw)`, `readAccessToken(env, wsId, plaidItemId)` (verifies pair), `removeItemStrict(env, wsId, plaidItemId)` (Plaid first, then local) |
-| `src/plaid/sync.ts` | new | `syncTransactions(env, wsId, plaidItemId)` — setup-tx + per-page-tx + status-persist-tx; `upsertAdded`, `upsertModified`, `markRemoved`; `advisoryLockKey`, `plaidOccurredAt`, `plaidPostedAt` |
+| `src/plaid/lock.ts` | new | `lockPlaidItem(tx, plaidItemId)` (`SELECT ... FOR UPDATE NOWAIT`) + `SyncLockHeld` — shared by `items.ts` (disconnect) and `sync.ts` (per-page tx) so neither imports the other for locking |
+| `src/plaid/items.ts` | new | service: `storeAccessToken(env, tx, {workspaceId, itemId, institutionId, institutionName, accessToken})` (caller wraps in `prisma.$transaction`), `readAccessToken(env, wsId, plaidItemId)` (verifies pair), `removeItemStrict(env, wsId, plaidItemId)` (Plaid call inside an outer tx that takes `lockPlaidItem` first; surfaces 409 `sync_in_progress` on contention) |
+| `src/plaid/sync.ts` | new | `syncTransactions(env, wsId, plaidItemId)` — read-then-loop with per-page-tx (`lockPlaidItem`) + final-tx + status-persist-tx; `upsertAdded`, `upsertModified`, `markRemoved`, `plaidOccurredAt`, `plaidPostedAt` |
 | `src/routes/plaid.ts` | new | `POST /workspaces/:id/plaid/link-token`, `POST /workspaces/:id/plaid/exchange` (with `syncOk` partial-failure contract) |
 | `src/routes/plaid-items.ts` | new | `GET /workspaces/:id/plaid-items`, `POST /workspaces/:id/plaid-items/:itemId/sync`, `DELETE /workspaces/:id/plaid-items/:itemId` |
 | `src/routes/accounts.ts` | new | `GET /workspaces/:id/accounts` |
@@ -105,7 +106,7 @@ In `apps/api/prisma/schema.prisma`, locate the `Workspace` model. Add these four
 
 ```prisma
   plaidItems    PlaidItem[]
-  accounts      Account[]
+  bankAccounts  BankAccount[]
   transactions  Transaction[]
   categories    Category[]
 ```
@@ -133,7 +134,7 @@ model PlaidItem {
   updatedAt                DateTime        @updatedAt
 
   workspace                Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  accounts                 Account[]
+  bankAccounts             BankAccount[]
   transactions             Transaction[]
 
   @@index([workspaceId])
@@ -146,7 +147,7 @@ enum PlaidItemStatus {
   relink_required
 }
 
-model Account {
+model BankAccount {
   id                  String        @id @default(cuid())
   workspaceId         String
   plaidItemId         String?
@@ -172,7 +173,7 @@ model Account {
   transactions        Transaction[]
 
   @@index([workspaceId, plaidItemId])
-  @@map("accounts")
+  @@map("bank_accounts")
 }
 
 enum AccountStatus {
@@ -204,7 +205,10 @@ model Transaction {
   updatedAt                   DateTime           @updatedAt
 
   workspace                   Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  account                     Account            @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  // FK column kept as `accountId` (not `bankAccountId`) so URL/query filters
+  // and prior plan-2 code that exposes accountId in API responses don't churn.
+  // The Prisma model is BankAccount but the field name is unchanged.
+  account                     BankAccount        @relation(fields: [accountId], references: [id], onDelete: Cascade)
   plaidItem                   PlaidItem?         @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
   category                    Category?          @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
@@ -294,33 +298,16 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test \
 
 Edit `apps/api/tests/helpers/db.ts` to include the new tables (leaf-to-root order):
 
-```ts
-import { prisma } from "../../src/db.js";
-
-export async function truncateAll(): Promise<void> {
-  await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE "transactions", "accounts", "plaid_items", "categories",
-                   "invites", "memberships", "workspaces",
-                   "verifications", "sessions", "accounts" /* better-auth */, "users"
-    RESTART IDENTITY CASCADE;
-  `);
-}
-
-export async function disconnect(): Promise<void> {
-  await prisma.$disconnect();
-}
-```
-
-> **NOTE:** the better-auth table is also called `accounts`. Postgres lets us list both because they're different relations only if we qualify with schema. Both are in the default `public` schema, so the duplicate name in this raw SQL is a problem. Workaround: rename our table-map. **Don't** — renaming Plaid's `accounts` to something else is worse. Better fix: write the TRUNCATE without the duplicate by leaning on CASCADE — `TRUNCATE` of `users` cascades to better-auth `accounts`, and `TRUNCATE` of `workspaces` cascades to Plaid `accounts`. Replace with:
+> **NOTE:** the Plaid model used to be called `Account` (mapped to `accounts`), which collided with Better Auth's existing `accounts` table — caught in spec review and resolved by renaming Plaid's model to `BankAccount` mapped to `bank_accounts`. Even with that rename, the cleanest TRUNCATE is to lean on cascade rather than enumerate every table, so the next-write block stays small and survives future schema growth.
 
 ```ts
 import { prisma } from "../../src/db.js";
 
 export async function truncateAll(): Promise<void> {
-  // Workspace cascade kills plaid_items, accounts (Plaid), transactions, categories,
-  // invites, memberships. User cascade kills sessions, accounts (better-auth),
-  // verifications, memberships. Order: workspaces first (so workspace-scoped rows
-  // are removed cleanly), then users.
+  // Workspace cascade kills plaid_items, bank_accounts (Plaid), transactions,
+  // categories, invites, memberships. User cascade kills sessions, accounts
+  // (better-auth), verifications, memberships. Order: workspaces first (so
+  // workspace-scoped rows are removed cleanly), then users.
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE "workspaces" RESTART IDENTITY CASCADE;`);
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE "users" RESTART IDENTITY CASCADE;`);
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE "verifications" RESTART IDENTITY CASCADE;`);
@@ -331,7 +318,7 @@ export async function disconnect(): Promise<void> {
 }
 ```
 
-This avoids the name collision and is more maintainable as the schema grows.
+This avoids any future name-collision risk and is more maintainable as the schema grows.
 
 - [ ] **Step 7: Verify existing tests still pass**
 
@@ -345,7 +332,7 @@ Expected: 82 tests still PASS (no behavior change in this task — schema only).
 
 ```bash
 git add apps/api/prisma/schema.prisma apps/api/prisma/migrations apps/api/tests/helpers/db.ts
-git commit -m "feat(api): add Plaid schema (PlaidItem/Account/Transaction/Category) + partial indexes"
+git commit -m "feat(api): add Plaid schema (PlaidItem/BankAccount/Transaction/Category) + partial indexes"
 ```
 
 ---
@@ -367,6 +354,10 @@ Edit `apps/api/src/env.ts`. After the existing `WEB_APP_URL` line:
   PLAID_CLIENT_ID: z.string(),
   PLAID_SECRET: z.string(),
   PLAID_ENV: z.enum(["sandbox", "development", "production"]).default("sandbox"),
+  // Soft deadline for the initial sync inside POST /plaid/exchange. Tests
+  // override to a small value so the timeout path is exercised with real
+  // timers (vi.useFakeTimers + fastify.inject is racy and brittle).
+  PLAID_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
   // AES-256-GCM key for at-rest encryption (Plaid access_token).
   // Must base64-decode to exactly 32 bytes. Validation happens lazily inside
   // the crypto helper so tests can use a fixed value without re-running zod.
@@ -403,7 +394,7 @@ ENCRYPTION_KEY=
 
 - [ ] **Step 4: Pass-through Plaid env in smoke scripts**
 
-Edit `package.json`. Update the four `smoke:api*` scripts so they pass through any `PLAID_*` and `ENCRYPTION_KEY` already in the user's shell, instead of dropping them. Replace the existing `smoke:api` and `smoke:api:lan` scripts with:
+Edit `package.json`. Update the two `smoke:api*` scripts (`smoke:api` and `smoke:api:lan`) so they pass through any `PLAID_*` and `ENCRYPTION_KEY` already in the user's shell, instead of dropping them. Replace them with:
 
 ```json
     "smoke:api": "RESEND_API_KEY= DATABASE_URL=postgresql://fina:fina@localhost:5433/fina WEB_APP_URL=http://localhost:3100 nx run api:dev",
@@ -643,14 +634,16 @@ const env = {
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
 };
 
-describe("requireProTier / effectiveTier", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-  afterAll(async () => {
-    await disconnect();
-  });
+// File-level lifecycle (Plan 2 convention).
+beforeEach(async () => {
+  await truncateAll();
+});
 
+afterAll(async () => {
+  await disconnect();
+});
+
+describe("requireProTier / effectiveTier", () => {
   it("returns pro + trialActive=true on a fresh trial signup", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "pro@x.com", name: "Pro" });
@@ -785,7 +778,7 @@ Expected: 4 new tier tests + 3 existing me tests all PASS.
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test
 ```
 
-Expected: 86/86 (82 prior + 4 new tier tests).
+Expected: 92/92 (82 prior from Plan 2 + 6 from Task 3 crypto + 4 new tier tests).
 
 - [ ] **Step 7: Commit**
 
@@ -822,7 +815,11 @@ let cached: PlaidApi | null = null;
 let cachedFor: string | null = null;
 
 export function plaidClient(env: Env): PlaidApi {
-  if (cached && cachedFor === env.PLAID_ENV + env.PLAID_CLIENT_ID) return cached;
+  // Cache key includes the SECRET as well — otherwise a test that flips
+  // PLAID_SECRET while keeping client id + env constant would silently reuse
+  // a client configured with the old secret.
+  const cacheKey = `${env.PLAID_ENV}|${env.PLAID_CLIENT_ID}|${env.PLAID_SECRET}`;
+  if (cached && cachedFor === cacheKey) return cached;
   cached = new PlaidApi(
     new Configuration({
       basePath: PlaidEnvironments[env.PLAID_ENV],
@@ -835,7 +832,7 @@ export function plaidClient(env: Env): PlaidApi {
       },
     }),
   );
-  cachedFor = env.PLAID_ENV + env.PLAID_CLIENT_ID;
+  cachedFor = cacheKey;
   return cached;
 }
 
@@ -909,12 +906,26 @@ import { vi } from "vitest";
  * per method; the mock pops them in order. Throwing test errors are pushed
  * the same way (queue an Error instance to make the next call reject).
  *
- * Usage:
- *   import { setupPlaidMock, plaidMock } from "./helpers/plaid-mock.js";
- *   setupPlaidMock();
- *   plaidMock.transactionsSync.push({ data: { added: [...], ... } });
+ * Usage (top of every test file that imports anything that imports plaid):
+ *   import { vi } from "vitest";
+ *   import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError }
+ *     from "./helpers/plaid-mock.js";
+ *   vi.mock("plaid", plaidMockFactory);
+ *
+ * Important: `vi.mock` MUST be called at module top level (not from inside a
+ * helper function). Vitest hoists `vi.mock(...)` to before all imports, so
+ * by the time `import "../src/plaid/client.js"` runs, the mock is already in
+ * place. Wrapping `vi.mock` in a function defeats the hoisting and the real
+ * `plaid` SDK is loaded instead — the silent root cause of "tests pass with
+ * an empty queue" bugs.
  */
-type AnyResponse = { data: unknown } | Error;
+// A queued response is one of:
+//   - `{ data }`  → the call resolves with this object
+//   - `Error`     → the call rejects with this error
+//   - `Promise`   → the call awaits this promise (lets tests model "pending
+//                   forever" or "resolves later" — required by the soft-
+//                   timeout test which pushes `new Promise(() => {})`)
+type AnyResponse = { data: unknown } | Error | Promise<{ data: unknown } | Error>;
 
 export const plaidMock = {
   linkTokenCreate: [] as AnyResponse[],
@@ -942,28 +953,44 @@ function pop(method: keyof typeof plaidMock): AnyResponse {
 
 async function callOrThrow(method: keyof typeof plaidMock) {
   const next = pop(method);
+  // Pending-promise variant: the test wants this call to hang (or resolve
+  // later via test-controlled signaling). Await the queued promise and
+  // unwrap the same union as the synchronous case.
+  if (next && typeof (next as Promise<unknown>).then === "function") {
+    const resolved = await (next as Promise<{ data: unknown } | Error>);
+    if (resolved instanceof Error) throw resolved;
+    return resolved;
+  }
   if (next instanceof Error) throw next;
-  return next;
+  return next as { data: unknown };
 }
 
-/** Call once at the top of test files that need the mock. Replaces `plaid` globally. */
-export function setupPlaidMock(): void {
-  vi.mock("plaid", async () => {
-    return {
-      Configuration: class {
-        constructor(_: unknown) {}
-      },
-      PlaidApi: class {
-        constructor(_: unknown) {}
-        async linkTokenCreate() { return callOrThrow("linkTokenCreate"); }
-        async itemPublicTokenExchange() { return callOrThrow("itemPublicTokenExchange"); }
-        async accountsGet() { return callOrThrow("accountsGet"); }
-        async transactionsSync() { return callOrThrow("transactionsSync"); }
-        async itemRemove() { return callOrThrow("itemRemove"); }
-      },
-      PlaidEnvironments: { sandbox: "https://sandbox.plaid.com", development: "x", production: "x" },
-    };
-  });
+/**
+ * Factory passed to `vi.mock("plaid", plaidMockFactory)` at the top of test
+ * files. Returns a fake `plaid` module whose PlaidApi methods consume from
+ * the per-method queues in `plaidMock`. Tests push prescripted responses
+ * (or Error instances to reject the next call) before invoking the code
+ * under test.
+ */
+export function plaidMockFactory() {
+  return {
+    Configuration: class {
+      constructor(_: unknown) {}
+    },
+    PlaidApi: class {
+      constructor(_: unknown) {}
+      async linkTokenCreate() { return callOrThrow("linkTokenCreate"); }
+      async itemPublicTokenExchange() { return callOrThrow("itemPublicTokenExchange"); }
+      async accountsGet() { return callOrThrow("accountsGet"); }
+      async transactionsSync() { return callOrThrow("transactionsSync"); }
+      async itemRemove() { return callOrThrow("itemRemove"); }
+    },
+    PlaidEnvironments: {
+      sandbox: "https://sandbox.plaid.com",
+      development: "https://development.plaid.com",
+      production: "https://production.plaid.com",
+    },
+  };
 }
 
 /** Build a realistic `error` shape that sanitizePlaidError can read. */
@@ -1004,14 +1031,245 @@ git commit -m "feat(api): plaid client wrapper + sanitized error path + test moc
 
 ---
 
-## Task 6: `plaid/items.ts` service — store / read / strict remove
+## Task 6: `plaid/lock.ts` (shared row-lock util) + `plaid/items.ts` service — store / read / strict locked remove (TDD)
 
 **Files:**
 - Create: `apps/api/src/plaid/items.ts`
+- Create: `apps/api/tests/plaid.items.test.ts`
 
-This task adds the access-token boundary. Tests for it land alongside sync (Task 7) and routes (Task 9-10) where they're naturally exercised end-to-end. The exhaustiveness check happens via typecheck + integration tests.
+This task adds the access-token boundary — the master spec §10.1 hard rule that
+Plaid functions take `(workspace_id, plaid_item_id)` and verify the pair before
+decrypting. Critical to test directly (not just transitively via routes) because
+the verification is what stands between us and a cross-workspace token leak.
 
-- [ ] **Step 1: Implement `apps/api/src/plaid/items.ts`**
+- [ ] **Step 1: Write failing tests for the store/read/strict-remove triad**
+
+Create `apps/api/tests/plaid.items.test.ts`:
+
+```ts
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+
+vi.mock("plaid", plaidMockFactory);
+
+import { prisma } from "../src/db.js";
+import { buildApp } from "../src/server.js";
+import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
+import { truncateAll, disconnect } from "./helpers/db.js";
+import { storeAccessToken, readAccessToken, removeItemStrict } from "../src/plaid/items.js";
+import { HttpError } from "../src/auth/context.js";
+
+const env = {
+  NODE_ENV: "test" as const,
+  PORT: 0,
+  DATABASE_URL: process.env.DATABASE_URL!,
+  BETTER_AUTH_SECRET: "x".repeat(48),
+  BETTER_AUTH_URL: "http://localhost:0",
+  EMAIL_FROM: "test@fina.app",
+  WEB_APP_URL: "http://localhost:3000",
+  PLAID_CLIENT_ID: "test_client_id",
+  PLAID_SECRET: "test_secret",
+  PLAID_ENV: "sandbox" as const,
+  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+};
+
+// File-level lifecycle (Plan 2 convention) — keeps hooks consistent with the
+// other plaid.* test files and avoids per-describe duplication if more
+// describes are added later.
+beforeEach(async () => {
+  await truncateAll();
+  resetPlaidMock();
+});
+
+afterAll(async () => {
+  await disconnect();
+});
+
+describe("plaid/items service", () => {
+  it("storeAccessToken — encrypts on write; row carries ciphertext + iv, NOT raw", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "s@x.com", name: "S" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+    const id = await prisma.$transaction(async (tx) =>
+      storeAccessToken(env, tx, {
+        workspaceId: wsId,
+        itemId: "item_x",
+        institutionId: "ins_x",
+        institutionName: "X",
+        accessToken: "secret-token-do-not-leak",
+      }),
+    );
+    const row = await prisma.plaidItem.findUniqueOrThrow({ where: { id } });
+    expect(row.accessTokenIv.length).toBe(12);
+    expect(row.accessTokenCiphertext.length).toBeGreaterThan(16);
+    expect(Buffer.from(row.accessTokenCiphertext).toString("utf8")).not.toContain("secret-token");
+    await app.close();
+  });
+
+  it("readAccessToken — round-trips when (workspaceId, plaidItemId) match", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "r1@x.com", name: "R" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+    const id = await prisma.$transaction((tx) =>
+      storeAccessToken(env, tx, {
+        workspaceId: wsId, itemId: "item_r", institutionId: "ins", institutionName: "X",
+        accessToken: "secret-r",
+      }),
+    );
+    const { accessToken } = await readAccessToken(env, wsId, id);
+    expect(accessToken).toBe("secret-r");
+    await app.close();
+  });
+
+  it("readAccessToken — 404 when workspaceId doesn't match the item's workspace (cross-workspace defense)", async () => {
+    const app = await buildApp(env);
+    const owner1 = await signUpAndGetCookie(app, { email: "o1@x.com", name: "O" });
+    const ws1 = await getOwnerWorkspaceId(owner1.userId);
+    const owner2 = await signUpAndGetCookie(app, { email: "o2@x.com", name: "O" });
+    const ws2 = await getOwnerWorkspaceId(owner2.userId);
+    const id = await prisma.$transaction((tx) =>
+      storeAccessToken(env, tx, {
+        workspaceId: ws1, itemId: "item_cross", institutionId: "ins", institutionName: "X",
+        accessToken: "secret-1",
+      }),
+    );
+    await expect(readAccessToken(env, ws2, id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "not_found",
+    });
+    await app.close();
+  });
+
+  it("readAccessToken — 404 when plaidItemId doesn't exist", async () => {
+    await expect(readAccessToken(env, "ws_nope", "no_such_item")).rejects.toBeInstanceOf(HttpError);
+  });
+
+  it("removeItemStrict — happy path: Plaid /item/remove called, accounts archived, plaid_item deleted, transactions kept", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "rm@x.com", name: "Rm" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const id = await prisma.$transaction((tx) =>
+      storeAccessToken(env, tx, {
+        workspaceId: wsId, itemId: "item_rm", institutionId: "ins", institutionName: "X",
+        accessToken: "secret-rm",
+      }),
+    );
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, plaidItemId: id, plaidAccountId: "acct_rm", name: "C", type: "depository" },
+    });
+    const txRow = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidItemId: id,
+        plaidTransactionId: "tx_rm", amount: 1, merchantRaw: "X", occurredAt: new Date(), rawData: {},
+      },
+    });
+
+    plaidMock.itemRemove.push({ data: { request_id: "r" } });
+    await removeItemStrict(env, wsId, id);
+
+    expect(await prisma.plaidItem.findUnique({ where: { id } })).toBeNull();
+    const acctAfter = await prisma.bankAccount.findUniqueOrThrow({ where: { id: acct.id } });
+    expect(acctAfter.archivedAt).not.toBeNull();
+    expect(acctAfter.plaidItemId).toBeNull(); // SetNull
+    const txAfter = await prisma.transaction.findUniqueOrThrow({ where: { id: txRow.id } });
+    expect(txAfter.plaidItemId).toBeNull();
+    await app.close();
+  });
+
+  it("removeItemStrict — Plaid failure 502 + local row preserved for retry", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "rm2@x.com", name: "Rm" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const id = await prisma.$transaction((tx) =>
+      storeAccessToken(env, tx, {
+        workspaceId: wsId, itemId: "item_rm2", institutionId: "ins", institutionName: "X",
+        accessToken: "secret-rm2",
+      }),
+    );
+    plaidMock.itemRemove.push(plaidApiError({ error_code: "INSTITUTION_DOWN", http_status: 503 }));
+    await expect(removeItemStrict(env, wsId, id)).rejects.toMatchObject({
+      statusCode: 502,
+      code: "plaid_unavailable",
+    });
+    expect(await prisma.plaidItem.findUnique({ where: { id } })).not.toBeNull();
+    await app.close();
+  });
+
+  it("removeItemStrict — ITEM_NOT_FOUND from Plaid is treated as already-removed; local cleanup proceeds", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "rm3@x.com", name: "Rm" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const id = await prisma.$transaction((tx) =>
+      storeAccessToken(env, tx, {
+        workspaceId: wsId, itemId: "item_rm3", institutionId: "ins", institutionName: "X",
+        accessToken: "secret-rm3",
+      }),
+    );
+    plaidMock.itemRemove.push(plaidApiError({ error_code: "ITEM_NOT_FOUND" }));
+    await removeItemStrict(env, wsId, id);
+    expect(await prisma.plaidItem.findUnique({ where: { id } })).toBeNull();
+    await app.close();
+  });
+});
+```
+
+- [ ] **Step 2: Run (expect fail — module missing)**
+
+```bash
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test -- tests/plaid.items.test.ts
+```
+
+Expected: FAIL.
+
+- [ ] **Step 2.5: Create `apps/api/src/plaid/lock.ts`** (shared so both `items.ts` and `sync.ts` can use it without a circular import)
+
+```ts
+import type { Prisma } from "@prisma/client";
+import { HttpError } from "../auth/context.js";
+
+export class SyncLockHeld extends Error {
+  constructor() {
+    super("plaid_item is locked by another sync/disconnect");
+  }
+}
+
+/**
+ * Acquire a non-blocking row-level lock on the plaid_items row inside a
+ * Prisma transaction. Three outcomes:
+ *
+ *   1. Row exists + free  → returns; lock is held until tx commits.
+ *   2. Row exists + held  → Postgres raises SQLSTATE 55P03 ("could not
+ *      obtain lock") immediately; we surface as `SyncLockHeld` so the
+ *      caller can decide (sync returns `{skipped:"lock_held"}`, disconnect
+ *      throws 409 `sync_in_progress`).
+ *   3. Row vanished       → SELECT returns 0 rows. We surface as 404
+ *      `not_found` so concurrent disconnect+refresh races don't get a
+ *      misleading `502 plaid_unavailable` later (`Prisma P2025` would
+ *      bubble up as an unhandled error otherwise).
+ */
+export async function lockPlaidItem(
+  tx: Prisma.TransactionClient,
+  plaidItemId: string,
+): Promise<void> {
+  let rows: { id: string }[];
+  try {
+    rows = await tx.$queryRaw<{ id: string }[]>`
+      SELECT id FROM "plaid_items" WHERE id = ${plaidItemId} FOR UPDATE NOWAIT
+    `;
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    if (code === "55P03" || /could not obtain lock/i.test((e as Error).message ?? "")) {
+      throw new SyncLockHeld();
+    }
+    throw e;
+  }
+  if (rows.length === 0) {
+    throw new HttpError(404, "not_found", "plaid_item vanished");
+  }
+}
+```
+
+- [ ] **Step 3: Implement `apps/api/src/plaid/items.ts`**
 
 ```ts
 import type { Env } from "../env.js";
@@ -1019,6 +1277,7 @@ import { prisma } from "../db.js";
 import { encrypt, decrypt } from "../crypto/aes-gcm.js";
 import { plaidClient, mapPlaidError, isPlaidErrorCode } from "./client.js";
 import { HttpError } from "../auth/context.js";
+import { lockPlaidItem, SyncLockHeld } from "./lock.js";
 
 export type StoreInput = {
   workspaceId: string;
@@ -1091,6 +1350,14 @@ export async function readAccessToken(
  * On success: archive the accounts (archivedAt = now) and delete the plaid_item;
  * accounts.plaidItemId becomes NULL via the SetNull FK; transactions stay
  * (their plaidItemId also becomes NULL via SetNull).
+ *
+ * Lock contract (architecture §): the entire operation runs inside one tx
+ * that takes the same `SELECT ... FOR UPDATE NOWAIT` row lock as the sync
+ * page-tx, so a refresh in flight cannot apply a page mid-disconnect (and
+ * vice-versa). The Plaid HTTP call happens inside the tx — disconnect is
+ * a rare, user-initiated action so holding the row lock for the few seconds
+ * of the Plaid round-trip is acceptable. If the lock is contended we throw
+ * `409 sync_in_progress` so the caller can retry.
  */
 export async function removeItemStrict(
   env: Env,
@@ -1100,49 +1367,75 @@ export async function removeItemStrict(
   const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
 
   try {
-    await plaidClient(env).itemRemove({ access_token: accessToken });
+    // Prisma's interactive-tx default timeout is 5s — well under what a slow
+    // Plaid `/item/remove` can take. Bump to 35s (Plaid SDK's own timeout
+    // ceiling is ~30s) so a slow remote-remove doesn't leave us in the worst
+    // failure mode: Plaid removed the item, then our cleanup tx aborts on
+    // timeout and leaves a stale local row whose access_token is now invalid.
+    // (That state IS retry-recoverable — a follow-up disconnect call will hit
+    // ITEM_NOT_FOUND and clean up — but better to avoid it.)
+    await prisma.$transaction(
+      async (tx) => {
+        await lockPlaidItem(tx, plaidItemId); // throws SyncLockHeld on 55P03
+        try {
+          await plaidClient(env).itemRemove({ access_token: accessToken });
+        } catch (e) {
+          if (isPlaidErrorCode(e, "ITEM_NOT_FOUND")) {
+            // Already removed remotely. Continue with local cleanup.
+          } else {
+            throw mapPlaidError(e); // 502 plaid_unavailable etc.
+          }
+        }
+        await tx.bankAccount.updateMany({
+          where: { plaidItemId },
+          data: { archivedAt: new Date() },
+        });
+        await tx.plaidItem.delete({ where: { id: plaidItemId } });
+      },
+      { maxWait: 5_000, timeout: 35_000 },
+    );
   } catch (e) {
-    if (isPlaidErrorCode(e, "ITEM_NOT_FOUND")) {
-      // Already removed remotely. Continue with local cleanup.
-    } else {
-      throw mapPlaidError(e); // 502 plaid_unavailable etc.
+    if (e instanceof SyncLockHeld) {
+      throw new HttpError(409, "sync_in_progress", "another sync or disconnect is in progress");
     }
+    throw e;
   }
-
-  await prisma.$transaction(async (tx) => {
-    await tx.account.updateMany({
-      where: { plaidItemId },
-      data: { archivedAt: new Date() },
-    });
-    await tx.plaidItem.delete({ where: { id: plaidItemId } });
-  });
 }
 ```
 
-- [ ] **Step 2: Typecheck**
+- [ ] **Step 4: Run tests (expect pass)**
 
 ```bash
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test -- tests/plaid.items.test.ts
+```
+
+Expected: 7/7 PASS.
+
+- [ ] **Step 5: Full suite + typecheck**
+
+```bash
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test
 pnpm nx run api:typecheck
 ```
 
-Expected: 0 errors.
+Both green.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/api/src/plaid/items.ts
-git commit -m "feat(api): plaid items service — store/read (with workspace pair check)/strict remove"
+git add apps/api/src/plaid/lock.ts apps/api/src/plaid/items.ts apps/api/tests/plaid.items.test.ts
+git commit -m "feat(api): plaid items service — store/read (with (workspace, item) pair check)/strict remove"
 ```
 
 ---
 
-## Task 7: `syncTransactions` — setup-tx + per-page-tx + status-persist-tx + advisory lock
+## Task 7: `syncTransactions` — read-then-loop with per-page-tx (FOR UPDATE NOWAIT) + status-persist-tx + mutation restart
 
 **Files:**
 - Create: `apps/api/src/plaid/sync.ts`
 - Create: `apps/api/tests/plaid.sync.test.ts`
 
-This is the largest task. It builds the spec §7 sync flow: setup transaction (acquire advisory lock + read item), per-page data transaction (apply added/modified/removed and advance cursor), status-persist transaction on failure (so error/relink_required survives), plus mutation-during-pagination restart per Plaid contract.
+This is the largest task. It builds the spec §7 sync flow: read item + cursor outside any tx, loop with per-page data transaction that takes a row-level `SELECT ... FOR UPDATE NOWAIT` on `plaid_items` (so two parallel refreshes can't both apply pages), final transaction commits `lastCursor`+`lastSyncAt` only when `has_more=false` (so any mid-loop crash leaves the cursor unmoved and the next sync naturally re-fetches from the original spot — partial-unique index makes upserts idempotent), status-persist transaction on failure (so error/relink_required survives), plus mutation-during-pagination restart per Plaid contract (catches the `TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION` error code, resets cursor + accumulators, max 3 restarts before surfacing as `plaid_unavailable`).
 
 `upsertAdded` lookup uses `plaidTransactionId == t.pending_transaction_id` for promotion (the corrected key from spec review).
 
@@ -1151,15 +1444,20 @@ This is the largest task. It builds the spec §7 sync flow: setup transaction (a
 Create `apps/api/tests/plaid.sync.test.ts`:
 
 ```ts
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+
+// vi.mock is HOISTED to before all imports — must be at module top, not inside
+// a function. Without this, the real `plaid` SDK loads and tests fail with
+// confusing "missing scripted response" or HTTP errors.
+vi.mock("plaid", plaidMockFactory);
+
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { setupPlaidMock, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
 import { encrypt } from "../src/crypto/aes-gcm.js";
 
-setupPlaidMock();
 
 import { syncTransactions } from "../src/plaid/sync.js";
 
@@ -1177,7 +1475,10 @@ const env = {
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
 };
 
-async function makeItemWithAccount(workspaceId: string): Promise<{ itemId: string; accountId: string; plaidItemId: string }> {
+async function makeItemWithAccount(
+  workspaceId: string,
+  plaidAccountId = "acct_test",
+): Promise<{ itemId: string; accountId: string; plaidItemId: string; plaidAccountId: string }> {
   const { ciphertext, iv } = encrypt(env, "access-test-token", workspaceId);
   const item = await prisma.plaidItem.create({
     data: {
@@ -1189,16 +1490,16 @@ async function makeItemWithAccount(workspaceId: string): Promise<{ itemId: strin
       accessTokenIv: iv,
     },
   });
-  const acct = await prisma.account.create({
+  const acct = await prisma.bankAccount.create({
     data: {
       workspaceId,
       plaidItemId: item.id,
-      plaidAccountId: `acct_${Math.random().toString(36).slice(2, 10)}`,
+      plaidAccountId, // deterministic so test mocks can reference it
       name: "Checking",
       type: "depository",
     },
   });
-  return { plaidItemId: item.id, itemId: item.itemId, accountId: acct.id };
+  return { plaidItemId: item.id, itemId: item.itemId, accountId: acct.id, plaidAccountId };
 }
 
 function tx(opts: {
@@ -1227,15 +1528,18 @@ function tx(opts: {
   };
 }
 
-describe("syncTransactions", () => {
-  beforeEach(async () => {
-    await truncateAll();
-    resetPlaidMock();
-  });
-  afterAll(async () => {
-    await disconnect();
-  });
+// File-level lifecycle (Plan 2 convention) — keeps hooks consistent with the
+// other plaid.* test files.
+beforeEach(async () => {
+  await truncateAll();
+  resetPlaidMock();
+});
 
+afterAll(async () => {
+  await disconnect();
+});
+
+describe("syncTransactions", () => {
   it("happy path — single page applies added/modified/removed and advances cursor", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o@x.com", name: "O" });
@@ -1245,7 +1549,7 @@ describe("syncTransactions", () => {
     plaidMock.transactionsSync.push({
       data: {
         added: [
-          tx({ transaction_id: "t1", account_id: "ignored", amount: 12.34, date: "2026-05-10" }),
+          tx({ transaction_id: "t1", account_id: "acct_test", amount: 12.34, date: "2026-05-10" }),
         ],
         modified: [],
         removed: [],
@@ -1276,8 +1580,8 @@ describe("syncTransactions", () => {
     const { plaidItemId } = await makeItemWithAccount(wsId);
 
     plaidMock.transactionsSync.push(
-      { data: { added: [tx({ transaction_id: "p1", account_id: "x", amount: 1, date: "2026-05-09" })], modified: [], removed: [], next_cursor: "c1", has_more: true } },
-      { data: { added: [tx({ transaction_id: "p2", account_id: "x", amount: 2, date: "2026-05-10" })], modified: [], removed: [], next_cursor: "c2", has_more: false } },
+      { data: { added: [tx({ transaction_id: "p1", account_id: "acct_test", amount: 1, date: "2026-05-09" })], modified: [], removed: [], next_cursor: "c1", has_more: true } },
+      { data: { added: [tx({ transaction_id: "p2", account_id: "acct_test", amount: 2, date: "2026-05-10" })], modified: [], removed: [], next_cursor: "c2", has_more: false } },
     );
 
     const r = await syncTransactions(env, wsId, plaidItemId);
@@ -1296,7 +1600,7 @@ describe("syncTransactions", () => {
     // Sync 1: a pending row arrives.
     plaidMock.transactionsSync.push({
       data: {
-        added: [tx({ transaction_id: "pend1", account_id: "x", amount: 9.99, date: "2026-05-10", pending: true })],
+        added: [tx({ transaction_id: "pend1", account_id: "acct_test", amount: 9.99, date: "2026-05-10", pending: true })],
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
@@ -1310,7 +1614,7 @@ describe("syncTransactions", () => {
       data: {
         added: [tx({
           transaction_id: "post1",
-          account_id: "x",
+          account_id: "acct_test",
           amount: 9.99,
           date: "2026-05-11",
           pending: false,
@@ -1342,28 +1646,37 @@ describe("syncTransactions", () => {
     // Sync 1: pending row arrives.
     plaidMock.transactionsSync.push({
       data: {
-        added: [tx({ transaction_id: "pend2", account_id: "x", amount: 5, date: "2026-05-10", pending: true })],
+        added: [tx({ transaction_id: "pend2", account_id: "acct_test", amount: 5, date: "2026-05-10", pending: true })],
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
     await syncTransactions(env, wsId, plaidItemId);
     const pendingRow = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
 
-    // Sync 2 (one page that REMOVES the pending and ADDS the posted in the same page).
+    // Sync 2 spans TWO pages — page 1 removes the pending row (soft-delete),
+    // page 2 (the posted `added`) needs to find the now-removed row by
+    // plaidTransactionId == pending_transaction_id and clear removedAt.
     plaidMock.transactionsSync.push({
       data: {
-        added: [tx({ transaction_id: "post2", account_id: "x", amount: 5, date: "2026-05-11", pending: false, pending_transaction_id: "pend2" })],
+        added: [],
         modified: [],
         removed: [{ transaction_id: "pend2" }],
-        next_cursor: "c2", has_more: false,
+        next_cursor: "mid", has_more: true,
+      },
+    });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [tx({ transaction_id: "post2", account_id: "acct_test", amount: 5, date: "2026-05-11", pending: false, pending_transaction_id: "pend2" })],
+        modified: [], removed: [], next_cursor: "c2", has_more: false,
       },
     });
     await syncTransactions(env, wsId, plaidItemId);
 
     const afterRow = await prisma.transaction.findUniqueOrThrow({ where: { id: pendingRow.id } });
-    expect(afterRow.removedAt).toBeNull(); // promotion cleared the soft-delete
+    expect(afterRow.removedAt).toBeNull(); // promotion cleared the page-1 soft-delete
     expect(afterRow.plaidTransactionId).toBe("post2");
     expect(afterRow.pending).toBe(false);
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(1);
     await app.close();
   });
 
@@ -1375,7 +1688,7 @@ describe("syncTransactions", () => {
 
     plaidMock.transactionsSync.push({
       data: {
-        added: [tx({ transaction_id: "m1", account_id: "x", amount: 1.0, date: "2026-05-10", merchant: "Old" })],
+        added: [tx({ transaction_id: "m1", account_id: "acct_test", amount: 1.0, date: "2026-05-10", merchant: "Old" })],
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
@@ -1383,7 +1696,7 @@ describe("syncTransactions", () => {
     plaidMock.transactionsSync.push({
       data: {
         added: [],
-        modified: [tx({ transaction_id: "m1", account_id: "x", amount: 1.5, date: "2026-05-10", merchant: "New" })],
+        modified: [tx({ transaction_id: "m1", account_id: "acct_test", amount: 1.5, date: "2026-05-10", merchant: "New" })],
         removed: [],
         next_cursor: "c2", has_more: false,
       },
@@ -1404,7 +1717,7 @@ describe("syncTransactions", () => {
 
     plaidMock.transactionsSync.push({
       data: {
-        added: [tx({ transaction_id: "r1", account_id: "x", amount: 1, date: "2026-05-10" })],
+        added: [tx({ transaction_id: "r1", account_id: "acct_test", amount: 1, date: "2026-05-10" })],
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
@@ -1456,69 +1769,104 @@ describe("syncTransactions", () => {
     await app.close();
   });
 
-  it("mutation-during-pagination — loop restarts from originalCursor and accumulators reset", async () => {
+  it("mutation-during-pagination — error code triggers loop restart from originalCursor", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o9@x.com", name: "O" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
     const { plaidItemId } = await makeItemWithAccount(wsId);
 
-    // Page 1: applies 1 row, has_more = true.
+    // Page 1 of attempt #1: applies 1 row, has_more = true. Row is committed
+    // (per-page commit) but lastCursor is NOT updated yet — that only happens
+    // at has_more=false.
     plaidMock.transactionsSync.push({
       data: {
-        added: [tx({ transaction_id: "first", account_id: "x", amount: 1, date: "2026-05-09" })],
+        added: [tx({ transaction_id: "first", account_id: "acct_test", amount: 1, date: "2026-05-09" })],
         modified: [], removed: [], next_cursor: "c1", has_more: true,
       },
     });
-    // Page 2: comes back with mutated_during_sync flag — loop should restart.
-    plaidMock.transactionsSync.push({
-      data: {
-        added: [],
-        modified: [],
-        removed: [],
-        next_cursor: "c1", has_more: false,
-        mutated_during_sync: true,
-      },
-    });
-    // Page 3 (restart from null cursor): applies 2 rows fresh.
+    // Page 2 of attempt #1: Plaid raises the documented error mid-pagination.
+    // Our loop catches by error code, resets cursor to originalCursor, restarts.
+    plaidMock.transactionsSync.push(
+      plaidApiError({ error_code: "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION" }),
+    );
+    // Attempt #2 page 1: re-fetches from originalCursor (=null since fresh
+    // item). Returns the same "first" row — upsert is idempotent (partial
+    // unique on plaidTransactionId). Plus 2 newer rows.
     plaidMock.transactionsSync.push({
       data: {
         added: [
-          tx({ transaction_id: "after1", account_id: "x", amount: 1, date: "2026-05-10" }),
-          tx({ transaction_id: "after2", account_id: "x", amount: 2, date: "2026-05-10" }),
+          tx({ transaction_id: "first", account_id: "acct_test", amount: 1, date: "2026-05-09" }),
+          tx({ transaction_id: "after1", account_id: "acct_test", amount: 1, date: "2026-05-10" }),
+          tx({ transaction_id: "after2", account_id: "acct_test", amount: 2, date: "2026-05-10" }),
         ],
         modified: [], removed: [], next_cursor: "c2", has_more: false,
       },
     });
 
     const r = await syncTransactions(env, wsId, plaidItemId);
-    // After restart, accumulator only counts page 3's two rows (not the first).
-    expect(r).toEqual({ added: 2, modified: 0, removed: 0 });
+    // After restart, the second-attempt page returned 3 added (re-applying the
+    // previously-seen "first" + 2 new). Accumulators were reset on restart so
+    // the count reflects only the second attempt.
+    expect(r).toEqual({ added: 3, modified: 0, removed: 0 });
     const all = await prisma.transaction.findMany({ where: { workspaceId: wsId } });
-    // The first row was committed in page 1. The restart doesn't undo committed
-    // page work — that's fine because the next sync will see it via Plaid's
-    // canonical state. Per-page commits give us forward progress under failure.
     expect(all.map((t) => t.plaidTransactionId).sort()).toEqual(["after1", "after2", "first"]);
+    // lastCursor only advances on the final successful page (has_more=false in
+    // attempt #2). Verify the cursor is persisted now.
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } });
+    expect(item.lastCursor).toBe("c2");
     await app.close();
   });
 
-  it("advisory lock contention — exactly one parallel call returns skipped", async () => {
+  it("row-lock contention — sync returns lock_held when another tx holds the row", async () => {
+    // We can't reliably exercise contention with two `Promise.all`-launched
+    // syncTransactions calls — the Plaid mock is FIFO and the JS event loop
+    // tends to serialize them, so both look "successful" in turn. The real
+    // production race is sync-vs-disconnect (or sync-vs-cron), so model that
+    // by holding the row lock in an out-of-band transaction and verifying
+    // syncTransactions hits SyncLockHeld → returns `{skipped:"lock_held"}`.
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o10@x.com", name: "O" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
     const { plaidItemId } = await makeItemWithAccount(wsId);
 
-    // One call gets the lock and does work; the other returns lock_held immediately.
     plaidMock.transactionsSync.push({
       data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false },
     });
-    const [r1, r2] = await Promise.all([
-      syncTransactions(env, wsId, plaidItemId),
-      syncTransactions(env, wsId, plaidItemId),
-    ]);
-    const skipped = [r1, r2].filter((r) => "skipped" in r && r.skipped === "lock_held").length;
-    const ran = [r1, r2].filter((r) => !("skipped" in r) || r.skipped !== "lock_held").length;
-    expect(skipped).toBe(1);
-    expect(ran).toBe(1);
+
+    // Coordinate via promises rather than setTimeout — the latter is racy
+    // on slow CI hosts (50ms can pass before the holder tx actually got the
+    // lock). `acquired` resolves the moment the SELECT returns; `released`
+    // is set by the test body to let the holder commit and free the lock.
+    let signalAcquired: () => void = () => {};
+    const acquired = new Promise<void>((r) => (signalAcquired = r));
+    let releaseHolder: () => void = () => {};
+    const released = new Promise<void>((r) => (releaseHolder = r));
+    const holderTx = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "plaid_items" WHERE id = ${plaidItemId} FOR UPDATE`;
+      signalAcquired();
+      await released;
+    });
+    try {
+      await acquired;
+
+      const r = await syncTransactions(env, wsId, plaidItemId);
+      expect(r).toEqual({ skipped: "lock_held", added: 0, modified: 0, removed: 0 });
+      // syncTransactions calls Plaid BEFORE attempting the per-page row lock,
+      // so the mock response IS consumed (then discarded when the per-page tx
+      // aborts on SyncLockHeld). Verify by asserting nothing landed in the DB:
+      // no transactions, and lastCursor on the plaid_item is unchanged.
+      expect(plaidMock.transactionsSync.length).toBe(0); // popped by the call
+      expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(0);
+      const itemRow = await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } });
+      expect(itemRow.lastCursor).toBeNull();
+    } finally {
+      // Always release the holder, even on assertion failure — otherwise the
+      // tx sits in Postgres holding the row lock until vitest's idle timeout
+      // and the failure surfaces as a confusing hang instead of the actual
+      // assertion error.
+      releaseHolder();
+      await holderTx;
+    }
     await app.close();
   });
 });
@@ -1535,27 +1883,22 @@ Expected: FAIL — `syncTransactions not exported`.
 - [ ] **Step 3: Implement `apps/api/src/plaid/sync.ts`**
 
 ```ts
-import crypto from "node:crypto";
 import { Prisma } from "@prisma/client";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { plaidClient, isPlaidErrorCode, isPlaidApiError, sanitizePlaidError, mapPlaidError } from "./client.js";
 import { readAccessToken } from "./items.js";
+import { lockPlaidItem, SyncLockHeld } from "./lock.js";
 import { HttpError } from "../auth/context.js";
 
+// `skipped` carries the partial counters from any pages that DID commit
+// before the lock was lost (final-tx race) — the page-level commits are
+// real and the user can see them. So the skipped variant uses `number`,
+// not literal 0. Routes that re-emit a "lock_held" response can still pass
+// zero-counters at the boundary if they prefer; the type doesn't force it.
 export type SyncResult =
   | { added: number; modified: number; removed: number }
-  | { skipped: "lock_held"; added: 0; modified: 0; removed: 0 };
-
-/**
- * SHA-256 of plaid_item_id, first 8 bytes interpreted as big-endian SIGNED
- * 64-bit int. Postgres advisory locks accept signed bigint; this keeps us in
- * range. SHA-256 collision risk across all rows in the DB is negligible.
- */
-export function advisoryLockKey(plaidItemId: string): bigint {
-  const h = crypto.createHash("sha256").update(plaidItemId).digest();
-  return h.readBigInt64BE(0);
-}
+  | { skipped: "lock_held"; added: number; modified: number; removed: number };
 
 export function plaidOccurredAt(t: PlaidTxLike): Date {
   // Prefer authorized_* (when the user actually transacted), fall back to date.
@@ -1590,92 +1933,106 @@ type PlaidPageData = {
   removed: { transaction_id: string }[];
   next_cursor: string;
   has_more: boolean;
-  // Plaid contract: when true, restart the page loop from the original cursor.
-  // Some SDK versions surface this as the error code TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION
-  // instead — both are handled.
-  mutated_during_sync?: boolean;
 };
 
+const MAX_MUTATION_RESTARTS = 3;
+
 export async function syncTransactions(env: Env, workspaceId: string, plaidItemId: string): Promise<SyncResult> {
-  // ---- Setup tx: acquire per-item advisory lock, scope-check the item ----
-  const setup = await prisma.$transaction(async (tx) => {
-    const lockKey = advisoryLockKey(plaidItemId);
-    const got = await tx.$queryRaw<{ got: boolean }[]>`SELECT pg_try_advisory_xact_lock(${lockKey}) AS got`;
-    if (!got[0]?.got) return { skipped: "lock_held" as const };
-
-    const item = await tx.plaidItem.findUnique({ where: { id: plaidItemId } });
-    if (!item || item.workspaceId !== workspaceId) {
-      throw new HttpError(404, "not_found", "plaid_item not found in workspace");
-    }
-    return { skipped: false as const, item };
+  // Read item once outside any tx so we have the original cursor even if the
+  // first per-page lock attempt fails. No lock here — we don't need one to
+  // simply read encrypted bytes + cursor for our own loop bookkeeping.
+  const item = await prisma.plaidItem.findUnique({
+    where: { id: plaidItemId },
+    select: { workspaceId: true, lastCursor: true },
   });
-
-  if (setup.skipped === "lock_held") {
-    return { skipped: "lock_held", added: 0, modified: 0, removed: 0 };
+  if (!item || item.workspaceId !== workspaceId) {
+    throw new HttpError(404, "not_found", "plaid_item not found in workspace");
   }
 
-  // Decrypt outside the setup tx — the lock was per-tx (xact_lock),
-  // released at commit, but `pg_try_advisory_xact_lock` re-acquires inside
-  // the per-page tx below via the same mechanism.
   const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
-  const originalCursor = setup.item.lastCursor ?? null;
+  const originalCursor = item.lastCursor ?? null;
   let cursor: string | null = originalCursor;
   let added = 0, modified = 0, removed = 0;
+  let restarts = 0;
 
   try {
-    // The page loop. Each iteration fetches one page from Plaid, applies it
-    // in its own per-page transaction (per-page advisory lock too, so a
-    // racing call still sees lock_held while we run).
     pageLoop: while (true) {
-      const res = await plaidClient(env).transactionsSync({
-        access_token: accessToken,
-        cursor: cursor ?? undefined,
-      });
-      const data = res.data as PlaidPageData;
-
-      // Plaid mid-pagination mutation: reset accumulators, reset cursor to
-      // the ORIGINAL value, restart the loop. (Some SDK versions raise this
-      // as an error code instead — handled in the catch below.)
-      if (data.mutated_during_sync) {
-        cursor = originalCursor;
-        added = modified = removed = 0;
-        continue pageLoop;
+      let pageData: PlaidPageData;
+      try {
+        const res = await plaidClient(env).transactionsSync({
+          access_token: accessToken,
+          cursor: cursor ?? undefined,
+        });
+        pageData = res.data as PlaidPageData;
+      } catch (e) {
+        // Plaid emits TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION (an error
+        // code) when the item changed mid-pagination. Per Plaid docs the
+        // client must restart from the ORIGINAL cursor and discard whatever
+        // partial state it had. Any committed page rows stay (they're still
+        // valid Plaid state); the cursor in DB hasn't moved (we only commit
+        // it at has_more=false) so the restart is naturally idempotent.
+        if (isPlaidErrorCode(e, "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION")) {
+          restarts++;
+          if (restarts > MAX_MUTATION_RESTARTS) {
+            // Pathological: the item is changing faster than we can read.
+            // Surface as plaid_unavailable so client can back off.
+            throw e;
+          }
+          cursor = originalCursor;
+          added = modified = removed = 0;
+          continue pageLoop;
+        }
+        throw e;
       }
 
-      await prisma.$transaction(async (tx) => {
-        // Re-acquire the same advisory lock inside the per-page tx so a
-        // concurrent disconnect can't yank the item mid-write.
-        const got = await tx.$queryRaw<{ got: boolean }[]>`SELECT pg_try_advisory_xact_lock(${advisoryLockKey(plaidItemId)}) AS got`;
-        if (!got[0]?.got) {
-          throw new HttpError(409, "sync_in_progress", "lost the advisory lock");
+      // Per-page tx: row-lock the plaid_items row + apply this page's
+      // added/modified/removed. lastCursor + lastSyncAt are NOT updated here —
+      // see the final-page tx after the loop. That way under any mid-loop
+      // failure the next sync simply re-fetches from the original cursor;
+      // partial-unique index makes the upserts idempotent.
+      try {
+        await prisma.$transaction(async (tx) => {
+          await lockPlaidItem(tx, plaidItemId); // FOR UPDATE NOWAIT — throws SyncLockHeld if held
+          for (const t of pageData.added)    { await upsertAdded(tx, t, plaidItemId, workspaceId);    added++; }
+          for (const t of pageData.modified) { await upsertModified(tx, t, workspaceId); modified++; }
+          for (const t of pageData.removed)  { await markRemoved(tx, t.transaction_id, workspaceId); removed++; }
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (e) {
+        if (e instanceof SyncLockHeld) {
+          // Pass through whatever counters previous pages already committed
+          // (the per-page tx is the unit of durability — earlier pages are
+          // safely on disk even though this one rolled back). The route
+          // returns the shape verbatim so the UI can show "got N before
+          // yielding to another sync."
+          return { skipped: "lock_held", added, modified, removed };
         }
+        throw e;
+      }
 
-        for (const t of data.added)    { await upsertAdded(tx, t, plaidItemId, workspaceId);    added++; }
-        for (const t of data.modified) { await upsertModified(tx, t, workspaceId); modified++; }
-        for (const t of data.removed)  { await markRemoved(tx, t.transaction_id, workspaceId); removed++; }
+      cursor = pageData.next_cursor;
+      if (!pageData.has_more) break;
+    }
 
+    // ---- Final tx: commit lastCursor + lastSyncAt + status=active ----
+    // Same row lock as per-page so disconnect can't slip in here either.
+    try {
+      await prisma.$transaction(async (tx) => {
+        await lockPlaidItem(tx, plaidItemId);
         await tx.plaidItem.update({
           where: { id: plaidItemId },
-          data: {
-            lastCursor: data.next_cursor,
-            lastSyncAt: new Date(),
-            status: "active",
-            errorCode: null,
-          },
+          data: { lastCursor: cursor, lastSyncAt: new Date(), status: "active", errorCode: null },
         });
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-
-      cursor = data.next_cursor;
-      if (!data.has_more) break;
+      });
+    } catch (e) {
+      if (e instanceof SyncLockHeld) {
+        return { skipped: "lock_held", added, modified, removed };
+      }
+      throw e;
     }
+
     return { added, modified, removed };
   } catch (e) {
     // Persist status in a SEPARATE short tx so it survives the rethrow.
-    if (isPlaidErrorCode(e, "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION")) {
-      // This branch should be rare — the in-loop guard catches the typical case.
-      // Defer to the loop next time.
-      throw mapPlaidError(e);
-    }
     if (isPlaidErrorCode(e, "ITEM_LOGIN_REQUIRED")) {
       await prisma.plaidItem.update({
         where: { id: plaidItemId },
@@ -1700,17 +2057,17 @@ async function accountIdForPlaidAccount(
   plaidItemId: string,
   plaidAccountId: string,
 ): Promise<string> {
-  // Find the local account. We assume the exchange handler already created
-  // the accounts row; if not, fail loudly so the test surfaces the bug.
-  const acct = await tx.account.findFirst({
+  // Strict — the exchange handler must have created the bank_accounts row
+  // for every Plaid `account_id` we'll see in transactions. If a transaction
+  // arrives with an account_id we don't know, that's a bug we want to fail
+  // loudly on (rather than silently quartering it on an unrelated account).
+  // Tests must use the same plaidAccountId in their mock transactions as
+  // they used in their account fixture.
+  const acct = await tx.bankAccount.findFirstOrThrow({
     where: { plaidItemId, plaidAccountId },
     select: { id: true },
   });
-  if (acct) return acct.id;
-  // Fallback: take any account on the same item. This handles tests/fixtures
-  // where the mock's t.account_id doesn't match a created plaidAccountId.
-  const any = await tx.account.findFirstOrThrow({ where: { plaidItemId }, select: { id: true } });
-  return any.id;
+  return acct.id;
 }
 
 export async function upsertAdded(
@@ -1832,13 +2189,13 @@ Expected: 10/10 PASS.
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test
 ```
 
-Expected: 96/96 (86 prior + 10 sync).
+Expected: 109/109 (99 prior — Plan 2 baseline 82 + Task 3 crypto 6 + Task 4 tier 4 + Task 6 items 7 — plus 10 sync).
 
 - [ ] **Step 6: Commit**
 
 ```bash
 git add apps/api/src/plaid/sync.ts apps/api/tests/plaid.sync.test.ts
-git commit -m "feat(api): syncTransactions — advisory lock + per-page commit + status-persist tx + mutation-during-pagination restart"
+git commit -m "feat(api): syncTransactions — row-level lock (FOR UPDATE NOWAIT) + per-page commit + status-persist tx + mutation-during-pagination restart"
 ```
 
 ---
@@ -1857,14 +2214,16 @@ The exchange handler creates the item + accounts in one transaction, then runs i
 Create `apps/api/tests/plaid.exchange.test.ts`:
 
 ```ts
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+
+vi.mock("plaid", plaidMockFactory);
+
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { setupPlaidMock, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
 
-setupPlaidMock();
 
 const env = {
   NODE_ENV: "test" as const,
@@ -1880,15 +2239,20 @@ const env = {
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
 };
 
-describe("POST /workspaces/:id/plaid/link-token", () => {
-  beforeEach(async () => {
-    await truncateAll();
-    resetPlaidMock();
-  });
-  afterAll(async () => {
-    await disconnect();
-  });
+// File-level lifecycle: every test in this file needs the same fresh
+// DB + mock state, and we only want to disconnect Prisma once at the end.
+// Defining these inside each describe duplicates work and risks one block's
+// afterAll closing the connection while the other block is mid-test.
+beforeEach(async () => {
+  await truncateAll();
+  resetPlaidMock();
+});
 
+afterAll(async () => {
+  await disconnect();
+});
+
+describe("POST /workspaces/:id/plaid/link-token", () => {
   it("happy path — owner Pro user gets a linkToken", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "ow@x.com", name: "OW" });
@@ -1938,14 +2302,27 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
     expect(res.statusCode).toBe(403);
     await app.close();
   });
+
+  it("400 workspace_mismatch — header points to a different workspace", async () => {
+    // Caller is owner of workspace A but submits B in the URL while their
+    // active-workspace cookie / X-Workspace-Id header is A. The route guards
+    // this regardless of role to prevent header-spoof CSRF-shaped attacks.
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "ww@x.com", name: "WW" });
+    const wsA = await getOwnerWorkspaceId(u.userId);
+    const wsB = (await prisma.workspace.create({ data: { name: "Other" } })).id;
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsB}/plaid/link-token`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsA },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
 });
 
 describe("POST /workspaces/:id/plaid/exchange", () => {
-  beforeEach(async () => {
-    await truncateAll();
-    resetPlaidMock();
-  });
-
   function pushExchangeAndAccounts(itemId = "item_test") {
     plaidMock.itemPublicTokenExchange.push({
       data: { access_token: "access_test", item_id: itemId, request_id: "req" },
@@ -1991,7 +2368,7 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: body.plaidItemId } });
     expect(item.itemId).toBe("item_test");
     expect(item.institutionName).toBe("Test Bank");
-    expect(await prisma.account.count({ where: { plaidItemId: item.id } })).toBe(1);
+    expect(await prisma.bankAccount.count({ where: { plaidItemId: item.id } })).toBe(1);
     expect(await prisma.transaction.count({ where: { plaidItemId: item.id } })).toBe(1);
     await app.close();
   });
@@ -2056,6 +2433,97 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: body.plaidItemId } });
     expect(item.status).toBe("error");
     expect(item.errorCode).toBe("INSTITUTION_DOWN");
+    await app.close();
+  });
+
+  it("402 upgrade_required for free-tier user", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "free2@x.com", name: "Free" });
+    await prisma.user.update({
+      where: { id: u.userId },
+      data: { trialEndsAt: new Date(Date.now() - 1000), trialConsumed: true },
+    });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("upgrade_required");
+    // Crucial: never call Plaid for free-tier callers.
+    expect(plaidMock.itemPublicTokenExchange.length).toBe(0);
+    await app.close();
+  });
+
+  it("403 when caller is not owner of the workspace", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ow3@x.com", name: "OW" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const editor = await signUpAndGetCookie(app, { email: "ed@x.com", name: "ED" });
+    await prisma.membership.create({
+      data: { userId: editor.userId, workspaceId: wsId, role: "editor" },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: editor.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(plaidMock.itemPublicTokenExchange.length).toBe(0);
+    await app.close();
+  });
+
+  it("400 workspace_mismatch — header points to a different workspace", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "wmx@x.com", name: "W" });
+    const wsA = await getOwnerWorkspaceId(u.userId);
+    const wsB = (await prisma.workspace.create({ data: { name: "Other" } })).id;
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsB}/plaid/exchange`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsA, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
+
+  it("soft timeout — initial sync exceeds deadline; 200 with syncOk: false", async () => {
+    // Real timers + a 50ms deadline override (PLAID_SYNC_TIMEOUT_MS in env).
+    // We tried fake timers + advanceTimersByTimeAsync first; it raced badly
+    // with fastify.inject + Prisma's microtask scheduling and either hung or
+    // resolved before the handler had registered its setTimeout. A real,
+    // small timer is far simpler and adds ~50ms to the run.
+    const fastTimeoutEnv = { ...env, PLAID_SYNC_TIMEOUT_MS: 50 };
+    const app = await buildApp(fastTimeoutEnv);
+    const owner = await signUpAndGetCookie(app, { email: "slow@x.com", name: "S" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    pushExchangeAndAccounts("item_slow");
+    // Hang transactionsSync forever so the timeout wins the race.
+    plaidMock.transactionsSync.push(new Promise(() => {}));
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.syncOk).toBe(false);
+    expect(body.transactionCount).toBe(0);
+    // Item is still durable so the user can hit Refresh later.
+    expect(typeof body.plaidItemId).toBe("string");
+    // Spec §7: deadline-hit initial sync persists status="error" + sync_timeout
+    // so the UI knows to prompt for retry.
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: body.plaidItemId } });
+    expect(item.status).toBe("error");
+    expect(item.errorCode).toBe("sync_timeout");
     await app.close();
   });
 });
@@ -2144,7 +2612,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
           accessToken: exch.data.access_token,
         });
         for (const a of accountsRes.data.accounts) {
-          await tx.account.create({
+          await tx.bankAccount.create({
             data: {
               workspaceId: ctx.membership.workspaceId,
               plaidItemId: itemRowId,
@@ -2176,17 +2644,40 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(m.statusCode).send({ error: m.code });
     }
 
-    // ---- Step 3: Initial sync — separate, partial-failure tolerant ----
+    // ---- Step 3: Initial sync — separate, partial-failure tolerant + soft timeout ----
+    // The connect flow blocks on this; if Plaid sandbox or a slow institution
+    // takes >30s to first-page sync, we'd hang the user's browser. Race against
+    // a 30s deadline and report `syncOk: false` (the item is durable, the user
+    // can hit Refresh later or wait for the next cron tick once that ships).
+    //
+    // Deadline is overridable via `app.fina.env.PLAID_SYNC_TIMEOUT_MS` so the
+    // test suite can exercise the timeout path with a real (small) timer
+    // instead of fighting vi.useFakeTimers + fastify.inject.
+    const SYNC_DEADLINE_MS = app.fina.env.PLAID_SYNC_TIMEOUT_MS ?? 30_000;
     let transactionCount = 0;
     let syncOk = true;
     try {
       const wsId = (req.headers["x-workspace-id"] as string)!;
-      const r = await syncTransactions(app.fina.env, wsId, plaidItemId);
-      if ("skipped" in r && r.skipped === "lock_held") {
-        // Vanishingly unlikely on a brand-new item, but just in case: report
-        // syncOk: false so the UI knows to refresh manually.
+      const r = await Promise.race([
+        syncTransactions(app.fina.env, wsId, plaidItemId),
+        new Promise<{ skipped: "deadline" }>((resolve) =>
+          setTimeout(() => resolve({ skipped: "deadline" }), SYNC_DEADLINE_MS),
+        ),
+      ]);
+      if ("skipped" in r) {
         syncOk = false;
-      } else if (!("skipped" in r)) {
+        if (r.skipped === "deadline") {
+          // Spec §7: a deadline-hit initial sync leaves the item in `error`
+          // with `errorCode = "sync_timeout"` so the UI knows to prompt the
+          // user to retry (vs. the vanishingly-rare `lock_held` on a brand-
+          // new item, which we leave alone — the racing sync will set its
+          // own status when it finishes).
+          await prisma.plaidItem.update({
+            where: { id: plaidItemId },
+            data: { status: "error", errorCode: "sync_timeout" },
+          });
+        }
+      } else {
         transactionCount = r.added;
       }
     } catch {
@@ -2219,7 +2710,7 @@ After `await app.register(inviteRoutes);`:
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test -- tests/plaid.exchange.test.ts
 ```
 
-Expected: 6/6 PASS.
+Expected: 12/12 PASS (4 link-token + 8 exchange).
 
 - [ ] **Step 6: Full suite**
 
@@ -2227,7 +2718,7 @@ Expected: 6/6 PASS.
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test
 ```
 
-Expected: 102/102 (96 prior + 6 exchange).
+Expected: 121/121 (109 prior + 12 exchange).
 
 - [ ] **Step 7: Commit**
 
@@ -2250,14 +2741,15 @@ git commit -m "feat(api): /workspaces/:id/plaid/{link-token,exchange} routes wit
 Create `apps/api/tests/plaid.routes.test.ts`:
 
 ```ts
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+
+vi.mock("plaid", plaidMockFactory);
+
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { setupPlaidMock, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
-
-setupPlaidMock();
 
 const env = {
   NODE_ENV: "test" as const,
@@ -2296,10 +2788,18 @@ async function connectAItem(app: ReturnType<typeof buildApp> extends Promise<inf
   return res.json().plaidItemId as string;
 }
 
-describe("GET /workspaces/:id/plaid-items", () => {
-  beforeEach(async () => { await truncateAll(); resetPlaidMock(); });
-  afterAll(async () => { await disconnect(); });
+// File-level lifecycle: every test in this file shares the same fresh DB +
+// mock state. We disconnect Prisma exactly once after the whole file.
+beforeEach(async () => {
+  await truncateAll();
+  resetPlaidMock();
+});
 
+afterAll(async () => {
+  await disconnect();
+});
+
+describe("GET /workspaces/:id/plaid-items", () => {
   it("members can list — returns institutionName, status, accountCount", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o@x.com", name: "O" });
@@ -2341,11 +2841,24 @@ describe("GET /workspaces/:id/plaid-items", () => {
     expect(res.statusCode).toBe(404);
     await app.close();
   });
+
+  it("400 workspace_mismatch — header points to a different workspace", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "wm@x.com", name: "W" });
+    const wsA = await getOwnerWorkspaceId(u.userId);
+    const wsB = (await prisma.workspace.create({ data: { name: "Other" } })).id;
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsB}/plaid-items`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsA },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
 });
 
 describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
-  beforeEach(async () => { await truncateAll(); resetPlaidMock(); });
-
   it("owner Pro user — happy path returns counts", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o@x.com", name: "O" });
@@ -2386,11 +2899,47 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
     expect(res.statusCode).toBe(403);
     await app.close();
   });
+
+  it("400 workspace_mismatch — header points to a different workspace", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "wms@x.com", name: "O" });
+    const wsA = await getOwnerWorkspaceId(owner.userId);
+    const plaidItemId = await connectAItem(app, owner, wsA);
+    const wsB = (await prisma.workspace.create({ data: { name: "Other" } })).id;
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsB}/plaid-items/${plaidItemId}/sync`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsA },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
+
+  it("402 upgrade_required when the owner's trial has expired (free tier)", async () => {
+    // Sync IS Pro-gated (unlike disconnect — see DELETE describe). A user
+    // whose trial expired can read existing transactions but can't pull
+    // new ones until they upgrade.
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "fr@x.com", name: "F" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const plaidItemId = await connectAItem(app, owner, wsId);
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { trialEndsAt: new Date(Date.now() - 1000), trialConsumed: true },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid-items/${plaidItemId}/sync`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("upgrade_required");
+    await app.close();
+  });
 });
 
 describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
-  beforeEach(async () => { await truncateAll(); resetPlaidMock(); });
-
   it("strict — Plaid /item/remove called first; then accounts archived + plaid_item deleted; transactions kept", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o@x.com", name: "O" });
@@ -2423,7 +2972,7 @@ describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
 
     expect(await prisma.plaidItem.findUnique({ where: { id: plaidItemId } })).toBeNull();
     // Account survives but is archived; plaidItemId becomes NULL via SetNull.
-    const acct = await prisma.account.findFirstOrThrow({ where: { workspaceId: wsId } });
+    const acct = await prisma.bankAccount.findFirstOrThrow({ where: { workspaceId: wsId } });
     expect(acct.archivedAt).not.toBeNull();
     expect(acct.plaidItemId).toBeNull();
     // Transaction survives.
@@ -2485,6 +3034,92 @@ describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
     expect(res.statusCode).toBe(403);
     await app.close();
   });
+
+  it("400 workspace_mismatch — header points to a different workspace", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "wmd@x.com", name: "O" });
+    const wsA = await getOwnerWorkspaceId(owner.userId);
+    const plaidItemId = await connectAItem(app, owner, wsA);
+    const wsB = (await prisma.workspace.create({ data: { name: "Other" } })).id;
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/workspaces/${wsB}/plaid-items/${plaidItemId}`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsA },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+    // Plaid /item/remove must NOT be called when the request is rejected.
+    expect(plaidMock.itemRemove.length).toBe(0);
+    await app.close();
+  });
+
+  it("free-tier owner CAN disconnect — deliberate exception to the Pro gate", async () => {
+    // Disconnect is owner-only but NOT Pro-gated, so a user whose trial has
+    // expired isn't trapped — they can still revoke Plaid's access.
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "fd@x.com", name: "F" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const plaidItemId = await connectAItem(app, owner, wsId);
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { trialEndsAt: new Date(Date.now() - 1000), trialConsumed: true },
+    });
+    plaidMock.itemRemove.push({ data: { request_id: "req" } });
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/workspaces/${wsId}/plaid-items/${plaidItemId}`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await prisma.plaidItem.findUnique({ where: { id: plaidItemId } })).toBeNull();
+    await app.close();
+  });
+
+  it("409 sync_in_progress — disconnect while another tx holds the row lock", async () => {
+    // Hold the row lock from outside the route handler in a second connection
+    // (Prisma uses one connection per $transaction). The disconnect's
+    // `SELECT ... FOR UPDATE NOWAIT` then fails with 55P03 → SyncLockHeld →
+    // 409 sync_in_progress.
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "lk@x.com", name: "O" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const plaidItemId = await connectAItem(app, owner, wsId);
+    plaidMock.itemRemove.push({ data: { request_id: "req" } });
+
+    // Coordinate via promises (see the parallel sync.test.ts test for why
+    // setTimeout-based coordination is too racy on CI).
+    let signalAcquired: () => void = () => {};
+    const acquired = new Promise<void>((r) => (signalAcquired = r));
+    let releaseHolder: () => void = () => {};
+    const released = new Promise<void>((r) => (releaseHolder = r));
+    const holderTx = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "plaid_items" WHERE id = ${plaidItemId} FOR UPDATE`;
+      signalAcquired();
+      await released;
+    });
+    try {
+      await acquired;
+
+      const res = await app.inject({
+        method: "DELETE",
+        url: `/workspaces/${wsId}/plaid-items/${plaidItemId}`,
+        headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("sync_in_progress");
+      // Plaid /item/remove must NOT have been called — the lock blocked us
+      // before the Plaid HTTP call.
+      expect(plaidMock.itemRemove.length).toBe(1); // pushed but not consumed
+      // Local row is still intact; the user can retry.
+      expect(await prisma.plaidItem.findUnique({ where: { id: plaidItemId } })).not.toBeNull();
+    } finally {
+      // Always release — see the matching note on the sync.test.ts test.
+      releaseHolder();
+      await holderTx;
+    }
+    await app.close();
+  });
 });
 ```
 
@@ -2524,7 +3159,7 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
           status: true,
           errorCode: true,
           lastSyncAt: true,
-          _count: { select: { accounts: true } },
+          _count: { select: { bankAccounts: true } },
         },
       });
       return {
@@ -2534,7 +3169,7 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
           status: i.status,
           errorCode: i.errorCode,
           lastSyncAt: i.lastSyncAt?.toISOString() ?? null,
-          accountCount: i._count.accounts,
+          accountCount: i._count.bankAccounts,
         })),
       };
     } catch (e) {
@@ -2552,9 +3187,8 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
       }
       await requireProTier(ctx.session.userId);
       const r = await syncTransactions(app.fina.env, ctx.membership.workspaceId, params.itemId);
-      if ("skipped" in r && r.skipped === "lock_held") {
-        return { skipped: "lock_held", added: 0, modified: 0, removed: 0 };
-      }
+      // Surface partial-commit counters even on `skipped` so the UI can show
+      // "Another refresh is running — got N transactions before yielding."
       return r;
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
@@ -2566,6 +3200,12 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
   app.delete("/workspaces/:id/plaid-items/:itemId", async (req, reply) => {
     const params = req.params as { id: string; itemId: string };
     try {
+      // INTENTIONAL EXCEPTION to "all Plaid-mutating routes are Pro-gated":
+      // disconnect must NOT require Pro tier. If a user's trial expires
+      // before they cancel/upgrade, they still need to be able to revoke
+      // Plaid's access to their bank — gating that behind the paywall would
+      // be a data trap. Owner-only is enforced; tier is not. The README and
+      // master spec both note this exception in the same wording.
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
@@ -2599,7 +3239,7 @@ After `await app.register(plaidRoutes);`:
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test -- tests/plaid.routes.test.ts
 ```
 
-Expected: 7/7 PASS.
+Expected: 14/14 PASS (3 list + 4 sync + 7 disconnect — workspace_mismatch on each, 402 free-owner on sync, 409 `sync_in_progress` race + free-tier-can-disconnect on disconnect).
 
 - [ ] **Step 6: Full suite**
 
@@ -2607,13 +3247,13 @@ Expected: 7/7 PASS.
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test
 ```
 
-Expected: 109/109 (102 prior + 7 new).
+Expected: 135/135 (121 prior + 14 new plaid-items routes).
 
 - [ ] **Step 7: Commit**
 
 ```bash
 git add apps/api/src/routes/plaid-items.ts apps/api/src/server.ts apps/api/tests/plaid.routes.test.ts
-git commit -m "feat(api): /workspaces/:id/plaid-items list/sync/disconnect (strict + advisory-locked)"
+git commit -m "feat(api): /workspaces/:id/plaid-items list/sync/disconnect (strict + row-level locked)"
 ```
 
 ---
@@ -2629,9 +3269,13 @@ git commit -m "feat(api): /workspaces/:id/plaid-items list/sync/disconnect (stri
 - [ ] **Step 1: Append failing tests to `plaid.routes.test.ts`**
 
 ```ts
-describe("GET /workspaces/:id/accounts", () => {
-  beforeEach(async () => { await truncateAll(); resetPlaidMock(); });
+// /accounts and /transactions are READ routes — no tier gate (a Free viewer
+// in a Pro owner's workspace can still browse what's already there). So
+// there's no 402 case to test, only auth + workspace scoping (403 / 404 /
+// workspace_mismatch). The existing per-file beforeEach/afterAll from the
+// top of the file applies to every describe below.
 
+describe("GET /workspaces/:id/accounts", () => {
   it("members can list accounts including archivedAt", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "oacc@x.com", name: "O" });
@@ -2650,10 +3294,37 @@ describe("GET /workspaces/:id/accounts", () => {
     expect(list[0].archivedAt).toBeNull();
     await app.close();
   });
+
+  it("404 for non-member workspace", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "xacc@x.com", name: "X" });
+    const otherWs = await prisma.workspace.create({ data: { name: "Other" } });
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${otherWs.id}/accounts`,
+      headers: { cookie: u.cookie, "x-workspace-id": otherWs.id },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("400 workspace_mismatch — header points to a different workspace", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "wmacc@x.com", name: "W" });
+    const wsA = await getOwnerWorkspaceId(u.userId);
+    const wsB = (await prisma.workspace.create({ data: { name: "Other" } })).id;
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsB}/accounts`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsA },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
 });
 
 describe("GET /workspaces/:id/transactions", () => {
-  beforeEach(async () => { await truncateAll(); resetPlaidMock(); });
 
   async function setupItemAndTxs(app: ReturnType<typeof buildApp> extends Promise<infer T> ? T : never, n: number) {
     const owner = await signUpAndGetCookie(app, { email: `otx-${Math.random().toString(36).slice(2,6)}@x.com`, name: "O" });
@@ -2756,6 +3427,34 @@ describe("GET /workspaces/:id/transactions", () => {
     expect(include.json().transactions).toHaveLength(3);
     await app.close();
   });
+
+  it("404 for non-member workspace", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "xtx@x.com", name: "X" });
+    const otherWs = await prisma.workspace.create({ data: { name: "Other" } });
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${otherWs.id}/transactions`,
+      headers: { cookie: u.cookie, "x-workspace-id": otherWs.id },
+    });
+    expect(res.statusCode).toBe(404);
+    await app.close();
+  });
+
+  it("400 workspace_mismatch — header points to a different workspace", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "wmtx@x.com", name: "W" });
+    const wsA = await getOwnerWorkspaceId(u.userId);
+    const wsB = (await prisma.workspace.create({ data: { name: "Other" } })).id;
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsB}/transactions`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsA },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
 });
 ```
 
@@ -2782,7 +3481,7 @@ export async function accountsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const rows = await prisma.account.findMany({
+      const rows = await prisma.bankAccount.findMany({
         where: { workspaceId: ctx.membership.workspaceId },
         orderBy: { createdAt: "desc" },
       });
@@ -2822,13 +3521,29 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 
+// `?from`/`?to` arrive as ISO date strings. We validate them as parseable
+// dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
+// like `?from=foo` would explode at runtime instead of returning 400.
+const IsoDate = z.string().refine((s) => !Number.isNaN(Date.parse(s)), {
+  message: "must be ISO date",
+});
+
+// `z.coerce.boolean()` is broken for query strings: `Boolean("false")` is
+// truthy, so `?includeRemoved=false` would include them. Parse the raw
+// string explicitly.
+const BoolFlag = z
+  .enum(["true", "false"])
+  .transform((v) => v === "true")
+  .optional()
+  .default("false");
+
 const QuerySchema = z.object({
   cursor: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
   accountId: z.string().optional(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  includeRemoved: z.coerce.boolean().optional().default(false),
+  from: IsoDate.optional(),
+  to: IsoDate.optional(),
+  includeRemoved: BoolFlag,
 });
 
 type Cursor = { occurredAtMs: number; id: string };
@@ -2936,7 +3651,7 @@ After `await app.register(plaidItemsRoutes);`:
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test -- tests/plaid.routes.test.ts
 ```
 
-Expected: 11/11 PASS in this file (7 prior + 1 accounts + 3 transactions).
+Expected: 22/22 PASS in this file (14 prior from Task 9 + 3 accounts + 5 transactions).
 
 - [ ] **Step 7: Full suite**
 
@@ -2944,7 +3659,7 @@ Expected: 11/11 PASS in this file (7 prior + 1 accounts + 3 transactions).
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm nx run api:test
 ```
 
-Expected: 113/113 (109 prior + 4 new).
+Expected: 143/143 (135 prior + 8 new accounts/transactions).
 
 - [ ] **Step 8: Commit**
 
@@ -2962,14 +3677,19 @@ git commit -m "feat(api): /workspaces/:id/{accounts,transactions} read routes (c
 
 The existing `apiFetch` is fine, but the `/settings/banks` page needs both `tier` (from `/me`) and the active workspace id. Adding two lightweight helpers here keeps the page concise and the hook reuse clear.
 
-- [ ] **Step 1: Append helpers to `apps/web/src/lib/api.ts`**
+- [ ] **Step 1: Add the React import to the existing import block at the top of `apps/web/src/lib/api.ts`**
 
-After the existing `bootstrapActiveWorkspace` definition:
+The file already imports `getActiveWorkspaceId` from `./active-workspace` (Plan 2). Do NOT re-import it. Just add `useEffect, useState` from React at the top of the file:
 
 ```ts
 import { useEffect, useState } from "react";
-import { getActiveWorkspaceId } from "./active-workspace";
+```
 
+- [ ] **Step 2: Append the two hooks at the END of the file**
+
+After the existing `bootstrapActiveWorkspace` function:
+
+```ts
 export type Me = {
   user: { id: string; email: string; tz: string; locale: string };
   tier: "free" | "lite" | "pro";
@@ -3039,17 +3759,19 @@ pnpm --filter @fina/web add react-plaid-link@^4
 ```tsx
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { usePlaidLink } from "react-plaid-link";
 import { apiFetch } from "../../../../../lib/api";
 
 export function ConnectBankButton({
   workspaceId,
   isPro,
+  isOwner,
   onConnected,
 }: {
   workspaceId: string;
   isPro: boolean;
+  isOwner: boolean;
   onConnected: () => void;
 }) {
   const [linkToken, setLinkToken] = useState<string | null>(null);
@@ -3097,6 +3819,19 @@ export function ConnectBankButton({
     },
   });
 
+  // Open the Plaid Link modal in an effect, NOT during render. Calling
+  // `open()` from the render body triggers React's render-during-render
+  // warning and double-invokes under StrictMode.
+  useEffect(() => {
+    if (linkToken && ready) {
+      open();
+    }
+  }, [linkToken, ready, open]);
+
+  if (!isOwner) {
+    return null; // Server enforces owner-only too; this just hides the affordance.
+  }
+
   if (!isPro) {
     return (
       <div style={{ padding: "12px 0" }}>
@@ -3113,11 +3848,6 @@ export function ConnectBankButton({
         </span>
       </div>
     );
-  }
-
-  if (linkToken && ready) {
-    // We already have a token + Plaid Link is initialized — open the modal.
-    open();
   }
 
   return (
@@ -3162,10 +3892,12 @@ export type PlaidItemView = {
 export function ConnectedBanksList({
   items,
   workspaceId,
+  isOwner,
   onChange,
 }: {
   items: PlaidItemView[];
   workspaceId: string;
+  isOwner: boolean;
   onChange: () => void;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -3180,7 +3912,15 @@ export function ConnectedBanksList({
         { method: "POST" },
       );
       if (r.skipped === "lock_held") {
-        setMsg("Another refresh is already running. Try again in a moment.");
+        // The per-page tx is the unit of durability, so anything the API
+        // reports here was actually committed before we yielded to the
+        // racing sync. Surface it instead of dropping the counters.
+        const partial = (r.added ?? 0) + (r.modified ?? 0) + (r.removed ?? 0);
+        setMsg(
+          partial > 0
+            ? `Another refresh is running. Got +${r.added ?? 0} / ~${r.modified ?? 0} / -${r.removed ?? 0} before yielding. Try again in a moment.`
+            : "Another refresh is already running. Try again in a moment.",
+        );
       } else {
         setMsg(`Refreshed: +${r.added ?? 0} added, ${r.modified ?? 0} modified, ${r.removed ?? 0} removed.`);
       }
@@ -3238,34 +3978,36 @@ export function ConnectedBanksList({
               Sync error{it.errorCode ? ` (${it.errorCode})` : ""}.
             </div>
           )}
-          <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
-            <button
-              onClick={() => refresh(it.id)}
-              disabled={busyId === it.id}
-              style={{
-                padding: "6px 12px",
-                background: "#fff",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                cursor: "pointer",
-              }}
-            >
-              Refresh
-            </button>
-            <button
-              onClick={() => disconnect(it.id, it.institutionName)}
-              disabled={busyId === it.id}
-              style={{
-                padding: "6px 12px",
-                background: "#fff",
-                border: "1px solid #ddd",
-                borderRadius: 6,
-                cursor: "pointer",
-              }}
-            >
-              Disconnect
-            </button>
-          </div>
+          {isOwner && (
+            <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
+              <button
+                onClick={() => refresh(it.id)}
+                disabled={busyId === it.id}
+                style={{
+                  padding: "6px 12px",
+                  background: "#fff",
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Refresh
+              </button>
+              <button
+                onClick={() => disconnect(it.id, it.institutionName)}
+                disabled={busyId === it.id}
+                style={{
+                  padding: "6px 12px",
+                  background: "#fff",
+                  border: "1px solid #ddd",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Disconnect
+              </button>
+            </div>
+          )}
         </div>
       ))}
       {msg && <p style={{ marginTop: 12, color: "#0a7" }}>{msg}</p>}
@@ -3286,18 +4028,25 @@ import { apiFetch, useMe, useActiveWorkspaceId } from "../../../../lib/api";
 import { ConnectBankButton } from "./_components/connect-bank-button";
 import { ConnectedBanksList, type PlaidItemView } from "./_components/connected-banks-list";
 
+type Member = { userId: string; role: "owner" | "editor" | "viewer" };
+
 export default function BanksPage() {
   const wsId = useActiveWorkspaceId();
   const { me, err: meErr } = useMe();
   const [items, setItems] = useState<PlaidItemView[] | null>(null);
+  const [members, setMembers] = useState<Member[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!wsId) return;
     setErr(null);
     try {
-      const r = await apiFetch<{ plaidItems: PlaidItemView[] }>(`/workspaces/${wsId}/plaid-items`);
-      setItems(r.plaidItems);
+      const [itemsRes, membersRes] = await Promise.all([
+        apiFetch<{ plaidItems: PlaidItemView[] }>(`/workspaces/${wsId}/plaid-items`),
+        apiFetch<{ members: Member[] }>(`/workspaces/${wsId}/members`),
+      ]);
+      setItems(itemsRes.plaidItems);
+      setMembers(membersRes.members);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "error");
     }
@@ -3307,11 +4056,18 @@ export default function BanksPage() {
     load();
   }, [load]);
 
-  if (!wsId || me === null) return <main style={{ padding: 32 }}>Loading…</main>;
+  // Errors first — if /me or /plaid-items or /members fails, `me`/`members`
+  // stays null but `meErr`/`err` is set. A loading-first check would render
+  // "Loading…" forever in that case.
   if (meErr) return <main style={{ padding: 32 }}>Could not load profile: {meErr}</main>;
   if (err) return <main style={{ padding: 32 }}>Could not load banks: {err}</main>;
+  if (!wsId || me === null || members === null) return <main style={{ padding: 32 }}>Loading…</main>;
 
   const isPro = me.tier === "pro";
+  // Owner-only for ALL Plaid mutations (link / refresh / disconnect).
+  // Server enforces this too; the UI hides the affordances so non-owners
+  // don't get rejected mid-action.
+  const isOwner = members.find((m) => m.userId === me.user.id)?.role === "owner";
 
   return (
     <main style={{ maxWidth: 720, margin: "0 auto", padding: 32, fontFamily: "system-ui" }}>
@@ -3319,10 +4075,15 @@ export default function BanksPage() {
       <p style={{ opacity: 0.6, marginBottom: 24 }}>
         Connect your bank account so Fina can import your transactions automatically.
       </p>
-      <ConnectedBanksList items={items ?? []} workspaceId={wsId} onChange={load} />
+      <ConnectedBanksList items={items ?? []} workspaceId={wsId} isOwner={isOwner} onChange={load} />
       <div style={{ marginTop: 24 }}>
-        <ConnectBankButton workspaceId={wsId} isPro={isPro} onConnected={load} />
+        <ConnectBankButton workspaceId={wsId} isPro={isPro} isOwner={isOwner} onConnected={load} />
       </div>
+      {!isOwner && (
+        <p style={{ opacity: 0.6, marginTop: 24, fontSize: 13 }}>
+          Only the workspace owner can connect, refresh, or disconnect a bank.
+        </p>
+      )}
     </main>
   );
 }
@@ -3400,7 +4161,7 @@ pnpm nx run-many -t typecheck
 pnpm nx run-many -t lint
 ```
 
-Expected: tests 113+ green; typecheck 4/4 green; lint 0 errors. Tests added in Plan 1B: `plaid.crypto` (6), `plaid.tier` (4), `plaid.sync` (10), `plaid.exchange` (6), `plaid.routes` (11). Total **+37 tests**, full suite ~119+ (82 from Plan 2 + 37 from this plan).
+Expected: 143 API tests green; typecheck 4/4 green; lint 0 errors. Tests added in Plan 1B: `plaid.crypto` (6), `plaid.tier` (4), `plaid.items` (7), `plaid.sync` (10), `plaid.exchange` (12 — 4 link-token + 8 exchange), `plaid.routes` (22 — 14 list/sync/disconnect + 3 accounts + 5 transactions). Total **+61 tests**, full suite **143** (82 from Plan 2 + 61 from this plan).
 
 - [ ] **Step 2: Append Plaid section to the smoke-test doc**
 
@@ -3442,18 +4203,18 @@ Edit `docs/superpowers/smoke-tests/2026-05-08-plan-2-workspace-sharing.md`. Appe
 8. The modal closes; the page shows the connected bank with an account count and a recent `last sync`.
 9. Verify the data landed via `pnpm smoke:db:studio` (Prisma Studio at `http://localhost:5555`):
    - **plaid_items** has 1 row with `accessTokenCiphertext` (Bytes — opaque) and `accessTokenIv` (12 bytes).
-   - **accounts** has rows under that plaid_item, with mask + balance.
+   - **bank_accounts** has rows under that plaid_item, with mask + balance.
    - **transactions** has rows with `merchantRaw`, `amount`, `occurredAt`. Sandbox typically returns ~5-15 per account.
 
 ## Manual Refresh
 
-Click **Refresh** on the connected bank card. Toast shows `+0 added, 0 modified, 0 removed` (sandbox doesn't keep generating new transactions). Repeated clicks within the same instant may show "Another refresh is already running" — that's the per-item advisory lock working.
+Click **Refresh** on the connected bank card. Toast shows `+0 added, 0 modified, 0 removed` (sandbox doesn't keep generating new transactions). Repeated clicks within the same instant may show "Another refresh is already running" — that's the per-item row-level lock (`SELECT ... FOR UPDATE NOWAIT`) working.
 
 ## Disconnect
 
 Click **Disconnect**. Confirm the prompt. The card disappears. In Prisma Studio:
 - **plaid_items** row is gone.
-- **accounts** row still exists, but `archivedAt` is set and `plaidItemId` is NULL.
+- **bank_accounts** row still exists, but `archivedAt` is set and `plaidItemId` is NULL.
 - **transactions** rows still exist; their `plaidItemId` is also NULL.
 
 ## Free-tier check
@@ -3484,7 +4245,7 @@ Edit `README.md`. Replace the Status section with:
 
 - ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready.
 - ✅ Plan 2 complete: workspace sharing on web — invites table (hashed bearer tokens, partial-unique-index invariants for one-owner-per-workspace and one-pending-invite-per-email), 9 endpoints, web UI for accept page, /settings/workspace, header switcher. Mobile gets X-Workspace-Id plumbing only.
-- ✅ Plan 1B-foundation complete: Plaid integration on web (sandbox) — 4 new schema entities (plaid_items, accounts, transactions, categories), AES-256-GCM token encryption with workspaceId AAD, cursor-based /transactions/sync with per-item advisory lock, mutation-during-pagination restart, pending→posted promotion via plaidTransactionId lookup, strict locked disconnect, Pro tier gate on all mutating routes. **API: 119 tests passing.**
+- ✅ Plan 1B-foundation complete: Plaid integration on web (sandbox) — 4 new schema entities (plaid_items, bank_accounts, transactions, categories), AES-256-GCM token encryption with workspaceId AAD, cursor-based /transactions/sync with per-item row-level lock (`SELECT ... FOR UPDATE NOWAIT`), mutation-during-pagination restart, pending→posted promotion via plaidTransactionId lookup, strict locked disconnect (409 `sync_in_progress` if a refresh races), Pro tier gate on connect/exchange/sync (disconnect is the deliberate exception so trial-expired users can revoke Plaid access), owner-only UI for Connect/Refresh/Disconnect. **API: 143 tests passing.**
 - 🚧 Next options: Plan 1B-webhooks (signature verify + idempotency), Plan 1B-categorize (Gemini Flash + merchant normalize), Plan 1B-cron (daily refresh), Plan 1B-mobile (transactions UI). See spec §11.
 ```
 
@@ -3505,15 +4266,15 @@ git push origin HEAD
 
 ## Done — Plan 1B-foundation Exit Criteria
 
-- [ ] `pnpm nx run-many -t test` green: ~119 API tests across plaid.crypto, plaid.tier, plaid.sync, plaid.exchange, plaid.routes plus the prior Plan 1 + Plan 2 suite.
+- [ ] `pnpm nx run-many -t test` green: 143 API tests across plaid.crypto, plaid.tier, plaid.items, plaid.sync, plaid.exchange, plaid.routes plus the prior Plan 1 + Plan 2 suite.
 - [ ] `pnpm nx run-many -t typecheck` green for api / web / mobile / shared.
 - [ ] `pnpm nx run-many -t lint` green.
 - [ ] CI green on push.
-- [ ] **Smoke test:** Pro user signs up → web `/settings/banks` → Plaid Link sandbox (`user_good`/`pass_good`) → DB has plaid_items + accounts + transactions → manual Refresh works → Disconnect leaves accounts (archived) + transactions (history) intact.
+- [ ] **Smoke test:** Pro user signs up → web `/settings/banks` → Plaid Link sandbox (`user_good`/`pass_good`) → DB has plaid_items + bank_accounts + transactions → manual Refresh works → Disconnect leaves bank_accounts (archived) + transactions (history) intact.
 - [ ] **Free-tier:** trial-expired user sees "Plaid is a Pro feature" and `/plaid/link-token` returns 402 `upgrade_required`.
-- [ ] **Concurrency:** two parallel manual refreshes — exactly one returns `lock_held`.
+- [ ] **Concurrency:** the row-lock unit test in `plaid.sync.test.ts` ("row-lock contention") verifies that `syncTransactions` returns `{skipped:"lock_held"}` when another tx holds `FOR UPDATE` on the row. (Two real parallel `Promise.all` calls don't reliably interleave under JS+Prisma+mocked Plaid, so we model the production race — sync vs. disconnect / sync vs. cron — directly.)
 - [ ] **Pending → posted:** sandbox can't easily simulate this, but the unit test `tests/plaid.sync.test.ts` covers it (`plaidTransactionId` lookup + `removedAt: null` restoration).
 - [ ] **Disconnect Plaid failure:** unit test verifies the local row is preserved + 502 returned.
 - [ ] **Initial-sync partial failure:** unit test verifies item is durable + response carries `syncOk: false`.
-- [ ] **Encryption boundary:** `readAccessToken(env, wsId, plaidItemId)` rejects mismatched pairs (covered by 404 path in `plaid.routes.test.ts` exchanges of someone else's item).
+- [ ] **Encryption boundary:** `readAccessToken(env, wsId, plaidItemId)` rejects mismatched `(workspaceId, plaidItemId)` pairs (covered directly in `plaid.items.test.ts` — "404 when workspaceId doesn't match the item's workspace").
 - [ ] **Plaid error sanitization:** no `access_token`-bearing string ever appears in API logs (`grep access_test apps/api logs` after a smoke test should return nothing).
