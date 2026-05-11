@@ -11,6 +11,7 @@ const env = {
   BETTER_AUTH_SECRET: "x".repeat(48),
   BETTER_AUTH_URL: "http://localhost:0",
   EMAIL_FROM: "test@fina.app",
+  WEB_APP_URL: "http://localhost:3000",
 };
 
 describe("GET /me", () => {
@@ -21,20 +22,14 @@ describe("GET /me", () => {
     await disconnect();
   });
 
-  it("returns user + workspace + role + tier=pro + trial active for fresh signup", async () => {
+  it("returns user + tier=pro + trial active for fresh signup", async () => {
     const app = await buildApp(env);
     const user = await signUpAndGetCookie(app, { email: "me1@example.com", name: "Me One" });
-
-    const res = await app.inject({
-      method: "GET",
-      url: "/me",
-      headers: { cookie: user.cookie },
-    });
+    const res = await app.inject({ method: "GET", url: "/me", headers: { cookie: user.cookie } });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.user.email).toBe("me1@example.com");
-    expect(body.workspace.name).toBe("Me One's workspace");
-    expect(body.workspace.role).toBe("owner");
+    expect(body).not.toHaveProperty("workspace");
     expect(body.tier).toBe("pro");
     expect(body.trial.active).toBe(true);
     expect(typeof body.trial.endsAt).toBe("string");
@@ -48,11 +43,7 @@ describe("GET /me", () => {
       where: { id: user.userId },
       data: { trialEndsAt: new Date(Date.now() - 1000), trialConsumed: true },
     });
-    const res = await app.inject({
-      method: "GET",
-      url: "/me",
-      headers: { cookie: user.cookie },
-    });
+    const res = await app.inject({ method: "GET", url: "/me", headers: { cookie: user.cookie } });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.tier).toBe("free");

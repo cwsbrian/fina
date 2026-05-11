@@ -30,6 +30,8 @@ model User {
 
   // Fina relations
   memberships     Membership[]
+  invitesSent     Invite[]     @relation("InvitesSent")
+  invitesAccepted Invite[]     @relation("InvitesAccepted")
 
   @@map("users")
 }
@@ -89,6 +91,7 @@ model Workspace {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   memberships Membership[]
+  invites     Invite[]
 
   @@map("workspaces")
 }
@@ -111,4 +114,34 @@ enum Role {
   owner
   editor
   viewer
+}
+
+model Invite {
+  id            String       @id @default(cuid())
+  workspaceId   String
+  invitedEmail  String       // stored lowercase
+  invitedRole   Role         // editor | viewer (owner not allowed via API)
+  invitedById   String
+  tokenHash     String       @unique  // SHA-256 hex of the raw bearer token; raw is only sent in the email
+  status        InviteStatus @default(pending)
+  expiresAt     DateTime
+  acceptedAt    DateTime?
+  acceptedById  String?
+  revokedAt     DateTime?
+  createdAt     DateTime     @default(now())
+
+  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy     User         @relation("InvitesSent", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedBy    User?        @relation("InvitesAccepted", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status])
+  @@index([invitedEmail, status])
+  @@map("invites")
+}
+
+enum InviteStatus {
+  pending
+  accepted
+  revoked
+  expired
 }

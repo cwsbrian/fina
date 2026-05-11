@@ -92,5 +92,6 @@ larger explorations, ER diagrams, or managing multiple environments side-by-side
 
 ## Status — 2026-05-08
 
-- ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready. **API: 13 tests passing.**
-- 🚧 Next: Plan 2 — workspace sharing (invites + roles + switcher).
+- ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready.
+- ✅ Plan 2 complete: workspace sharing on web — invites table (hashed bearer tokens, partial-unique-index invariants for one-owner-per-workspace and one-pending-invite-per-email) + 9 endpoints, web UI for accept page, /settings/workspace, header switcher. Mobile gets X-Workspace-Id plumbing only. **API: 76 tests passing.**
+- 🚧 Next: Plan 1B — Plaid + Account model (mobile-first), or Plan 2-mobile — mirror sharing UX onto mobile (TBD).

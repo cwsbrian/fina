@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const PROTECTED_PREFIXES = ["/home"];
+const PROTECTED_PREFIXES = ["/home", "/settings"];
 
 export function middleware(req: NextRequest) {
   if (!PROTECTED_PREFIXES.some((p) => req.nextUrl.pathname.startsWith(p))) {

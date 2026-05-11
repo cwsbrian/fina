@@ -2,6 +2,10 @@
   "name": "@fina/web",
   "version": "0.0.0",
   "private": true,
+  "scripts": {
+    "smoke": "NEXT_PUBLIC_API_URL=http://localhost:4000 next dev -p 3100",
+    "smoke:lan": "NEXT_PUBLIC_API_URL=http://100.65.93.102:4000 next dev -p 3100 -H 0.0.0.0"
+  },
   "dependencies": {
     "better-auth": "^1.6.9",
     "next": "14.2.3",

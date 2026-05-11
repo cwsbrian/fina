@@ -8,6 +8,14 @@ import { startTrialAndBootstrapWorkspace } from "./workspaces/bootstrap.js";
 
 export type FinaAuth = ReturnType<typeof createAuth>;
 
+export function parseDevOrigins(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 export function createAuth(env: Env) {
   const socialProviders: Record<string, { clientId: string; clientSecret: string }> = {};
   if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
@@ -17,13 +25,15 @@ export function createAuth(env: Env) {
     };
   }
 
+  const devOrigins = parseDevOrigins(env.DEV_ORIGINS);
+
   return betterAuth({
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
     trustedOrigins:
       env.NODE_ENV === "production"
         ? []
-        : ["http://localhost:3000", "fina://"],
+        : ["http://localhost:3000", "http://localhost:3100", "fina://", ...devOrigins],
     database: prismaAdapter(prisma, { provider: "postgresql" }),
     emailAndPassword: { enabled: true, requireEmailVerification: false },
     socialProviders,

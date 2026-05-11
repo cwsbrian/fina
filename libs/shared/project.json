@@ -21,6 +21,12 @@
       "options": {
         "reportsDirectory": "../../coverage/libs/shared"
       }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc --noEmit -p libs/shared/tsconfig.lib.json"
+      }
     }
   }
 }

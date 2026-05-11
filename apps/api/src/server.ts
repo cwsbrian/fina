@@ -4,7 +4,9 @@ import cors from "@fastify/cors";
 import type { Env } from "./env.js";
 import { healthRoutes } from "./routes/health.js";
 import { meRoutes } from "./routes/me.js";
-import { createAuth, type FinaAuth } from "./auth.js";
+import { workspacesRoutes } from "./routes/workspaces.js";
+import { inviteRoutes } from "./routes/invites.js";
+import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 
 export type AppCtx = { env: Env; auth: FinaAuth };
 
@@ -23,8 +25,19 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   await app.register(sensible);
   await app.register(cors, {
-    origin: env.NODE_ENV === "production" ? false : ["http://localhost:3000"],
+    origin:
+      env.NODE_ENV === "production"
+        ? false
+        : [
+            "http://localhost:3000",
+            "http://localhost:3100",
+            ...parseDevOrigins(env.DEV_ORIGINS),
+          ],
     credentials: true,
+    // Be explicit about methods + headers so preflight (OPTIONS) for PATCH/DELETE
+    // with our custom `X-Workspace-Id` header succeeds without surprises.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["content-type", "x-workspace-id", "cookie"],
   });
 
   // Bridge Fastify request → Web Fetch handler that Better Auth expects.
@@ -48,13 +61,25 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     const response = await auth.handler(new Request(url, init));
 
     reply.code(response.status);
-    response.headers.forEach((value, key) => reply.header(key, value));
+    // Forward all headers EXCEPT set-cookie via forEach (forEach combines
+    // multiple set-cookie values into a comma-joined string, which browsers
+    // misparse as a single broken cookie). Use getSetCookie() — which returns
+    // a string[] per spec — and pass that array to reply.header so Fastify
+    // emits one Set-Cookie per entry.
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === "set-cookie") return;
+      reply.header(key, value);
+    });
+    const setCookies = response.headers.getSetCookie();
+    if (setCookies.length > 0) reply.header("set-cookie", setCookies);
     const buf = Buffer.from(await response.arrayBuffer());
     return reply.send(buf);
   });
 
   await app.register(healthRoutes);
   await app.register(meRoutes);
+  await app.register(workspacesRoutes);
+  await app.register(inviteRoutes);
 
   return app;
 }

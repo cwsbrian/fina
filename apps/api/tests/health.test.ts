@@ -8,6 +8,7 @@ const env = {
   BETTER_AUTH_SECRET: "x".repeat(32),
   BETTER_AUTH_URL: "http://localhost:0",
   EMAIL_FROM: "test@fina.app",
+  WEB_APP_URL: "http://localhost:3000",
 };
 
 describe("GET /health", () => {

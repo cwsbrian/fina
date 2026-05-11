@@ -1,32 +1,38 @@
 "use client";
 import { useEffect, useState } from "react";
 import { signOut } from "../../../auth/client";
-import { env } from "../../../env";
+import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
+import { getActiveWorkspaceId } from "../../../lib/active-workspace";
 
 type Me = {
   user: { id: string; email: string; tz: string; locale: string };
-  workspace: { id: string; name: string; role: string };
   tier: "free" | "lite" | "pro";
   trial: { active: boolean; endsAt: string | null };
 };
-
-async function fetchMe(): Promise<Me> {
-  const res = await fetch(`${env.NEXT_PUBLIC_API_URL}/me`, {
-    credentials: "include",
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
-}
+type Workspace = { id: string; name: string; role: string };
 
 export default function HomePage() {
   const [me, setMe] = useState<Me | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchMe()
-      .then(setMe)
-      .catch((e) => setErr(e instanceof Error ? e.message : String(e)));
+    (async () => {
+      try {
+        await bootstrapActiveWorkspace();
+        const [meData, wsData] = await Promise.all([
+          apiFetch<Me>("/me"),
+          apiFetch<{ workspaces: Workspace[] }>("/workspaces"),
+        ]);
+        setMe(meData);
+        const activeId = getActiveWorkspaceId();
+        setWorkspace(
+          wsData.workspaces.find((w) => w.id === activeId) ?? wsData.workspaces[0] ?? null,
+        );
+      } catch (e) {
+        setErr((e as { code?: string }).code ?? "error");
+      }
+    })();
   }, []);
 
   return (
@@ -34,7 +40,7 @@ export default function HomePage() {
       <h1 style={{ fontSize: 32, marginBottom: 24 }}>Welcome</h1>
       {err && <p style={{ color: "#c00" }}>Could not reach API: {err}</p>}
       {!me && !err && <p>Loading…</p>}
-      {me && (
+      {me && workspace && (
         <div
           style={{
             border: "1px solid #eee",
@@ -44,9 +50,9 @@ export default function HomePage() {
           }}
         >
           <div style={{ fontSize: 12, opacity: 0.5 }}>Workspace</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>{me.workspace.name}</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{workspace.name}</div>
           <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8 }}>Role</div>
-          <div style={{ fontSize: 18, fontWeight: 600 }}>{me.workspace.role}</div>
+          <div style={{ fontSize: 18, fontWeight: 600 }}>{workspace.role}</div>
           <div style={{ fontSize: 12, opacity: 0.5, marginTop: 8 }}>Tier</div>
           <div style={{ fontSize: 18, fontWeight: 600 }}>{me.tier.toUpperCase()}</div>
           {me.trial.active && (

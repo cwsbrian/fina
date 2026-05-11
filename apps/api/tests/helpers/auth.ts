@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { prisma } from "../../src/db.js";
 
 export type SignedUpUser = {
   userId: string;
@@ -30,4 +31,11 @@ export async function signUpAndGetCookie(
   const cookie = res.headers["set-cookie"];
   const cookieStr = Array.isArray(cookie) ? cookie.join("; ") : cookie ?? "";
   return { userId: body.user.id as string, email, cookie: cookieStr };
+}
+
+export async function getOwnerWorkspaceId(userId: string): Promise<string> {
+  const m = await prisma.membership.findFirstOrThrow({
+    where: { userId, role: "owner" },
+  });
+  return m.workspaceId;
 }

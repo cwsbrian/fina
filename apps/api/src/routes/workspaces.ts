@@ -1,0 +1,132 @@
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
+import type { Role } from "@fina/shared";
+import { prisma } from "../db.js";
+import { HttpError, requireSession, requireWorkspaceContext } from "../auth/context.js";
+import {
+  listMembers,
+  updateMemberRole,
+  removeMember,
+  transferOwner,
+  MembersServiceError,
+} from "../workspaces/members.js";
+
+const PatchRoleBody = z.object({ role: z.enum(["owner", "editor", "viewer"]) });
+
+function mapMembersError(e: unknown): { statusCode: number; code: string } {
+  if (e instanceof MembersServiceError) {
+    switch (e.code) {
+      case "not_found":
+        return { statusCode: 404, code: "not_found" };
+      case "last_owner":
+      case "conflict":
+        return { statusCode: 409, code: e.code };
+      case "use_transfer":
+      case "same_user":
+        return { statusCode: 400, code: e.code };
+      case "not_owner":
+        return { statusCode: 403, code: "not_owner" };
+      default: {
+        // Compile-time exhaustiveness — adding a new MembersCode without
+        // updating this switch is a TS error here, not a silent 500.
+        const _exhaustive: never = e.code;
+        void _exhaustive;
+      }
+    }
+  }
+  return { statusCode: 500, code: "internal" };
+}
+
+export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
+  app.get("/workspaces", async (req, reply) => {
+    try {
+      const session = await requireSession(req, app);
+      const memberships = await prisma.membership.findMany({
+        where: { userId: session.userId },
+        include: { workspace: true },
+        orderBy: { workspace: { createdAt: "asc" } },
+      });
+      return {
+        workspaces: memberships.map((m) => ({
+          id: m.workspace.id,
+          name: m.workspace.name,
+          role: m.role as Role,
+        })),
+      };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/workspaces/:id/members", async (req, reply) => {
+    const params = req.params as { id: string };
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });
+      // Path id must match header to avoid confused-deputy; we trust the header context.
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const members = await listMembers({ workspaceId: ctx.membership.workspaceId });
+      return { members };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.patch("/workspaces/:id/members/:userId", async (req, reply) => {
+    const params = req.params as { id: string; userId: string };
+    const parsed = PatchRoleBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+    const newRole = parsed.data.role as Role;
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      if (newRole === "owner") {
+        await transferOwner({
+          workspaceId: ctx.membership.workspaceId,
+          currentOwnerId: ctx.session.userId,
+          newOwnerId: params.userId,
+        });
+      } else {
+        await updateMemberRole({
+          workspaceId: ctx.membership.workspaceId,
+          targetUserId: params.userId,
+          newRole,
+        });
+      }
+      return reply.code(200).send({ ok: true });
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      const m = mapMembersError(e);
+      return reply.code(m.statusCode).send({ error: m.code });
+    }
+  });
+
+  app.delete("/workspaces/:id/members/:userId", async (req, reply) => {
+    const params = req.params as { id: string; userId: string };
+    try {
+      const session = await requireSession(req, app);
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const isSelf = params.userId === session.userId;
+      if (!isSelf && ctx.membership.role !== "owner") {
+        return reply.code(403).send({ error: "insufficient_role" });
+      }
+      await removeMember({
+        workspaceId: ctx.membership.workspaceId,
+        targetUserId: params.userId,
+      });
+      return reply.code(204).send();
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      const m = mapMembersError(e);
+      return reply.code(m.statusCode).send({ error: m.code });
+    }
+  });
+}

@@ -1,29 +1,40 @@
 import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
 import { useSession, signOut } from "../../src/auth/client";
-import { apiFetch } from "../../src/api/client";
+import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 
 type Me = {
   user: { id: string; email: string; tz: string; locale: string };
-  workspace: { id: string; name: string; role: string };
   tier: "free" | "lite" | "pro";
   trial: { active: boolean; endsAt: string | null };
 };
 
+type Workspace = { id: string; name: string; role: string };
+
 export default function Home() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    apiFetch<Me>("/me")
-      .then((m) => {
-        if (!cancelled) setMe(m);
-      })
-      .catch((e) => {
+    (async () => {
+      try {
+        const activeId = await bootstrapActiveWorkspace();
+        const [meData, wsData] = await Promise.all([
+          apiFetch<Me>("/me"),
+          apiFetch<{ workspaces: Workspace[] }>("/workspaces"),
+        ]);
+        if (cancelled) return;
+        setMe(meData);
+        setWorkspace(
+          wsData.workspaces.find((w) => w.id === activeId) ?? wsData.workspaces[0] ?? null,
+        );
+      } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -36,12 +47,12 @@ export default function Home() {
       </Text>
       {!me && !err && <ActivityIndicator />}
       {err && <Text style={styles.err}>Could not reach API: {err}</Text>}
-      {me && (
+      {me && workspace && (
         <View style={styles.card}>
           <Text style={styles.label}>Workspace</Text>
-          <Text style={styles.value}>{me.workspace.name}</Text>
+          <Text style={styles.value}>{workspace.name}</Text>
           <Text style={styles.label}>Role</Text>
-          <Text style={styles.value}>{me.workspace.role}</Text>
+          <Text style={styles.value}>{workspace.role}</Text>
           <Text style={styles.label}>Tier</Text>
           <Text style={styles.value}>{me.tier.toUpperCase()}</Text>
           {me.trial.active && (
