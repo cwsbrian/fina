@@ -31,7 +31,7 @@ This plan is **backend only.** No web/mobile UI. UI for categorize lands later:
 - `merchant_mappings` table + `transactions.categorizationSource` enum column + 1 migration.
 - Default category seed (11 English categories) on workspace bootstrap.
 - `src/categorize/` module: rule-based merchant normalizer, mapping lookup, Gemini Flash Lite caller, batch service.
-- Auto-categorize hook in `syncTransactions` (after final-tx commits cursor).
+- `syncTransactions` returns the list of newly-inserted local tx IDs in its result. Callers (exchange route, manual sync route, future webhook/cron) invoke `categorizeNewTransactions(env, wsId, newTxIds)` themselves — see §9.2 for the latency-budget rationale.
 - API endpoints: categories CRUD, list uncategorized, manual categorize (auto-creates mapping + back-fills).
 - Env vars: `GEMINI_API_KEY` (required), `CATEGORIZE_BATCH_MAX` (optional, default 50).
 - Tests: unit (normalize, service with mocked LLM, route guards) + E2E (sync → assert categorized).
@@ -114,7 +114,7 @@ A null value means "uncategorized" (same as `categoryId IS NULL`). The two are c
 
 The existing `categories` schema has `@@unique([workspaceId, name])` (case-sensitive, includes archived rows). The categorize API promises **case-insensitive** uniqueness scoped to **active** categories (so `Groceries` and `groceries` collide, but an archived `Groceries` does not block a new active `Groceries`).
 
-Migration appends a partial unique index in raw SQL (Prisma can't model partial uniques):
+These two contracts are incompatible — the existing full unique would still block re-creating an exact-case archived name. So **the migration drops the existing `@@unique([workspaceId, name])`** (remove the directive from `schema.prisma`; the migration emits the corresponding `DROP CONSTRAINT`) and appends a partial unique index in raw SQL (Prisma can't model partial uniques):
 
 ```sql
 CREATE UNIQUE INDEX "categories_one_active_name_per_workspace_ci"
@@ -122,7 +122,7 @@ CREATE UNIQUE INDEX "categories_one_active_name_per_workspace_ci"
   WHERE "archivedAt" IS NULL;
 ```
 
-The existing `@@unique([workspaceId, name])` stays in place (it doesn't block the partial index; archived-vs-active duplicates are fine under it because case-sensitive name collisions are rare in practice). The API duplicate check uses the same `lower(name) AND archivedAt IS NULL` predicate so the route returns 422 before the DB rejects.
+The API duplicate check (POST/PATCH `/categories`) uses the same `lower(name) AND archivedAt IS NULL` predicate so the route returns 422 before the DB rejects.
 
 ### 3.4 Category seed
 
@@ -164,10 +164,15 @@ CROSS JOIN (VALUES
   ('Groceries'),('Dining'),('Transit'),('Housing'),('Utilities'),
   ('Health'),('Shopping'),('Entertainment'),('Subscriptions'),('Income'),('Other')
 ) AS c(name)
-ON CONFLICT ("workspaceId", "name") DO NOTHING;
+WHERE NOT EXISTS (
+  SELECT 1 FROM "categories"
+  WHERE "workspaceId" = w.id
+    AND lower("name") = lower(c.name)
+    AND "archivedAt" IS NULL
+);
 ```
 
-The `ON CONFLICT DO NOTHING` on `(workspaceId, name)` makes the migration safe to re-run, and idempotent if the user already created some of those categories manually before the migration. This backfill is one-time and not invoked at runtime.
+We use `WHERE NOT EXISTS` rather than `ON CONFLICT` because the full unique on `(workspaceId, name)` is being dropped in this same migration in favor of the partial unique above (`(workspaceId, lower(name)) WHERE archivedAt IS NULL`). `ON CONFLICT` against a partial index requires a more complex predicate; the `NOT EXISTS` form is clearer and equivalent for our idempotency need (safe to re-run, respects users who manually pre-created any of these names in any case before the migration).
 
 ---
 
@@ -175,7 +180,14 @@ The `ON CONFLICT DO NOTHING` on `(workspaceId, name)` makes the migration safe t
 
 ### 4.1 Auto-categorize after sync
 
-After `syncTransactions` finishes its final-tx (cursor commit), it calls `categorizeNewTransactions(env, workspaceId, newTxIds)`. The list of new tx IDs is what `syncTransactions` knows it just added (NOT all uncategorized in the workspace — that would re-process forever).
+`syncTransactions` is augmented to **return** the list of newly-inserted local tx IDs (`newTxIds: string[]`) as part of its `SyncResult`. It does NOT call categorize itself — callers wire that in based on their latency budget (see §9.2).
+
+How `newTxIds` is collected:
+- `upsertAdded` (foundation function) currently returns `void`. We change it to return `{ kind: "inserted" | "updated"; localId: string }` so the outer loop can collect IDs where `kind === "inserted"`.
+- "Inserted" = the `create` branch fired (not the `findFirst → update` branch). Promotion (`pending_transaction_id` lookup) explicitly takes the update branch — promoted tx are NOT in `newTxIds`, which is correct: they keep their existing `categoryId` and don't need re-categorize.
+- Mutation-restart can replay the same tx; the second run hits the `findFirst → update` branch and is also excluded. No duplicates in `newTxIds`.
+
+Callers invoke `categorizeNewTransactions(env, workspaceId, newTxIds)`. That function does:
 
 Per-sync, not per-page. If sync was interrupted mid-page, the partially-committed transactions stay uncategorized; the next successful full sync will catch them via the `newTxIds` it builds during that run plus a separate "uncategorized backfill" call (NOT in this plan; flagged for follow-up).
 
@@ -191,17 +203,26 @@ categorizeNewTransactions(env, workspaceId, newTxIds):
     UPDATE transactions SET merchantNormalized = ... WHERE id = tx.id AND workspaceId = ?
 
   # Step 2: Apply existing mappings (no LLM, no cost).
-  # Guard write by both id AND workspaceId AND categorizationSource IS NULL —
-  # we MUST NOT overwrite a manual decision that races with our LLM call.
-  mappings = SELECT * FROM merchant_mappings WHERE workspaceId = ? AND merchantNormalized IN (...)
+  # JOIN categories with archivedAt IS NULL — a mapping that points to a
+  # category the user later archived must NOT be applied (else we'd quietly
+  # set tx into an archived category, surprising the user). The mapping row
+  # itself stays; if the category is un-archived, mapping resumes working.
+  # A follow-up plan can prune mappings on archive.
+  mappings = SELECT m.* FROM merchant_mappings m
+             JOIN categories c ON c.id = m.categoryId
+             WHERE m.workspaceId = ?
+               AND c.archivedAt IS NULL
+               AND m.merchantNormalized IN (...)
   for tx in txs:
     if mapping = mappings[tx.merchantNormalized]:
+      # Guard write by id AND workspaceId AND categorizationSource IS NULL —
+      # MUST NOT overwrite a manual decision that races with our LLM call.
       UPDATE transactions
         SET categoryId = mapping.categoryId,
             categorizationSource = 'mapping'
         WHERE id = tx.id
           AND workspaceId = ?
-          AND categorizationSource IS NULL    -- defend against manual-confirm race
+          AND categorizationSource IS NULL
       remove tx from "unmapped" set
 
   # Step 3: LLM batch for unmapped.
@@ -269,20 +290,39 @@ Auth:  editor+ (per §6 role table — viewers are GET-only, editors mutate)
 
 ### 4.3 Merchant normalization rules (`src/categorize/normalize.ts`)
 
-Rule-based. Order matters:
+Rule-based, applied in a **loop-until-stable** fashion: run all rules; if the string changed, re-run; max 5 iterations. Necessary because one rule's strip can expose another rule's pattern (e.g. removing a trailing state code reveals the trailing city name as the new trailing token).
+
+Rules, in pass order:
 
 1. Trim, lowercase.
 2. Strip trailing parenthesized location: `pizza pizza (toronto)` → `pizza pizza`.
-3. Strip trailing 2-letter state/province codes after space: `walmart bc` → `walmart`.
-4. Strip trailing store IDs: `walmart #1234` → `walmart`, `walmart 1234` → `walmart`, `mcdonalds q39` → `mcdonalds`.
-5. Strip city qualifiers we hard-list (small allowlist for major CA cities): `tim hortons toronto` → `tim hortons`.
-6. Collapse repeated whitespace, trim again.
+3. Strip trailing 2-letter state/province codes (`\s+[a-z]{2}$`): `walmart bc` → `walmart`.
+4. Strip trailing store IDs (apply all three patterns):
+   - `\s+#\d+$`: `walmart #1234` → `walmart`
+   - `\s+\d+$`: `walmart 1234` → `walmart`
+   - `\s+[qrst]\d+$`: `mcdonalds q39` → `mcdonalds`
+5. Strip trailing city from a hardcoded CA allowlist (`toronto`, `vancouver`, `montreal`, `calgary`, `ottawa`, `edmonton`, `mississauga`, `winnipeg`, `quebec`, `hamilton`): `tim hortons toronto` → `tim hortons`.
+6. Collapse repeated whitespace, trim.
 
-Plaid's `merchant_name` is usually already pretty clean (`"Starbucks"` rather than the raw card-network string), but we normalize defensively because:
+**Worked example** (loop-until-stable):
+
+Input: `STARBUCKS #1234 TORONTO ON`
+
+| Iter | Output | Notes |
+|---|---|---|
+| start | `STARBUCKS #1234 TORONTO ON` | |
+| 1 | `starbucks #1234 toronto` | lowercase + strip ` on` (state code, rule 3) |
+| 2 | `starbucks #1234` | strip ` toronto` (city, rule 5) |
+| 3 | `starbucks` | strip ` #1234` (store id, rule 4) |
+| 4 | `starbucks` | no change → stop |
+
+Without the loop, a single-pass run with this rule order would leave `starbucks #1234 toronto` (rule 4 doesn't match `#1234` mid-string). The loop fixes this without us having to micro-tune rule order.
+
+Plaid's `merchant_name` is usually pretty clean (`"Starbucks"` rather than the raw card-network string), but we normalize defensively because:
 - Plaid sometimes falls back to `name` (the raw string).
 - Merchant chains have inconsistent suffixes (`McDonald's #5152`, `McDonald's q39`, etc.).
 
-We accept that no rule-based normalizer is perfect — that's why `merchant_mappings` is keyed by the **already-normalized** form. If `mcdonalds 5152` and `mcdonalds q39` normalize differently, that's two mappings to confirm; not catastrophic.
+We accept no rule-based normalizer is perfect — that's why `merchant_mappings` is keyed by the **already-normalized** form. If `mcdonalds 5152` and `mcdonalds q39` normalize differently, that's two mappings to confirm; not catastrophic.
 
 ---
 
@@ -391,7 +431,7 @@ All under `/workspaces/:id/...`, with the same `requireWorkspaceContext` + path/
 | `POST`  | `/workspaces/:id/categories` | owner  | — | Create category. Body `{name}`. 422 if name duplicates an existing (case-insensitive) active category in the workspace. |
 | `PATCH` | `/workspaces/:id/categories/:catId` | owner | — | Rename, recolor, or archive. Body `{name?, icon?, color?, archived?}`. Renaming honors the same uniqueness rule. |
 | `GET`   | `/workspaces/:id/transactions?uncategorizedOnly=true` | viewer | — | The existing transactions endpoint gains a `uncategorizedOnly` boolean query flag (`BoolFlag` parser like `includeRemoved`). When true, restricts the page to `categoryId IS NULL`. Same response shape as the existing route. NOT a separate `/transactions/uncategorized` path — there's no value in two URLs for the same resource. |
-| `POST`  | `/workspaces/:id/transactions/:txId/categorize` | **editor** | — | Manually categorize. Body `{categoryName: string}`. 404 if category name doesn't exist in workspace. Side effects: `merchant_mapping` upsert + back-fill (see §4.2). Returns the updated tx + count of back-filled tx. |
+| `POST`  | `/workspaces/:id/transactions/:txId/categorize` | **editor+** | — | Manually categorize. Body `{categoryName: string}`. 404 if category name doesn't exist (active only) in workspace. Side effects: `merchant_mapping` upsert + back-fill (see §4.2). Returns the updated tx + count of back-filled tx. |
 
 **Note on roles:**
 - **viewer**: GET-only. Daily ritual users who only browse can still see categories and uncategorized lists.
@@ -404,23 +444,25 @@ All under `/workspaces/:id/...`, with the same `requireWorkspaceContext` + path/
 
 | File | Op | Purpose |
 |---|---|---|
-| `prisma/schema.prisma` | modify | `MerchantMapping` model, `MappingSource` enum, `Transaction.categorizationSource` field + enum |
-| `prisma/migrations/<ts>_add_categorize/migration.sql` | new | generated |
-| `src/env.ts` | modify | `GEMINI_API_KEY: z.string()`, `CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().default(50)` |
-| `src/categorize/normalize.ts` | new | `normalizeMerchant(raw: string): string` |
-| `src/categorize/seed.ts` | new | `DEFAULT_CATEGORIES: string[]` (11 names) + `seedDefaultCategories(tx, workspaceId)` |
-| `src/workspaces/bootstrap.ts` | modify | call `seedDefaultCategories(tx, ws.id)` inside the existing bootstrap tx |
-| `src/categorize/llm.ts` | new | Gemini SDK wrapper with structured-output config; `callGeminiCategorize(env, categories, txs)` |
-| `src/categorize/service.ts` | new | `categorizeNewTransactions(env, workspaceId, txIds)` + helpers |
-| `src/plaid/sync.ts` | modify | After final-tx in `syncTransactions`, call `categorizeNewTransactions` (best-effort, errors don't fail sync) |
-| `src/routes/categories.ts` | new | CRUD routes |
-| `src/routes/transactions.ts` | modify | add `?uncategorizedOnly=true` filter + `POST /:txId/categorize` |
-| `src/server.ts` | modify | register `categoriesRoutes` |
-| `tests/helpers/gemini-mock.ts` | new | `vi.hoisted` factory mirror of plaid-mock; scriptable queue |
-| `tests/categorize.normalize.test.ts` | new | 6+ rule cases |
-| `tests/categorize.service.test.ts` | new | mapping-first, LLM fallback, back-fill, source field, batch chunking |
-| `tests/categorize.routes.test.ts` | new | categories CRUD + manual categorize + workspace_mismatch + role guards |
-| `tests/plaid.sync.test.ts` | modify | add a "auto-categorize after sync" test (mocks Gemini) |
+| `apps/api/prisma/schema.prisma` | modify | `MerchantMapping` model, `MappingSource` enum, `Transaction.categorizationSource` field + enum |
+| `apps/api/prisma/migrations/<ts>_add_categorize/migration.sql` | new | generated |
+| `apps/api/src/env.ts` | modify | `GEMINI_API_KEY: z.string()`, `CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().default(50)` |
+| `apps/api/src/categorize/normalize.ts` | new | `normalizeMerchant(raw: string): string` |
+| `apps/api/src/categorize/seed.ts` | new | `DEFAULT_CATEGORIES: string[]` (11 names) + `seedDefaultCategories(tx, workspaceId)` |
+| `apps/api/src/workspaces/bootstrap.ts` | modify | call `seedDefaultCategories(tx, ws.id)` inside the existing bootstrap tx |
+| `apps/api/src/categorize/llm.ts` | new | Gemini SDK wrapper with structured-output config; `callGeminiCategorize(env, categories, txs)` |
+| `apps/api/src/categorize/service.ts` | new | `categorizeNewTransactions(env, workspaceId, txIds)` + helpers |
+| `apps/api/src/plaid/sync.ts` | modify | (1) Augment `SyncResult` to include `newTxIds: string[]`; (2) change `upsertAdded` return type to `{kind:"inserted"\|"updated"; localId:string}`; (3) collect inserted IDs in the page loop. Does NOT call categorize itself. |
+| `apps/api/src/routes/plaid.ts` | modify | Exchange route: after sync result is computed, fire `categorizeNewTransactions(...)` as a **detached promise** (catch + log; no await — keeps the existing 30s sync deadline intact). |
+| `apps/api/src/routes/plaid-items.ts` | modify | Manual sync route: `await categorizeNewTransactions(...)` between sync and response (no deadline pressure, caller wants the categorized state in the response). |
+| `apps/api/src/routes/categories.ts` | new | CRUD routes |
+| `apps/api/src/routes/transactions.ts` | modify | add `?uncategorizedOnly=true` filter + `POST /:txId/categorize` |
+| `apps/api/src/server.ts` | modify | register `categoriesRoutes` |
+| `apps/api/tests/helpers/gemini-mock.ts` | new | `vi.hoisted` factory mirror of plaid-mock; scriptable queue |
+| `apps/api/tests/categorize.normalize.test.ts` | new | 6+ rule cases |
+| `apps/api/tests/categorize.service.test.ts` | new | mapping-first, LLM fallback, back-fill, source field, batch chunking |
+| `apps/api/tests/categorize.routes.test.ts` | new | categories CRUD + manual categorize + workspace_mismatch + role guards |
+| `apps/api/tests/plaid.sync.test.ts` | modify | add a "auto-categorize after sync" test (mocks Gemini) |
 | `e2e/plan-1b-categorize.spec.ts` | new | Plaid sandbox connect → wait → assert categorized; manual categorize → mapping created + back-fill |
 | `apps/api/.env.test` | modify | `GEMINI_API_KEY=test_gemini_key` |
 | `.env.example` | modify | document `GEMINI_API_KEY` + how to get one |
@@ -459,6 +501,8 @@ All under `/workspaces/:id/...`, with the same `requireWorkspaceContext` + path/
 9. **Manual-vs-LLM race**: pre-set one tx's `categorizationSource='manual'` and `categoryId` before invoking the service. Service must NOT overwrite that tx (mapping branch + LLM branch both honor the `IS NULL` guard).
 10. **Workspace-scoped category resolution**: create two workspaces each with their own `Groceries` category. Service for workspace A must only resolve A's category id, never B's.
 11. **Archived category ignored by LLM**: archive `Dining` mid-test; service must not pass it to the LLM (so LLM can't return it) and must reject if mocked LLM returns it anyway.
+12. **Mapping points to archived category**: create mapping `starbucks → Dining`, then archive `Dining`. Service must skip applying this mapping (tx stays uncategorized; LLM gets a shot at it instead).
+13. **Archive + recreate same name (case-different)**: archive `Groceries`, then POST `groceries` — should succeed (partial-unique on `lower(name) WHERE archivedAt IS NULL` allows it). Both rows coexist.
 
 ### 8.3 Unit — `categorize.routes.test.ts`
 
@@ -486,8 +530,16 @@ All under `/workspaces/:id/...`, with the same `requireWorkspaceContext` + path/
 ### 8.4 Integration — `plaid.sync.test.ts`
 
 Add to existing file:
-- After-sync auto-categorize: mock Gemini to return categories; assert tx rows get `categoryId` + `categorizationSource = 'ai'`.
-- LLM failure during auto-categorize: assert sync still returns success + tx stay uncategorized.
+In `plaid.sync.test.ts`:
+- `syncTransactions` returns `newTxIds` for fresh inserts only — promoted rows excluded, mutation-restart deduped.
+- `syncTransactions` does NOT call categorize itself.
+
+In `plaid.exchange.test.ts` (detached-promise hook test):
+- Mock Gemini to return valid categories. Call exchange, assert 200 + syncOk:true returns promptly. Then poll DB and assert tx rows get `categoryId` + `categorizationSource = 'ai'` within ~5 s.
+- Gemini failure during exchange: 200 still returns; tx stay uncategorized; error visible in logs (assert via captured logger).
+
+In `plaid.routes.test.ts` (manual sync awaits):
+- POST /sync awaits categorize before responding. On Gemini success, response time reflects the wait but body is correct.
 
 ### 8.5 E2E — `e2e/plan-1b-categorize.spec.ts`
 
