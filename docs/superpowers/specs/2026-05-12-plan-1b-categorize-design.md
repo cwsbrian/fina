@@ -29,7 +29,7 @@ This plan is **backend only.** No web/mobile UI. UI for categorize lands later:
 
 **In:**
 - `merchant_mappings` table + `transactions.categorizationSource` enum column + 1 migration.
-- Default category seed (10 English categories) on workspace bootstrap.
+- Default category seed (11 English categories) on workspace bootstrap.
 - `src/categorize/` module: rule-based merchant normalizer, mapping lookup, Gemini Flash Lite caller, batch service.
 - Auto-categorize hook in `syncTransactions` (after final-tx commits cursor).
 - API endpoints: categories CRUD, list uncategorized, manual categorize (auto-creates mapping + back-fills).
@@ -83,6 +83,16 @@ enum MappingSource {
 
 In Plan 1B-categorize, **only `manual` mappings get created** (per master spec §15 line "manual confirm 시 자동 생성"). The other enum values are forward-looking placeholders.
 
+**Required back-relations** on existing models (Prisma fails validation without them):
+
+```prisma
+// Workspace — add inside the relations block (alongside plaidItems / bankAccounts / etc.)
+merchantMappings  MerchantMapping[]
+
+// Category — add inside the relations block (alongside transactions / parent / children)
+merchantMappings  MerchantMapping[]
+```
+
 ### 3.2 New column on `Transaction`
 
 ```prisma
@@ -100,7 +110,21 @@ enum CategorizationSource {
 
 A null value means "uncategorized" (same as `categoryId IS NULL`). The two are correlated — never `categoryId IS NULL AND categorizationSource IS NOT NULL`.
 
-### 3.3 Category seed
+### 3.3 Category uniqueness (case-insensitive, active-only)
+
+The existing `categories` schema has `@@unique([workspaceId, name])` (case-sensitive, includes archived rows). The categorize API promises **case-insensitive** uniqueness scoped to **active** categories (so `Groceries` and `groceries` collide, but an archived `Groceries` does not block a new active `Groceries`).
+
+Migration appends a partial unique index in raw SQL (Prisma can't model partial uniques):
+
+```sql
+CREATE UNIQUE INDEX "categories_one_active_name_per_workspace_ci"
+  ON "categories" ("workspaceId", lower("name"))
+  WHERE "archivedAt" IS NULL;
+```
+
+The existing `@@unique([workspaceId, name])` stays in place (it doesn't block the partial index; archived-vs-active duplicates are fine under it because case-sensitive name collisions are rare in practice). The API duplicate check uses the same `lower(name) AND archivedAt IS NULL` predicate so the route returns 422 before the DB rejects.
+
+### 3.4 Category seed
 
 On workspace bootstrap (existing `apps/api/src/workspaces/bootstrap.ts`), after creating the workspace + owner membership, seed 11 categories (English):
 
@@ -123,10 +147,15 @@ Other
 Seeding is part of the bootstrap tx so a fresh workspace always has at least these 11 categories. **The migration also back-fills every existing workspace** with the same 11 defaults via raw SQL appended to `migration.sql`:
 
 ```sql
+-- Requires pgcrypto for gen_random_uuid(). It's already enabled on Postgres 16
+-- by default; if a future host lacks it, prepend `CREATE EXTENSION IF NOT
+-- EXISTS pgcrypto;` to this migration.
 INSERT INTO categories ("id", "workspaceId", "name", "createdAt")
 SELECT
-  -- cuid-shaped collision-safe id: 'cmpseed_' + workspace prefix + name slug
-  'cmpseed_' || substr(w.id, 4, 8) || '_' || lower(replace(c.name, ' ', '_')),
+  -- gen_random_uuid() always produces a globally unique value, so we don't
+  -- have to invent a collision-safe scheme. The id column is a free-form TEXT
+  -- field (existing rows use cuid()); mixing UUID-shaped rows is fine.
+  gen_random_uuid()::text,
   w.id,
   c.name,
   NOW()
@@ -138,7 +167,7 @@ CROSS JOIN (VALUES
 ON CONFLICT ("workspaceId", "name") DO NOTHING;
 ```
 
-The `ON CONFLICT DO NOTHING` makes the migration safe to re-run, and idempotent if the user already created some of those categories manually before the migration. This backfill is one-time and not invoked at runtime.
+The `ON CONFLICT DO NOTHING` on `(workspaceId, name)` makes the migration safe to re-run, and idempotent if the user already created some of those categories manually before the migration. This backfill is one-time and not invoked at runtime.
 
 ---
 
@@ -155,12 +184,15 @@ categorizeNewTransactions(env, workspaceId, newTxIds):
   txs = SELECT id, merchantRaw, amount, occurredAt FROM transactions
         WHERE id IN (newTxIds) AND categoryId IS NULL
 
-  # Step 1: Normalize merchant for each tx
+  # Step 1: Normalize merchant for each tx (write back so future syncs/mapping
+  # lookups see the normalized form). Guard write by workspaceId.
   for tx in txs:
     tx.merchantNormalized = normalizeMerchant(tx.merchantRaw)
-    UPDATE transactions SET merchantNormalized = ... WHERE id = tx.id
+    UPDATE transactions SET merchantNormalized = ... WHERE id = tx.id AND workspaceId = ?
 
-  # Step 2: Apply existing mappings (no LLM, no cost)
+  # Step 2: Apply existing mappings (no LLM, no cost).
+  # Guard write by both id AND workspaceId AND categorizationSource IS NULL —
+  # we MUST NOT overwrite a manual decision that races with our LLM call.
   mappings = SELECT * FROM merchant_mappings WHERE workspaceId = ? AND merchantNormalized IN (...)
   for tx in txs:
     if mapping = mappings[tx.merchantNormalized]:
@@ -168,21 +200,31 @@ categorizeNewTransactions(env, workspaceId, newTxIds):
         SET categoryId = mapping.categoryId,
             categorizationSource = 'mapping'
         WHERE id = tx.id
+          AND workspaceId = ?
+          AND categorizationSource IS NULL    -- defend against manual-confirm race
       remove tx from "unmapped" set
 
-  # Step 3: LLM batch for unmapped
+  # Step 3: LLM batch for unmapped.
+  # Build a scoped lookup map — category names are unique per workspace but
+  # globally repeat across workspaces (e.g. every workspace has 'Groceries').
+  # A workspace-less query would error or hit the wrong row.
   if unmapped is empty: return
-  categories = SELECT name FROM categories WHERE workspaceId = ? AND archivedAt IS NULL
+  categoryRows = SELECT id, name FROM categories
+                 WHERE workspaceId = ? AND archivedAt IS NULL
+  categoryByName = { row.name: row.id for row in categoryRows }
+  categoryNames  = [row.name for row in categoryRows]
 
   for batch in chunks(unmapped, env.CATEGORIZE_BATCH_MAX or 50):
     try:
-      results = callGeminiCategorize(env, categories, batch)
+      results = callGeminiCategorize(env, categoryNames, batch)
       for r in results:
-        if r.category not in categories: skip (leave uncategorized)
+        if r.category not in categoryByName: skip (leave uncategorized)
         UPDATE transactions
-          SET categoryId = (SELECT id FROM categories WHERE name = r.category),
+          SET categoryId = categoryByName[r.category],
               categorizationSource = 'ai'
           WHERE id = r.tx_id
+            AND workspaceId = ?
+            AND categorizationSource IS NULL    -- defend against manual-confirm race
     except LLMError:
       log + continue (those tx stay uncategorized; no retry in same sync)
 ```
@@ -191,20 +233,23 @@ categorizeNewTransactions(env, workspaceId, newTxIds):
 
 ```
 Input: { categoryName: string }
-Auth:  members (any role can categorize their workspace's tx)
+Auth:  editor+ (per §6 role table — viewers are GET-only, editors mutate)
 
 1. Verify tx exists in workspace + load merchantRaw + merchantNormalized.
    If merchantNormalized is null (rare; tx imported before this plan):
      merchantNormalized = normalizeMerchant(merchantRaw); store back.
 
-2. Find category by name in workspace.
+2. Find category by name in workspace, ACTIVE only:
+     SELECT id FROM categories
+       WHERE workspaceId = ? AND lower(name) = lower(?) AND archivedAt IS NULL
    If not exists: 404 category_not_found
-     (User must create categories explicitly. We don't auto-create from
-      free-form input — keeps the category vocabulary controlled.)
+     (User must create categories explicitly via POST /categories.
+      We don't auto-create from free-form input — keeps the category
+      vocabulary controlled. Archived categories are not writable targets.)
 
 3. UPDATE transactions
      SET categoryId, categorizationSource = 'manual'
-     WHERE id = txId
+     WHERE id = txId AND workspaceId = ?
 
 4. Upsert merchant_mapping:
      INSERT INTO merchant_mappings (workspaceId, merchantNormalized, categoryId, confidence=1.0, source='manual')
@@ -216,8 +261,8 @@ Auth:  members (any role can categorize their workspace's tx)
          categorizationSource = 'mapping'
      WHERE workspaceId = ?
        AND merchantNormalized = ?
-       AND id != txId                         -- skip the one we just set to 'manual'
-       AND categorizationSource != 'manual'   -- don't overwrite user's other manual decisions
+       AND id != txId                                                     -- skip the one we just set to 'manual'
+       AND (categorizationSource IS NULL OR categorizationSource <> 'manual')  -- NULL-safe: SQL `!=` doesn't match NULL, so we'd lose uncategorized rows without this
 
 6. Return updated tx.
 ```
@@ -243,55 +288,72 @@ We accept that no rule-based normalizer is perfect — that's why `merchant_mapp
 
 ## 5. LLM Contract (Gemini 2.5 Flash Lite)
 
-### 5.1 Request
+### 5.1 SDK call (`@google/genai`)
 
-```
-model: gemini-2.5-flash-lite
-generationConfig: { responseMimeType: "application/json", responseSchema: {...} }
-contents: [
-  {
-    role: "user",
-    parts: [{
-      text: """
-        Categorize each Canadian personal financial transaction into exactly one
-        of these categories: [Groceries, Dining, Transit, Housing, Utilities,
-        Health, Shopping, Entertainment, Subscriptions, Income, Other].
+The SDK is the current Google Gen AI SDK for JS/TS (`@google/genai`, formerly `@google/generative-ai`, which is deprecated). The shape below is implementation-ready — no `generationConfig` top-level key; structured output lives in `config.responseMimeType` + `config.responseSchema`.
 
-        Currency is CAD. Positive amount = expense, negative = income/refund.
+```ts
+import { GoogleGenAI, Type } from "@google/genai";
 
-        Return JSON: { "results": [{ "tx_id": string, "category": string }] }
-        Use exact category names from the list. If genuinely unclear, use "Other".
+const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
-        Transactions:
-        - tx_id: tx_abc123, merchant: Starbucks, amount: 5.50, date: 2026-05-10
-        - tx_id: tx_def456, merchant: Loblaws, amount: 89.40, date: 2026-05-10
-        - ...
-      """
-    }]
-  }
-]
-```
+// `userPayload` is JSON.stringified so merchant-name prompt-injection
+// can't escape the user-message text (see §9 prompt-injection note).
+const userPayload = {
+  categories,   // ["Groceries", "Dining", ...]
+  transactions: txs.map((t) => ({
+    tx_id: t.id,
+    merchant: t.merchantRaw,        // raw is fine — JSON-encoded below
+    amount: Number(t.amount),
+    date: t.occurredAt.toISOString().slice(0, 10),
+  })),
+};
 
-### 5.2 Response schema (Gemini structured output)
-
-```json
-{
-  "type": "object",
-  "properties": {
-    "results": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "tx_id": { "type": "string" },
-          "category": { "type": "string" }
+const result = await ai.models.generateContent({
+  model: "gemini-2.5-flash-lite",
+  config: {
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: Type.OBJECT,
+      properties: {
+        results: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              tx_id:    { type: Type.STRING },
+              category: { type: Type.STRING },
+            },
+            required: ["tx_id", "category"],
+          },
         },
-        "required": ["tx_id", "category"]
-      }
-    }
+      },
+      required: ["results"],
+    },
+    systemInstruction:
+      "You categorize Canadian personal financial transactions. CAD currency. " +
+      "Positive amount = expense, negative = income/refund. " +
+      "Use exact category names from the list provided. If genuinely unclear, use 'Other'.",
   },
-  "required": ["results"]
-}
+  contents: [
+    {
+      role: "user",
+      parts: [{ text: JSON.stringify(userPayload) }],
+    },
+  ],
+});
+
+const parsed = JSON.parse(result.text);  // already JSON because of responseMimeType
+```
+
+### 5.2 Response schema
+
+Encoded inline above via `responseSchema` (the `Type.*` constants are how `@google/genai` represents schema types — equivalent to JSON Schema's `type: "object"`, etc.). The parsed shape is:
+
+```ts
+type CategorizeResponse = {
+  results: Array<{ tx_id: string; category: string }>;
+};
 ```
 
 ### 5.3 Validation & failure handling
@@ -328,7 +390,7 @@ All under `/workspaces/:id/...`, with the same `requireWorkspaceContext` + path/
 | `GET`   | `/workspaces/:id/categories` | viewer | — | List active categories (archivedAt IS NULL). Returns `[{id, name, icon?, color?}]`. |
 | `POST`  | `/workspaces/:id/categories` | owner  | — | Create category. Body `{name}`. 422 if name duplicates an existing (case-insensitive) active category in the workspace. |
 | `PATCH` | `/workspaces/:id/categories/:catId` | owner | — | Rename, recolor, or archive. Body `{name?, icon?, color?, archived?}`. Renaming honors the same uniqueness rule. |
-| `GET`   | `/workspaces/:id/transactions/uncategorized` | viewer | — | List uncategorized transactions (cursor-paginated, reuse the existing transactions paginator with `?uncategorizedOnly=true`). Returns the same `transaction` shape as the existing transactions route. |
+| `GET`   | `/workspaces/:id/transactions?uncategorizedOnly=true` | viewer | — | The existing transactions endpoint gains a `uncategorizedOnly` boolean query flag (`BoolFlag` parser like `includeRemoved`). When true, restricts the page to `categoryId IS NULL`. Same response shape as the existing route. NOT a separate `/transactions/uncategorized` path — there's no value in two URLs for the same resource. |
 | `POST`  | `/workspaces/:id/transactions/:txId/categorize` | **editor** | — | Manually categorize. Body `{categoryName: string}`. 404 if category name doesn't exist in workspace. Side effects: `merchant_mapping` upsert + back-fill (see §4.2). Returns the updated tx + count of back-filled tx. |
 
 **Note on roles:**
@@ -394,6 +456,9 @@ All under `/workspaces/:id/...`, with the same `requireWorkspaceContext` + path/
 6. LLM throws → all unmapped tx stay uncategorized; mapped tx still applied.
 7. Batch > `CATEGORIZE_BATCH_MAX` → 2+ LLM calls.
 8. `merchantNormalized` populated correctly on tx rows after run.
+9. **Manual-vs-LLM race**: pre-set one tx's `categorizationSource='manual'` and `categoryId` before invoking the service. Service must NOT overwrite that tx (mapping branch + LLM branch both honor the `IS NULL` guard).
+10. **Workspace-scoped category resolution**: create two workspaces each with their own `Groceries` category. Service for workspace A must only resolve A's category id, never B's.
+11. **Archived category ignored by LLM**: archive `Dining` mid-test; service must not pass it to the LLM (so LLM can't return it) and must reject if mocked LLM returns it anyway.
 
 ### 8.3 Unit — `categorize.routes.test.ts`
 
@@ -401,13 +466,20 @@ All under `/workspaces/:id/...`, with the same `requireWorkspaceContext` + path/
 |---|---|
 | GET /categories — seeded 11 categories | 200, 11 names |
 | POST /categories — viewer caller | 403 |
-| POST /categories — owner, duplicate name | 422 |
+| POST /categories — owner, duplicate name (exact case match) | 422 |
+| POST /categories — owner, duplicate name (case-insensitive: `groceries` vs `Groceries`) | 422 |
+| POST /categories — owner, name length 41 chars | 400 invalid_body |
+| POST /categories — owner, when workspace already has 30 active categories | 422 too_many_categories |
 | POST /categories — owner, new name | 201 |
 | PATCH /categories/:id — rename to existing name | 422 |
-| GET /transactions/uncategorized — empty | 200, [] |
+| GET /transactions?uncategorizedOnly=true — empty | 200, [] |
+| GET /transactions?uncategorizedOnly=true — mixed | 200, only those with categoryId IS NULL |
+| POST /transactions/:txId/categorize — viewer caller | 403 (write requires editor+) |
 | POST /transactions/:txId/categorize — happy path | tx updated, mapping created, back-fill count returned |
 | POST /transactions/:txId/categorize — category doesn't exist | 404 |
-| POST /transactions/:txId/categorize — back-fill skips manual-source tx | verify |
+| POST /transactions/:txId/categorize — category exists but archived | 404 (active-only resolution) |
+| POST /transactions/:txId/categorize — back-fill applies to NULL-source siblings | verify (NULL-safe predicate) |
+| POST /transactions/:txId/categorize — back-fill skips manual-source siblings | verify |
 | All routes — workspace_mismatch | 400 |
 | All routes — non-member | 404 |
 
@@ -434,9 +506,34 @@ Real Gemini API only if `GEMINI_API_KEY` is set (matches Plaid sandbox condition
 | LLM returns category not in seed list | Skip that tx — never trust LLM to invent vocabulary. |
 | User creates a category, then archives it, then LLM returns its name | LLM only sees non-archived categories (per §4.1 step 3 query), so this can't happen for fresh syncs. Existing tx pointing to an archived category remain pointing — UI can filter or relabel as "Other". |
 | Massive batch (e.g. initial connect with 500 tx) | `CATEGORIZE_BATCH_MAX = 50` default → 10 sequential LLM calls × $0.0003 ≈ $0.003. Trivial. |
+| **Prompt size blowup from huge category vocabulary** | Hard caps enforced server-side (see §9.1 below). |
+| **Categorize latency distorts Plaid exchange's 30 s soft timeout** | `syncTransactions` does NOT call categorize anymore. Caller decides — see §9.2. |
 | Cross-workspace data leak via merchant_mappings | All queries scope by `workspaceId` (same defense-in-depth as Plan 1B-foundation). Tested in route tests. |
-| Race: two concurrent syncs both call auto-categorize on overlapping tx | Each `categorizeNewTransactions` call takes its own `newTxIds` list (a sync's locally-known new tx IDs). UPDATEs are idempotent (set categoryId; if already set, no harm). Worst case: two LLM calls for the same tx — wasted ~$0.0001. Not worth defending against. |
+| Race: auto-categorize tries to overwrite a manual categorization mid-batch | Every auto-categorize UPDATE has `WHERE categorizationSource IS NULL` (see §4.1) so a manual write that landed first is preserved. |
+| Race: two concurrent syncs both call auto-categorize on overlapping tx | Each `categorizeNewTransactions` call takes its own `newTxIds` list. UPDATEs are idempotent under the IS NULL guard. Worst case: two LLM calls for the same tx — wasted ~$0.0001. Not worth defending against further. |
 | Manual categorize back-fills 1000+ historical tx | One UPDATE statement — bounded by query timeout (default 5s). For very large workspaces (Phase 3 territory), can add LIMIT + paginate. Not blocking for v1. |
+| **Prompt injection via merchant name** | Merchant strings are JSON-encoded inside the prompt (`JSON.stringify`) so a malicious merchant name can't escape the user-message text or impersonate JSON tokens. The model is told to return JSON conforming to `responseSchema`; structured output enforces the shape. |
+
+### 9.1 Hard caps on categories & prompt size
+
+To prevent prompt-size blowup from a free-tier owner creating massive category names, the API enforces:
+
+- `name` ≤ **40 characters** on `POST /categories` and `PATCH /categories` (zod min(1).max(40))
+- ≤ **30 active categories** per workspace at any time (count check on POST)
+- LLM prompt is built defensively: if categories alone exceed 2 KB of system content, refuse the categorize batch (log, leave tx uncategorized — should never happen under the above caps)
+- Per-call batch capped at `CATEGORIZE_BATCH_MAX` (default 50). Each tx contributes ~80 tokens to the prompt, so a 50-tx call is ~4 KB user-message text. Multiple batches run sequentially.
+
+### 9.2 Categorize is decoupled from `syncTransactions`
+
+`syncTransactions` returns the list of new tx IDs in its result and **does not itself call categorize**. This avoids extending the Plaid exchange route's 30 s `Promise.race` deadline with LLM latency.
+
+Callers wire categorize in based on their latency budget:
+
+- **`POST /workspaces/:id/plaid/exchange`** (initial connect, latency-sensitive — user is staring at a loading modal): kicks off `categorizeNewTransactions(env, wsId, newTxIds)` as a **detached promise** after the sync result is computed, then returns the response. Errors are caught + logged. Tests poll the DB to assert categorization finished.
+- **`POST /workspaces/:id/plaid-items/:itemId/sync`** (manual refresh, less latency-sensitive — user clicked Refresh): **awaits** `categorizeNewTransactions` before returning so the response reflects the final state.
+- **Future webhook handler / cron**: awaits, no deadline pressure.
+
+The detached-promise pattern in the exchange route is OK because the categorize work is small and self-contained (one Prisma+Gemini batch), uses request-independent state, and any failure is logged. We're not building a real job queue — that's Phase 1B-cron territory.
 
 ---
 
