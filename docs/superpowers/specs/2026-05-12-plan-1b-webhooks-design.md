@@ -29,7 +29,7 @@ This plan is **backend only.** No web/mobile UI changes. Cron-based daily fallba
 - `plaid_webhook_events` table — audit trail (no body-hash dedup; sync is idempotent).
 - Detached `sync + categorize` dispatch for `TRANSACTIONS` / `SYNC_UPDATES_AVAILABLE`. All other webhook types logged and stored but not acted on.
 - `PLAID_WEBHOOK_URL` env var (required). Passed explicitly to `linkTokenCreate({ webhook: env.PLAID_WEBHOOK_URL })` so every new Item is registered per-item, not relying solely on Dashboard default.
-- On startup: call `plaid.itemWebhookUpdate` for all active `PlaidItem`s whose `webhookUrl` column is not yet set (backfill for items connected before this feature ships).
+- On startup: call `plaid.itemWebhookUpdate` for all active `PlaidItem`s where `webhookUrl IS NULL OR webhookUrl != env.PLAID_WEBHOOK_URL`. This handles both initial backfill (null) and URL changes after domain migration or Funnel URL rotation.
 - Helper module for test key injection (`apps/api/tests/helpers/plaid-webhook-mock.ts`).
 - Smoke test doc with Tailscale Funnel setup + Plaid Dashboard sandbox URL (already registered by owner).
 - Unit tests (signature, routes, dispatch) + E2E test (skip-guarded on real PLAID_* creds + Funnel URL).
@@ -368,11 +368,11 @@ For production: register the production API base URL's `/plaid/webhook` path in 
 
 ### 9.3 Env vars
 
-**New required var:**
+**New optional var:**
 ```
 PLAID_WEBHOOK_URL=https://<machine>.<tailnet>.ts.net/plaid/webhook
 ```
-Added to `env.ts` (zod schema, required string). Passed to `linkTokenCreate({ webhook: env.PLAID_WEBHOOK_URL })` for new items, and to `plaid.itemWebhookUpdate` for backfill. E2E tests use it to skip when not set (optional in tests, required in production).
+Declared as `z.string().url().optional()` in `env.ts`. Unit tests and local dev without Funnel omit it — API starts fine. The two paths that need it (`linkTokenCreate` and the startup backfill task) assert it at call time and throw a clear error if absent. E2E webhook tests skip when not set.
 
 `PLAID_CLIENT_ID` + `PLAID_SECRET` + `PLAID_ENV` already present. JWK fetching uses the Plaid SDK client already initialized in `src/plaid/client.ts`.
 
