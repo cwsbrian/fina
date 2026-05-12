@@ -25,3 +25,7 @@ android/app/build/
 out
 
 *.tsbuildinfo
+
+# Playwright
+test-results/
+playwright-report/

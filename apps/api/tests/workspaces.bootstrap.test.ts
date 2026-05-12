@@ -65,4 +65,21 @@ describe("startTrialAndBootstrapWorkspace", () => {
     const result = await startTrialAndBootstrapWorkspace({ userId: u.id });
     expect(result.workspace.name).toBe("alice's workspace");
   });
+
+  it("seeds 11 default categories on workspace bootstrap", async () => {
+    const u = await prisma.user.create({
+      data: { id: `bs-cat-${Date.now()}`, email: `bscat-${Date.now()}@x.com`, emailVerified: true, name: "BSCat" },
+    });
+    const result = await startTrialAndBootstrapWorkspace({ userId: u.id });
+    const wsId = result.workspace.id;
+    const cats = await prisma.category.findMany({
+      where: { workspaceId: wsId, archivedAt: null },
+      orderBy: { name: "asc" },
+      select: { name: true },
+    });
+    expect(cats.map((c) => c.name).sort()).toEqual([
+      "Dining", "Entertainment", "Groceries", "Health", "Housing",
+      "Income", "Other", "Shopping", "Subscriptions", "Transit", "Utilities",
+    ]);
+  });
 });

@@ -33,6 +33,7 @@ const env = {
   PLAID_SECRET: "test_secret",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  GEMINI_API_KEY: "test_gemini_key",
 };
 
 async function makeItemWithAccount(
@@ -119,7 +120,7 @@ describe("syncTransactions", () => {
     });
 
     const r = await syncTransactions(env, wsId, plaidItemId);
-    expect(r).toEqual({ added: 1, modified: 0, removed: 0 });
+    expect(r).toMatchObject({ added: 1, modified: 0, removed: 0 });
 
     const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } });
     expect(item.lastCursor).toBe("cursor_v1");
@@ -145,7 +146,7 @@ describe("syncTransactions", () => {
     );
 
     const r = await syncTransactions(env, wsId, plaidItemId);
-    expect(r).toEqual({ added: 2, modified: 0, removed: 0 });
+    expect(r).toMatchObject({ added: 2, modified: 0, removed: 0 });
     expect((await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } })).lastCursor).toBe("c2");
     expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(2);
     await app.close();
@@ -367,13 +368,79 @@ describe("syncTransactions", () => {
     // After restart, the second-attempt page returned 3 added (re-applying the
     // previously-seen "first" + 2 new). Accumulators were reset on restart so
     // the count reflects only the second attempt.
-    expect(r).toEqual({ added: 3, modified: 0, removed: 0 });
+    expect(r).toMatchObject({ added: 3, modified: 0, removed: 0 });
     const all = await prisma.transaction.findMany({ where: { workspaceId: wsId } });
     expect(all.map((t) => t.plaidTransactionId).sort()).toEqual(["after1", "after2", "first"]);
     // lastCursor only advances on the final successful page (has_more=false in
     // attempt #2). Verify the cursor is persisted now.
     const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } });
     expect(item.lastCursor).toBe("c2");
+    await app.close();
+  });
+
+  it("returns newTxIds for fresh inserts only — promotion excluded", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ntx-prom@x.com", name: "P" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "pend_n1", account_id: "acct_test", amount: 5, date: "2026-05-10", pending: true })], modified: [], removed: [], next_cursor: "c1", has_more: false },
+    });
+    const r1 = await syncTransactions(env, wsId, plaidItemId);
+    expect("newTxIds" in r1).toBe(true);
+    expect((r1 as { newTxIds: string[] }).newTxIds).toHaveLength(1);
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "post_n1", account_id: "acct_test", amount: 5, date: "2026-05-11", pending: false, pending_transaction_id: "pend_n1" })], modified: [], removed: [], next_cursor: "c2", has_more: false },
+    });
+    const r2 = await syncTransactions(env, wsId, plaidItemId);
+    expect((r2 as { newTxIds: string[] }).newTxIds).toHaveLength(0);
+    await app.close();
+  });
+
+  it("returns newTxIds: multi-page run accumulates fresh inserts across pages", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ntx-multi@x.com", name: "M" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+    plaidMock.transactionsSync.push(
+      { data: { added: [tx({ transaction_id: "p1a", account_id: "acct_test", amount: 1, date: "2026-05-09" })], modified: [], removed: [], next_cursor: "c1", has_more: true } },
+      { data: { added: [tx({ transaction_id: "p2a", account_id: "acct_test", amount: 2, date: "2026-05-10" })], modified: [], removed: [], next_cursor: "c2", has_more: false } },
+    );
+    const r = await syncTransactions(env, wsId, plaidItemId);
+    expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(2);
+    await app.close();
+  });
+
+  it("syncTransactions does NOT call categorize (newTxIds is caller's responsibility)", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ntx-nocategorize@x.com", name: "NC" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "nc1", account_id: "acct_test", amount: 3, date: "2026-05-10" })], modified: [], removed: [], next_cursor: "c1", has_more: false },
+    });
+    // No Gemini push — if categorize were called, it would throw "no scripted response".
+    const r = await syncTransactions(env, wsId, plaidItemId);
+    expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
+    const t = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
+    expect(t.categoryId).toBeNull();
+    await app.close();
+  });
+
+  it("mutation-restart: newTxIds from committed page survives restart", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ntx-restart@x.com", name: "R" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "mr_a", account_id: "acct_test", amount: 1, date: "2026-05-09" })], modified: [], removed: [], next_cursor: "c1", has_more: true },
+    });
+    plaidMock.transactionsSync.push(plaidApiError({ error_code: "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION" }));
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "mr_a", account_id: "acct_test", amount: 1, date: "2026-05-09" })], modified: [], removed: [], next_cursor: "c2", has_more: false },
+    });
+    const r = await syncTransactions(env, wsId, plaidItemId);
+    expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
     await app.close();
   });
 
@@ -410,7 +477,7 @@ describe("syncTransactions", () => {
       await acquired;
 
       const r = await syncTransactions(env, wsId, plaidItemId);
-      expect(r).toEqual({ skipped: "lock_held", added: 0, modified: 0, removed: 0 });
+      expect(r).toMatchObject({ skipped: "lock_held", added: 0, modified: 0, removed: 0 });
       // syncTransactions calls Plaid BEFORE attempting the per-page row lock,
       // so the mock response IS consumed (then discarded when the per-page tx
       // aborts on SyncLockHeld). Verify by asserting nothing landed in the DB:

@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
+import { seedDefaultCategories } from "../categorize/seed.js";
 
 const TRIAL_DAYS = 30;
 
@@ -47,6 +48,8 @@ export async function startTrialAndBootstrapWorkspace(
       const membership = await tx.membership.create({
         data: { userId: user.id, workspaceId: workspace.id, role: "owner" },
       });
+
+      await seedDefaultCategories(tx, workspace.id);
 
       // Start trial only if not already started.
       if (!user.trialStartedAt) {

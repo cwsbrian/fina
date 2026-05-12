@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
+import { normalizeMerchant } from "../categorize/normalize.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -26,6 +27,7 @@ const QuerySchema = z.object({
   from: IsoDate.optional(),
   to: IsoDate.optional(),
   includeRemoved: BoolFlag,
+  uncategorizedOnly: BoolFlag,
 });
 
 type Cursor = { occurredAtMs: number; id: string };
@@ -68,6 +70,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return {};
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
+        ...(q.uncategorizedOnly ? { categoryId: null } : {}),
         ...(cursor
           ? {
               OR: [
@@ -111,6 +114,130 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           removedAt: t.removedAt?.toISOString() ?? null,
         })),
         nextCursor,
+      };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  const CategorizeBody = z.object({ categoryName: z.string().trim().min(1).max(80) });
+
+  app.post("/workspaces/:id/transactions/:txId/categorize", async (req, reply) => {
+    const params = req.params as { id: string; txId: string };
+    const parsed = CategorizeBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const wsId = ctx.membership.workspaceId;
+      const trimmedName = parsed.data.categoryName.trim();
+
+      // 1. Load tx (verify workspace ownership).
+      const tx = await prisma.transaction.findFirst({
+        where: { id: params.txId, workspaceId: wsId },
+        select: { id: true, merchantRaw: true, merchantNormalized: true },
+      });
+      if (!tx) return reply.code(404).send({ error: "not_found" });
+
+      // Compute merchantNormalized if missing.
+      const merchantNorm = tx.merchantNormalized ?? normalizeMerchant(tx.merchantRaw);
+
+      // 2. Resolve category (active only, case-insensitive).
+      const category = await prisma.category.findFirst({
+        where: {
+          workspaceId: wsId,
+          archivedAt: null,
+          name: { equals: trimmedName, mode: "insensitive" },
+        },
+        select: { id: true, name: true },
+      });
+      if (!category) return reply.code(404).send({ error: "category_not_found" });
+
+      // 3. Apply tx + 4. upsert mapping + 5. normalize null siblings + 6. back-fill, all in one tx.
+      const result = await prisma.$transaction(async (db) => {
+        // 3. Tx update with merchantNormalized backfill
+        await db.transaction.update({
+          where: { id: tx.id },
+          data: {
+            merchantNormalized: merchantNorm,
+            categoryId: category.id,
+            categorizationSource: "manual",
+          },
+        });
+
+        // 4. Upsert merchant_mapping
+        await db.merchantMapping.upsert({
+          where: { workspaceId_merchantNormalized: { workspaceId: wsId, merchantNormalized: merchantNorm } },
+          create: {
+            workspaceId: wsId,
+            merchantNormalized: merchantNorm,
+            categoryId: category.id,
+            confidence: 1.0,
+            source: "manual",
+          },
+          update: {
+            categoryId: category.id,
+            source: "manual",
+            confidence: 1.0,
+          },
+        });
+
+        // 5. Normalize null-merchantNormalized siblings — load candidates whose
+        //    raw merchant looks similar and normalize them lazily.
+        const nullSiblings = await db.transaction.findMany({
+          where: {
+            workspaceId: wsId,
+            merchantNormalized: null,
+            merchantRaw: { mode: "insensitive", contains: trimmedName.length >= 3 ? merchantNorm.slice(0, 3) : merchantNorm },
+          },
+          select: { id: true, merchantRaw: true },
+        });
+        for (const ns of nullSiblings) {
+          const norm = normalizeMerchant(ns.merchantRaw);
+          if (norm === merchantNorm) {
+            await db.transaction.update({
+              where: { id: ns.id },
+              data: { merchantNormalized: norm },
+            });
+          }
+        }
+
+        // 6. Back-fill: update siblings sharing the normalized merchant, skipping
+        //    the just-updated tx and any siblings already manually categorized.
+        //    NULL-safe predicate handles tx with categorizationSource = NULL.
+        const backfilled = await db.transaction.updateMany({
+          where: {
+            workspaceId: wsId,
+            merchantNormalized: merchantNorm,
+            id: { not: tx.id },
+            OR: [
+              { categorizationSource: null },
+              { categorizationSource: { not: "manual" } },
+            ],
+          },
+          data: { categoryId: category.id, categorizationSource: "mapping" },
+        });
+
+        return { backfilledCount: backfilled.count };
+      });
+
+      const updated = await prisma.transaction.findUniqueOrThrow({
+        where: { id: tx.id },
+        select: {
+          id: true, amount: true, merchantRaw: true, merchantNormalized: true,
+          categoryId: true, categorizationSource: true, occurredAt: true,
+        },
+      });
+      return {
+        transaction: {
+          ...updated,
+          amount: updated.amount.toString(),
+          occurredAt: updated.occurredAt.toISOString(),
+        },
+        backfilledCount: result.backfilledCount,
       };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

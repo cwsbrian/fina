@@ -10,6 +10,7 @@ import { plaidRoutes } from "./routes/plaid.js";
 import { plaidItemsRoutes } from "./routes/plaid-items.js";
 import { accountsRoutes } from "./routes/accounts.js";
 import { transactionsRoutes } from "./routes/transactions.js";
+import { categoriesRoutes } from "./routes/categories.js";
 import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 
 export type AppCtx = { env: Env; auth: FinaAuth };
@@ -88,6 +89,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(plaidItemsRoutes);
   await app.register(accountsRoutes);
   await app.register(transactionsRoutes);
+  await app.register(categoriesRoutes);
 
   return app;
 }

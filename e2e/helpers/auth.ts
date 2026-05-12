@@ -20,14 +20,23 @@ export function uniqueEmail(prefix = "e2e") {
  * localhost:4000 on cross-origin fetches.
  */
 export async function signUp(page: Page, email: string, password = "password123", name = "E2E User") {
-  const resp = await page.request.post(`${PROXY}/api/auth/sign-up/email`, {
-    headers: { "content-type": "application/json" },
-    data: { email, password, name },
-  });
-  if (!resp.ok()) throw new Error(`Sign-up failed: ${resp.status()} ${await resp.text()}`);
-  // Navigate to /home so the web app's bootstrap (workspace creation) runs.
-  await page.goto("/home");
-  await page.waitForLoadState("networkidle", { timeout: 10_000 });
+  // Retry up to 3x with a short back-off — the API can return transient 500s
+  // immediately after Plaid-sandbox tests that stress the connection pool.
+  let lastErr: Error | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await page.waitForTimeout(1_000 * attempt);
+    const resp = await page.request.post(`${PROXY}/api/auth/sign-up/email`, {
+      headers: { "content-type": "application/json" },
+      data: { email, password, name },
+    });
+    if (resp.ok()) {
+      await page.goto("/home");
+      await page.waitForLoadState("networkidle", { timeout: 10_000 });
+      return;
+    }
+    lastErr = new Error(`Sign-up failed: ${resp.status()} ${await resp.text()}`);
+  }
+  throw lastErr!;
 }
 
 export async function signIn(page: Page, email: string, password = "password123") {

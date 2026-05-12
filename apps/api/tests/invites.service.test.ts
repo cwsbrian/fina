@@ -23,6 +23,7 @@ const env = {
   PLAID_SECRET: "test_secret",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  GEMINI_API_KEY: "test_gemini_key",
 };
 
 // File-level hooks so multiple describe blocks (this file gets a second one in Task 5) share them

@@ -7,6 +7,7 @@ import { requireProTier } from "../auth/tier.js";
 import { plaidClient, mapPlaidError, PLAID_PRODUCTS, PLAID_COUNTRY_CODES } from "../plaid/client.js";
 import { storeAccessToken } from "../plaid/items.js";
 import { syncTransactions } from "../plaid/sync.js";
+import { categorizeNewTransactions } from "../categorize/service.js";
 
 const ExchangeBody = z.object({
   publicToken: z.string().min(1),
@@ -139,6 +140,14 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         }
       } else {
         transactionCount = r.added;
+      }
+
+      // Detached categorize — keeps the response fast. Errors are logged.
+      if ("newTxIds" in r && r.newTxIds.length > 0) {
+        const newTxIds = r.newTxIds;
+        void categorizeNewTransactions(app.fina.env, verifiedWsId, newTxIds).catch((e) => {
+          app.log.error({ err: e, plaidItemId, workspace: verifiedWsId }, "categorize after exchange failed");
+        });
       }
     } catch {
       // Status was already persisted inside syncTransactions's catch.

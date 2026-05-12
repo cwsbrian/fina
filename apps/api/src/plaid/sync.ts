@@ -12,8 +12,8 @@ import { HttpError } from "../auth/context.js";
 // not literal 0. Routes that re-emit a "lock_held" response can still pass
 // zero-counters at the boundary if they prefer; the type doesn't force it.
 export type SyncResult =
-  | { added: number; modified: number; removed: number }
-  | { skipped: "lock_held"; added: number; modified: number; removed: number };
+  | { added: number; modified: number; removed: number; newTxIds: string[] }
+  | { skipped: "lock_held"; added: number; modified: number; removed: number; newTxIds: string[] };
 
 export function plaidOccurredAt(t: PlaidTxLike): Date {
   // Prefer authorized_* (when the user actually transacted), fall back to date.
@@ -69,6 +69,7 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
   const originalCursor = item.lastCursor ?? null;
   let cursor: string | null = originalCursor;
   let added = 0, modified = 0, removed = 0;
+  const newTxIds: string[] = [];
   let restarts = 0;
 
   try {
@@ -99,6 +100,8 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
           }
           cursor = originalCursor;
           added = modified = removed = 0;
+          // NOTE: newTxIds is NOT reset — committed inserts from prior pages
+          // are durable and need categorizing regardless of the restart.
           continue pageLoop;
         }
         throw e;
@@ -112,7 +115,11 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
       try {
         await prisma.$transaction(async (tx) => {
           await lockPlaidItem(tx, plaidItemId); // FOR UPDATE NOWAIT — throws SyncLockHeld if held
-          for (const t of pageData.added)    { await upsertAdded(tx, t, plaidItemId, workspaceId);    added++; }
+          for (const t of pageData.added) {
+            const result = await upsertAdded(tx, t, plaidItemId, workspaceId);
+            if (result.kind === "inserted") newTxIds.push(result.localId);
+            added++;
+          }
           for (const t of pageData.modified) { await upsertModified(tx, t, workspaceId); modified++; }
           for (const t of pageData.removed)  { await markRemoved(tx, t.transaction_id, workspaceId); removed++; }
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -123,7 +130,7 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
           // safely on disk even though this one rolled back). The route
           // returns the shape verbatim so the UI can show "got N before
           // yielding to another sync."
-          return { skipped: "lock_held", added, modified, removed };
+          return { skipped: "lock_held", added, modified, removed, newTxIds };
         }
         throw e;
       }
@@ -144,12 +151,12 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
       });
     } catch (e) {
       if (e instanceof SyncLockHeld) {
-        return { skipped: "lock_held", added, modified, removed };
+        return { skipped: "lock_held", added, modified, removed, newTxIds };
       }
       throw e;
     }
 
-    return { added, modified, removed };
+    return { added, modified, removed, newTxIds };
   } catch (e) {
     // Persist status in a SEPARATE short tx so it survives the rethrow.
     if (isPlaidErrorCode(e, "ITEM_LOGIN_REQUIRED")) {
@@ -194,7 +201,7 @@ export async function upsertAdded(
   t: PlaidTxLike,
   plaidItemId: string,
   workspaceId: string,
-): Promise<void> {
+): Promise<{ kind: "inserted" | "updated"; localId: string }> {
   // Promotion path: posted row points back at an existing pending row.
   if (t.pending_transaction_id) {
     const promotion = await tx.transaction.findFirst({
@@ -219,7 +226,7 @@ export async function upsertAdded(
           removedAt: null, // promote restores any earlier soft-removal
         },
       });
-      return;
+      return { kind: "updated", localId: promotion.id };
     }
   }
 
@@ -247,9 +254,9 @@ export async function upsertAdded(
         rawData: t as unknown as Prisma.InputJsonValue,
       },
     });
-    return;
+    return { kind: "updated", localId: existing.id };
   }
-  await tx.transaction.create({
+  const created = await tx.transaction.create({
     data: {
       workspaceId,
       accountId,
@@ -264,7 +271,9 @@ export async function upsertAdded(
       pending: t.pending,
       rawData: t as unknown as Prisma.InputJsonValue,
     },
+    select: { id: true },
   });
+  return { kind: "inserted", localId: created.id };
 }
 
 export async function upsertModified(

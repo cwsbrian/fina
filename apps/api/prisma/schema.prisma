@@ -91,12 +91,13 @@ model Workspace {
   name         String
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-  memberships  Membership[]
-  invites      Invite[]
-  plaidItems   PlaidItem[]
-  bankAccounts BankAccount[]
-  transactions Transaction[]
-  categories   Category[]
+  memberships      Membership[]
+  invites          Invite[]
+  plaidItems       PlaidItem[]
+  bankAccounts     BankAccount[]
+  transactions     Transaction[]
+  categories       Category[]
+  merchantMappings MerchantMapping[]
 
   @@map("workspaces")
 }
@@ -245,6 +246,7 @@ model Transaction {
   removedAt                 DateTime?
   createdAt                 DateTime          @default(now())
   updatedAt                 DateTime          @updatedAt
+  categorizationSource      CategorizationSource?
 
   workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // FK column kept as `accountId` (not `bankAccountId`) so URL/query filters
@@ -276,11 +278,45 @@ model Category {
   archivedAt  DateTime?
   createdAt   DateTime  @default(now())
 
-  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id])
-  children     Category[]    @relation("CategoryTree")
-  transactions Transaction[]
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent           Category?         @relation("CategoryTree", fields: [parentId], references: [id])
+  children         Category[]        @relation("CategoryTree")
+  transactions     Transaction[]
+  merchantMappings MerchantMapping[]
 
-  @@unique([workspaceId, name])
   @@map("categories")
+}
+
+model MerchantMapping {
+  id                  String         @id @default(cuid())
+  workspaceId         String
+  // Lowercased, stripped of store IDs/state codes/city qualifiers.
+  // E.g. "STARBUCKS #1234 TORONTO ON" → "starbucks".
+  // See apps/api/src/categorize/normalize.ts for the exact rules.
+  merchantNormalized  String
+  categoryId          String
+  // 0.00 – 1.00. Manual confirms = 1.00. Reserved for confidence-weighted
+  // UI (Phase 2) — stored but not consumed in Plan 1B.
+  confidence          Decimal        @default(1.00) @db.Decimal(3, 2)
+  source              MappingSource
+  createdAt           DateTime       @default(now())
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  category   Category  @relation(fields: [categoryId],  references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, merchantNormalized])
+  @@index([workspaceId])
+  @@map("merchant_mappings")
+}
+
+enum MappingSource {
+  manual
+  ai
+  auto
+}
+
+enum CategorizationSource {
+  mapping
+  ai
+  manual
 }

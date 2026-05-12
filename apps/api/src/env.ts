@@ -27,6 +27,11 @@ const Schema = z.object({
   // Must base64-decode to exactly 32 bytes. Validation happens lazily inside
   // the crypto helper so tests can use a fixed value without re-running zod.
   ENCRYPTION_KEY: z.string(),
+  // Gemini (categorize)
+  GEMINI_API_KEY: z.string(),
+  // OPTIONAL — keeps test literals clean. Use `env.CATEGORIZE_BATCH_MAX ?? 50`
+  // in service code. z.default() would make the inferred Env type non-optional.
+  CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().optional(),
 });
 
 export type Env = z.infer<typeof Schema>;

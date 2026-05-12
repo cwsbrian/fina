@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+import { geminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 
 // vi.mock(path, factory) is hoisted above all imports — pass the factory
 // through vi.hoisted() so it's loaded in the same hoisted scope.
@@ -7,6 +8,11 @@ const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
   async () => await import("./helpers/plaid-mock.js"),
 );
 vi.mock("plaid", hoistedPlaidMockFactory);
+
+const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/gemini-mock.js"),
+);
+vi.mock("@google/genai", hoistedGeminiMockFactory);
 
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
@@ -26,6 +32,7 @@ const env = {
   PLAID_SECRET: "test_secret",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  GEMINI_API_KEY: "test_gemini_key",
 };
 
 // File-level lifecycle: every test in this file needs the same fresh
@@ -35,6 +42,7 @@ const env = {
 beforeEach(async () => {
   await truncateAll();
   resetPlaidMock();
+  resetGeminiMock();
 });
 
 afterAll(async () => {
@@ -278,6 +286,70 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
+
+  it("detached categorize after exchange — tx get categoryId + source='ai' within poll window", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ex-cat@x.com", name: "EC" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    pushExchangeAndAccounts("item_cat");
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [{ transaction_id: "tx_cat", account_id: "acct_1", amount: 5, date: "2026-05-10", authorized_date: null, authorized_datetime: null, datetime: null, pending: false, pending_transaction_id: null, merchant_name: "Loblaws", name: "Loblaws", iso_currency_code: "CAD" }],
+        modified: [], removed: [], next_cursor: "c1", has_more: false,
+      },
+    });
+    let geminiResolveExch!: (r: { results: Array<{ tx_id: string; category: string }> }) => void;
+    geminiMock.generateContent.push(
+      new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolveExch = r; }),
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
+    });
+    expect(res.statusCode).toBe(200);
+    const localTx = await prisma.transaction.findFirstOrThrow({
+      where: { workspaceId: wsId, plaidTransactionId: "tx_cat" },
+      select: { id: true },
+    });
+    geminiResolveExch({ results: [{ tx_id: localTx.id, category: "Groceries" }] });
+    for (let i = 0; i < 50; i++) {
+      const t = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
+      if (t.categoryId !== null) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
+    const groceriesCat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
+    expect(after.categoryId).toBe(groceriesCat.id);
+    expect(after.categorizationSource).toBe("ai");
+    await app.close();
+  });
+
+  it("detached categorize: Gemini failure does NOT break exchange response", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ex-cat-fail@x.com", name: "ECF" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    pushExchangeAndAccounts("item_cat_fail");
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [{ transaction_id: "tx_fail", account_id: "acct_1", amount: 5, date: "2026-05-10", authorized_date: null, authorized_datetime: null, datetime: null, pending: false, pending_transaction_id: null, merchant_name: "Costco", name: "Costco", iso_currency_code: "CAD" }],
+        modified: [], removed: [], next_cursor: "c1", has_more: false,
+      },
+    });
+    geminiMock.generateContent.push(new Error("Gemini down"));
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.syncOk).toBe(true);
+    await new Promise((r) => setTimeout(r, 500));
     await app.close();
   });
 

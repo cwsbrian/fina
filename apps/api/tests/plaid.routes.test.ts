@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+import { geminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 
 // vi.mock(path, factory) is hoisted above all imports — pass the factory
 // through vi.hoisted() so it's loaded in the same hoisted scope.
@@ -7,6 +8,11 @@ const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
   async () => await import("./helpers/plaid-mock.js"),
 );
 vi.mock("plaid", hoistedPlaidMockFactory);
+
+const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/gemini-mock.js"),
+);
+vi.mock("@google/genai", hoistedGeminiMockFactory);
 
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
@@ -25,6 +31,7 @@ const env = {
   PLAID_SECRET: "test_secret",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  GEMINI_API_KEY: "test_gemini_key",
 };
 
 async function connectAItem(app: ReturnType<typeof buildApp> extends Promise<infer T> ? T : never, owner: { cookie: string }, wsId: string, suffix = ""): Promise<string> {
@@ -55,6 +62,7 @@ async function connectAItem(app: ReturnType<typeof buildApp> extends Promise<inf
 beforeEach(async () => {
   await truncateAll();
   resetPlaidMock();
+  resetGeminiMock();
 });
 
 afterAll(async () => {
@@ -135,6 +143,8 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
+    // Sync awaits categorize — provide a mock Gemini response so the route unblocks.
+    geminiMock.generateContent.push({ results: [] });
     const res = await app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid-items/${plaidItemId}/sync`,
@@ -199,6 +209,55 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
     expect(res.json().error).toBe("upgrade_required");
     await app.close();
   });
+
+  it("manual sync awaits categorize — response reflects categoryId set", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ms-cat@x.com", name: "MS" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const plaidItemId = await connectAItem(app, owner, wsId);
+
+    const syncPlaidTxId = "tx_msync";
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [{ transaction_id: syncPlaidTxId, account_id: "acct", amount: 5, date: "2026-05-10", authorized_date: null, authorized_datetime: null, datetime: null, pending: false, pending_transaction_id: null, merchant_name: "Loblaws", name: "Loblaws", iso_currency_code: "CAD" }],
+        modified: [], removed: [], next_cursor: "c2", has_more: false,
+      },
+    });
+
+    let geminiResolve!: (r: { results: Array<{ tx_id: string; category: string }> }) => void;
+    geminiMock.generateContent.push(
+      new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolve = r; }),
+    );
+
+    const resPromise = app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid-items/${plaidItemId}/sync`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    // Poll until the tx is created in DB (sync completed but categorize is still blocked).
+    let localTxId: string | null = null;
+    for (let i = 0; i < 50; i++) {
+      const found = await prisma.transaction.findFirst({
+        where: { workspaceId: wsId, plaidTransactionId: syncPlaidTxId },
+        select: { id: true },
+      });
+      if (found) { localTxId = found.id; break; }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!localTxId) throw new Error("tx never appeared — sync may have failed");
+    geminiResolve({ results: [{ tx_id: localTxId, category: "Groceries" }] });
+
+    const res = await resPromise;
+    expect(res.statusCode).toBe(200);
+    expect(geminiMock.generateContent.length).toBe(0);
+
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTxId } });
+    const groceriesCat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
+    expect(after.categoryId).toBe(groceriesCat.id);
+    expect(after.categorizationSource).toBe("ai");
+    await app.close();
+  });
 });
 
 describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
@@ -217,6 +276,8 @@ describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
         modified: [], removed: [], next_cursor: "cN", has_more: false,
       },
     });
+    // Sync awaits categorize — provide a mock Gemini response so the route unblocks.
+    geminiMock.generateContent.push({ results: [] });
     await app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid-items/${plaidItemId}/sync`,
@@ -604,6 +665,31 @@ describe("GET /workspaces/:id/transactions", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("invalid_query");
+    await app.close();
+  });
+
+  it("?uncategorizedOnly=true filters to NULL categoryId only", async () => {
+    const app = await buildApp(env);
+    const { owner, wsId } = await setupItemAndTxs(app, 3);
+    const cat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Other" } });
+    const tx = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: { categoryId: cat.id, categorizationSource: "manual" },
+    });
+    const all = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+    expect(all.json().transactions.length).toBe(3);
+    const uncat = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?uncategorizedOnly=true`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+    expect(uncat.json().transactions.length).toBe(2);
+    expect(uncat.json().transactions.every((t: { categoryId: string | null }) => t.categoryId === null)).toBe(true);
     await app.close();
   });
 });

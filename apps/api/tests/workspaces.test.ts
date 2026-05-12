@@ -16,6 +16,7 @@ const env = {
   PLAID_SECRET: "test_secret",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  GEMINI_API_KEY: "test_gemini_key",
 };
 
 describe("GET /workspaces", () => {

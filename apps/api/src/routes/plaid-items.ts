@@ -4,6 +4,7 @@ import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { requireProTier } from "../auth/tier.js";
 import { syncTransactions } from "../plaid/sync.js";
 import { removeItemStrict } from "../plaid/items.js";
+import { categorizeNewTransactions } from "../categorize/service.js";
 import { mapPlaidError } from "../plaid/client.js";
 
 export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
@@ -51,6 +52,10 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
       }
       await requireProTier(ctx.session.userId);
       const r = await syncTransactions(app.fina.env, ctx.membership.workspaceId, params.itemId);
+      // Await categorize so the response reflects the final categorized state.
+      if ("newTxIds" in r && r.newTxIds.length > 0) {
+        await categorizeNewTransactions(app.fina.env, ctx.membership.workspaceId, r.newTxIds);
+      }
       // Surface partial-commit counters even on `skipped` so the UI can show
       // "Another refresh is running — got N transactions before yielding."
       return r;
