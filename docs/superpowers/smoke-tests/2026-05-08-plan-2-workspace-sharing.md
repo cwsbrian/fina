@@ -218,3 +218,72 @@ docker exec fina-postgres-dev psql -U fina -d fina -c \
 | `nx run api:dev` (API for smoke test) | `postgresql://fina:fina@localhost:5433/fina` |
 
 The repo `.env` and `apps/api/.env.test` both hardcode port 5432 (matches `docker-compose.yml`). On this machine port 5432 is taken by another Postgres, so we run on 5433 via the dev container — every command above must override `DATABASE_URL` inline (or via `apps/api/.env` for the dev DB).
+
+---
+
+# Addendum — Plan 1B-foundation: Plaid sandbox flow
+
+## Pre-flight (one-time per machine)
+
+1. Sign up for a Plaid account at https://dashboard.plaid.com/signup → "Sandbox" environment is auto-enabled and free.
+2. Copy the **Sandbox** `client_id` and `secret` from the dashboard.
+3. Generate an encryption key (32 bytes, base64-encoded):
+   ```bash
+   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
+   ```
+4. Add to your shell env (or to a personal `.env.local` you source before `pnpm smoke:api*`):
+   ```bash
+   export PLAID_CLIENT_ID=...your-client-id...
+   export PLAID_SECRET=...your-sandbox-secret...
+   export PLAID_ENV=sandbox
+   export ENCRYPTION_KEY=...your-32-byte-base64-key...
+   ```
+
+## Connect → see transactions
+
+1. `pnpm smoke:db:start` (or confirm `fina-postgres-dev` is up).
+2. `pnpm smoke:api` (Terminal A) — must show `Server listening at http://[::1]:4000` with no env errors.
+3. `pnpm smoke:web` (Terminal B).
+4. Browser → `http://localhost:3100/sign-in` → sign up (gives you a 30-day Pro trial automatically).
+5. Click `Banks` in the header nav. Click **Connect a bank**.
+6. Plaid Link sandbox modal opens. Pick any institution (e.g. "Tartan Bank"). Use the canned credentials:
+   - Username: `user_good`
+   - Password: `pass_good`
+   - When prompted for MFA, leave the default (`1234`).
+7. Select one or more accounts → Continue.
+8. The modal closes; the page shows the connected bank with an account count and a recent `last sync`.
+9. Verify the data landed via `pnpm smoke:db:studio` (Prisma Studio at `http://localhost:5555`):
+   - **plaid_items** has 1 row with `accessTokenCiphertext` (Bytes — opaque) and `accessTokenIv` (12 bytes).
+   - **bank_accounts** has rows under that plaid_item, with mask + balance.
+   - **transactions** has rows with `merchantRaw`, `amount`, `occurredAt`. Sandbox typically returns ~5-15 per account.
+
+## Manual Refresh
+
+Click **Refresh** on the connected bank card. Toast shows `+0 added, 0 modified, 0 removed` (sandbox doesn't keep generating new transactions). Repeated clicks within the same instant may show "Another refresh is already running" — that's the per-item row-level lock (`SELECT ... FOR UPDATE NOWAIT`) working.
+
+## Disconnect
+
+Click **Disconnect**. Confirm the prompt. The card disappears. In Prisma Studio:
+- **plaid_items** row is gone.
+- **bank_accounts** row still exists, but `archivedAt` is set and `plaidItemId` is NULL.
+- **transactions** rows still exist; their `plaidItemId` is also NULL.
+
+## Free-tier check
+
+Force trial to expire:
+```bash
+docker exec fina-postgres-dev psql -U fina -d fina -c \
+  "UPDATE users SET \"trialEndsAt\" = NOW() - INTERVAL '1 day', \"trialConsumed\" = true WHERE email = 'YOUR_EMAIL';"
+```
+
+Reload `/settings/banks`. The Connect button is replaced with **"Plaid is a Pro feature — upgrade to connect a bank"**. Try the API call directly:
+
+```bash
+curl -i -X POST http://localhost:4000/workspaces/<wsId>/plaid/link-token \
+  -H "x-workspace-id: <wsId>" \
+  --cookie "<your session cookie>"
+```
+
+→ HTTP 402 `{"error":"upgrade_required"}`.
+
+Disconnect, however, must STILL work for the same trial-expired owner — that's the deliberate exception (a free-tier user must always be able to revoke Plaid access). Click **Disconnect** on a connected bank → confirms 204 + the row disappears.

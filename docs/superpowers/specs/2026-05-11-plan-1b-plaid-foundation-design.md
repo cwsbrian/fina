@@ -42,7 +42,7 @@ This is the foundation: schema + Plaid client + cursor-based sync + tier gate + 
 - Manual transaction entry / CSV import.
 - Auto-created "Cash" account for users with no Plaid item.
 - Lite-tier 1-Item gating (no `subscriptions` table yet — flat Pro-or-Free).
-- Plaid `development`/`production` environment hardening (sandbox only here; env var supports later promotion without code change).
+- Plaid `production` environment hardening (sandbox only here; env var supports later promotion without code change).
 
 ---
 
@@ -662,7 +662,7 @@ Add a new section to `docs/superpowers/smoke-tests/2026-05-08-plan-2-workspace-s
 |---|---|---|
 | `PLAID_CLIENT_ID` | yes (api) | Plaid app client id |
 | `PLAID_SECRET` | yes (api) | Plaid app secret (env-specific) |
-| `PLAID_ENV` | default `sandbox` | `sandbox` / `development` / `production` |
+| `PLAID_ENV` | default `sandbox` | `sandbox` / `production` |
 | `ENCRYPTION_KEY` | yes (api) | base64-encoded 32 random bytes for AES-256-GCM |
 
 Updates needed in: `apps/api/src/env.ts`, `.env.example`, `.env.test` (deterministic test value), repo-root `.env` (user fills their sandbox keys), all `pnpm smoke:api*` scripts (don't hardcode secrets — pass through if shell-set).

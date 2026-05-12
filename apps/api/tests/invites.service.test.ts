@@ -19,6 +19,10 @@ const env = {
   BETTER_AUTH_URL: "http://localhost:0",
   EMAIL_FROM: "test@fina.app",
   WEB_APP_URL: "http://localhost:3000",
+  PLAID_CLIENT_ID: "test_client_id",
+  PLAID_SECRET: "test_secret",
+  PLAID_ENV: "sandbox" as const,
+  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
 };
 
 // File-level hooks so multiple describe blocks (this file gets a second one in Task 5) share them

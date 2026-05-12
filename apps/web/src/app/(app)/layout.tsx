@@ -18,6 +18,9 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <Link href="/home" style={{ color: "inherit", textDecoration: "none" }}>
             Home
           </Link>
+          <Link href="/settings/banks" style={{ color: "inherit", textDecoration: "none" }}>
+            Banks
+          </Link>
           <Link href="/settings/workspace" style={{ color: "inherit", textDecoration: "none" }}>
             Workspace
           </Link>

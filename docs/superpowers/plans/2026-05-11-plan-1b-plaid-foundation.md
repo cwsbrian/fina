@@ -17,7 +17,7 @@ This plan implements `docs/superpowers/specs/2026-05-11-plan-1b-plaid-foundation
 **Frozen design decisions** (no arguing about during execution — see spec for rationale):
 
 - **Web only.** No mobile UI in this plan. No webhook handler. No cron. No LLM categorize. (See spec §11 for follow-ups.)
-- **Sandbox env.** `PLAID_ENV=sandbox`. Code accepts the env var so future promotion to development/production is one config change.
+- **Sandbox env.** `PLAID_ENV=sandbox`. Code accepts the env var so future promotion to production is one config change.
 - **Pro tier only.** No Lite-1-Item logic until billing/`subscriptions` exists. `requireProTier` rejects with `402 upgrade_required`.
 - **All Plaid-mutating routes are owner-only.** Pro check fires on the **requesting** user for `link-token`, `exchange`, `sync`. Reads are members-only with no tier gate. **Disconnect (`DELETE /plaid-items/:itemId`) is the deliberate exception:** owner-only but NOT Pro-gated, so a user whose trial expired can still revoke Plaid's access to their bank rather than being trapped by the paywall.
 - **AES-256-GCM at rest.** `accessTokenCiphertext` (Bytes, 16-byte tag appended) + `accessTokenIv` (12 Bytes). AAD = `workspaceId`. Key from `ENCRYPTION_KEY` env (base64 32 bytes).
@@ -353,7 +353,7 @@ Edit `apps/api/src/env.ts`. After the existing `WEB_APP_URL` line:
   // Plaid
   PLAID_CLIENT_ID: z.string(),
   PLAID_SECRET: z.string(),
-  PLAID_ENV: z.enum(["sandbox", "development", "production"]).default("sandbox"),
+  PLAID_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
   // Soft deadline for the initial sync inside POST /plaid/exchange. Tests
   // override to a small value so the timeout path is exercised with real
   // timers (vi.useFakeTimers + fastify.inject is racy and brittle).
@@ -382,7 +382,7 @@ The base64 above decodes to 32 bytes `[0x00, 0x01, ..., 0x1F]` — readable in f
 In the repo-root `.env.example`, add a new section before "Mobile":
 
 ```
-# Plaid (sandbox to start; promote PLAID_ENV later for development/production)
+# Plaid (sandbox to start; promote PLAID_ENV later for production)
 PLAID_CLIENT_ID=
 PLAID_SECRET=
 PLAID_ENV=sandbox
@@ -908,16 +908,21 @@ import { vi } from "vitest";
  *
  * Usage (top of every test file that imports anything that imports plaid):
  *   import { vi } from "vitest";
- *   import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError }
- *     from "./helpers/plaid-mock.js";
- *   vi.mock("plaid", plaidMockFactory);
+ *   import { plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
  *
- * Important: `vi.mock` MUST be called at module top level (not from inside a
- * helper function). Vitest hoists `vi.mock(...)` to before all imports, so
- * by the time `import "../src/plaid/client.js"` runs, the mock is already in
- * place. Wrapping `vi.mock` in a function defeats the hoisting and the real
- * `plaid` SDK is loaded instead — the silent root cause of "tests pass with
- * an empty queue" bugs.
+ *   // vi.mock(path, factory) is hoisted above all imports — referencing the
+ *   // factory through a regular `import` triggers a TDZ error. `vi.hoisted`
+ *   // runs in that same hoisted scope, so dynamic-importing the helper
+ *   // inside it gives the factory a stable binding before vi.mock fires.
+ *   const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
+ *     async () => await import("./helpers/plaid-mock.js"),
+ *   );
+ *   vi.mock("plaid", hoistedPlaidMockFactory);
+ *
+ * Important: `vi.mock` IS hoisted to before all imports — that's a feature.
+ * The catch is that the FACTORY argument can't be a regular import binding
+ * (TDZ error). Use `vi.hoisted(() => import(...))` to lift the factory load
+ * into the same hoisted scope, then pass that. See the Usage block above.
  */
 // A queued response is one of:
 //   - `{ data }`  → the call resolves with this object
@@ -987,7 +992,6 @@ export function plaidMockFactory() {
     },
     PlaidEnvironments: {
       sandbox: "https://sandbox.plaid.com",
-      development: "https://development.plaid.com",
       production: "https://production.plaid.com",
     },
   };
@@ -1048,9 +1052,14 @@ Create `apps/api/tests/plaid.items.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+import { plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
 
-vi.mock("plaid", plaidMockFactory);
+// vi.mock(path, factory) is hoisted above all imports — pass the factory
+// through vi.hoisted() so it's loaded in the same hoisted scope.
+const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/plaid-mock.js"),
+);
+vi.mock("plaid", hoistedPlaidMockFactory);
 
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
@@ -1445,12 +1454,18 @@ Create `apps/api/tests/plaid.sync.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+import { plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
 
-// vi.mock is HOISTED to before all imports — must be at module top, not inside
-// a function. Without this, the real `plaid` SDK loads and tests fail with
-// confusing "missing scripted response" or HTTP errors.
-vi.mock("plaid", plaidMockFactory);
+// vi.mock(path, factory) is hoisted above all imports — referencing the
+// factory through a regular `import` triggers a TDZ error. Use vi.hoisted()
+// to load the helper in the same hoisted scope so the factory has a stable
+// binding before vi.mock fires. Without this, either the real `plaid` SDK
+// loads (silent: tests fail with "missing scripted response") or the test
+// file itself crashes with "Cannot access '__vi_import_0__' before init".
+const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/plaid-mock.js"),
+);
+vi.mock("plaid", hoistedPlaidMockFactory);
 
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
@@ -1959,10 +1974,13 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
     pageLoop: while (true) {
       let pageData: PlaidPageData;
       try {
-        const res = await plaidClient(env).transactionsSync({
-          access_token: accessToken,
-          cursor: cursor ?? undefined,
-        });
+        // Build the request body conditionally — under exactOptionalPropertyTypes
+        // we can't pass `cursor: undefined` to a `cursor: string` field. Plaid
+        // treats omitted cursor as "first sync from earliest available data".
+        const req = cursor !== null
+          ? { access_token: accessToken, cursor }
+          : { access_token: accessToken };
+        const res = await plaidClient(env).transactionsSync(req);
         pageData = res.data as PlaidPageData;
       } catch (e) {
         // Plaid emits TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION (an error
@@ -2104,20 +2122,26 @@ export async function upsertAdded(
     }
   }
 
-  // Fresh-insert path: create or update by partial unique
-  // (workspaceId, plaidTransactionId). Prisma can't model the partial unique
-  // directly, so we try create + fall back to update on P2002.
+  // Fresh-insert path: lookup-then-update-or-create by partial unique
+  // (workspaceId, plaidTransactionId). We can't rely on `create` + catch
+  // P2002: inside a Postgres transaction (esp. Serializable), a unique-
+  // constraint violation aborts the surrounding tx ("current transaction is
+  // aborted" / 25P02), so the fallback `updateMany` would fail. Doing the
+  // existence check first keeps the tx healthy. findFirst is benign here —
+  // Serializable isolation forces conflicting concurrent writers to abort at
+  // commit time, which is the same window we'd have with the catch-P2002
+  // pattern. Mutation-during-pagination restart and webhook replay both rely
+  // on this idempotent behavior.
   const accountId = await accountIdForPlaidAccount(tx, plaidItemId, t.account_id);
-  try {
-    await tx.transaction.create({
+  const existing = await tx.transaction.findFirst({
+    where: { workspaceId, plaidTransactionId: t.transaction_id },
+    select: { id: true },
+  });
+  if (existing) {
+    await tx.transaction.update({
+      where: { id: existing.id },
       data: {
-        workspaceId,
-        accountId,
-        plaidItemId,
-        plaidTransactionId: t.transaction_id,
-        plaidPendingTransactionId: t.pending_transaction_id ?? null,
         amount: t.amount,
-        currency: t.iso_currency_code ?? "CAD",
         merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
         occurredAt: plaidOccurredAt(t),
         postedAt: plaidPostedAt(t),
@@ -2125,24 +2149,24 @@ export async function upsertAdded(
         rawData: t as unknown as Prisma.InputJsonValue,
       },
     });
-  } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
-      // Webhook replay or race — treat as idempotent update.
-      await tx.transaction.updateMany({
-        where: { workspaceId, plaidTransactionId: t.transaction_id },
-        data: {
-          amount: t.amount,
-          merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
-          occurredAt: plaidOccurredAt(t),
-          postedAt: plaidPostedAt(t),
-          pending: t.pending,
-          rawData: t as unknown as Prisma.InputJsonValue,
-        },
-      });
-      return;
-    }
-    throw e;
+    return;
   }
+  await tx.transaction.create({
+    data: {
+      workspaceId,
+      accountId,
+      plaidItemId,
+      plaidTransactionId: t.transaction_id,
+      plaidPendingTransactionId: t.pending_transaction_id ?? null,
+      amount: t.amount,
+      currency: t.iso_currency_code ?? "CAD",
+      merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
+      occurredAt: plaidOccurredAt(t),
+      postedAt: plaidPostedAt(t),
+      pending: t.pending,
+      rawData: t as unknown as Prisma.InputJsonValue,
+    },
+  });
 }
 
 export async function upsertModified(
@@ -2215,9 +2239,14 @@ Create `apps/api/tests/plaid.exchange.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+import { plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
 
-vi.mock("plaid", plaidMockFactory);
+// vi.mock(path, factory) is hoisted above all imports — pass the factory
+// through vi.hoisted() so it's loaded in the same hoisted scope.
+const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/plaid-mock.js"),
+);
+vi.mock("plaid", hoistedPlaidMockFactory);
 
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
@@ -2742,9 +2771,14 @@ Create `apps/api/tests/plaid.routes.test.ts`:
 
 ```ts
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { plaidMockFactory, plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
+import { plaidMock, resetPlaidMock, plaidApiError } from "./helpers/plaid-mock.js";
 
-vi.mock("plaid", plaidMockFactory);
+// vi.mock(path, factory) is hoisted above all imports — pass the factory
+// through vi.hoisted() so it's loaded in the same hoisted scope.
+const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/plaid-mock.js"),
+);
+vi.mock("plaid", hoistedPlaidMockFactory);
 
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";

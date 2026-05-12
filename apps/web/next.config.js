@@ -12,6 +12,16 @@ const nextConfig = {
     // See: https://github.com/gregberge/svgr
     svgr: false,
   },
+  // Proxy /api-proxy/* → backend API so E2E tests stay same-origin.
+  // The browser at localhost:3100 calls /api-proxy/... which Next.js
+  // rewrites to the real API server. Cookie domain is localhost:3100 so
+  // SameSite=Lax is fully respected without cross-port issues.
+  async rewrites() {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+    return [
+      { source: "/api-proxy/:path*", destination: `${apiUrl}/:path*` },
+    ];
+  },
 };
 
 const plugins = [

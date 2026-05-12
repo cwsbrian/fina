@@ -90,8 +90,9 @@ SELECT * FROM sessions;          -- active sessions
 Connect to `localhost:5432`, user `fina`, password `fina`, database `fina`. Use this for
 larger explorations, ER diagrams, or managing multiple environments side-by-side.
 
-## Status — 2026-05-08
+## Status — 2026-05-11
 
 - ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready.
-- ✅ Plan 2 complete: workspace sharing on web — invites table (hashed bearer tokens, partial-unique-index invariants for one-owner-per-workspace and one-pending-invite-per-email) + 9 endpoints, web UI for accept page, /settings/workspace, header switcher. Mobile gets X-Workspace-Id plumbing only. **API: 76 tests passing.**
-- 🚧 Next: Plan 1B — Plaid + Account model (mobile-first), or Plan 2-mobile — mirror sharing UX onto mobile (TBD).
+- ✅ Plan 2 complete: workspace sharing on web — invites table (hashed bearer tokens, partial-unique-index invariants for one-owner-per-workspace and one-pending-invite-per-email), 9 endpoints, web UI for accept page, /settings/workspace, header switcher. Mobile gets X-Workspace-Id plumbing only.
+- ✅ Plan 1B-foundation complete: Plaid integration on web (sandbox) — 4 new schema entities (plaid_items, bank_accounts, transactions, categories), AES-256-GCM token encryption with workspaceId AAD, cursor-based /transactions/sync with per-item row-level lock (`SELECT ... FOR UPDATE NOWAIT`), mutation-during-pagination restart, pending→posted promotion via plaidTransactionId lookup, strict locked disconnect (409 `sync_in_progress` if a refresh races), Pro tier gate on connect/exchange/sync (disconnect is the deliberate exception so trial-expired users can revoke Plaid access), owner-only UI for Connect/Refresh/Disconnect. **API: 146 tests passing.**
+- 🚧 Next options: Plan 1B-webhooks (signature verify + idempotency), Plan 1B-categorize (Gemini Flash + merchant normalize), Plan 1B-cron (daily refresh), Plan 1B-mobile (transactions UI). See spec §11.

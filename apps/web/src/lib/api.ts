@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { env } from "../env";
 import { getActiveWorkspaceId } from "./active-workspace";
 
@@ -54,4 +55,34 @@ export async function bootstrapActiveWorkspace(): Promise<string | null> {
     clearActiveWorkspaceId();
   }
   return first;
+}
+
+export type Me = {
+  user: { id: string; email: string; tz: string; locale: string };
+  tier: "free" | "lite" | "pro";
+  trial: { active: boolean; endsAt: string | null };
+};
+
+export function useMe(): { me: Me | null; err: string | null } {
+  const [me, setMe] = useState<Me | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    apiFetch<Me>("/me")
+      .then(setMe)
+      .catch((e) => setErr((e as { code?: string }).code ?? "error"));
+  }, []);
+  return { me, err };
+}
+
+/**
+ * Reconciled active workspace id. Returns null until bootstrap completes.
+ */
+export function useActiveWorkspaceId(): string | null {
+  const [wsId, setWsId] = useState<string | null>(null);
+  useEffect(() => {
+    bootstrapActiveWorkspace()
+      .then((id) => setWsId(id ?? getActiveWorkspaceId()))
+      .catch(() => setWsId(null));
+  }, []);
+  return wsId;
 }

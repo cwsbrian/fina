@@ -9,50 +9,51 @@ datasource db {
 
 // ----- Better Auth -----
 model User {
-  id              String       @id
-  email           String       @unique
-  emailVerified   Boolean      @default(false)
-  name            String?
-  image           String?
-  createdAt       DateTime     @default(now())
-  updatedAt       DateTime     @updatedAt
+  id            String   @id
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  name          String?
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   // Fina extensions
-  tz              String       @default("America/Toronto")
-  locale          String       @default("en-CA")
-  trialStartedAt  DateTime?
-  trialEndsAt     DateTime?
-  trialConsumed   Boolean      @default(false)
+  tz             String    @default("America/Toronto")
+  locale         String    @default("en-CA")
+  trialStartedAt DateTime?
+  trialEndsAt    DateTime?
+  trialConsumed  Boolean   @default(false)
 
   // Better Auth relations
-  sessions        Session[]
-  accounts        Account[]
+  sessions Session[]
+  accounts Account[]
 
   // Fina relations
   memberships     Membership[]
   invitesSent     Invite[]     @relation("InvitesSent")
   invitesAccepted Invite[]     @relation("InvitesAccepted")
+  plaidItems      PlaidItem[]
 
   @@map("users")
 }
 
 model Session {
-  id           String   @id
-  userId       String
-  token        String   @unique
-  expiresAt    DateTime
-  ipAddress    String?
-  userAgent    String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id        String   @id
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  ipAddress String?
+  userAgent String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@map("sessions")
 }
 
 model Account {
-  id                    String   @id
+  id                    String    @id
   userId                String
   accountId             String
   providerId            String
@@ -63,9 +64,9 @@ model Account {
   scope                 String?
   idToken               String?
   password              String?
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
-  user                  User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([providerId, accountId])
   @@index([userId])
@@ -86,12 +87,16 @@ model Verification {
 
 // ----- Fina core -----
 model Workspace {
-  id          String       @id @default(cuid())
-  name        String
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  memberships Membership[]
-  invites     Invite[]
+  id           String        @id @default(cuid())
+  name         String
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  memberships  Membership[]
+  invites      Invite[]
+  plaidItems   PlaidItem[]
+  bankAccounts BankAccount[]
+  transactions Transaction[]
+  categories   Category[]
 
   @@map("workspaces")
 }
@@ -117,22 +122,22 @@ enum Role {
 }
 
 model Invite {
-  id            String       @id @default(cuid())
-  workspaceId   String
-  invitedEmail  String       // stored lowercase
-  invitedRole   Role         // editor | viewer (owner not allowed via API)
-  invitedById   String
-  tokenHash     String       @unique  // SHA-256 hex of the raw bearer token; raw is only sent in the email
-  status        InviteStatus @default(pending)
-  expiresAt     DateTime
-  acceptedAt    DateTime?
-  acceptedById  String?
-  revokedAt     DateTime?
-  createdAt     DateTime     @default(now())
+  id           String       @id @default(cuid())
+  workspaceId  String
+  invitedEmail String // stored lowercase
+  invitedRole  Role // editor | viewer (owner not allowed via API)
+  invitedById  String
+  tokenHash    String       @unique // SHA-256 hex of the raw bearer token; raw is only sent in the email
+  status       InviteStatus @default(pending)
+  expiresAt    DateTime
+  acceptedAt   DateTime?
+  acceptedById String?
+  revokedAt    DateTime?
+  createdAt    DateTime     @default(now())
 
-  workspace     Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  invitedBy     User         @relation("InvitesSent", fields: [invitedById], references: [id], onDelete: Cascade)
-  acceptedBy    User?        @relation("InvitesAccepted", fields: [acceptedById], references: [id], onDelete: SetNull)
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy  User      @relation("InvitesSent", fields: [invitedById], references: [id], onDelete: Cascade)
+  acceptedBy User?     @relation("InvitesAccepted", fields: [acceptedById], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, status])
   @@index([invitedEmail, status])
@@ -144,4 +149,138 @@ enum InviteStatus {
   accepted
   revoked
   expired
+}
+
+model PlaidItem {
+  id                    String          @id @default(cuid())
+  workspaceId           String
+  connectedBy           String? // userId of the member who connected this item
+  // AES-256-GCM. AAD = workspaceId so a row swapped between workspaces won't decrypt.
+  // Layout: ciphertext bytes followed by 16-byte auth tag.
+  accessTokenCiphertext Bytes
+  accessTokenIv         Bytes // 12 bytes
+  itemId                String          @unique // Plaid item_id; second exchange retry hits P2002
+  institutionId         String
+  institutionName       String
+  status                PlaidItemStatus @default(active)
+  errorCode             String?
+  lastSyncAt            DateTime?
+  lastCursor            String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // SetNull so workspace data survives if the connecting user leaves/is deleted.
+  user         User?         @relation(fields: [connectedBy], references: [id], onDelete: SetNull)
+  bankAccounts BankAccount[]
+  transactions Transaction[]
+
+  @@index([workspaceId])
+  @@index([connectedBy])
+  @@map("plaid_items")
+}
+
+enum PlaidItemStatus {
+  active
+  error
+  relink_required
+}
+
+model BankAccount {
+  id                String        @id @default(cuid())
+  workspaceId       String
+  plaidItemId       String?
+  // Plaid account_ids are globally unique per Plaid's contract — global UNIQUE
+  // is fine. Transaction.plaidTransactionId uses a workspace-scoped partial
+  // UNIQUE because it's only unique per workspace.
+  plaidAccountId    String?       @unique
+  name              String
+  officialName      String?
+  mask              String?
+  type              String
+  subtype           String?
+  currency          String        @default("CAD")
+  status            AccountStatus @default(active)
+  balanceCurrent    Decimal?      @db.Decimal(14, 2)
+  balanceAvailable  Decimal?      @db.Decimal(14, 2)
+  balanceLimit      Decimal?      @db.Decimal(14, 2)
+  lastBalanceSyncAt DateTime?
+  archivedAt        DateTime?
+  createdAt         DateTime      @default(now())
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // SetNull (NOT Cascade) — disconnect must keep accounts (and via them, transactions)
+  // as history. Disconnect handler also stamps archivedAt so UI can hide them.
+  plaidItem    PlaidItem?    @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
+  transactions Transaction[]
+
+  @@index([workspaceId, plaidItemId])
+  @@map("bank_accounts")
+}
+
+enum AccountStatus {
+  active
+  closed
+  hidden
+}
+
+model Transaction {
+  id                        String            @id @default(cuid())
+  workspaceId               String
+  accountId                 String
+  plaidItemId               String?
+  plaidTransactionId        String?
+  plaidPendingTransactionId String?
+  amount                    Decimal           @db.Decimal(14, 2)
+  currency                  String            @default("CAD")
+  merchantRaw               String
+  merchantNormalized        String?
+  categoryId                String?
+  occurredAt                DateTime
+  postedAt                  DateTime?
+  pending                   Boolean           @default(false)
+  source                    TransactionSource @default(plaid)
+  rawData                   Json
+  note                      String?
+  removedAt                 DateTime?
+  createdAt                 DateTime          @default(now())
+  updatedAt                 DateTime          @updatedAt
+
+  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  // FK column kept as `accountId` (not `bankAccountId`) so URL/query filters
+  // and prior plan-2 code that exposes accountId in API responses don't churn.
+  // The Prisma model is BankAccount but the field name is unchanged.
+  account   BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  plaidItem PlaidItem?  @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
+  category  Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, occurredAt(sort: Desc)])
+  @@index([workspaceId, accountId, occurredAt(sort: Desc)])
+  @@index([workspaceId, categoryId])
+  @@map("transactions")
+}
+
+enum TransactionSource {
+  plaid
+  manual
+  csv
+}
+
+model Category {
+  id          String    @id @default(cuid())
+  workspaceId String
+  name        String
+  parentId    String?
+  icon        String?
+  color       String?
+  archivedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent       Category?     @relation("CategoryTree", fields: [parentId], references: [id])
+  children     Category[]    @relation("CategoryTree")
+  transactions Transaction[]
+
+  @@unique([workspaceId, name])
+  @@map("categories")
 }

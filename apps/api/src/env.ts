@@ -15,6 +15,18 @@ const Schema = z.object({
   // Default empty; baseline allowlist still includes localhost:3000 and :3100.
   // Use this to add LAN/Tailscale IPs when smoke-testing from another device.
   DEV_ORIGINS: z.string().optional(),
+  // Plaid
+  PLAID_CLIENT_ID: z.string(),
+  PLAID_SECRET: z.string(),
+  PLAID_ENV: z.enum(["sandbox", "production"]).default("sandbox"),
+  // Soft deadline for the initial sync inside POST /plaid/exchange. Tests
+  // override to a small value so the timeout path is exercised with real
+  // timers (vi.useFakeTimers + fastify.inject is racy and brittle).
+  PLAID_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  // AES-256-GCM key for at-rest encryption (Plaid access_token).
+  // Must base64-decode to exactly 32 bytes. Validation happens lazily inside
+  // the crypto helper so tests can use a fixed value without re-running zod.
+  ENCRYPTION_KEY: z.string(),
 });
 
 export type Env = z.infer<typeof Schema>;

@@ -6,6 +6,10 @@ import { healthRoutes } from "./routes/health.js";
 import { meRoutes } from "./routes/me.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { inviteRoutes } from "./routes/invites.js";
+import { plaidRoutes } from "./routes/plaid.js";
+import { plaidItemsRoutes } from "./routes/plaid-items.js";
+import { accountsRoutes } from "./routes/accounts.js";
+import { transactionsRoutes } from "./routes/transactions.js";
 import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 
 export type AppCtx = { env: Env; auth: FinaAuth };
@@ -80,6 +84,10 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(meRoutes);
   await app.register(workspacesRoutes);
   await app.register(inviteRoutes);
+  await app.register(plaidRoutes);
+  await app.register(plaidItemsRoutes);
+  await app.register(accountsRoutes);
+  await app.register(transactionsRoutes);
 
   return app;
 }
