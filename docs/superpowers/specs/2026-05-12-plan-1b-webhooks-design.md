@@ -14,7 +14,7 @@
 
 Receive Plaid webhook callbacks, verify their authenticity, and trigger `syncTransactions` + `categorizeNewTransactions` in the background — so new transactions appear automatically without the user hitting Refresh.
 
-**Exit criterion (smoke):** Plaid sandbox fires `SYNC_UPDATES_AVAILABLE` → API logs show webhook received → `plaid_webhook_events` row appears → new transactions + categories in DB. Duplicate webhook delivery deduped (second row not created, sync not triggered twice).
+**Exit criterion (smoke):** Plaid sandbox fires `SYNC_UPDATES_AVAILABLE` (via `/sandbox/item/fire_webhook`) → API logs show webhook received → `plaid_webhook_events` row appears + `processedAt` set → new transactions + categories in DB. Second identical fire → second row created, second sync runs but is a no-op (cursor-based idempotency).
 
 This plan is **backend only.** No web/mobile UI changes. Cron-based daily fallback sync is a separate plan (Plan 1B-cron).
 
@@ -26,8 +26,10 @@ This plan is **backend only.** No web/mobile UI changes. Cron-based daily fallba
 - `POST /plaid/webhook` — unauthenticated Plaid-signature-verified endpoint.
 - Plaid JWT (ES256) signature verification + body SHA-256 check + `iat` 5-minute replay window.
 - JWK memory cache (Map<kid, jwk>, 24h TTL) to avoid per-request Plaid API calls.
-- `plaid_webhook_events` table — idempotency (body hash dedup) + audit trail.
+- `plaid_webhook_events` table — audit trail (no body-hash dedup; sync is idempotent).
 - Detached `sync + categorize` dispatch for `TRANSACTIONS` / `SYNC_UPDATES_AVAILABLE`. All other webhook types logged and stored but not acted on.
+- `PLAID_WEBHOOK_URL` env var (required). Passed explicitly to `linkTokenCreate({ webhook: env.PLAID_WEBHOOK_URL })` so every new Item is registered per-item, not relying solely on Dashboard default.
+- On startup: call `plaid.itemWebhookUpdate` for all active `PlaidItem`s whose `webhookUrl` column is not yet set (backfill for items connected before this feature ships).
 - Helper module for test key injection (`apps/api/tests/helpers/plaid-webhook-mock.ts`).
 - Smoke test doc with Tailscale Funnel setup + Plaid Dashboard sandbox URL (already registered by owner).
 - Unit tests (signature, routes, dispatch) + E2E test (skip-guarded on real PLAID_* creds + Funnel URL).
@@ -52,10 +54,11 @@ model PlaidWebhookEvent {
   plaidItemId   String?
   webhookType   String    // e.g. "TRANSACTIONS"
   webhookCode   String    // e.g. "SYNC_UPDATES_AVAILABLE"
-  // SHA-256 (hex) of raw request body bytes. Dedupes exact replay deliveries.
-  // Two consecutive SYNC_UPDATES_AVAILABLE webhooks differ in timestamp/count → different hash → both processed.
-  bodyHash      String    @unique
-  // Full body stored for debugging + future audit consistency.
+  // Full body stored for debugging + future audit. No unique constraint:
+  // SYNC_UPDATES_AVAILABLE bodies are identical across deliveries once
+  // initial_update_complete=true, so body-hash dedup would silently block
+  // all future legitimate events. Sync idempotency (cursor-based + row-level
+  // lock) handles duplicate dispatches safely.
   body          Json
   receivedAt    DateTime  @default(now())
   // Set by the detached dispatchWebhookSync after sync+categorize completes (or fails).
@@ -73,13 +76,19 @@ model PlaidWebhookEvent {
 
 `processedAt` / `processError` are written by `dispatchWebhookSync` after the webhook handler has already returned 200, so the handler does not await them. Their purpose is operational: a single query reveals "webhook received but sync failed" cases.
 
-### 3.2 Existing schema — no changes
+### 3.2 Existing schema changes
 
-`PlaidItem` needs no new columns. Plaid routes webhook delivery by the registered URL in the Dashboard; the webhook URL is not stored per-item in our DB.
+`PlaidItem` gets one new nullable column:
+
+```prisma
+webhookUrl  String?   // Set on connect; backfilled by startup task for older items.
+```
+
+Rationale: Plaid routes `SYNC_UPDATES_AVAILABLE` to the webhook URL registered **per-item** (set via `linkTokenCreate.webhook` or `/item/webhook/update`). The Dashboard global webhook URL is a fallback but cannot be relied upon for items connected before the Dashboard URL was configured. Storing `webhookUrl` in our DB lets the startup backfill task detect which items still need updating.
 
 ### 3.3 Migration
 
-Single migration: `add_plaid_webhook_events`.
+Single migration: `add_plaid_webhook_events` — creates `plaid_webhook_events` table + adds `webhookUrl` column to `plaid_items`.
 
 ---
 
@@ -124,8 +133,9 @@ Plaid server ─POST─▶ POST /plaid/webhook
                       4. PlaidItem lookup by webhook.item_id
                          Not found → plaidItemId = null (store for audit, skip dispatch)
                       │
-                      5. Idempotency: INSERT INTO plaid_webhook_events (bodyHash, ...)
-                         P2002 conflict → already processed → 200 + return
+                      5. INSERT INTO plaid_webhook_events (body, webhookType, ...)
+                         No dedup at DB level — duplicate deliveries are safe because
+                         syncTransactions is cursor-based + row-level-locked (idempotent).
                       │
                       6. Dispatch decision
                          webhookType === "TRANSACTIONS"
@@ -200,14 +210,15 @@ export async function verifyPlaidWebhook(
 
 ### 5.3 Library
 
-`jose` (ES256) — already installed as a transitive dependency (`jose@6.2.3` via pnpm). No new package needed.
+`jose` (ES256). Must be added as a **direct** dependency to `apps/api/package.json` (`"jose": "^6"`). pnpm's strict dependency layout does not allow packages to import transitive deps — `jose@6.2.3` is only in the workspace graph via `better-auth` and is not resolvable from `@fina/api` without an explicit declaration.
 
-### 5.4 Replay protection — two layers
+### 5.4 Replay protection
 
 | Layer | Mechanism | Catches |
 |---|---|---|
-| Time-based | `iat` within ±5 minutes | Attacker who intercepts a valid webhook and re-sends it later |
-| Content-based | `bodyHash @unique` in DB | Plaid's own retry deliveries of the exact same payload |
+| Time-based | `iat` within ±5 minutes | Attacker who intercepts and re-sends a signed webhook later |
+
+No DB-level dedup. Plaid re-signs each delivery with a fresh JWT (`iat` changes), so Plaid's own retries all pass the `iat` check — which is correct: each retry may carry new Plaid deltas. Duplicate processing is safe because `syncTransactions` is cursor-based and row-level-locked; duplicate deliveries result in a no-op or `lock_held` skipped sync.
 
 ---
 
@@ -265,8 +276,7 @@ void dispatchWebhookSync(env, wsId, plaidItemId, event.id).catch(() => {
 | `iat` > 5 min from now | 401 | Replay attempt. |
 | Body not valid JSON or fails zod | 400 | Legitimate Plaid would never send this. |
 | `item_id` not in our DB | 200 | Row stored with `plaidItemId=null`; sync skipped. 200 prevents Plaid retry storm on stale items. |
-| Duplicate body hash (idempotency) | 200 | No new row, no dispatch. |
-| `TRANSACTIONS` / `SYNC_UPDATES_AVAILABLE` | 200 | Row stored + dispatch detached. |
+| `TRANSACTIONS` / `SYNC_UPDATES_AVAILABLE` | 200 | Row stored + dispatch detached. Duplicate deliveries safe: sync is idempotent. |
 | `TRANSACTIONS` / other code (legacy) | 200 | Row stored, no dispatch, logged. |
 | Any other `webhookType` | 200 | Row stored, no dispatch, logged. |
 | Detached sync throws | — | Handler already returned 200. `processError` written to row. |
@@ -307,7 +317,7 @@ Signature module is mocked (pass-through by default, throw on demand).
 
 - Valid `SYNC_UPDATES_AVAILABLE` → 200, `plaid_webhook_events` row created, dispatch spy called once
 - Invalid signature (mock throws) → 401, no row
-- Same body twice → first 200 + insert, second 200 + no insert, dispatch called once total
+- Same body twice → both 200 + both rows inserted; dispatch called twice, but second sync is a no-op (cursor unchanged) or `lock_held` if first is still running
 - Unknown `item_id` → 200, row with `plaidItemId=null`, dispatch not called
 - `webhookType=ITEM` → 200, row stored, dispatch not called
 - Bad JSON body → 400
@@ -358,13 +368,13 @@ For production: register the production API base URL's `/plaid/webhook` path in 
 
 ### 9.3 Env vars
 
-No new env vars required. `PLAID_CLIENT_ID` + `PLAID_SECRET` + `PLAID_ENV` already present. JWK fetching uses the Plaid SDK client already initialized in `src/plaid/client.ts`.
-
-For E2E tests, one new optional var:
+**New required var:**
 ```
 PLAID_WEBHOOK_URL=https://<machine>.<tailnet>.ts.net/plaid/webhook
 ```
-If absent, E2E webhook tests are skipped.
+Added to `env.ts` (zod schema, required string). Passed to `linkTokenCreate({ webhook: env.PLAID_WEBHOOK_URL })` for new items, and to `plaid.itemWebhookUpdate` for backfill. E2E tests use it to skip when not set (optional in tests, required in production).
+
+`PLAID_CLIENT_ID` + `PLAID_SECRET` + `PLAID_ENV` already present. JWK fetching uses the Plaid SDK client already initialized in `src/plaid/client.ts`.
 
 ---
 
