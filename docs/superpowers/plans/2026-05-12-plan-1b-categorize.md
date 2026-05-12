@@ -141,7 +141,7 @@ CREATE UNIQUE INDEX "categories_one_active_name_per_workspace_ci"
   WHERE "archivedAt" IS NULL;
 
 -- Seed 11 default English categories for every existing workspace.
--- Uses gen_random_uuid() for the id column — pgcrypto is enabled on Postgres
+-- Uses gen_random_uuid() for the id column — it's a core Postgres 16 function
 -- 16 by default. The id column is free-form TEXT (existing rows use cuid()),
 -- so mixing UUID-shaped rows is fine.
 --
@@ -225,7 +225,10 @@ After the existing `ENCRYPTION_KEY` line:
 ```ts
   // Gemini (categorize)
   GEMINI_API_KEY: z.string(),
-  CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().default(50),
+  // OPTIONAL — keeps test literals clean. Use `env.CATEGORIZE_BATCH_MAX ?? 50`
+  // in service code. z.default() would make the inferred Env type non-optional,
+  // requiring every buildApp(env) test literal to include it.
+  CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().optional(),
 ```
 
 - [ ] **Step 2: Add to `apps/api/.env.test`**
@@ -639,11 +642,17 @@ export async function callGeminiCategorize(
   });
 
   const text = response.text;
-  if (typeof text !== "string") {
+  if (typeof text !== "string" || text.length === 0) {
     throw new Error("Gemini returned no text");
   }
+  // JSON.parse can throw on malformed responses. The caller (service.ts)
+  // catches this in the same try/catch as network errors — all failures
+  // leave the batch uncategorized per spec.
   const parsed = JSON.parse(text) as { results?: LLMResult[] };
-  return parsed.results ?? [];
+  if (!Array.isArray(parsed.results)) {
+    throw new Error(`Gemini response missing results array: ${text.slice(0, 200)}`);
+  }
+  return parsed.results;
 }
 ```
 
@@ -824,13 +833,15 @@ async function categoryId(wsId: string, name: string): Promise<string> {
   return c.id;
 }
 
+// NOTE: `setupWorkspaceWithAccount()` signs up a user, which triggers bootstrap
+// and seeds all 11 default categories. Do NOT call prisma.category.createMany()
+// for seeded category names (Dining, Groceries, Transit, etc.) — those calls
+// will violate the active-name partial unique index and fail.
+// Use `await categoryId(wsId, "Dining")` to look up already-seeded categories.
 describe("categorizeNewTransactions", () => {
   it("all mapped → no LLM call, source='mapping'", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    // Seed default categories so the service can resolve "Dining".
-    await prisma.category.createMany({
-      data: ["Dining", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Categories already seeded by bootstrap.
     const diningId = await categoryId(wsId, "Dining");
     await prisma.merchantMapping.create({
       data: { workspaceId: wsId, merchantNormalized: "starbucks", categoryId: diningId, source: "manual" },
@@ -848,9 +859,7 @@ describe("categorizeNewTransactions", () => {
 
   it("no mappings → LLM returns valid categories → source='ai'", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Dining", "Groceries", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const txId = await makeTx(wsId, accountId, "Loblaws");
 
     geminiMock.generateContent.push({
@@ -866,9 +875,7 @@ describe("categorizeNewTransactions", () => {
 
   it("mixed: 1 mapped, 2 unmapped → LLM called for 2 only", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Dining", "Groceries", "Transit", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const diningId = await categoryId(wsId, "Dining");
     await prisma.merchantMapping.create({
       data: { workspaceId: wsId, merchantNormalized: "starbucks", categoryId: diningId, source: "manual" },
@@ -893,9 +900,7 @@ describe("categorizeNewTransactions", () => {
 
   it("LLM returns category not in seed → that tx stays uncategorized", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Groceries", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const txId = await makeTx(wsId, accountId, "WeirdShop");
 
     geminiMock.generateContent.push({
@@ -911,9 +916,7 @@ describe("categorizeNewTransactions", () => {
 
   it("LLM returns unknown tx_id → skip silently, valid ones still applied", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Groceries", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const txId = await makeTx(wsId, accountId, "Loblaws");
 
     geminiMock.generateContent.push({
@@ -930,9 +933,7 @@ describe("categorizeNewTransactions", () => {
 
   it("LLM throws → unmapped tx stay uncategorized; mapped ones still applied", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Dining", "Groceries", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const diningId = await categoryId(wsId, "Dining");
     await prisma.merchantMapping.create({
       data: { workspaceId: wsId, merchantNormalized: "starbucks", categoryId: diningId, source: "manual" },
@@ -950,9 +951,7 @@ describe("categorizeNewTransactions", () => {
 
   it("batch > CATEGORIZE_BATCH_MAX → multiple LLM calls", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const smallEnv = { ...env, CATEGORIZE_BATCH_MAX: 2 };
     const ids = await Promise.all([
       makeTx(wsId, accountId, "M1", "1"),
@@ -979,9 +978,7 @@ describe("categorizeNewTransactions", () => {
 
   it("merchantNormalized is populated on tx rows", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const txId = await makeTx(wsId, accountId, "STARBUCKS #1234 TORONTO ON");
     geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "Other" }] });
 
@@ -992,9 +989,7 @@ describe("categorizeNewTransactions", () => {
 
   it("manual-vs-LLM race: pre-set source='manual' is NOT overwritten", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Dining", "Groceries", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const groceriesId = await categoryId(wsId, "Groceries");
     const diningId = await categoryId(wsId, "Dining");
 
@@ -1018,13 +1013,7 @@ describe("categorizeNewTransactions", () => {
   it("workspace-scoped category resolution: two workspaces with same category name", async () => {
     const { wsId: wsA, accountId: acctA } = await setupWorkspaceWithAccount();
     const { wsId: wsB } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: [
-        { workspaceId: wsA, name: "Groceries" },
-        { workspaceId: wsB, name: "Groceries" }, // same name, different workspace
-        { workspaceId: wsA, name: "Other" },
-      ],
-    });
+    // Both workspaces already have "Groceries" seeded by bootstrap — no createMany needed.
     const txId = await makeTx(wsA, acctA, "Loblaws");
     geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "Groceries" }] });
 
@@ -1037,9 +1026,7 @@ describe("categorizeNewTransactions", () => {
 
   it("archived category ignored by LLM (not in passed list)", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Dining", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     // Archive Dining.
     await prisma.category.update({
       where: { id: await categoryId(wsId, "Dining") },
@@ -1058,9 +1045,7 @@ describe("categorizeNewTransactions", () => {
 
   it("mapping points to archived category → skipped (tx stays uncategorized OR goes to LLM)", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Dining", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const diningId = await categoryId(wsId, "Dining");
     await prisma.merchantMapping.create({
       data: { workspaceId: wsId, merchantNormalized: "starbucks", categoryId: diningId, source: "manual" },
@@ -1081,9 +1066,7 @@ describe("categorizeNewTransactions", () => {
 
   it("LLM case-insensitive category match: 'groceries' lower matches 'Groceries' stored", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    await prisma.category.createMany({
-      data: ["Groceries", "Other"].map((name) => ({ workspaceId: wsId, name })),
-    });
+    // Bootstrap already seeded these categories.
     const txId = await makeTx(wsId, accountId, "Loblaws");
     geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "groceries" }] }); // lowercase
 
@@ -1213,7 +1196,7 @@ export async function categorizeNewTransactions(
   const categoryNames = categoryRows.map((c) => c.name);
   if (categoryNames.length === 0) return; // no vocabulary, nothing to do
 
-  const batchMax = env.CATEGORIZE_BATCH_MAX ?? 50;
+  const batchMax = env.CATEGORIZE_BATCH_MAX ?? 50; // optional field; default in code not zod
   for (let i = 0; i < unmapped.length; i += batchMax) {
     const batch = unmapped.slice(i, i + batchMax);
     const llmTxs: LLMTransaction[] = batch.map((t) => ({
@@ -1228,6 +1211,9 @@ export async function categorizeNewTransactions(
       results = await callGeminiCategorize(env, categoryNames, llmTxs);
     } catch (e) {
       // Log + continue. Tx in this batch stay uncategorized.
+      // NOTE: callGeminiCategorize may throw on network errors OR on
+      // JSON.parse failure (malformed structured response). Both are caught
+      // here so the "best-effort, leave uncategorized" contract holds.
       console.error("[categorize] Gemini batch failed", e);
       continue;
     }
@@ -1518,11 +1504,6 @@ Add `resetGeminiMock()` to the existing `beforeEach`. Then append at the end of 
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
-    // The exchange flow → sync → detached categorize will call Gemini.
-    // Push a valid result for it.
-    geminiMock.generateContent.push({
-      results: [{ tx_id: "_placeholder", category: "Groceries" }],
-    });
 
     const res = await app.inject({
       method: "POST",
@@ -1531,14 +1512,31 @@ Add `resetGeminiMock()` to the existing `beforeEach`. Then append at the end of 
       payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
     });
     expect(res.statusCode).toBe(200);
+    const body = res.json();
 
-    // The detached promise needs to resolve. Poll briefly.
-    // NOTE: we pushed a placeholder tx_id because we don't know the local tx
-    // id ahead of time. The service rejects unknown tx_ids silently — so the
-    // tx stays uncategorized, but we still verify the categorize CODE PATH
-    // ran by checking that Gemini was consumed.
-    await new Promise((r) => setTimeout(r, 500));
-    expect(geminiMock.generateContent.length).toBe(0);
+    // Look up the real local tx id so the Gemini mock returns the right id.
+    const localTx = await prisma.transaction.findFirstOrThrow({
+      where: { workspaceId: wsId, plaidTransactionId: "tx_cat" },
+      select: { id: true },
+    });
+
+    // Now push the mock with the real id — the detached promise hasn't fired yet
+    // (it's awaiting the Gemini call which pops from the queue).
+    geminiMock.generateContent.push({
+      results: [{ tx_id: localTx.id, category: "Groceries" }],
+    });
+
+    // Allow the detached categorize promise to execute.
+    await new Promise((r) => setTimeout(r, 800));
+    expect(geminiMock.generateContent.length).toBe(0); // consumed
+
+    // Assert the tx actually got categorized.
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
+    const groceriesCat = await prisma.category.findFirstOrThrow({
+      where: { workspaceId: wsId, name: "Groceries" },
+    });
+    expect(after.categoryId).toBe(groceriesCat.id);
+    expect(after.categorizationSource).toBe("ai");
     await app.close();
   });
 
@@ -1653,17 +1651,53 @@ Append a test in the existing "POST /workspaces/:id/plaid-items/:itemId/sync" de
         modified: [], removed: [], next_cursor: "c2", has_more: false,
       },
     });
-    geminiMock.generateContent.push({
-      results: [{ tx_id: "_placeholder", category: "Groceries" }],
-    });
 
-    const res = await app.inject({
+    // Intercept the Gemini call with a factory that:
+    //   (a) returns a pending promise initially
+    //   (b) resolves it with the real tx id AFTER the response is sent
+    // This is simpler: push a result using the plaid_transaction_id to find
+    // the local row first. But since sync runs categorize synchronously (await),
+    // the tx is created before the Gemini call fires. We can look it up after
+    // the response.
+    //
+    // Practical test: push a placeholder and assert Gemini was consumed.
+    // Then assert the DB state.
+    const syncPlaidTxId = "tx_msync";
+    // Push a deferred handler that resolves with the real local id.
+    let geminiResolve!: (r: { results: Array<{ tx_id: string; category: string }> }) => void;
+    geminiMock.generateContent.push(
+      new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolve = r; }),
+    );
+
+    // Start the inject — it will await categorize (which blocks on Gemini mock promise).
+    const resPromise = app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid-items/${plaidItemId}/sync`,
       headers: { cookie: owner.cookie, "x-workspace-id": wsId },
     });
+
+    // Give the route a moment to get to the Gemini await.
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Now we can look up the real local tx id.
+    const localTx = await prisma.transaction.findFirstOrThrow({
+      where: { workspaceId: wsId, plaidTransactionId: syncPlaidTxId },
+      select: { id: true },
+    });
+    // Resolve the Gemini promise with the real id.
+    geminiResolve({ results: [{ tx_id: localTx.id, category: "Groceries" }] });
+
+    const res = await resPromise;
     expect(res.statusCode).toBe(200);
-    expect(geminiMock.generateContent.length).toBe(0); // categorize was awaited
+    expect(geminiMock.generateContent.length).toBe(0); // consumed
+
+    // Verify the tx was actually categorized (categorize was awaited).
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
+    const groceriesCat = await prisma.category.findFirstOrThrow({
+      where: { workspaceId: wsId, name: "Groceries" },
+    });
+    expect(after.categoryId).toBe(groceriesCat.id);
+    expect(after.categorizationSource).toBe("ai");
     await app.close();
   });
 ```
@@ -1975,7 +2009,8 @@ import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 const MAX_NAME_LEN = 40;
 const MAX_ACTIVE_CATEGORIES = 30;
 
-const CreateBody = z.object({ name: z.string().min(1).max(MAX_NAME_LEN) });
+// Use .trim() BEFORE .min(1) so "   " (only spaces) is rejected as empty.
+const CreateBody = z.object({ name: z.string().trim().min(1).max(MAX_NAME_LEN) });
 
 const PatchBody = z.object({
   name: z.string().min(1).max(MAX_NAME_LEN).optional(),
@@ -2068,7 +2103,15 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(404).send({ error: "not_found" });
       }
 
-      const data: Record<string, unknown> = {};
+      // Build a properly-typed update object (Record<string,unknown> would
+      // fail strict Prisma assignability checks).
+      type CategoryPatch = {
+        name?: string;
+        icon?: string | null;
+        color?: string | null;
+        archivedAt?: Date | null;
+      };
+      const data: CategoryPatch = {};
       if (parsed.data.name !== undefined) {
         const nameTrim = parsed.data.name.trim();
         if (nameTrim.toLowerCase() !== existing.name.toLowerCase()) {
@@ -2088,6 +2131,15 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
       if (parsed.data.icon !== undefined) data.icon = parsed.data.icon;
       if (parsed.data.color !== undefined) data.color = parsed.data.color;
       if (parsed.data.archived !== undefined) {
+        // Unarchiving: check the 30-category cap so we don't exceed it on restore.
+        if (!parsed.data.archived) {
+          const activeCount = await prisma.category.count({
+            where: { workspaceId: wsId, archivedAt: null },
+          });
+          if (activeCount >= MAX_ACTIVE_CATEGORIES) {
+            return reply.code(422).send({ error: "too_many_categories" });
+          }
+        }
         data.archivedAt = parsed.data.archived ? new Date() : null;
       }
 
@@ -2791,14 +2843,14 @@ In Prisma Studio (`pnpm smoke:db:studio`) or via psql:
 
 ```bash
 docker exec fina-postgres-dev psql -U fina -d fina -c "
-SELECT t.merchant_raw, t.merchant_normalized, c.name AS category, t.categorization_source
+SELECT t."merchantRaw", t."merchantNormalized", c.name AS category, t."categorizationSource"
 FROM transactions t
-LEFT JOIN categories c ON c.id = t.category_id
-ORDER BY t.occurred_at DESC LIMIT 20;
+LEFT JOIN categories c ON c.id = t."categoryId"
+ORDER BY t."occurredAt" DESC LIMIT 20;
 "
 ```
 
-Expected: each transaction has `category` populated and `categorization_source` is `mapping` or `ai`. Most should be `ai` on first run (no mappings yet).
+Expected: each transaction has `category` populated and `categorizationSource` is `mapping` or `ai`. Most should be `ai` on first run (no mappings yet).
 
 ## 3. Test manual categorize + back-fill
 
