@@ -513,10 +513,20 @@ Append a new test (don't replace existing tests — read the file first to see w
 
 ```ts
   it("seeds 11 default categories on workspace bootstrap", async () => {
+    // Read apps/api/tests/workspaces.bootstrap.test.ts to see the actual
+    // function name and import for the bootstrap helper, then adapt.
+    // The pattern is typically: create a user → call the bootstrap helper →
+    // verify the workspace has 11 seeded categories.
+    //
+    // Example (adjust function name to match the existing test file):
     const u = await prisma.user.create({
       data: { id: `bs-cat-${Date.now()}`, email: `bscat-${Date.now()}@x.com`, name: "BSCat" },
     });
-    const wsId = await startTrialAndBootstrapWorkspace(u.id);
+    // `startTrialAndBootstrapWorkspace` returns a workspace id (read the
+    // existing test to confirm the exact return shape; some versions return
+    // { workspace, membership }).
+    const result = await startTrialAndBootstrapWorkspace(u.id);
+    const wsId = typeof result === "string" ? result : result.workspace.id;
     const cats = await prisma.category.findMany({
       where: { workspaceId: wsId, archivedAt: null },
       orderBy: { name: "asc" },
@@ -529,7 +539,7 @@ Append a new test (don't replace existing tests — read the file first to see w
   });
 ```
 
-(Adjust `startTrialAndBootstrapWorkspace` import + signature to match the existing test file's pattern. Read the existing tests in the file first.)
+**Important:** Read `apps/api/tests/workspaces.bootstrap.test.ts` first to see how `startTrialAndBootstrapWorkspace` is called and what it returns — adapt the snippet above to match exactly.
 
 - [ ] **Step 5: Run (expect fail before bootstrap hook is applied — but Step 3 already added it, so this should PASS)**
 
@@ -987,26 +997,53 @@ describe("categorizeNewTransactions", () => {
     expect((await prisma.transaction.findUniqueOrThrow({ where: { id: txId } })).merchantNormalized).toBe("starbucks");
   });
 
-  it("manual-vs-LLM race: pre-set source='manual' is NOT overwritten", async () => {
+  it("manual-vs-LLM race: concurrent manual categorize is NOT overwritten by LLM update guard", async () => {
+    // This test verifies the `WHERE categorizationSource IS NULL` guard on the
+    // LLM update path prevents overwriting a manual categorization that lands
+    // AFTER the service's SELECT but BEFORE the service's UPDATE.
+    //
+    // Approach: pause the service at the Gemini call using a pending promise.
+    // While it's paused, apply a manual categorization to the tx. Then resolve
+    // Gemini. The service's `updateMany(WHERE categorizationSource IS NULL)`
+    // must skip the tx (categorizationSource is now 'manual').
     const { wsId, accountId } = await setupWorkspaceWithAccount();
-    // Bootstrap already seeded these categories.
     const groceriesId = await categoryId(wsId, "Groceries");
     const diningId = await categoryId(wsId, "Dining");
 
     const txId = await makeTx(wsId, accountId, "Loblaws");
-    // Simulate a manual write that landed before our service got around to it.
+
+    // Push a pending Gemini promise so the service blocks at the LLM call.
+    let geminiResolve!: (r: { results: Array<{ tx_id: string; category: string }> }) => void;
+    geminiMock.generateContent.push(
+      new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolve = r; }),
+    );
+
+    // Start categorize (it will block at Gemini call after loading the tx).
+    const servicePromise = categorizeNewTransactions(env, wsId, [txId]);
+
+    // Poll until the service has loaded and started its Gemini request.
+    // The mock queue being empty means the service already popped the pending
+    // promise from the queue.
+    for (let i = 0; i < 50; i++) {
+      if (geminiMock.generateContent.length === 0) break;
+      await new Promise((r) => setTimeout(r, 20));
+    }
+
+    // Now simulate the concurrent manual categorize firing while service is blocked.
     await prisma.transaction.update({
       where: { id: txId },
       data: { categoryId: diningId, categorizationSource: "manual", merchantNormalized: "loblaws" },
     });
 
-    geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "Groceries" }] });
+    // Resolve Gemini with a Groceries result for the same tx.
+    geminiResolve({ results: [{ tx_id: txId, category: "Groceries" }] });
+    await servicePromise;
 
-    await categorizeNewTransactions(env, wsId, [txId]);
-
+    // The service's updateMany WHERE categorizationSource IS NULL must have
+    // skipped this tx (it's now 'manual'). Manual categorization is preserved.
     const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categoryId).toBe(diningId);             // manual preserved
-    expect(after.categorizationSource).toBe("manual");   // NOT overwritten
+    expect(after.categoryId).toBe(diningId);              // manual survived
+    expect(after.categorizationSource).toBe("manual");    // NOT overwritten to 'ai'
     expect(after.categoryId).not.toBe(groceriesId);
   });
 
@@ -1081,6 +1118,23 @@ describe("categorizeNewTransactions", () => {
     const { wsId } = await setupWorkspaceWithAccount();
     await categorizeNewTransactions(env, wsId, []);
     // geminiMock was never pushed; if it had been called, pop() would throw.
+  });
+
+  it("LLM categorization does NOT create merchant_mapping rows", async () => {
+    // merchant_mappings are only created on manual confirm (spec §4.2).
+    // The LLM path must ONLY update tx.categoryId; it must not auto-learn.
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+    const txId = await makeTx(wsId, accountId, "Loblaws");
+
+    geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "Groceries" }] });
+    await categorizeNewTransactions(env, wsId, [txId]);
+
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
+    expect(after.categorizationSource).toBe("ai");
+
+    // No mapping must have been created.
+    const mappings = await prisma.merchantMapping.count({ where: { workspaceId: wsId } });
+    expect(mappings).toBe(0);
   });
 });
 ```
@@ -1309,6 +1363,53 @@ Expected: 172/172 (157 + 15), typecheck green.
     expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(2);
     await app.close();
   });
+
+  it("syncTransactions does NOT call categorize (newTxIds is caller's responsibility)", async () => {
+    // This test verifies the spec's decoupling: sync returns newTxIds and
+    // never touches the Gemini client. If categorize were called internally,
+    // this would fail because no Gemini mock was pushed.
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ntx-nocategorize@x.com", name: "NC" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "nc1", account_id: "acct_test", amount: 3, date: "2026-05-10" })], modified: [], removed: [], next_cursor: "c1", has_more: false },
+    });
+    // No Gemini push — if categorize were called, it would throw "no scripted response".
+    const r = await syncTransactions(env, wsId, plaidItemId);
+    expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
+    const t = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
+    expect(t.categoryId).toBeNull(); // not categorized by sync itself
+    await app.close();
+  });
+
+  it("mutation-restart: newTxIds from committed page survives restart", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "ntx-restart@x.com", name: "R" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+
+    // Page 1 (attempt 1): commits 1 row, has_more=true.
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "mr_a", account_id: "acct_test", amount: 1, date: "2026-05-09" })], modified: [], removed: [], next_cursor: "c1", has_more: true },
+    });
+    // Page 2 (attempt 1): triggers mutation-during-pagination restart.
+    plaidMock.transactionsSync.push(
+      plaidApiError({ error_code: "TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION" }),
+    );
+    // Page 1 (attempt 2): re-applies mr_a (idempotent), returns 1 new row.
+    plaidMock.transactionsSync.push({
+      data: { added: [tx({ transaction_id: "mr_a", account_id: "acct_test", amount: 1, date: "2026-05-09" })], modified: [], removed: [], next_cursor: "c2", has_more: false },
+    });
+
+    const r = await syncTransactions(env, wsId, plaidItemId);
+    expect("newTxIds" in r).toBe(true);
+    // mr_a was inserted on attempt 1's page 1 → newTxIds includes it.
+    // Attempt 2's re-apply hits the update branch → not re-added.
+    expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
+    await app.close();
+  });
 ```
 
 - [ ] **Step 2: Run (expect fail — `newTxIds` not in SyncResult yet)**
@@ -1505,6 +1606,15 @@ Add `resetGeminiMock()` to the existing `beforeEach`. Then append at the end of 
       },
     });
 
+    // Push a pending Gemini promise BEFORE calling inject. The detached
+    // categorize fires immediately after sync finishes — if we push AFTER
+    // app.inject resolves, the service may already be blocking on Gemini
+    // before we add anything to the queue.
+    let geminiResolveExch!: (r: { results: Array<{ tx_id: string; category: string }> }) => void;
+    geminiMock.generateContent.push(
+      new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolveExch = r; }),
+    );
+
     const res = await app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid/exchange`,
@@ -1512,25 +1622,21 @@ Add `resetGeminiMock()` to the existing `beforeEach`. Then append at the end of 
       payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
     });
     expect(res.statusCode).toBe(200);
-    const body = res.json();
 
-    // Look up the real local tx id so the Gemini mock returns the right id.
+    // Sync has completed. Look up the local tx id and resolve Gemini.
     const localTx = await prisma.transaction.findFirstOrThrow({
       where: { workspaceId: wsId, plaidTransactionId: "tx_cat" },
       select: { id: true },
     });
+    geminiResolveExch({ results: [{ tx_id: localTx.id, category: "Groceries" }] });
 
-    // Now push the mock with the real id — the detached promise hasn't fired yet
-    // (it's awaiting the Gemini call which pops from the queue).
-    geminiMock.generateContent.push({
-      results: [{ tx_id: localTx.id, category: "Groceries" }],
-    });
+    // Poll until the detached categorize writes the result (no direct await).
+    for (let i = 0; i < 50; i++) {
+      const t = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
+      if (t.categoryId !== null) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
-    // Allow the detached categorize promise to execute.
-    await new Promise((r) => setTimeout(r, 800));
-    expect(geminiMock.generateContent.length).toBe(0); // consumed
-
-    // Assert the tx actually got categorized.
     const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
     const groceriesCat = await prisma.category.findFirstOrThrow({
       where: { workspaceId: wsId, name: "Groceries" },
@@ -1669,30 +1775,35 @@ Append a test in the existing "POST /workspaces/:id/plaid-items/:itemId/sync" de
       new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolve = r; }),
     );
 
-    // Start the inject — it will await categorize (which blocks on Gemini mock promise).
+    // Start the inject — it will await categorize internally. The route blocks
+    // until the Gemini promise resolves, then returns the response.
     const resPromise = app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid-items/${plaidItemId}/sync`,
       headers: { cookie: owner.cookie, "x-workspace-id": wsId },
     });
 
-    // Give the route a moment to get to the Gemini await.
-    await new Promise((r) => setTimeout(r, 200));
+    // Poll until the tx is created in DB (sync completed but categorize is still blocked).
+    let localTxId: string | null = null;
+    for (let i = 0; i < 50; i++) {
+      const found = await prisma.transaction.findFirst({
+        where: { workspaceId: wsId, plaidTransactionId: syncPlaidTxId },
+        select: { id: true },
+      });
+      if (found) { localTxId = found.id; break; }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    if (!localTxId) throw new Error("tx never appeared in DB — sync may have failed");
 
-    // Now we can look up the real local tx id.
-    const localTx = await prisma.transaction.findFirstOrThrow({
-      where: { workspaceId: wsId, plaidTransactionId: syncPlaidTxId },
-      select: { id: true },
-    });
-    // Resolve the Gemini promise with the real id.
-    geminiResolve({ results: [{ tx_id: localTx.id, category: "Groceries" }] });
+    // Resolve the Gemini promise with the real local tx id.
+    geminiResolve({ results: [{ tx_id: localTxId, category: "Groceries" }] });
 
     const res = await resPromise;
     expect(res.statusCode).toBe(200);
     expect(geminiMock.generateContent.length).toBe(0); // consumed
 
     // Verify the tx was actually categorized (categorize was awaited).
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTxId } });
     const groceriesCat = await prisma.category.findFirstOrThrow({
       where: { workspaceId: wsId, name: "Groceries" },
     });
@@ -2013,7 +2124,7 @@ const MAX_ACTIVE_CATEGORIES = 30;
 const CreateBody = z.object({ name: z.string().trim().min(1).max(MAX_NAME_LEN) });
 
 const PatchBody = z.object({
-  name: z.string().min(1).max(MAX_NAME_LEN).optional(),
+  name: z.string().trim().min(1).max(MAX_NAME_LEN).optional(), // trim before min(1) to reject "   "
   icon: z.string().max(40).optional().nullable(),
   color: z.string().max(20).optional().nullable(),
   archived: z.boolean().optional(),
