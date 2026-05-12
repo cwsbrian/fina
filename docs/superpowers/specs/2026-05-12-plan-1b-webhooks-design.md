@@ -66,7 +66,7 @@ model PlaidWebhookEvent {
   processedAt   DateTime?
   processError  String?   // Short error message (≤500 chars); full stack goes to structured log.
 
-  plaidItem PlaidItem? @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
+  plaidItem PlaidItem? @relation("PlaidItemWebhookEvents", fields: [plaidItemId], references: [id], onDelete: SetNull)
 
   @@index([plaidItemId, receivedAt])
   @@index([webhookType, webhookCode])
@@ -78,10 +78,11 @@ model PlaidWebhookEvent {
 
 ### 3.2 Existing schema changes
 
-`PlaidItem` gets one new nullable column:
+`PlaidItem` gets one new nullable column and the reverse relation:
 
 ```prisma
-webhookUrl  String?   // Set on connect; backfilled by startup task for older items.
+webhookUrl    String?               // Set on connect; backfilled by startup task for older items.
+webhookEvents PlaidWebhookEvent[]   // @relation("PlaidItemWebhookEvents")
 ```
 
 Rationale: Plaid routes `SYNC_UPDATES_AVAILABLE` to the webhook URL registered **per-item** (set via `linkTokenCreate.webhook` or `/item/webhook/update`). The Dashboard global webhook URL is a fallback but cannot be relied upon for items connected before the Dashboard URL was configured. Storing `webhookUrl` in our DB lets the startup backfill task detect which items still need updating.
@@ -171,16 +172,23 @@ This override is scoped to the plugin's encapsulation context (Fastify's `regist
 ### 5.1 JWK cache
 
 ```typescript
-const cache = new Map<string, { key: jose.KeyLike; fetchedAt: number }>();
-const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+
+// expired_at is a Unix timestamp (seconds) from Plaid, or null if not yet rotated.
+const cache = new Map<string, { key: jose.KeyLike; expiresAt: number }>();
 
 async function getJwk(env: Env, kid: string): Promise<jose.KeyLike> {
   const hit = cache.get(kid);
-  if (hit && Date.now() - hit.fetchedAt < CACHE_TTL_MS) return hit.key;
+  if (hit && Date.now() < hit.expiresAt) return hit.key;
   const res = await plaidClient(env).webhookVerificationKeyGet({ key_id: kid });
   const jwk = res.data.key;
+  if (jwk.expired_at !== null && jwk.expired_at * 1000 <= Date.now()) {
+    throw new PlaidWebhookVerifyError('key_expired');
+  }
   const key = await jose.importJWK(jwk, 'ES256');
-  cache.set(kid, { key, fetchedAt: Date.now() });
+  const plaidExpiry = jwk.expired_at !== null ? jwk.expired_at * 1000 : Infinity;
+  const expiresAt = Math.min(Date.now() + MAX_CACHE_TTL_MS, plaidExpiry);
+  cache.set(kid, { key, expiresAt });
   return key;
 }
 ```
@@ -254,7 +262,7 @@ export async function dispatchWebhookSync(
 }
 ```
 
-**lock_held case**: `syncTransactions` returns `{ skipped: 'lock_held', ... }` — treated as success (another sync is in progress; it will pick up the same Plaid delta). `processedAt` is set, `processError` is null.
+**lock_held case**: `syncTransactions` returns `{ skipped: 'lock_held', ... }` — the competing sync may have started before Plaid generated the delta that triggered this webhook, so it is not guaranteed to include the same new transactions. Leave `processedAt` null and `processError` null. Plan 1B-cron will query `plaid_webhook_events WHERE processedAt IS NULL` and retry. This is already noted in Open Questions #5.
 
 Caller in route handler:
 
@@ -372,7 +380,7 @@ For production: register the production API base URL's `/plaid/webhook` path in 
 ```
 PLAID_WEBHOOK_URL=https://<machine>.<tailnet>.ts.net/plaid/webhook
 ```
-Declared as `z.string().url().optional()` in `env.ts`. Unit tests and local dev without Funnel omit it — API starts fine. The two paths that need it (`linkTokenCreate` and the startup backfill task) assert it at call time and throw a clear error if absent. E2E webhook tests skip when not set.
+Declared as `z.string().url().optional()` in `env.ts`. Unit tests and local dev without Funnel omit it — API starts fine. The startup backfill task **skips with a warning log** when absent (no throw). `linkTokenCreate` also skips the `webhook` field when absent (Plaid Dashboard default applies). E2E webhook tests skip when not set.
 
 `PLAID_CLIENT_ID` + `PLAID_SECRET` + `PLAID_ENV` already present. JWK fetching uses the Plaid SDK client already initialized in `src/plaid/client.ts`.
 
