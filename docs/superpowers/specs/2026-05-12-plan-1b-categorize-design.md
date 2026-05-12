@@ -30,7 +30,7 @@ This plan is **backend only.** No web/mobile UI. UI for categorize lands later:
 **In:**
 - `merchant_mappings` table + `transactions.categorizationSource` enum column + 1 migration.
 - Default category seed (11 English categories) on workspace bootstrap.
-- `src/categorize/` module: rule-based merchant normalizer, mapping lookup, Gemini Flash Lite caller, batch service.
+- `apps/api/src/categorize/` module: rule-based merchant normalizer, mapping lookup, Gemini Flash Lite caller, batch service.
 - `syncTransactions` returns the list of newly-inserted local tx IDs in its result. Callers (exchange route, manual sync route, future webhook/cron) invoke `categorizeNewTransactions(env, wsId, newTxIds)` themselves — see §9.2 for the latency-budget rationale.
 - API endpoints: categories CRUD, list uncategorized, manual categorize (auto-creates mapping + back-fills).
 - Env vars: `GEMINI_API_KEY` (required), `CATEGORIZE_BATCH_MAX` (optional, default 50).
@@ -57,7 +57,7 @@ model MerchantMapping {
   workspaceId         String
   // Lowercased, stripped of store IDs/state codes/trailing digits.
   // E.g. "STARBUCKS #1234 TORONTO ON" → "starbucks".
-  // See src/categorize/normalize.ts for the exact rules.
+  // See apps/api/src/categorize/normalize.ts for the exact rules.
   merchantNormalized  String
   categoryId          String
   // 0.00 – 1.00. Manual confirms = 1.00. Reserved for future
@@ -124,6 +124,8 @@ CREATE UNIQUE INDEX "categories_one_active_name_per_workspace_ci"
 
 The API duplicate check (POST/PATCH `/categories`) uses the same `lower(name) AND archivedAt IS NULL` predicate so the route returns 422 before the DB rejects.
 
+**Migration safety note:** `CREATE UNIQUE INDEX ... WHERE archivedAt IS NULL` will fail if active categories in existing workspaces already differ only by case (e.g. both `Groceries` and `groceries` are active). In the current app this can't happen — workspaces either have empty categories (dev/smoke users) or categories seeded from this migration's backfill which are all canonical-case. If a future migration path risks this, add a dedup preflight (e.g. archive duplicates before creating the index). No defensive action needed now.
+
 ### 3.4 Category seed
 
 On workspace bootstrap (existing `apps/api/src/workspaces/bootstrap.ts`), after creating the workspace + owner membership, seed 11 categories (English):
@@ -185,7 +187,8 @@ We use `WHERE NOT EXISTS` rather than `ON CONFLICT` because the full unique on `
 How `newTxIds` is collected:
 - `upsertAdded` (foundation function) currently returns `void`. We change it to return `{ kind: "inserted" | "updated"; localId: string }` so the outer loop can collect IDs where `kind === "inserted"`.
 - "Inserted" = the `create` branch fired (not the `findFirst → update` branch). Promotion (`pending_transaction_id` lookup) explicitly takes the update branch — promoted tx are NOT in `newTxIds`, which is correct: they keep their existing `categoryId` and don't need re-categorize.
-- Mutation-restart can replay the same tx; the second run hits the `findFirst → update` branch and is also excluded. No duplicates in `newTxIds`.
+- Mutation-restart replays from `originalCursor` and re-applies all pages. The outer loop's `newTxIds` accumulator is **NOT reset on restart** (unlike `added/modified/removed` counters). Reasoning: commits from attempt #1's pages are durable on disk; those tx IDs need categorizing regardless of which attempt produced them. The second attempt sees them via the `findFirst → update` branch (idempotent upsert) and they won't be re-added to `newTxIds`.
+- Similarly on `lock_held` (early return): `newTxIds` contains IDs from whichever pages committed before the lock was lost. Those are returned and categorized by the caller. The lock_held path's partial `{added, modified, removed}` counters already follow this same pattern.
 
 Callers invoke `categorizeNewTransactions(env, workspaceId, newTxIds)`. That function does:
 
@@ -232,16 +235,19 @@ categorizeNewTransactions(env, workspaceId, newTxIds):
   if unmapped is empty: return
   categoryRows = SELECT id, name FROM categories
                  WHERE workspaceId = ? AND archivedAt IS NULL
-  categoryByName = { row.name: row.id for row in categoryRows }
-  categoryNames  = [row.name for row in categoryRows]
+  # Case-insensitive lookup: category names are unique on lower(name) so
+  # `categoryByLower` has no collision risk. Using lower() lets the LLM
+  # return `groceries` when the stored name is `Groceries` and still match.
+  categoryByLower = { lower(row.name): row.id for row in categoryRows }
+  categoryNames   = [row.name for row in categoryRows]   # sent to LLM as-is
 
   for batch in chunks(unmapped, env.CATEGORIZE_BATCH_MAX or 50):
     try:
       results = callGeminiCategorize(env, categoryNames, batch)
       for r in results:
-        if r.category not in categoryByName: skip (leave uncategorized)
+        if lower(r.category) not in categoryByLower: skip (leave uncategorized)
         UPDATE transactions
-          SET categoryId = categoryByName[r.category],
+          SET categoryId = categoryByLower[lower(r.category)],
               categorizationSource = 'ai'
           WHERE id = r.tx_id
             AND workspaceId = ?
@@ -277,7 +283,22 @@ Auth:  editor+ (per §6 role table — viewers are GET-only, editors mutate)
      ON CONFLICT (workspaceId, merchantNormalized)
      DO UPDATE SET categoryId = excluded.categoryId, source = 'manual', confidence = 1.0
 
-5. Back-fill: UPDATE transactions
+5. Normalize any sibling rows whose `merchantNormalized` is still NULL.
+   These are transactions imported before this plan was shipped (when
+   normalization didn't run at sync time). Without this step, the back-fill
+   in step 6 would miss them, contradicting "all past Starbucks transactions
+   update."
+
+   UPDATE transactions
+     SET merchantNormalized = normalizeMerchant(merchantRaw)
+     WHERE workspaceId = ?
+       AND lower(merchantRaw) LIKE lower(txMerchantNormalized) || '%'
+       AND merchantNormalized IS NULL
+
+   Note: this is a best-effort recovery pass, not a guaranteed exhaustive
+   migration. A cron plan can backfill the entire workspace in bulk.
+
+6. Back-fill: UPDATE transactions
      SET categoryId = (the mapping's category),
          categorizationSource = 'mapping'
      WHERE workspaceId = ?
@@ -285,10 +306,10 @@ Auth:  editor+ (per §6 role table — viewers are GET-only, editors mutate)
        AND id != txId                                                     -- skip the one we just set to 'manual'
        AND (categorizationSource IS NULL OR categorizationSource <> 'manual')  -- NULL-safe: SQL `!=` doesn't match NULL, so we'd lose uncategorized rows without this
 
-6. Return updated tx.
+7. Return updated tx.
 ```
 
-### 4.3 Merchant normalization rules (`src/categorize/normalize.ts`)
+### 4.3 Merchant normalization rules (`apps/api/src/categorize/normalize.ts`)
 
 Rule-based, applied in a **loop-until-stable** fashion: run all rules; if the string changed, re-run; max 5 iterations. Necessary because one rule's strip can expose another rule's pattern (e.g. removing a trailing state code reveals the trailing city name as the new trailing token).
 
