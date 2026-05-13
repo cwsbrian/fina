@@ -12,6 +12,7 @@ export type StoreInput = {
   institutionId: string;
   institutionName: string;
   accessToken: string; // raw — only here briefly before encryption
+  webhookUrl?: string | null; // NEW — set at connect time, skips startup backfill for this item
 };
 
 /**
@@ -35,6 +36,7 @@ export async function storeAccessToken(
       institutionName: input.institutionName,
       accessTokenCiphertext: ciphertext,
       accessTokenIv: iv,
+      ...(input.webhookUrl != null ? { webhookUrl: input.webhookUrl } : {}),
     },
   });
   return created.id;

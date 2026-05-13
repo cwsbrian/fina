@@ -30,6 +30,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         products: PLAID_PRODUCTS,
         country_codes: PLAID_COUNTRY_CODES,
         language: "en",
+        ...(app.fina.env.PLAID_WEBHOOK_URL ? { webhook: app.fina.env.PLAID_WEBHOOK_URL } : {}),
       });
       return { linkToken: res.data.link_token, expiration: res.data.expiration };
     } catch (e) {
@@ -72,6 +73,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
           institutionId: parsed.data.institutionId,
           institutionName: parsed.data.institutionName,
           accessToken: exch.data.access_token,
+          webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
         });
         for (const a of accountsRes.data.accounts) {
           await tx.bankAccount.create({

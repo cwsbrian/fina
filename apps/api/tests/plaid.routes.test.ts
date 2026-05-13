@@ -128,6 +128,45 @@ describe("GET /workspaces/:id/plaid-items", () => {
   });
 });
 
+describe("POST /workspaces/:id/plaid/link-token", () => {
+  it("passes webhook URL to linkTokenCreate when PLAID_WEBHOOK_URL is set", async () => {
+    const envWithUrl = { ...env, PLAID_WEBHOOK_URL: "https://example.com/plaid/webhook" };
+    const app = await buildApp(envWithUrl);
+    const u = await signUpAndGetCookie(app, { email: "wh-link@x.com", name: "WH" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+
+    plaidMock.linkTokenCreate.push({ data: { link_token: "link-tok", expiration: "2099-01-01" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    // Task 2.1 added linkTokenCreateCalls capture to plaid-mock.ts.
+    expect(plaidMock.linkTokenCreateCalls[0][0]).toMatchObject({
+      webhook: "https://example.com/plaid/webhook",
+    });
+    await app.close();
+  });
+
+  it("omits webhook field when PLAID_WEBHOOK_URL is not set", async () => {
+    const app = await buildApp(env); // env without PLAID_WEBHOOK_URL
+    const u = await signUpAndGetCookie(app, { email: "wh-omit@x.com", name: "WO" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+    plaidMock.linkTokenCreate.push({ data: { link_token: "t", expiration: "2099-01-01" } });
+
+    await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(plaidMock.linkTokenCreateCalls[0][0]).not.toHaveProperty("webhook");
+    await app.close();
+  });
+});
+
 describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
   it("owner Pro user — happy path returns counts", async () => {
     const app = await buildApp(env);
