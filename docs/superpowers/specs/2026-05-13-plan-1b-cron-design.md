@@ -217,9 +217,8 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
 
     const item = ev.plaidItem;
 
-    if (!item.connectedBy) {
-      // Pre-dates connectedBy tracking — allow sync, no gate possible.
-    } else {
+    // Positive-condition form avoids an empty if-block lint warning.
+    if (item.connectedBy) {
       const gate = await checkBackgroundSyncGate(item.connectedBy);
       if (!gate.ok) {
         // Stamp the row so it stops appearing in the NULL retry set.
@@ -231,6 +230,7 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
         continue;
       }
     }
+    // connectedBy null → pre-dates tracking; allow sync, no gate possible.
 
     // dispatchWebhookSync handles its own try/catch + processedAt semantics:
     //  - normal sync: processedAt set
@@ -259,6 +259,10 @@ Either way, TTL cleanup will sweep them eventually. No alarm on these in this pl
 ```ts
 export async function runCleanupEvents(env: Env): Promise<void> {
   const cutoff = new Date(Date.now() - env.CRON_EVENT_TTL_DAYS * 86_400_000);
+  // Intentionally no processedAt filter: rows still NULL at 30 days are either
+  // superseded by cursor-driven syncs or permanently stuck. Either way they are
+  // not worth retrying; TTL sweeps them silently. This is the correct tradeoff
+  // for a dogfood-scale deployment with 30-day retention.
   const r = await prisma.plaidWebhookEvent.deleteMany({
     where: { receivedAt: { lt: cutoff } },
   });
@@ -325,6 +329,7 @@ Each job invoked directly. Test container DB; `syncTransactions` and `dispatchWe
 - `status='error'` item not selected
 - tier-gated user → no sync call, `gated` counter increments
 - `newTxIds.length > 0` → categorize called
+- `connectedBy = null` item → sync still called (tier gate skipped), `console.warn` emitted
 
 **`retry-unprocessed.test.ts`**
 - `processedAt = null` + `SYNC_UPDATES_AVAILABLE` + recent → dispatch called
@@ -345,6 +350,8 @@ Each job invoked directly. Test container DB; `syncTransactions` and `dispatchWe
 - active trial (`trialEndsAt > now`) → `{ ok: true }`
 - expired trial (`trialEndsAt < now`, trialConsumed is irrelevant — effectiveTier only checks trialEndsAt) → `{ ok: false, reason: 'trial_expired' }`
 - no trial ever set (`trialEndsAt = null`) → `{ ok: false, reason: 'no_subscription' }`
+
+**Counter observability note:** All job signatures return `Promise<void>`. Tests that verify counters (e.g. `attempted = 1`) must spy on `console.info` and assert the structured argument, or the implementer may change the internal function to return a counters object while keeping the public `runX(env)` wrapper `void`. Either approach is acceptable; the spy approach is simpler. The implementation plan should pick one and be consistent.
 
 ### 8.2 Integration — `cron/scheduler.test.ts`
 
