@@ -69,12 +69,8 @@ async function createSandboxPublicToken(): Promise<string> {
     body: JSON.stringify({
       client_id: process.env.PLAID_CLIENT_ID,
       secret: process.env.PLAID_SECRET,
-      institution_id: "ins_110000",
+      institution_id: "ins_109508",
       initial_products: ["transactions"],
-      options: {
-        auth: {},
-        transactions: { days: 30 },
-      },
     }),
   });
   if (!response.ok) {
@@ -144,8 +140,8 @@ test.describe("plan 1b-webhooks", () => {
         headers: { "x-workspace-id": wsId, "content-type": "application/json" },
         data: {
           publicToken,
-          institutionId: "ins_110000",
-          institutionName: "Tartan Bank",
+          institutionId: "ins_109508",
+          institutionName: "First Platypus Bank",
         },
       },
     );
