@@ -41,6 +41,15 @@ const Schema = z.object({
   // OPTIONAL — keeps test literals clean. Use `env.CATEGORIZE_BATCH_MAX ?? 50`
   // in service code. z.default() would make the inferred Env type non-optional.
   CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().optional(),
+  // Scheduler — off by default so dev/test never fire cron jobs.
+  // Use "true" or "1" to enable (env vars are always strings).
+  // .optional() keeps test env literals clean (same convention as CATEGORIZE_BATCH_MAX).
+  CRON_ENABLED: z.preprocess(
+    (v) => (v === "true" || v === "1" ? true : v === "false" ? false : v),
+    z.boolean().optional(),
+  ),
+  // TTL for plaid_webhook_events rows in days. Default 30 applied at use site with ?? 30.
+  CRON_EVENT_TTL_DAYS: z.coerce.number().int().positive().optional(),
 });
 
 export type Env = z.infer<typeof Schema>;
