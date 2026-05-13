@@ -1,6 +1,6 @@
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
-import { plaidClient } from "./client.js";
+import { plaidClient, sanitizePlaidError } from "./client.js";
 import { readAccessToken } from "./items.js";
 
 /**
@@ -39,7 +39,9 @@ export async function backfillWebhookUrls(env: Env): Promise<void> {
         data: { webhookUrl: wantUrl },
       });
     } catch (e) {
-      console.error("backfillWebhookUrls: failed for item", { itemId: item.id, err: e });
+      // sanitizePlaidError strips axios request config (which contains access_token)
+      // from the logged object, preventing accidental token leakage in logs.
+      console.error("backfillWebhookUrls: failed for item", { itemId: item.id, err: sanitizePlaidError(e) });
     }
   }
 }

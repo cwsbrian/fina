@@ -27,7 +27,12 @@ export async function dispatchWebhookSync(
     const r = await syncTransactions(env, workspaceId, plaidItemId);
 
     if (r.newTxIds.length > 0) {
-      await categorizeNewTransactions(env, workspaceId, r.newTxIds);
+      // Categorize is best-effort and must not affect the lock_held retry sentinel.
+      // A DB error here would otherwise jump to the catch block and set processedAt,
+      // losing the NULL that signals cron to retry the unfinished sync.
+      await categorizeNewTransactions(env, workspaceId, r.newTxIds).catch((catErr) => {
+        console.error("categorize after webhook sync failed", { err: catErr, plaidItemId, webhookEventId });
+      });
     }
 
     if ("skipped" in r) {
