@@ -16,10 +16,16 @@ import { signUp, uniqueEmail, getWorkspaceId } from "./helpers/auth";
 import { execSync } from "child_process";
 
 const API = process.env.API_URL ?? "http://localhost:4000";
+// PLAID_SANDBOX_ACCESS_TOKEN: a real decrypted Plaid sandbox access_token.
+// Required for the positive path because the app encrypts the token and
+// fire_webhook needs the raw token to authenticate with Plaid.
+// Obtain from smoke test: exchange a public_token via Plaid sandbox API directly
+// (not through the app), then pass the access_token here.
 const HAS_WEBHOOK_ENV = !!(
   process.env.PLAID_CLIENT_ID &&
   process.env.PLAID_SECRET &&
-  process.env.PLAID_WEBHOOK_URL
+  process.env.PLAID_WEBHOOK_URL &&
+  process.env.PLAID_SANDBOX_ACCESS_TOKEN
 );
 
 /**
@@ -35,9 +41,9 @@ async function queryDatabase<T extends Record<string, unknown>>(
       { encoding: "utf8" },
     ).trim();
     if (!result) return [];
-    // Parse the psql output (tab-separated columns)
+    // Parse the psql output. psql -A uses '|' as column separator by default.
     return result.split("\n").map((row) => {
-      const parts = row.split("\t");
+      const parts = row.split("|");
       return {
         id: parts[0],
         plaidItemId: parts[1],
@@ -154,20 +160,14 @@ test.describe("plan 1b-webhooks", () => {
     // Step 3: Retrieve the item_id for the webhook
     const itemId = exchangeBody.itemId;
 
-    // Step 4: Fire webhook event via Plaid sandbox
-    // Note: In a real test, we'd use the actual access_token from the exchange response
-    // or decrypt it from the DB. For now, we'll use a mock scenario.
-    // The webhook event will be stored even if the sync fails.
-    try {
-      await fireWebhookEvent(itemId, "mock_access_token_for_test");
-    } catch (e) {
-      // If fire_webhook fails, we'll just note it; the route might still work
-      console.log("fire_webhook failed (expected in test env):", e);
-    }
+    // Step 4: Fire webhook event via Plaid sandbox.
+    // PLAID_SANDBOX_ACCESS_TOKEN is required — the app encrypts the token so we
+    // can't retrieve it from the DB without server-side decryption.
+    await fireWebhookEvent(itemId, process.env.PLAID_SANDBOX_ACCESS_TOKEN!);
 
-    // Step 5: Poll the database for the webhook event
-    // Within 10 seconds, we should see a row in plaid_webhook_events
-    let webhookEvent = null;
+    // Step 5: Poll the database for the webhook event.
+    // Within 10 seconds we should see a row in plaid_webhook_events.
+    let webhookEvent: Record<string, unknown> | null = null;
     for (let i = 0; i < 20; i++) {
       const events = await queryDatabase(
         `SELECT id, "plaidItemId", "webhookType", "webhookCode", "processedAt", "processError" \
@@ -181,15 +181,9 @@ test.describe("plan 1b-webhooks", () => {
       await page.waitForTimeout(500);
     }
 
-    // We expect a row to be present if the webhook was actually fired
-    // (In test environments without real Plaid credentials, this may not work,
-    //  so we make this a soft assertion for now.)
-    if (webhookEvent) {
-      expect(webhookEvent.webhookType).toBe("TRANSACTIONS");
-      expect(webhookEvent.webhookCode).toBe("SYNC_UPDATES_AVAILABLE");
-      // processedAt should be set if the sync was dispatched and completed
-      // This depends on the sync implementation and may be null if still processing
-    }
+    expect(webhookEvent, "Webhook event row must appear within 10s").not.toBeNull();
+    expect(webhookEvent!.webhookType).toBe("TRANSACTIONS");
+    expect(webhookEvent!.webhookCode).toBe("SYNC_UPDATES_AVAILABLE");
   });
 
   test("webhook: invalid signature → 401", async ({ page }) => {
