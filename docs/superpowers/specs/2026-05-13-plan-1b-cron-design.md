@@ -144,20 +144,24 @@ pnpm --filter @fina/api add croner
 export async function runDailyRefresh(env: Env): Promise<void> {
   const items = await prisma.plaidItem.findMany({
     where: { status: "active" },
-    select: {
-      id: true,
-      workspaceId: true,
-      itemId: true,
-      workspace: { select: { ownerUserId: true } },
-    },
+    // connectedBy is the userId of the member who ran Plaid Link.
+    // Workspace has no ownerUserId column; connectedBy is the correct handle for
+    // per-user tier gating.  It is nullable (SetNull on user delete) — see below.
+    select: { id: true, workspaceId: true, connectedBy: true },
   });
 
   const t0 = Date.now();
   let synced = 0, gated = 0, failed = 0, lockHeld = 0;
 
   for (const item of items) {
-    const gate = await checkBackgroundSyncGate(item.workspace.ownerUserId);
-    if (!gate.ok) { gated++; continue; }
+    if (!item.connectedBy) {
+      // Item pre-dates connectedBy tracking. No userId → cannot gate.
+      // Allow the sync so stale items are not silently frozen.
+      console.warn("daily-refresh: connectedBy null, skipping tier gate", { itemId: item.id });
+    } else {
+      const gate = await checkBackgroundSyncGate(item.connectedBy);
+      if (!gate.ok) { gated++; continue; }
+    }
 
     try {
       const r = await syncTransactions(env, item.workspaceId, item.id);
@@ -196,23 +200,36 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
       plaidItemId: { not: null },
       receivedAt: { gte: cutoff },
     },
-    include: { plaidItem: { include: { workspace: { select: { ownerUserId: true } } } } },
+    // No workspace join needed — tier gate uses plaidItem.connectedBy directly.
+    include: { plaidItem: { select: { id: true, workspaceId: true, connectedBy: true } } },
     take: 50,
     orderBy: { receivedAt: "asc" },
   });
 
-  let dispatched = 0, gated = 0;
+  // `attempted` counts rows we passed to dispatchWebhookSync.
+  // lock_held dispatches remain NULL and reappear on the next tick — this is intentional.
+  let attempted = 0, gated = 0;
 
   for (const ev of events) {
-    const item = ev.plaidItem!;
-    const gate = await checkBackgroundSyncGate(item.workspace.ownerUserId);
-    if (!gate.ok) {
-      await prisma.plaidWebhookEvent.update({
-        where: { id: ev.id },
-        data: { processedAt: new Date(), processError: `tier_gated:${gate.reason}` },
-      });
-      gated++;
-      continue;
+    // Guard: plaidItemId filter ensures plaidItem is non-null at query time, but a
+    // concurrent user deletion applies SetNull between findMany and here.
+    if (!ev.plaidItem) continue;
+
+    const item = ev.plaidItem;
+
+    if (!item.connectedBy) {
+      // Pre-dates connectedBy tracking — allow sync, no gate possible.
+    } else {
+      const gate = await checkBackgroundSyncGate(item.connectedBy);
+      if (!gate.ok) {
+        // Stamp the row so it stops appearing in the NULL retry set.
+        await prisma.plaidWebhookEvent.update({
+          where: { id: ev.id },
+          data: { processedAt: new Date(), processError: `tier_gated:${gate.reason}` },
+        });
+        gated++;
+        continue;
+      }
     }
 
     // dispatchWebhookSync handles its own try/catch + processedAt semantics:
@@ -220,11 +237,11 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
     //  - sync throws: processedAt + processError set
     //  - lock_held:   processedAt stays NULL (we'll see this row again next tick)
     await dispatchWebhookSync(env, item.workspaceId, item.id, ev.id);
-    dispatched++;
+    attempted++;
   }
 
   console.info("retry-unprocessed complete", {
-    found: events.length, dispatched, gated,
+    found: events.length, attempted, gated,
   });
 }
 ```
@@ -316,6 +333,8 @@ Each job invoked directly. Test container DB; `syncTransactions` and `dispatchWe
 - `receivedAt < cutoff` → not selected
 - tier-gated → row gets `processedAt` + `processError = 'tier_gated:<reason>'`, dispatch NOT called
 - 51 rows present → exactly 50 dispatched in one tick
+- `plaidItem` is null at iteration time (race: SetNull between query and loop) → skip silently, no crash
+- `dispatchWebhookSync` mock returns normally but leaves `processedAt = null` (lock_held path) → row reappears on next `findMany` (confirm `attempted = 1`, row still NULL)
 
 **`cleanup-events.test.ts`**
 - row older than `CRON_EVENT_TTL_DAYS` → deleted
@@ -323,9 +342,9 @@ Each job invoked directly. Test container DB; `syncTransactions` and `dispatchWe
 - `env.CRON_EVENT_TTL_DAYS = 1` → cutoff respects the override
 
 **`tier-gate.test.ts`**
-- active trial → `{ ok: true }`
-- `trialEndsAt < now` + `trialConsumed = true` → `{ ok: false, reason: 'trial_expired' }`
-- never started trial → `{ ok: false, reason: 'no_subscription' }`
+- active trial (`trialEndsAt > now`) → `{ ok: true }`
+- expired trial (`trialEndsAt < now`, trialConsumed is irrelevant — effectiveTier only checks trialEndsAt) → `{ ok: false, reason: 'trial_expired' }`
+- no trial ever set (`trialEndsAt = null`) → `{ ok: false, reason: 'no_subscription' }`
 
 ### 8.2 Integration — `cron/scheduler.test.ts`
 
@@ -357,6 +376,8 @@ New: `docs/superpowers/smoke-tests/2026-05-13-plan-1b-cron.md`
 | 6 | Load at scale | Sequential per-item sync is fine up to ~50 items per workspace. Past that, batch with sleep or move to a queue (follow-up). |
 | 7 | Test isolation | Cron stays off in tests because `CRON_ENABLED` defaults to false and the dynamic import means tests never load `croner`. |
 | 8 | Webhook-handler gate parity | The live webhook handler currently dispatches without a tier check (intentional in 1B-webhooks since all users are trial). When this plan ships, optionally fold `checkBackgroundSyncGate` into `dispatchWebhookSync` for parity — out of scope here, listed as the natural next step. |
+| 9 | Per-item `effectiveTier` N DB reads | `daily-refresh` calls `checkBackgroundSyncGate` once per item. A user with N items makes N identical `user.findUniqueOrThrow` calls in one tick. At dogfood scale (≤ 5 items total) this is negligible. Implementers may add a `Map<userId, GateResult>` per-tick cache as an easy optimization if N grows. |
+| 10 | `syncTransactions` per-item timeout | The Plaid axios client has no request timeout. A hung call in `daily-refresh` can block the entire tick. At dogfood scale this is low-risk; implementers should wrap each `syncTransactions` call in `Promise.race([syncTransactions(...), sleep(60_000).then(() => { throw new Error("timeout") })])` or configure an axios timeout on the Plaid client. Flagged as a follow-up. |
 
 ---
 
