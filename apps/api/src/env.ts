@@ -23,6 +23,15 @@ const Schema = z.object({
   // override to a small value so the timeout path is exercised with real
   // timers (vi.useFakeTimers + fastify.inject is racy and brittle).
   PLAID_SYNC_TIMEOUT_MS: z.coerce.number().int().positive().optional(),
+  // Plaid webhook delivery URL (Tailscale Funnel in dev, prod URL in prod).
+  // Optional — unit tests + local dev without Funnel omit it. linkTokenCreate
+  // and the startup backfill task skip when absent.
+  // z.preprocess converts blank string ("PLAID_WEBHOOK_URL=" in .env) → undefined,
+  // so dotenv-loaded empty values don't fail the url() validator.
+  PLAID_WEBHOOK_URL: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().url().optional(),
+  ),
   // AES-256-GCM key for at-rest encryption (Plaid access_token).
   // Must base64-decode to exactly 32 bytes. Validation happens lazily inside
   // the crypto helper so tests can use a fixed value without re-running zod.

@@ -167,14 +167,18 @@ model PlaidItem {
   errorCode             String?
   lastSyncAt            DateTime?
   lastCursor            String?
+  // Webhook URL registered with Plaid for this item (per §1B-webhooks).
+  // NULL for items connected before the webhook feature shipped — startup task backfills them.
+  webhookUrl            String?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
-  workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace       Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // SetNull so workspace data survives if the connecting user leaves/is deleted.
-  user         User?         @relation(fields: [connectedBy], references: [id], onDelete: SetNull)
-  bankAccounts BankAccount[]
-  transactions Transaction[]
+  user            User?                  @relation(fields: [connectedBy], references: [id], onDelete: SetNull)
+  bankAccounts    BankAccount[]
+  transactions    Transaction[]
+  webhookEvents   PlaidWebhookEvent[]    @relation("PlaidItemWebhookEvents")
 
   @@index([workspaceId])
   @@index([connectedBy])
@@ -185,6 +189,31 @@ enum PlaidItemStatus {
   active
   error
   relink_required
+}
+
+model PlaidWebhookEvent {
+  id            String    @id @default(cuid())
+  // NULL when item_id is not in our DB (disconnected item, stale Plaid delivery).
+  plaidItemId   String?
+  webhookType   String    // e.g. "TRANSACTIONS"
+  webhookCode   String    // e.g. "SYNC_UPDATES_AVAILABLE"
+  // Raw Plaid body — audit trail. No unique constraint:
+  // SYNC_UPDATES_AVAILABLE bodies are identical across deliveries once
+  // initial_update_complete=true; body-hash dedup would silently drop
+  // legitimate events. Sync's cursor + row-level lock handles duplicates.
+  body          Json
+  receivedAt    DateTime  @default(now())
+  // Set by detached dispatchWebhookSync after sync+categorize completes (or fails).
+  // NULL while in-flight, when webhook type wasn't dispatched, OR when sync hit lock_held
+  // (so 1B-cron can retry — competing sync may have started before this delta existed).
+  processedAt   DateTime?
+  processError  String?   // ≤500 chars; full stack to structured log.
+
+  plaidItem PlaidItem? @relation("PlaidItemWebhookEvents", fields: [plaidItemId], references: [id], onDelete: SetNull)
+
+  @@index([plaidItemId, receivedAt])
+  @@index([webhookType, webhookCode])
+  @@map("plaid_webhook_events")
 }
 
 model BankAccount {

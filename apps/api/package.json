@@ -18,6 +18,7 @@
     "@fastify/cors": "^11.2.0",
     "@fastify/sensible": "^6.0.1",
     "@google/genai": "^1",
+    "jose": "^6",
     "@prisma/client": "^5.22.0",
     "better-auth": "^1.6.9",
     "fastify": "^5.0.0",
