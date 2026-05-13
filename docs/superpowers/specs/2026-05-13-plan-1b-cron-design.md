@@ -233,9 +233,12 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
     // connectedBy null → pre-dates tracking; allow sync, no gate possible.
 
     // dispatchWebhookSync handles its own try/catch + processedAt semantics:
-    //  - normal sync: processedAt set
-    //  - sync throws: processedAt + processError set
-    //  - lock_held:   processedAt stays NULL (we'll see this row again next tick)
+    //  - normal sync:  processedAt set
+    //  - sync throws:  processedAt + processError set
+    //  - lock_held:    processedAt stays NULL (row reappears next tick).
+    //                  NOTE: any newTxIds from already-committed pages are still
+    //                  categorized inside dispatchWebhookSync before it returns on
+    //                  lock_held — so processedAt=NULL does NOT mean "no data committed".
     await dispatchWebhookSync(env, item.workspaceId, item.id, ev.id);
     attempted++;
   }
@@ -281,7 +284,12 @@ export type GateResult = { ok: true } | { ok: false; reason: string };
 
 /** Background-sync version of requireProTier — never throws; returns a
  *  structured skip reason instead. Reuses the shared effectiveTier helper
- *  so trial logic stays in one place. */
+ *  so trial logic stays in one place.
+ *
+ *  When paid subscriptions land (future plan), effectiveTier will return
+ *  tier:"pro" for subscribers too — the first branch handles that correctly.
+ *  The second branch (trial_expired) only triggers when tier is "free" and
+ *  trialEndsAt is in the past; it does not need updating for subscriptions. */
 export async function checkBackgroundSyncGate(userId: string): Promise<GateResult> {
   const t = await effectiveTier(userId);
   if (t.tier === "pro") return { ok: true };
