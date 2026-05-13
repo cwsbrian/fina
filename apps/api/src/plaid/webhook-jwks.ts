@@ -1,4 +1,4 @@
-import { compactVerify, importJWK, type KeyLike, type JWK } from "jose";
+import { compactVerify, importJWK, type JWK } from "jose";
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Env } from "../env.js";
@@ -19,10 +19,10 @@ const PlaidJwtPayloadSchema = z.object({
   iat: z.number(),
 });
 
-type CacheEntry = { key: KeyLike; expiresAt: number };
+type CacheEntry = { key: CryptoKey; expiresAt: number };
 const cache = new Map<string, CacheEntry>();
 
-async function getJwk(env: Env, kid: string): Promise<KeyLike> {
+async function getJwk(env: Env, kid: string): Promise<CryptoKey> {
   const hit = cache.get(kid);
   if (hit && Date.now() < hit.expiresAt) return hit.key;
 
@@ -39,8 +39,8 @@ async function getJwk(env: Env, kid: string): Promise<KeyLike> {
   }
   const plaidExpiry = jwk.expired_at !== null ? jwk.expired_at * 1000 : Number.POSITIVE_INFINITY;
   const expiresAt = Math.min(Date.now() + MAX_CACHE_TTL_MS, plaidExpiry);
-  cache.set(kid, { key: key as KeyLike, expiresAt });
-  return key as KeyLike;
+  cache.set(kid, { key: key as CryptoKey, expiresAt });
+  return key as CryptoKey;
 }
 
 export async function verifyPlaidWebhook(
@@ -61,7 +61,7 @@ export async function verifyPlaidWebhook(
     throw new PlaidWebhookVerifyError("invalid_signature");
   }
 
-  let key: KeyLike;
+  let key: CryptoKey;
   try {
     key = await getJwk(env, kid);
   } catch (e) {
@@ -76,7 +76,12 @@ export async function verifyPlaidWebhook(
     throw new PlaidWebhookVerifyError("invalid_signature");
   }
 
-  const claims = PlaidJwtPayloadSchema.parse(JSON.parse(new TextDecoder().decode(payload)));
+  let claims: z.infer<typeof PlaidJwtPayloadSchema>;
+  try {
+    claims = PlaidJwtPayloadSchema.parse(JSON.parse(new TextDecoder().decode(payload)));
+  } catch {
+    throw new PlaidWebhookVerifyError("invalid_claims");
+  }
 
   const bodyHash = createHash("sha256").update(rawBody).digest("hex");
   if (claims.request_body_sha256 !== bodyHash) {
@@ -92,6 +97,6 @@ export async function verifyPlaidWebhook(
 export function _clearCacheForTest(): void {
   cache.clear();
 }
-export function _injectJwkForTest(kid: string, key: KeyLike, expiresAt: number): void {
+export function _injectJwkForTest(kid: string, key: CryptoKey, expiresAt: number): void {
   cache.set(kid, { key, expiresAt });
 }

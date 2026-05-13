@@ -1,10 +1,10 @@
-import { generateKeyPair, exportJWK, SignJWT, type KeyLike } from "jose";
+import { generateKeyPair, exportJWK, SignJWT } from "jose";
 import { createHash } from "node:crypto";
 import { _clearCacheForTest, _injectJwkForTest } from "../../src/plaid/webhook-jwks.js";
 
 export type WebhookKeyPair = {
-  privateKey: KeyLike;
-  publicKey: KeyLike;
+  privateKey: CryptoKey;
+  publicKey: CryptoKey;
   jwk: Record<string, unknown>;
   kid: string;
 };
@@ -24,7 +24,7 @@ export async function generateWebhookKeys(kid = "test-kid-1"): Promise<WebhookKe
  */
 export async function signWebhook(
   body: Buffer,
-  privateKey: KeyLike,
+  privateKey: CryptoKey,
   kid: string,
   iat: number = Math.floor(Date.now() / 1000),
 ): Promise<string> {
@@ -39,7 +39,7 @@ export async function signWebhook(
  * Inject a public key into the JWK cache so verification skips the Plaid API call.
  * `expiresAt` is an absolute ms timestamp; defaults to 1h from now.
  */
-export function injectJwkForTest(kid: string, publicKey: KeyLike, expiresAt?: number): void {
+export function injectJwkForTest(kid: string, publicKey: CryptoKey, expiresAt?: number): void {
   _injectJwkForTest(kid, publicKey, expiresAt ?? Date.now() + 60 * 60 * 1000);
 }
 
