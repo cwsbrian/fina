@@ -11,6 +11,11 @@ async function start(): Promise<void> {
   void backfillWebhookUrls(env).catch((err) => {
     console.error("webhook backfill failed", err);
   });
+
+  if (env.CRON_ENABLED) {
+    const { startScheduler } = await import("./cron/scheduler.js");
+    startScheduler(env);
+  }
 }
 
 start().catch((err) => {
