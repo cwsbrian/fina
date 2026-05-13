@@ -12,10 +12,20 @@ async function start(): Promise<void> {
     console.error("webhook backfill failed", err);
   });
 
+  let stopScheduler: (() => void) | undefined;
   if (env.CRON_ENABLED) {
-    const { startScheduler } = await import("./cron/scheduler.js");
-    startScheduler(env);
+    const scheduler = await import("./cron/scheduler.js");
+    scheduler.startScheduler(env);
+    stopScheduler = scheduler.stopScheduler;
   }
+
+  const shutdown = async () => {
+    stopScheduler?.();
+    await app.close();
+    process.exit(0);
+  };
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }
 
 start().catch((err) => {

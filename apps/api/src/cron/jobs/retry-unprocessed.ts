@@ -4,6 +4,9 @@ import { dispatchWebhookSync } from "../../plaid/webhook-dispatch.js";
 import { checkBackgroundSyncGate } from "../tier-gate.js";
 
 export async function runRetryUnprocessed(env: Env): Promise<void> {
+  // 24h window: Plaid retries undelivered webhooks for up to 24h, so retrying
+  // within that window can still catch new deltas. Events aged 24h–30d are
+  // superseded by cursor-driven syncs and swept by cleanup-events at TTL.
   const cutoff = new Date(Date.now() - 24 * 3600_000);
 
   const events = await prisma.plaidWebhookEvent.findMany({
