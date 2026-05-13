@@ -53,7 +53,7 @@ export async function verifyPlaidWebhook(
   let payload: Uint8Array;
   let kid: string;
   try {
-    const headerB64 = jwtHeader.split(".")[0];
+    const headerB64 = jwtHeader.split(".")[0]!;
     const header = JSON.parse(Buffer.from(headerB64, "base64url").toString("utf8")) as { kid?: string };
     if (!header.kid) throw new Error("no kid");
     kid = header.kid;
