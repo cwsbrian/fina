@@ -6,6 +6,7 @@ import { healthRoutes } from "./routes/health.js";
 import { meRoutes } from "./routes/me.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { inviteRoutes } from "./routes/invites.js";
+import { plaidWebhookRoutes } from "./routes/plaid-webhook.js";
 import { plaidRoutes } from "./routes/plaid.js";
 import { plaidItemsRoutes } from "./routes/plaid-items.js";
 import { accountsRoutes } from "./routes/accounts.js";
@@ -85,6 +86,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(meRoutes);
   await app.register(workspacesRoutes);
   await app.register(inviteRoutes);
+  await app.register(plaidWebhookRoutes);
   await app.register(plaidRoutes);
   await app.register(plaidItemsRoutes);
   await app.register(accountsRoutes);
