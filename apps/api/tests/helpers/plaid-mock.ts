@@ -29,21 +29,28 @@
 //                   timeout test which pushes `new Promise(() => {})`)
 type AnyResponse = { data: unknown } | Error | Promise<{ data: unknown } | Error>;
 
+type QueueKey = "linkTokenCreate" | "itemPublicTokenExchange" | "accountsGet" | "transactionsSync" | "itemRemove" | "webhookVerificationKeyGet" | "itemWebhookUpdate";
+
 export const plaidMock = {
   linkTokenCreate: [] as AnyResponse[],
   itemPublicTokenExchange: [] as AnyResponse[],
   accountsGet: [] as AnyResponse[],
   transactionsSync: [] as AnyResponse[],
   itemRemove: [] as AnyResponse[],
+  webhookVerificationKeyGet: [] as AnyResponse[],
+  itemWebhookUpdate: [] as AnyResponse[],
+  linkTokenCreateCalls: [] as unknown[][],
 };
 
 export function resetPlaidMock(): void {
-  for (const k of Object.keys(plaidMock) as (keyof typeof plaidMock)[]) {
+  const queueKeys: QueueKey[] = ["linkTokenCreate", "itemPublicTokenExchange", "accountsGet", "transactionsSync", "itemRemove", "webhookVerificationKeyGet", "itemWebhookUpdate"];
+  for (const k of queueKeys) {
     plaidMock[k].length = 0;
   }
+  plaidMock.linkTokenCreateCalls.length = 0;
 }
 
-function pop(method: keyof typeof plaidMock): AnyResponse {
+function pop(method: QueueKey): AnyResponse {
   const next = plaidMock[method].shift();
   if (!next) {
     throw new Error(
@@ -53,7 +60,7 @@ function pop(method: keyof typeof plaidMock): AnyResponse {
   return next;
 }
 
-async function callOrThrow(method: keyof typeof plaidMock) {
+async function callOrThrow(method: QueueKey) {
   const next = pop(method);
   // Pending-promise variant: the test wants this call to hang (or resolve
   // later via test-controlled signaling). Await the queued promise and
@@ -81,11 +88,16 @@ export function plaidMockFactory() {
     },
     PlaidApi: class {
       constructor(_: unknown) {}
-      async linkTokenCreate() { return callOrThrow("linkTokenCreate"); }
+      async linkTokenCreate(args: unknown) {
+        plaidMock.linkTokenCreateCalls.push([args]);
+        return callOrThrow("linkTokenCreate");
+      }
       async itemPublicTokenExchange() { return callOrThrow("itemPublicTokenExchange"); }
       async accountsGet() { return callOrThrow("accountsGet"); }
       async transactionsSync() { return callOrThrow("transactionsSync"); }
       async itemRemove() { return callOrThrow("itemRemove"); }
+      async webhookVerificationKeyGet() { return callOrThrow("webhookVerificationKeyGet"); }
+      async itemWebhookUpdate() { return callOrThrow("itemWebhookUpdate"); }
     },
     PlaidEnvironments: {
       sandbox: "https://sandbox.plaid.com",
