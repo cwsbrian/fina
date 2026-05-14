@@ -35,11 +35,9 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Add at the end of `apps/api/tests/plaid.tier.test.ts`, inside a new `describe` block after the existing ones:
+Add `computeEffectiveTier` to the existing top-level import from `"../src/auth/tier.js"` (it is likely already imported there; if not, add it to the import). Then add a new `describe` block at the end of the file:
 
 ```ts
-import { computeEffectiveTier } from "../src/auth/tier.js";
-
 describe("computeEffectiveTier — plaidItemLimit", () => {
   it("active trial → plaidItemLimit: 5", () => {
     const t = computeEffectiveTier({ trialEndsAt: new Date(Date.now() + 86_400_000) });
@@ -320,12 +318,14 @@ Expected: the new 6 tests fail (402 not returned where expected; limit check doe
 
 Make 3 changes:
 
-**a) Add imports** (after existing imports):
+**a) Replace the `requireProTier` import** — `requireProTier` is only used in `plaid.ts` and is being replaced. Change the existing import line:
+
 ```ts
+// Before:
+import { requireProTier } from "../auth/tier.js";
+// After:
 import { effectiveTier } from "../auth/tier.js";
 ```
-
-(Remove `requireProTier` from the existing import of `"../auth/tier.js"` — or keep it if used elsewhere, but it's only used in this file.)
 
 **b) Add the `checkPlaidItemLimit` helper** (before the `plaidRoutes` function):
 
@@ -401,7 +401,6 @@ describe("removeItemForBilling", () => {
   async function seedItemWithTransactions() {
     const ws = await prisma.workspace.create({ data: { name: "W-billing" } });
     // storeAccessToken encrypts and creates the plaid_items row.
-    const app = await buildApp(env);
     const itemRowId = await storeAccessToken(env, prisma, {
       workspaceId: ws.id,
       itemId: `pi_bill_${Math.random()}`,
@@ -409,7 +408,7 @@ describe("removeItemForBilling", () => {
       institutionName: "Bank",
       accessToken: "access-sandbox-test-billing",
     });
-    // Seed a transaction so we can verify it survives.
+    // Seed a transaction so we can verify it survives after billing removal.
     const account = await prisma.bankAccount.create({
       data: {
         workspaceId: ws.id,
@@ -423,14 +422,11 @@ describe("removeItemForBilling", () => {
     await prisma.transaction.create({
       data: {
         workspaceId: ws.id,
-        bankAccountId: account.id,
+        accountId: account.id,      // NOTE: field is accountId, not bankAccountId
         amount: 10,
-        currency: "CAD",
         merchantRaw: "Test",
-        merchantNormalized: "Test",
         occurredAt: new Date(),
-        pending: false,
-        source: "plaid",
+        rawData: {},                 // required Json field (no default)
       },
     });
     return { wsId: ws.id, itemRowId, accountId: account.id };
@@ -451,7 +447,7 @@ describe("removeItemForBilling", () => {
     expect(item.id).toBe(itemRowId);
 
     // Transactions preserved.
-    const txCount = await prisma.transaction.count({ where: { bankAccountId: accountId } });
+    const txCount = await prisma.transaction.count({ where: { accountId } });
     expect(txCount).toBe(1);
   });
 
@@ -622,6 +618,8 @@ describe("runDailyRefresh — Step 0 trial expiry cleanup", () => {
 
   it("active-trial owner's item → NOT removed", async () => {
     await seedWorkspaceWithOwner(new Date(Date.now() + 86_400_000));
+    // Mock sync so the item's sync attempt doesn't error noisily in this test.
+    vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
     await runDailyRefresh(env);
 
