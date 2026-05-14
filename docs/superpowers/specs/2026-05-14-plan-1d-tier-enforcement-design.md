@@ -155,9 +155,6 @@ export async function removeItemForBilling(
 
 **Partial-failure retry path:** If the Plaid call succeeds but the `prisma.plaidItem.update` fails (e.g., network blip), the item stays `active` locally but is invalid on Plaid's side. Tomorrow's Step 0 in daily-refresh selects it again (`status: "active"`, trial still expired), calls `removeItemForBilling`, which calls Plaid again. Plaid returns `ITEM_NOT_FOUND`; `isPlaidErrorCode` catches it and falls through to the `prisma.plaidItem.update`, which succeeds. The retry is self-healing — no manual intervention needed.
 
-```ts
-```
-
 ### 4.5 `runDailyRefresh` — Step 0 prepend (`apps/api/src/cron/jobs/daily-refresh.ts`)
 
 Inserted **before** the existing active-items sync loop:
@@ -243,6 +240,7 @@ Mock `effectiveTier` for each tier scenario (both link-token and exchange now ru
 - Free user → exchange → 402 `upgrade_required`
 - Pro user at limit (5 active items) → link-token → 402 `plaid_item_limit_reached`
 - Pro user at limit (5 active items) → exchange → 402 `plaid_item_limit_reached`
+- Pro user below limit (4 active items) → link-token → 200
 - Pro user below limit (4 active items) → exchange → 200
 - Disconnected items don't count toward limit (3 active + 2 disconnected → exchange allowed for Pro)
 
