@@ -146,7 +146,7 @@ describe("POST /plaid/webhook", () => {
     await app.close();
   });
 
-  it("webhookType ITEM → 200, row stored, no dispatch", async () => {
+  it("webhookType ITEM/ITEM_ERROR → 200, row stored, TRANSACTIONS dispatch not called", async () => {
     const app = await buildApp(env);
     const { pi } = await seedItem();
     const body = {
@@ -199,6 +199,87 @@ describe("POST /plaid/webhook", () => {
     expect(r2.statusCode).toBe(200);
     expect(await prisma.plaidWebhookEvent.count()).toBe(2);
     expect(dispatchWebhookSync).toHaveBeenCalledTimes(2);
+    await app.close();
+  });
+
+  it("ITEM/ERROR for known item → 200, status='error', event row stored", async () => {
+    const app = await buildApp(env);
+    const { pi } = await seedItem();
+    const body = {
+      webhook_type: "ITEM",
+      webhook_code: "ERROR",
+      item_id: pi.itemId,
+      error: { error_code: "ITEM_LOGIN_REQUIRED", error_type: "ITEM_ERROR", error_message: "login required" },
+    };
+    const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+
+    const res = await postWebhook(app, body, jwt);
+
+    expect(res.statusCode).toBe(200);
+
+    // Poll until the detached dispatchItemEvent writes status (up to 500ms).
+    // The dispatch is a single local DB write — 500ms is very conservative.
+    let updatedItem = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    for (let i = 0; i < 10 && updatedItem.status === "active"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      updatedItem = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    }
+
+    const rows = await prisma.plaidWebhookEvent.findMany({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0].webhookType).toBe("ITEM");
+    expect(rows[0].plaidItemId).toBe(pi.id);
+
+    // updatedItem already fetched by the polling loop above.
+    expect(updatedItem.status).toBe("error");
+    expect(updatedItem.errorCode).toBe("ITEM_LOGIN_REQUIRED");
+
+    expect(dispatchWebhookSync).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("ITEM/ERROR for unknown item → 200, event row with plaidItemId=null, no item write", async () => {
+    const app = await buildApp(env);
+    const body = {
+      webhook_type: "ITEM",
+      webhook_code: "ERROR",
+      item_id: "p_does_not_exist",
+      error: { error_code: "ITEM_LOGIN_REQUIRED" },
+    };
+    const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+
+    const res = await postWebhook(app, body, jwt);
+
+    expect(res.statusCode).toBe(200);
+    const rows = await prisma.plaidWebhookEvent.findMany({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0].plaidItemId).toBeNull();
+    // No plaid_items rows — nothing to update.
+    expect(await prisma.plaidItem.count()).toBe(0);
+    await app.close();
+  });
+
+  it("ITEM/WEBHOOK_UPDATE_ACKNOWLEDGED for known item → 200, event row stored, status unchanged", async () => {
+    const app = await buildApp(env);
+    const { pi } = await seedItem();
+    const body = {
+      webhook_type: "ITEM",
+      webhook_code: "WEBHOOK_UPDATE_ACKNOWLEDGED",
+      item_id: pi.itemId,
+    };
+    const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+
+    const res = await postWebhook(app, body, jwt);
+
+    expect(res.statusCode).toBe(200);
+    // ACK events are no-ops — status stays active. Brief poll to ensure the
+    // detached dispatch (which logs + exits) has settled before asserting.
+    await new Promise((r) => setTimeout(r, 100));
+    const rows = await prisma.plaidWebhookEvent.findMany({});
+    expect(rows).toHaveLength(1);
+    expect(rows[0].plaidItemId).toBe(pi.id);
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    expect(item.status).toBe("active"); // unchanged — ACK is a no-op
     await app.close();
   });
 });

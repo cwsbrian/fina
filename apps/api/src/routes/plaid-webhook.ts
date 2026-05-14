@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { verifyPlaidWebhook, PlaidWebhookVerifyError } from "../plaid/webhook-jwks.js";
 import { dispatchWebhookSync } from "../plaid/webhook-dispatch.js";
+import { dispatchItemEvent } from "../plaid/webhook-item.js";
 
 const WebhookBodySchema = z.object({
   webhook_type: z.string(),
@@ -43,7 +44,7 @@ export async function plaidWebhookRoutes(app: FastifyInstance): Promise<void> {
 
     const item = await prisma.plaidItem.findUnique({
       where: { itemId: parsed.item_id },
-      select: { id: true, workspaceId: true },
+      select: { id: true, workspaceId: true, status: true },
     });
 
     const event = await prisma.plaidWebhookEvent.create({
@@ -60,9 +61,17 @@ export async function plaidWebhookRoutes(app: FastifyInstance): Promise<void> {
       parsed.webhook_type === "TRANSACTIONS" &&
       parsed.webhook_code === "SYNC_UPDATES_AVAILABLE" &&
       item !== null;
+    const isItemRelevant = parsed.webhook_type === "ITEM" && item !== null;
 
     if (isSyncRelevant) {
       void dispatchWebhookSync(app.fina.env, item.workspaceId, item.id, event.id).catch(() => {});
+    } else if (isItemRelevant) {
+      void dispatchItemEvent(
+        item,
+        parsed as { webhook_code: string; error?: { error_code?: string | null } | null },
+      ).catch((e) => {
+        app.log.error({ err: e, itemId: parsed.item_id }, "ITEM webhook dispatch failed");
+      });
     } else {
       app.log.info(
         { webhookType: parsed.webhook_type, webhookCode: parsed.webhook_code, itemId: parsed.item_id },
