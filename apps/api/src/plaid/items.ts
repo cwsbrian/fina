@@ -131,3 +131,42 @@ export async function removeItemStrict(
     throw e;
   }
 }
+
+/**
+ * Billing-side disconnect: calls Plaid /item/remove to stop recurring charges
+ * (~$0.25 CAD/item/month), then sets status='disconnected' locally.
+ *
+ * Unlike removeItemStrict, this preserves the plaid_items row and all
+ * associated bank_accounts and transactions — data is kept for historical
+ * reference and potential re-subscription.
+ *
+ * No advisory lock: this runs from a cron job (daily-refresh Step 0) where
+ * the item is not being synced concurrently (tier-gated users are skipped in
+ * the sync loop, and the sync loop runs AFTER Step 0).
+ *
+ * Partial-failure retry: if the Plaid call succeeds but the DB update fails,
+ * the item stays 'active'. Tomorrow's Step 0 retries, Plaid returns
+ * ITEM_NOT_FOUND, the catch falls through, and the DB update succeeds.
+ */
+export async function removeItemForBilling(
+  env: Env,
+  workspaceId: string,
+  plaidItemId: string,
+): Promise<void> {
+  const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
+
+  try {
+    await plaidClient(env).itemRemove({ access_token: accessToken });
+  } catch (e) {
+    if (isPlaidErrorCode(e, "ITEM_NOT_FOUND")) {
+      // Already removed on Plaid's side — proceed with local status update.
+    } else {
+      throw e; // caller logs and continues to next item
+    }
+  }
+
+  await prisma.plaidItem.update({
+    where: { id: plaidItemId },
+    data: { status: "disconnected", errorCode: null },
+  });
+}

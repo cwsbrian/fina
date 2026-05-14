@@ -15,7 +15,7 @@ import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { storeAccessToken, readAccessToken, removeItemStrict } from "../src/plaid/items.js";
+import { storeAccessToken, readAccessToken, removeItemStrict, removeItemForBilling } from "../src/plaid/items.js";
 import { HttpError } from "../src/auth/context.js";
 
 const env = {
@@ -169,5 +169,83 @@ describe("plaid/items service", () => {
     await removeItemStrict(env, wsId, id);
     expect(await prisma.plaidItem.findUnique({ where: { id } })).toBeNull();
     await app.close();
+  });
+});
+
+describe("removeItemForBilling", () => {
+  async function seedItemWithTransactions() {
+    const ws = await prisma.workspace.create({ data: { name: "W-billing" } });
+    // storeAccessToken encrypts and creates the plaid_items row.
+    const itemRowId = await storeAccessToken(env, prisma, {
+      workspaceId: ws.id,
+      itemId: `pi_bill_${Math.random()}`,
+      institutionId: "ins_1",
+      institutionName: "Bank",
+      accessToken: "access-sandbox-test-billing",
+    });
+    // Seed a transaction so we can verify it survives after billing removal.
+    const account = await prisma.bankAccount.create({
+      data: {
+        workspaceId: ws.id,
+        plaidItemId: itemRowId,
+        plaidAccountId: "acct_bill",
+        name: "Checking",
+        type: "depository",
+        currency: "CAD",
+      },
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: ws.id,
+        accountId: account.id,      // NOTE: field is accountId, not bankAccountId
+        amount: 10,
+        merchantRaw: "Test",
+        occurredAt: new Date(),
+        rawData: {},                 // required Json field (no default)
+      },
+    });
+    return { wsId: ws.id, itemRowId, accountId: account.id };
+  }
+
+  it("normal path: Plaid /item/remove → status='disconnected', row + transactions preserved", async () => {
+    const { wsId, itemRowId, accountId } = await seedItemWithTransactions();
+
+    plaidMock.itemRemove.push({ data: { request_id: "req" } });
+
+    await removeItemForBilling(env, wsId, itemRowId);
+
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
+    expect(item.status).toBe("disconnected");
+    expect(item.errorCode).toBeNull();
+
+    // Row preserved (not deleted).
+    expect(item.id).toBe(itemRowId);
+
+    // Transactions preserved.
+    const txCount = await prisma.transaction.count({ where: { accountId } });
+    expect(txCount).toBe(1);
+  });
+
+  it("ITEM_NOT_FOUND: graceful — Plaid already removed, still sets disconnected", async () => {
+    const { wsId, itemRowId } = await seedItemWithTransactions();
+
+    plaidMock.itemRemove.push(plaidApiError({ error_code: "ITEM_NOT_FOUND" }));
+
+    await removeItemForBilling(env, wsId, itemRowId);
+
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
+    expect(item.status).toBe("disconnected");
+  });
+
+  it("other Plaid error: propagates (caller catches and continues)", async () => {
+    const { wsId, itemRowId } = await seedItemWithTransactions();
+
+    plaidMock.itemRemove.push(plaidApiError({ error_code: "PLAID_UNAVAILABLE", http_status: 503 }));
+
+    await expect(removeItemForBilling(env, wsId, itemRowId)).rejects.toThrow();
+
+    // Status NOT changed — item still active (cron retries tomorrow).
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
+    expect(item.status).toBe("active");
   });
 });
