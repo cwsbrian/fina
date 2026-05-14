@@ -175,4 +175,25 @@ describe("runRetryUnprocessed", () => {
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
     expect(dispatchWebhookSync).toHaveBeenCalledTimes(1);
   });
+
+  it("item deleted after event created (onDelete:SetNull) → event excluded, no dispatch", async () => {
+    // The runtime guard `if (!ev.plaidItem) continue` defends against the race
+    // where plaidItemId is non-null at findMany time but the relation is null
+    // by loop time. The primary protection is the DB-level filter
+    // (plaidItemId: { not: null }): once onDelete:SetNull fires, the event is
+    // excluded from the next query. This test verifies the full safety path.
+    //
+    // Note: vi.spyOn on Prisma's delegate proxy corrupts the model's method
+    // table across test files, so we use the real DB to trigger SetNull instead.
+    const { itemId, wsId } = await seedItem();
+    await seedEvent(itemId);
+
+    // Delete the workspace → cascades to plaid_items → SetNull on event.plaidItemId.
+    // The event now has plaidItemId=null and is excluded by the query filter.
+    await prisma.workspace.delete({ where: { id: wsId } });
+
+    await runRetryUnprocessed(env);
+
+    expect(dispatchWebhookSync).not.toHaveBeenCalled();
+  });
 });

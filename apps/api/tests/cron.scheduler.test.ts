@@ -12,6 +12,7 @@ vi.mock("../src/cron/jobs/cleanup-events.js", () => ({ runCleanupEvents: vi.fn()
 
 import { Cron } from "croner";
 import { startScheduler, stopScheduler } from "../src/cron/scheduler.js";
+import { runDailyRefresh } from "../src/cron/jobs/daily-refresh.js";
 
 const env = {
   NODE_ENV: "test" as const,
@@ -61,5 +62,25 @@ describe("scheduler", () => {
   it("stopScheduler is idempotent (safe to call when disabled)", () => {
     startScheduler({ ...env }); // disabled
     expect(() => stopScheduler()).not.toThrow();
+  });
+
+  it("safe() wrapper: job throw is caught, does not propagate", async () => {
+    // Capture the callback passed to the first Cron instance (daily-refresh).
+    let capturedCallback: (() => Promise<void>) | undefined;
+    vi.mocked(Cron).mockImplementationOnce((_expr, _opts, fn) => {
+      capturedCallback = fn as () => Promise<void>;
+      return { stop: vi.fn() };
+    });
+
+    vi.mocked(runDailyRefresh).mockRejectedValueOnce(new Error("job failed"));
+    startScheduler({ ...env, CRON_ENABLED: true });
+
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(capturedCallback?.()).resolves.toBeUndefined();
+    expect(errorSpy).toHaveBeenCalledWith(
+      "cron job uncaught",
+      expect.objectContaining({ jobName: "daily-refresh" }),
+    );
+    errorSpy.mockRestore();
   });
 });
