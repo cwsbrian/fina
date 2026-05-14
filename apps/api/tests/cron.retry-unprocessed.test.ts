@@ -200,4 +200,38 @@ describe("runRetryUnprocessed", () => {
 
     expect(dispatchWebhookSync).not.toHaveBeenCalled();
   });
+
+  it("disconnected item: excluded from query, processedAt stays NULL (TTL will sweep it)", async () => {
+    // The query filter `plaidItem: { is: { status: { not: "disconnected" } } }` prevents
+    // disconnected items' events from ever entering the retry loop. processedAt stays NULL
+    // and cleanup-events will sweep the row at TTL. dispatchWebhookSync must not be called.
+    const ws = await prisma.workspace.create({ data: { name: "W-disc" } });
+    const item = await prisma.plaidItem.create({
+      data: {
+        workspaceId: ws.id,
+        accessTokenCiphertext: Buffer.from([1]),
+        accessTokenIv: Buffer.from([2]),
+        itemId: `pi_disc_${Math.random()}`,
+        institutionId: "ins_disc",
+        institutionName: "Disc Bank",
+        status: "disconnected",
+      },
+    });
+    const ev = await prisma.plaidWebhookEvent.create({
+      data: {
+        plaidItemId: item.id,
+        webhookType: "TRANSACTIONS",
+        webhookCode: "SYNC_UPDATES_AVAILABLE",
+        body: {},
+        receivedAt: new Date(Date.now() - 5 * 60_000),
+      },
+    });
+
+    await runRetryUnprocessed(env);
+
+    expect(dispatchWebhookSync).not.toHaveBeenCalled();
+    const row = await prisma.plaidWebhookEvent.findUniqueOrThrow({ where: { id: ev.id } });
+    // processedAt stays NULL — the query filter excluded this event. TTL will clean it up.
+    expect(row.processedAt).toBeNull();
+  });
 });

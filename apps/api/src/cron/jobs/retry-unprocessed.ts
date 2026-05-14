@@ -15,14 +15,14 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
       webhookCode: "SYNC_UPDATES_AVAILABLE",
       plaidItemId: { not: null },
       receivedAt: { gte: cutoff },
+      plaidItem: { is: { status: { not: "disconnected" } } },
     },
-    // No workspace join — tier gate uses plaidItem.connectedBy directly.
-    include: { plaidItem: { select: { id: true, workspaceId: true, connectedBy: true } } },
+    include: { plaidItem: { select: { id: true, workspaceId: true, connectedBy: true, status: true } } },
     take: 50,
     orderBy: { receivedAt: "asc" },
   });
 
-  let attempted = 0, gated = 0;
+  let attempted = 0, gated = 0, disconnected = 0;
 
   for (const ev of events) {
     // Guard: plaidItemId filter ensures non-null at query time, but onDelete:SetNull
@@ -30,6 +30,17 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
     if (!ev.plaidItem) continue;
 
     const item = ev.plaidItem;
+
+    if (item.status === "disconnected") {
+      // Race: status flipped to disconnected between findMany and this loop iteration.
+      // Stamp the row so it doesn't reappear, without calling sync.
+      await prisma.plaidWebhookEvent.update({
+        where: { id: ev.id },
+        data: { processedAt: new Date(), processError: "item_disconnected" },
+      });
+      disconnected++;
+      continue;
+    }
 
     // Positive-condition form avoids an empty-if lint warning.
     if (item.connectedBy) {
@@ -56,5 +67,5 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
     attempted++;
   }
 
-  console.info("retry-unprocessed complete", { found: events.length, attempted, gated });
+  console.info("retry-unprocessed complete", { found: events.length, attempted, gated, disconnected });
 }
