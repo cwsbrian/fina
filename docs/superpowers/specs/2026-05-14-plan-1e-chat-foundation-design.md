@@ -46,15 +46,24 @@ Two new tables. No `chat_blocks` table — blocks live as JSON on `chat_messages
 
 ```prisma
 model ChatThread {
-  id          String   @id @default(cuid())
-  workspaceId String   @unique  // one thread per workspace
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id          String         @id @default(cuid())
+  workspaceId String
+  type        ChatThreadType @default(adhoc)   // adhoc = the user's chat; daily = morning-ritual brief
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
 
   workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
 
+  // Forward-compat for the morning-ritual plan: each workspace will have one
+  // adhoc thread + one daily-brief thread. 1E only creates the adhoc thread.
+  @@unique([workspaceId, type])
   @@map("chat_threads")
+}
+
+enum ChatThreadType {
+  adhoc
+  daily
 }
 
 model ChatMessage {
@@ -85,8 +94,8 @@ enum ChatMessageRole {
 
 ### Design decisions
 
-- **`workspaceId @unique` on `ChatThread`** — enforces "1 workspace = 1 thread" invariant at the DB layer. Service code uses `prisma.chatThread.upsert({ where: { workspaceId } })` to get-or-create.
-- **`role: tool`** — tool calls + results are persisted as their own messages. Easy to reconstruct LLM history and to surface tool usage in the UI later.
+- **`@@unique([workspaceId, type])` on `ChatThread`** — enforces "1 thread per (workspace, type)" at the DB layer. 1E always uses `type: adhoc`. Service code: `prisma.chatThread.upsert({ where: { workspaceId_type: { workspaceId, type: "adhoc" } } })` to get-or-create. The morning-ritual plan adds `type: daily` rows without migrating existing data.
+- **`role: tool`** — tool calls + results are persisted as their own messages. The `blocks` JSON includes both `args` AND `result` so the row alone is sufficient to reconstruct both Gemini parts (`functionCall` + `functionResponse`) on rehydration. See §5.3.
 - **`blocks Json`** — 1E emits one-element arrays only, but the array shape lets future block types stack inside a single assistant message (e.g. text + categorize_card + text) without schema changes.
 
 ### Migration
@@ -123,14 +132,20 @@ The generated SQL creates the two tables + new enum. No `IF NOT EXISTS` needed (
 **Flow:**
 
 ```
-1. requireWorkspaceContext (auth + workspace membership)
-2. effectiveTier(userId).tier === "pro"? else 402 upgrade_required
-3. Validate body (zod)
-4. chatThread.upsert({ where: { workspaceId } })
-5. Insert user message (role=user, blocks=[{type:"text", markdown:text}])
-6. processChatTurn(env, thread, userId) → { assistantText, toolCalls }
-7. Insert assistant message (role=assistant, blocks=[{type:"text", markdown:assistantText}])
-8. Return all four in response
+1. requireWorkspaceContext (reads X-Workspace-Id header; throws 400 missing_workspace_header
+   or 404 no_membership if needed)
+2. Compare ctx.membership.workspaceId === params.id; mismatch → 400 workspace_mismatch
+3. effectiveTier(userId).tier === "pro"? else 402 upgrade_required
+4. Validate body (zod) — text is required, 1..4000 chars
+5. chatThread.upsert({
+     where: { workspaceId_type: { workspaceId, type: "adhoc" } },
+     create: { workspaceId, type: "adhoc" },
+     update: {},
+   })
+6. Insert user message (role=user, blocks=[{type:"text", markdown:text}])
+7. processChatTurn(env, thread, userId) → { assistantText, toolCalls }
+8. Insert assistant message (role=assistant, blocks=[{type:"text", markdown:assistantText}])
+9. Return all four in response
 ```
 
 ### 3.2 `GET /workspaces/:id/chat/thread`
@@ -151,9 +166,14 @@ If no thread exists yet, the endpoint upserts and returns an empty `messages: []
 | HTTP | Code | Trigger |
 |---|---|---|
 | 400 | `invalid_body` | text empty / >4000 chars / missing |
-| 402 | `upgrade_required` | `tier !== "pro"` |
-| 403 | `workspace_mismatch` | path :id ≠ ctx workspace |
-| 500 | `chat_provider_error` | Gemini SDK throws |
+| 400 | `missing_workspace_header` | `X-Workspace-Id` header missing (raised by `requireWorkspaceContext`) |
+| 400 | `workspace_mismatch` | path `:id` ≠ ctx `workspaceId` (matches existing routes — see `transactions.ts:57`, `invites.ts:60`) |
+| 401 | `unauthenticated` | no session cookie |
+| 402 | `upgrade_required` | `effectiveTier(userId).tier !== "pro"` |
+| 404 | `no_membership` | session valid but user not a member of `:id` |
+| 500 | `chat_provider_error` | Gemini SDK throws (network, malformed response, etc.) — full error logged server-side, generic message to client |
+
+Out of scope for 1E: per-user rate limiting (`429`). Master spec §11.3 calls for it; deferred to a future safety plan.
 
 ---
 
@@ -196,17 +216,33 @@ Each tool file owns: name, description, zod schema, `run()`. No cross-imports be
 
 ### 4.3 Gemini adapter — `apps/api/src/chat/gemini-adapter.ts`
 
-Convert zod schemas to JSON Schema for Gemini's `functionDeclarations`:
+Convert zod schemas to JSON Schema for Gemini's `functionDeclarations`. Two important details:
+
+1. **Use `parametersJsonSchema` (not `parameters`).** `FunctionDeclaration.parameters: Schema` is Gemini's typed OpenAPI 3.03 subset; `parametersJsonSchema: unknown` is the JSON-Schema-format alternative. They are mutually exclusive. `zod-to-json-schema` emits JSON Schema, so the second field is the correct target.
+2. **Omit the field entirely for zero-arg tools.** Gemini rejects `parameters: { type: "object", properties: {} }` ("properties: should be non-empty for OBJECT type"). For tools whose `args` is `z.object({})`, drop the field.
 
 ```ts
 import { zodToJsonSchema } from "zod-to-json-schema";
+import type { FunctionDeclaration } from "@google/genai";
+import type { ToolDef } from "./tools/types.js";
 
 export function toGeminiFunctionDeclarations(tools: ToolDef[]): FunctionDeclaration[] {
-  return tools.map((t) => ({
-    name: t.name,
-    description: t.description,
-    parameters: zodToJsonSchema(t.args, { target: "openAi" }),
-  }));
+  return tools.map((t) => {
+    const decl: FunctionDeclaration = { name: t.name, description: t.description };
+    if (hasAnyKeys(t.args)) {
+      // Cast — Gemini SDK types `parametersJsonSchema` as `unknown`; zod-to-json-schema
+      // emits a JSON Schema object that Gemini's documented subset accepts.
+      decl.parametersJsonSchema = zodToJsonSchema(t.args, { $refStrategy: "none" });
+    }
+    return decl;
+  });
+}
+
+/** True when the zod object schema has at least one property. */
+function hasAnyKeys(schema: z.ZodType): boolean {
+  // ZodObject has a `.shape` getter; everything else (z.string(), z.array()) skips this guard.
+  if (!(schema instanceof z.ZodObject)) return true;
+  return Object.keys(schema.shape).length > 0;
 }
 ```
 
@@ -223,7 +259,9 @@ export async function dispatchTool(
   const tool = REGISTRY.find((t) => t.name === toolName);
   if (!tool) return { ok: false, error: `unknown_tool: ${toolName}` };
 
-  const parsed = tool.args.safeParse(rawArgs);
+  // Gemini may send no args object for zero-arg tools — coerce to {} so
+  // z.object({}).safeParse doesn't fail on undefined.
+  const parsed = tool.args.safeParse(rawArgs ?? {});
   if (!parsed.success) return { ok: false, error: `invalid_args: ${parsed.error.message}` };
 
   try {
@@ -231,41 +269,58 @@ export async function dispatchTool(
     return { ok: true, result };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    // Log full error server-side (sanitized) for debugging; truncate the LLM-facing message.
+    console.error("chat tool failed", { toolName, err: e });
     return { ok: false, error: msg.slice(0, 500) };
   }
 }
 ```
 
-The dispatcher never throws. Errors become `{ ok: false, error }` and are fed back to the LLM as a `functionResponse` with an `error` field.
+The dispatcher never throws. Errors become `{ ok: false, error }` and are wrapped as `{ error }` in the Gemini `functionResponse.response` (see §5.4).
 
 ### 4.5 Tool reference
 
-Names + zod arg schemas (descriptions inform the LLM):
+Names + zod arg schemas. **Per-field `.describe()` is mandatory** — `zod-to-json-schema` propagates these into the JSON Schema's `description` field, and Gemini reads them when picking which tool/arg to call.
 
 ```ts
 // listTransactions
 args: z.object({
-  period: z.enum(["today", "this_week", "this_month", "last_month"]).optional(),
-  limit:  z.number().int().positive().max(50).optional(),
+  period: z.enum(["today", "this_week", "this_month", "last_month"])
+    .describe("Time window for the listing. Omit for all-time.")
+    .optional(),
+  limit: z.number().int().positive().max(50)
+    .describe("Max transactions to return. Default 20, hard cap 50.")
+    .optional(),
 });
 
 // getSpendingSummary
 args: z.object({
-  period:   z.enum(["this_week", "this_month", "last_month"]),
-  group_by: z.enum(["category", "merchant", "day"]).optional(),
+  period: z.enum(["this_week", "this_month", "last_month"])
+    .describe("Period to summarize."),
+  group_by: z.enum(["category", "merchant", "day"])
+    .describe("Bucket dimension. Defaults to 'category'.")
+    .optional(),
 });
 
-// listCategories
+// listCategories — zero args; adapter omits the parameters field entirely (see §4.3)
 args: z.object({});
 
 // categorizeTransaction
 args: z.object({
-  tx_id:    z.string().min(1),
-  category: z.string().min(1),   // matched by name within workspace, case-insensitive
+  tx_id: z.string().min(1)
+    .describe("Transaction id (cuid) — must belong to the current workspace."),
+  category: z.string().min(1)
+    .describe("Category name (case-insensitive match within the workspace's categories)."),
 });
 ```
 
-Tools validate workspace ownership via `ctx.workspaceId` on every query. Cross-workspace `tx_id` → tool throws → dispatcher returns `{ error }` → LLM apologizes.
+**Tool implementation contracts:**
+
+- All tools enforce workspace ownership via `ctx.workspaceId` on every query. Cross-workspace `tx_id` → tool throws → dispatcher returns `{ error }` → LLM explains.
+- `categorizeTransaction` matches Plan 1B-categorize's manual-categorize flow: in addition to `prisma.transaction.update({ categoryId })` for the target row, it **also**:
+  1. Upserts a `merchant_mappings` row (`source: manual`, `confidence: 1.00`) for the transaction's `merchantNormalized` → category. This causes future imports from the same merchant to auto-categorize.
+  2. Back-fills sibling transactions in the same workspace with the same `merchantNormalized` and no current category. The `transactions.categorizationSource` enum is set to `manual` on the target and `mapping_backfill` on the back-filled siblings.
+  This matches the existing `POST /transactions/:txId/categorize` behavior (`apps/api/src/routes/transactions.ts`) — the chat tool delegates to the same service function rather than duplicating logic.
 
 ---
 
@@ -317,27 +372,43 @@ Don't ask permission to look up data — just call the tool and show the result.
 
 ### 5.3 History conversion — Prisma rows → Gemini `contents`
 
+Gemini requires every `functionResponse` part to be **preceded by** a `model`-role `functionCall` part with the same name in the same `contents` array. Since the assistant's "I'm calling tool X" turn is not stored as its own row, the tool row's `blocks[0]` carries both `args` (to reconstruct the `functionCall`) and `result` (to reconstruct the `functionResponse`). Each tool row therefore expands into **two** Gemini parts on rehydration.
+
+`FunctionResponse.response` is typed `Record<string, unknown>` — pass through as `{ output: result }` for success, `{ error: msg }` for failure. The Gemini docs explicitly use these keys.
+
 ```ts
+type ToolBlock = { type: "tool"; toolName: string; args: unknown; result: unknown };
+
 function toGeminiHistory(messages: ChatMessage[]): GeminiContent[] {
-  return messages.map((m) => {
+  const out: GeminiContent[] = [];
+  for (const m of messages) {
     const blocks = m.blocks as Block[];
     if (m.role === "user") {
-      return { role: "user", parts: [{ text: blocks[0].markdown }] };
+      out.push({ role: "user", parts: [{ text: (blocks[0] as TextBlock).markdown }] });
+      continue;
     }
     if (m.role === "assistant") {
-      return { role: "model", parts: [{ text: blocks[0].markdown }] };
+      out.push({ role: "model", parts: [{ text: (blocks[0] as TextBlock).markdown }] });
+      continue;
     }
-    // tool result — Gemini wants a user-role functionResponse part
+    // role === "tool" — emit BOTH the model's functionCall and the user's functionResponse.
     const t = blocks[0] as ToolBlock;
-    return {
-      role: "user",
-      parts: [{ functionResponse: { name: t.toolName, response: t.result } }],
-    };
-  });
+    const isError = t.result && typeof t.result === "object" && "error" in (t.result as object);
+    const response = isError ? (t.result as { error: string }) : { output: t.result };
+    out.push({ role: "model", parts: [{ functionCall: { name: t.toolName, args: t.args } }] });
+    out.push({ role: "user", parts: [{ functionResponse: { name: t.toolName, response } }] });
+  }
+  return out;
 }
 ```
 
 ### 5.4 Main loop — `apps/api/src/chat/turn.ts`
+
+Three subtleties:
+
+1. **Loop bound counts tool dispatches, not LLM calls.** After `MAX_TOOL_CALLS` dispatches, one final LLM call asks the model to summarize. The bug-prone "off-by-one" in the original draft (`<=` with apology inside) wasted an extra LLM call.
+2. **Gemini 2.5 may emit multiple `functionCall` parts in one response (parallel tool use).** The SDK exposes `resp.functionCalls: FunctionCall[]`. We must dispatch all of them, persist each as its own `role:"tool"` row, and append one `model(functionCall)` part + one `user(functionResponse)` part per dispatch in the same iteration. Each parallel call counts toward `MAX_TOOL_CALLS`.
+3. **`FunctionResponse.response` must be a `Record<string, unknown>`.** Wrap success as `{ output: result }`, error as `{ error: msg }`. Per Gemini docs.
 
 ```ts
 export async function processChatTurn(
@@ -345,9 +416,9 @@ export async function processChatTurn(
   thread: { id: string; workspaceId: string },
   userId: string,
 ): Promise<{ assistantText: string; toolCalls: ToolCallRecord[] }> {
-  const HISTORY_LIMIT  = env.CHAT_HISTORY_LIMIT          ?? 20;
+  const HISTORY_LIMIT  = env.CHAT_HISTORY_LIMIT           ?? 20;
   const MAX_TOOL_CALLS = env.CHAT_MAX_TOOL_CALLS_PER_TURN ?? 10;
-  const MODEL          = env.CHAT_MODEL                  ?? "gemini-2.5-flash-lite";
+  const MODEL          = env.CHAT_MODEL                   ?? "gemini-2.5-flash-lite";
 
   const ctx: ToolContext = { env, workspaceId: thread.workspaceId, userId };
 
@@ -364,51 +435,65 @@ export async function processChatTurn(
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
   let contents = toGeminiHistory(historyChrono);
   const toolCalls: ToolCallRecord[] = [];
+  let dispatched = 0;
 
-  for (let i = 0; i <= MAX_TOOL_CALLS; i++) {
+  while (true) {
     const resp = await ai.models.generateContent({
       model: MODEL,
       contents,
       config: { systemInstruction: sysInstruction, tools },
     });
 
-    const fc = extractFunctionCall(resp);
-    if (!fc) {
-      const text = extractText(resp) ?? "";
-      return { assistantText: text, toolCalls };
+    const fcs = resp.functionCalls ?? [];
+    if (fcs.length === 0) {
+      // Final text turn.
+      return { assistantText: resp.text ?? "", toolCalls };
     }
 
-    if (i === MAX_TOOL_CALLS) {
-      console.warn("chat: max tool calls exceeded", { threadId: thread.id, count: i });
+    if (dispatched + fcs.length > MAX_TOOL_CALLS) {
+      console.warn("chat: max tool calls exceeded", {
+        threadId: thread.id,
+        dispatched,
+        requested: fcs.length,
+      });
       return {
         assistantText: "I couldn't complete that — try a simpler request.",
         toolCalls,
       };
     }
 
-    const dispatch = await dispatchTool(ctx, fc.name, fc.args);
-    const result = dispatch.ok ? dispatch.result : { error: dispatch.error };
-    toolCalls.push({ toolName: fc.name, args: fc.args, result });
+    // Dispatch all parallel calls in this round; append one (model, user) part-pair each.
+    const newContents: GeminiContent[] = [...contents];
+    for (const fc of fcs) {
+      const dispatch = await dispatchTool(ctx, fc.name, fc.args);
+      const responseObj = dispatch.ok
+        ? { output: dispatch.result }
+        : { error: dispatch.error };
 
-    await prisma.chatMessage.create({
-      data: {
-        threadId: thread.id,
-        role: "tool",
-        blocks: [{ type: "tool", toolName: fc.name, args: fc.args, result }],
-      },
-    });
+      toolCalls.push({ toolName: fc.name, args: fc.args, result: responseObj });
 
-    contents = [
-      ...contents,
-      { role: "model", parts: [{ functionCall: { name: fc.name, args: fc.args } }] },
-      { role: "user",  parts: [{ functionResponse: { name: fc.name, response: result } }] },
-    ];
+      await prisma.chatMessage.create({
+        data: {
+          threadId: thread.id,
+          role: "tool",
+          blocks: [{ type: "tool", toolName: fc.name, args: fc.args, result: responseObj }],
+        },
+      });
+
+      newContents.push(
+        { role: "model", parts: [{ functionCall: { name: fc.name, args: fc.args } }] },
+        { role: "user",  parts: [{ functionResponse: { name: fc.name, response: responseObj } }] },
+      );
+      dispatched++;
+    }
+    contents = newContents;
   }
-
-  // Unreachable — the loop bound includes the apology path
-  return { assistantText: "", toolCalls };
 }
 ```
+
+**Helper accessors are direct SDK fields** — no separate `extractFunctionCall`/`extractText` functions:
+- `resp.functionCalls?: FunctionCall[]` — undefined if no calls; else array (length 1 for serial, >1 for parallel)
+- `resp.text?: string` — convenience getter on the response object
 
 ---
 
@@ -423,11 +508,17 @@ export async function processChatTurn(
 
 | Failure | Response |
 |---|---|
-| Gemini API throws (network, 5xx) | 500 `chat_provider_error`. User message persisted; assistant message NOT persisted. Log sanitized error. |
+| Gemini API throws (network, 5xx) | 500 `chat_provider_error`. User message persisted; assistant message NOT persisted. Tool side-effects from earlier in the turn ARE persisted (see below). Log sanitized error. |
 | Gemini returns neither text nor functionCall | Treat as empty turn — `assistantText: ""`. Log warning. |
 | Tool throws | Caught in `dispatcher.ts` → `{ ok: false, error }` → LLM sees `{ error }` in functionResponse |
 | `MAX_TOOL_CALLS` exceeded | Apology assistant message. Log warning with thread id. |
 | Tier check fails | 402 `upgrade_required` before user message is persisted |
+
+**Mid-turn failure with tool side-effects:** If `categorizeTransaction` runs successfully and then the next Gemini call throws, the DB write **is preserved** (no transaction wrap — see why below) and the corresponding `role: "tool"` row is in the audit trail. The user sees a 500 with no assistant message. This is acceptable because:
+
+- A naive client retry posts the same user message; the next turn's history rehydration includes the prior `role: "tool"` row, so Gemini sees the categorization already happened and won't double-write.
+- Wrapping the entire turn in `prisma.$transaction` is rejected — it would hold a DB transaction open across multi-second LLM calls, blocking other writes.
+- User-visible reconciliation ("your last message couldn't complete, but X was already done") is deferred to a future plan.
 
 ### 6.3 Privacy
 
@@ -474,19 +565,25 @@ Real DB, no LLM. Seed workspace + transactions, call `tool.run(ctx, args)` direc
 
 - LLM returns text immediately → assistant message saved, `toolCalls: []`
 - LLM returns 1 functionCall → dispatcher runs → result fed back → LLM returns text → assistant message saved, `toolCalls.length === 1`
-- LLM returns 10+ consecutive functionCalls → loop hits `MAX_TOOL_CALLS` → apology assistant text, log warning fires
+- **LLM returns 2 functionCalls in one response (parallel tool use)** → both dispatched → 2 `role:"tool"` rows persisted → both `dispatched` count toward MAX_TOOL_CALLS → next LLM turn returns text
+- LLM returns 11 functionCalls across iterations → loop returns apology, log warning fires
 - Gemini SDK throws → exception propagates (route returns 500)
 - Tool dispatcher returns error → LLM sees `{ error }` → mock LLM returns explanatory text
+- **Multi-turn rehydration:** turn 1 includes a tool call. Turn 2 starts; verify `toGeminiHistory` produces both `model(functionCall)` and `user(functionResponse)` parts from the persisted `role:"tool"` row (catches I6 from review).
+- **`listCategories()` zero-arg call:** Gemini sends `functionCalls[0].args = undefined` → dispatcher coerces to `{}` → tool runs successfully (catches C4 dispatcher path).
 
 ### 7.4 Integration — Route
 
 `chat.routes.test.ts` with `vi.mock("@google/genai", ...)`:
 
 - Free user (expired trial) → POST `/chat/message` → 402 `upgrade_required`, no thread/message rows created
-- Pro user → POST `/chat/message` → 200, thread upserted, user+assistant messages persisted, response shape correct
-- Second message → reuses existing thread (`workspaceId @unique` invariant)
+- Pro user → POST `/chat/message` → 200, thread upserted (`type: "adhoc"`), user+assistant messages persisted, response shape correct
+- Second message → reuses existing thread (composite `@@unique([workspaceId, type])`)
 - Pro user → GET `/chat/thread` → returns thread + messages oldest-first
-- Gemini mock throws → 500 `chat_provider_error`, user message NOT persisted
+- Pro user → POST without `X-Workspace-Id` header → 400 `missing_workspace_header`
+- Pro user → POST with `:id` ≠ ctx workspace → 400 `workspace_mismatch`
+- Gemini mock throws → 500 `chat_provider_error`, user message NOT persisted, no assistant message
+- **`categorizeTransaction` chat-tool variant** → tool succeeds → DB shows: target tx categoryId set, `merchant_mappings` upserted with `source: "manual"`, sibling tx with same `merchantNormalized` back-filled with `categorizationSource: "mapping_backfill"` (matches Plan 1B-categorize behavior; catches I8 from review).
 
 ### 7.5 E2E (skip-guarded on `GEMINI_API_KEY`)
 
