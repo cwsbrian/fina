@@ -1863,11 +1863,14 @@ Create `apps/api/tests/chat.turn.test.ts`:
 
 ```ts
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
+
+const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/gemini-mock.js"),
+);
+vi.mock("@google/genai", hoistedGeminiMockFactory);
+
 import { prisma } from "../src/db.js";
-import { chatGeminiMock, geminiMockFactory, resetGeminiMock } from "./helpers/gemini-mock.js";
-
-vi.mock("@google/genai", () => geminiMockFactory());
-
 import { processChatTurn } from "../src/chat/turn.js";
 
 describe("processChatTurn", () => {
@@ -2229,13 +2232,16 @@ Create `apps/api/tests/chat.routes.test.ts`:
 ```ts
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
+import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
+
+const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/gemini-mock.js"),
+);
+vi.mock("@google/genai", hoistedGeminiMockFactory);
+
 import { prisma } from "../src/db.js";
-import { chatGeminiMock, geminiMockFactory, resetGeminiMock } from "./helpers/gemini-mock.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-
-vi.mock("@google/genai", () => geminiMockFactory());
-
 import { buildApp } from "../src/server.js";
 
 const env = {
