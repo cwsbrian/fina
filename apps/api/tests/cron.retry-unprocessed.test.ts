@@ -185,6 +185,10 @@ describe("runRetryUnprocessed", () => {
     //
     // Note: vi.spyOn on Prisma's delegate proxy corrupts the model's method
     // table across test files, so we use the real DB to trigger SetNull instead.
+    // This verifies the primary (DB-level) safety path; the in-process runtime
+    // guard `if (!ev.plaidItem) continue` at line 30 of retry-unprocessed.ts
+    // covers the narrower race between findMany and the loop, which is not
+    // reproducible via the real DB.
     const { itemId, wsId } = await seedItem();
     await seedEvent(itemId);
 
