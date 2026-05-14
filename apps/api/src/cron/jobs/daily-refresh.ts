@@ -4,12 +4,52 @@ import { syncTransactions } from "../../plaid/sync.js";
 import { categorizeNewTransactions } from "../../categorize/service.js";
 import { sanitizePlaidError } from "../../plaid/client.js";
 import { checkBackgroundSyncGate } from "../tier-gate.js";
+import { removeItemForBilling } from "../../plaid/items.js";
 
 export async function runDailyRefresh(env: Env): Promise<void> {
+  // ── Step 0: remove active items for expired-trial workspace owners ──────
+  // Plaid charges ~$0.25/item/month even with no API calls. Removing on expiry
+  // stops billing immediately. Data (transactions, accounts) is preserved.
+  const expiredItems = await prisma.plaidItem.findMany({
+    where: {
+      status: "active",
+      workspace: {
+        memberships: {
+          some: {
+            role: "owner",
+            user: { trialEndsAt: { lt: new Date() } },
+          },
+        },
+      },
+    },
+    select: { id: true, workspaceId: true },
+  });
+
+  let billingRemoved = 0;
+  for (const item of expiredItems) {
+    try {
+      await removeItemForBilling(env, item.workspaceId, item.id);
+      billingRemoved++;
+    } catch (e) {
+      console.error("daily-refresh: billing-remove failed", {
+        itemId: item.id,
+        err: sanitizePlaidError(e),
+      });
+      // Non-fatal: cron retries tomorrow. Plaid will return ITEM_NOT_FOUND
+      // if the token was already removed, and removeItemForBilling handles that.
+    }
+  }
+  if (expiredItems.length > 0) {
+    console.info("daily-refresh: trial expiry cleanup", {
+      found: expiredItems.length,
+      removed: billingRemoved,
+    });
+  }
+  // ── existing active-items sync loop (fresh query — Step 0's disconnected
+  //    items are excluded by status:'active' filter below) ─────────────────
+
   const items = await prisma.plaidItem.findMany({
     where: { status: "active" },
-    // connectedBy is the userId who ran Plaid Link — used for tier gating.
-    // Workspace has no ownerUserId column. connectedBy is nullable (SetNull on user delete).
     select: { id: true, workspaceId: true, connectedBy: true },
   });
 

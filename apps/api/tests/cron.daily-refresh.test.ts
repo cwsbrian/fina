@@ -13,6 +13,10 @@ vi.mock("../src/categorize/service.js", () => ({
 vi.mock("../src/cron/tier-gate.js", () => ({
   checkBackgroundSyncGate: vi.fn(),
 }));
+vi.mock("../src/plaid/items.js", () => ({
+  removeItemForBilling: vi.fn().mockResolvedValue(undefined),
+}));
+import { removeItemForBilling } from "../src/plaid/items.js";
 
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
@@ -82,6 +86,8 @@ beforeEach(async () => {
   vi.mocked(checkBackgroundSyncGate).mockReset();
   // Default: all users are Pro
   vi.mocked(checkBackgroundSyncGate).mockResolvedValue({ ok: true });
+  vi.mocked(removeItemForBilling).mockReset();
+  vi.mocked(removeItemForBilling).mockResolvedValue(undefined);
 });
 
 afterAll(async () => { await disconnect(); });
@@ -188,5 +194,72 @@ describe("runDailyRefresh", () => {
     // Should complete without error
     await expect(runDailyRefresh(env)).resolves.toBeUndefined();
     expect(syncTransactions).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runDailyRefresh — Step 0 trial expiry cleanup", () => {
+  async function seedWorkspaceWithOwner(trialEndsAt: Date | null) {
+    const { randomUUID } = await import("crypto");
+    const userId = randomUUID();
+    await prisma.user.create({
+      data: {
+        id: userId,
+        name: "Test Owner",
+        email: `owner-${userId.slice(0, 8)}@x.com`,
+        emailVerified: true,
+        trialEndsAt,
+      },
+    });
+    const ws = await prisma.workspace.create({ data: { name: "WS" } });
+    await prisma.membership.create({
+      data: { userId, workspaceId: ws.id, role: "owner" },
+    });
+    const item = await prisma.plaidItem.create({
+      data: {
+        workspaceId: ws.id,
+        accessTokenCiphertext: Buffer.from([1]),
+        accessTokenIv: Buffer.from(new Array(12).fill(2)),
+        itemId: `pi_step0_${Math.random()}`,
+        institutionId: "ins_1",
+        institutionName: "Bank",
+        status: "active",
+      },
+    });
+    return { wsId: ws.id, itemId: item.id };
+  }
+
+  it("expired-trial owner's active item → removeItemForBilling called", async () => {
+    const { itemId } = await seedWorkspaceWithOwner(new Date(Date.now() - 86_400_000));
+
+    await runDailyRefresh(env);
+
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), itemId);
+  });
+
+  it("active-trial owner's item → NOT removed", async () => {
+    await seedWorkspaceWithOwner(new Date(Date.now() + 86_400_000));
+    // Mock sync so the item's sync attempt doesn't error noisily in this test.
+    vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
+
+    await runDailyRefresh(env);
+
+    expect(removeItemForBilling).not.toHaveBeenCalled();
+  });
+
+  it("removeItemForBilling throws → other items still synced (non-fatal)", async () => {
+    vi.mocked(removeItemForBilling).mockRejectedValueOnce(new Error("plaid down"));
+    const { itemId: expiredItemId } = await seedWorkspaceWithOwner(new Date(Date.now() - 86_400_000));
+
+    // Also seed an active-trial item that should still sync.
+    const { itemId: activeItemId } = await seedWorkspaceWithOwner(new Date(Date.now() + 86_400_000));
+    vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
+
+    await runDailyRefresh(env);
+
+    // removeItemForBilling was attempted for the expired item.
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), expiredItemId);
+    // syncTransactions was still called for the active item.
+    expect(syncTransactions).toHaveBeenCalled();
+    void activeItemId;
   });
 });
