@@ -90,23 +90,20 @@ The Lite branch (`plaidItemLimit: 2`) is not reachable today (no subscription co
 
 ### 4.3 Exchange endpoint changes (`apps/api/src/routes/plaid.ts`)
 
-Both endpoints use a shared helper:
+Both endpoints use the same shared helper — count is checked for both:
 
 ```ts
 async function checkPlaidItemLimit(
   userId: string,
   workspaceId: string,
-  checkCount: boolean,   // false for link-token (not yet connected), true for exchange
 ): Promise<{ error: string } | null> {
   const t = await effectiveTier(userId);
   if (t.plaidItemLimit === 0) return { error: "upgrade_required" };
 
-  if (checkCount) {
-    const count = await prisma.plaidItem.count({
-      where: { workspaceId, status: { not: "disconnected" } },
-    });
-    if (count >= t.plaidItemLimit) return { error: "plaid_item_limit_reached" };
-  }
+  const count = await prisma.plaidItem.count({
+    where: { workspaceId, status: { not: "disconnected" } },
+  });
+  if (count >= t.plaidItemLimit) return { error: "plaid_item_limit_reached" };
   return null;
 }
 ```
@@ -114,18 +111,13 @@ async function checkPlaidItemLimit(
 Replace `await requireProTier(ctx.session.userId)` calls in both endpoints with:
 
 ```ts
-// In link-token:
-const limitErr = await checkPlaidItemLimit(ctx.session.userId, params.id, false);
-if (limitErr) return reply.code(402).send(limitErr);
-
-// In exchange:
-const limitErr = await checkPlaidItemLimit(ctx.session.userId, params.id, true);
+const limitErr = await checkPlaidItemLimit(ctx.session.userId, params.id);
 if (limitErr) return reply.code(402).send(limitErr);
 ```
 
-**Why `status: { not: "disconnected" }` in the count:** items that were removed for billing (trial expiry or manual disconnect) don't consume a limit slot. A user who re-subscribes can reconnect the same bank.
+**Why the same check for both endpoints:** Checking count at link-token gives early feedback — a user with 5/5 Pro items doesn't go through the full bank-auth flow only to be rejected at exchange. Exchange remains the authoritative gate (race between link-token and exchange is accepted; exchange re-checks). Both checks use the same count query for consistency.
 
-**Why link-token checks limit=0 only (not count):** The limit check is advisory for link-token — the user has not actually connected yet. Preventing link-token opening when already at the limit is a UX guard, but the count could change between link-token and exchange (concurrent sessions). Exchange is the authoritative gate.
+**Why `status: { not: "disconnected" }` in the count:** items removed for billing or manually disconnected don't consume a limit slot. A re-subscribing user can reconnect the same bank without being blocked by their old disconnected entries.
 
 ### 4.4 `removeItemForBilling` (`apps/api/src/plaid/items.ts`)
 
@@ -159,6 +151,11 @@ export async function removeItemForBilling(
     data: { status: "disconnected", errorCode: null },
   });
 }
+```
+
+**Partial-failure retry path:** If the Plaid call succeeds but the `prisma.plaidItem.update` fails (e.g., network blip), the item stays `active` locally but is invalid on Plaid's side. Tomorrow's Step 0 in daily-refresh selects it again (`status: "active"`, trial still expired), calls `removeItemForBilling`, which calls Plaid again. Plaid returns `ITEM_NOT_FOUND`; `isPlaidErrorCode` catches it and falls through to the `prisma.plaidItem.update`, which succeeds. The retry is self-healing — no manual intervention needed.
+
+```ts
 ```
 
 ### 4.5 `runDailyRefresh` — Step 0 prepend (`apps/api/src/cron/jobs/daily-refresh.ts`)
@@ -201,10 +198,15 @@ if (billingRemoved > 0 || expiredItems.length > 0) {
     removed: billingRemoved,
   });
 }
-// ── existing active-items sync loop follows ────────────────────────────────
+// ── existing active-items sync loop follows (separate findMany call, so
+//    items removed in Step 0 are already 'disconnected' and excluded) ────────
 ```
 
 **Query design:** filters on `workspace.memberships` where `role = "owner"` — the workspace owner's trial determines whether the workspace has Plaid access. Memberships of other roles don't affect this. `trialEndsAt: { lt: now }` catches any expired trial regardless of `trialConsumed`.
+
+**Step 0 ordering:** the active-items sync loop's `findMany` is a fresh Prisma query that runs after Step 0 completes. Items set to `disconnected` in Step 0 are excluded by the `status: "active"` filter in the sync loop's query — no snapshot issue.
+
+**trialEndsAt IS NULL:** users with `trialEndsAt = null` have `NULL < now = NULL` in Postgres (not true), so they are correctly excluded from Step 0. They would have been blocked from connecting Plaid in the first place (link-token returns 402 for `plaidItemLimit === 0`), so no active items should exist for them. This assumption holds in normal operation; dev-seeded items with `trialEndsAt IS NULL` would not be removed by Step 0.
 
 **Idempotent:** running twice on the same day is safe — items removed yesterday are now `status='disconnected'` and excluded from the `status: "active"` filter.
 
@@ -235,10 +237,11 @@ Both existed or are new. `upgrade_required` is already returned by `requireProTi
 
 ### 7.2 `plaid.routes.test.ts` — extend exchange + link-token tests
 
-Mock `effectiveTier` for each tier scenario:
+Mock `effectiveTier` for each tier scenario (both link-token and exchange now run the full limit check):
 
 - Free user → link-token → 402 `upgrade_required`
 - Free user → exchange → 402 `upgrade_required`
+- Pro user at limit (5 active items) → link-token → 402 `plaid_item_limit_reached`
 - Pro user at limit (5 active items) → exchange → 402 `plaid_item_limit_reached`
 - Pro user below limit (4 active items) → exchange → 200
 - Disconnected items don't count toward limit (3 active + 2 disconnected → exchange allowed for Pro)
@@ -253,11 +256,12 @@ Real DB + mocked Plaid:
 
 ### 7.4 `cron.daily-refresh.test.ts` — Step 0
 
-Mock `removeItemForBilling`:
+Mock `removeItemForBilling` via `vi.mock("../src/plaid/items.js", ...)` (same pattern as existing `vi.mock("../src/plaid/sync.js", ...)`):
 
-- Active item whose owner's `trialEndsAt < now` → `removeItemForBilling` called
-- Active item whose owner's `trialEndsAt > now` (trial active) → NOT removed
-- No owner membership (connectedBy null) → query relies on workspace owner membership; item not targeted
+- Active item whose workspace has an owner membership with `trialEndsAt < now` → `removeItemForBilling` called
+- Active item whose workspace has an owner membership with `trialEndsAt > now` (trial active) → NOT removed
+- Active item whose workspace has **no owner membership at all** (owner left the workspace) → NOT targeted by query (no matching `memberships.some({ role: "owner" })` row)
+- Active item with `connectedBy = null` (pre-dates tracking) — note: `connectedBy` is irrelevant; the query joins through the workspace owner membership, not through `connectedBy`
 - `removeItemForBilling` throws for one item → others continue, error logged
 
 ## 8. Open Questions / Risks
@@ -270,6 +274,9 @@ Mock `removeItemForBilling`:
 | 4 | Workspace with multiple members — which user's trial? | Workspace owner's trial determines Plaid access. Other members (editor/viewer) do not affect this. |
 | 5 | `requireProTier` — still needed? | After this plan, both callers of `requireProTier` in `plaid.ts` are replaced. `requireProTier` remains for other routes (e.g., `/categories` rate limits if any). No removal. |
 | 6 | `checkPlaidItemLimit` visibility | Defined as a module-local async function in `plaid.ts`. Not exported — only the two Plaid endpoints use it. |
+| 7 | Workspace owner controls Plaid access for all members | The workspace owner's trial/subscription determines whether the workspace has Plaid access. If the owner's trial expires, ALL workspace members lose live Plaid sync — even editors on active trials. This is a known limitation at current dogfood scale (workspaces are effectively single-user). When workspace-level billing lands, this model must be revisited. |
+| 8 | Concurrent exchange race accepted | Two simultaneous exchanges can both pass the count check and create count+1 items. Acceptable at dogfood scale. Proper fix is a serializable transaction or advisory lock; deferred to billing plan. |
+| 9 | `removeItemForBilling` partial failure | If Plaid remove succeeds but DB update fails, item stays `active` locally. Next day's Step 0 retries: calls `/item/remove` → gets `ITEM_NOT_FOUND` → falls through → DB update succeeds. Self-healing, no manual intervention. |
 
 ---
 
