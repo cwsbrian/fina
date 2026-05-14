@@ -351,6 +351,16 @@ args: z.object({
 
   Scope inside 1E: the extraction is part of the chat-tool task, not a separate plan. The plan splits this into two ordered commits: `refactor(categorize): extract applyManualCategorize service` → `feat(chat): categorizeTransaction tool calls applyManualCategorize`.
 
+  **Naming mapping (LLM-facing snake_case ↔ service camelCase):** the tool keeps snake_case arg names because Gemini's tool-selection prompts that style; the service uses TypeScript camelCase. The tool's `run()` body does the mapping explicitly:
+  ```ts
+  await applyManualCategorize({
+    workspaceId: ctx.workspaceId,
+    txId: args.tx_id,
+    categoryName: args.category,
+  });
+  ```
+  Service return shape: `{ tx: { id, categoryId, categorizationSource, ... }, backfilledCount }` — the existing route at `transactions.ts:227-241` already wraps that shape into an HTTP response, so the route's post-extraction body becomes a thin caller that re-uses the same wrapping.
+
 ---
 
 ## 5. Chat Turn Engine
@@ -472,6 +482,12 @@ export async function processChatTurn(
 
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
   let contents = toGeminiHistory(historyChrono);
+  // Guard: toGeminiHistory may have trimmed every leading non-user part
+  // (see §5.3). Surfacing as chat_provider_error with a clear log beats
+  // an opaque Gemini 400 about empty contents.
+  if (contents.length === 0) {
+    throw new Error("chat_history_empty");
+  }
   const toolCalls: ToolCallRecord[] = [];
   let dispatched = 0;
 
