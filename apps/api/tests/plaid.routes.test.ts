@@ -732,3 +732,164 @@ describe("GET /workspaces/:id/transactions", () => {
     await app.close();
   });
 });
+
+describe("Plaid connection limits", () => {
+  it("Free user (expired trial) → POST /link-token → 402 upgrade_required", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "free@x.com", name: "Free" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    // Expire the trial.
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { trialEndsAt: new Date(Date.now() - 1_000), trialConsumed: true },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("upgrade_required");
+    await app.close();
+  });
+
+  it("Free user → POST /exchange → 402 upgrade_required", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "free2@x.com", name: "Free2" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { trialEndsAt: new Date(Date.now() - 1_000), trialConsumed: true },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "Bank" }),
+    });
+
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("upgrade_required");
+    await app.close();
+  });
+
+  it("Pro user below limit → POST /link-token → 200", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "pro@x.com", name: "Pro" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    // No items connected — 0/5, well below limit.
+
+    plaidMock.linkTokenCreate.push({ data: { link_token: "lt_ok", expiration: "2099-01-01" } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("Pro user at limit (5 items) → POST /exchange → 402 plaid_item_limit_reached", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "atlimit@x.com", name: "AtLimit" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    // Seed 5 active items directly (bypassing exchange) to hit the limit.
+    for (let i = 0; i < 5; i++) {
+      await prisma.plaidItem.create({
+        data: {
+          workspaceId: wsId,
+          accessTokenCiphertext: Buffer.from([1]),
+          accessTokenIv: Buffer.from(new Array(12).fill(2)),
+          itemId: `item_limit_${i}`,
+          institutionId: "ins_1",
+          institutionName: "Bank",
+          status: "active",
+        },
+      });
+    }
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p6", institutionId: "ins_1", institutionName: "Bank6" }),
+    });
+
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("plaid_item_limit_reached");
+    await app.close();
+  });
+
+  it("Pro user at limit (5 items) → POST /link-token → 402 plaid_item_limit_reached", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "atlimit2@x.com", name: "AtLimit2" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    for (let i = 0; i < 5; i++) {
+      await prisma.plaidItem.create({
+        data: {
+          workspaceId: wsId,
+          accessTokenCiphertext: Buffer.from([1]),
+          accessTokenIv: Buffer.from(new Array(12).fill(2)),
+          itemId: `item_lt_${i}`,
+          institutionId: "ins_1",
+          institutionName: "Bank",
+          status: "active",
+        },
+      });
+    }
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("plaid_item_limit_reached");
+    await app.close();
+  });
+
+  it("Disconnected items don't count toward limit → exchange allowed", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "disc@x.com", name: "Disc" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    // 3 active + 2 disconnected = 3 effective, below limit of 5.
+    for (let i = 0; i < 3; i++) {
+      await prisma.plaidItem.create({
+        data: {
+          workspaceId: wsId,
+          accessTokenCiphertext: Buffer.from([1]),
+          accessTokenIv: Buffer.from(new Array(12).fill(2)),
+          itemId: `item_active_${i}`,
+          institutionId: "ins_1",
+          institutionName: "Bank",
+          status: "active",
+        },
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      await prisma.plaidItem.create({
+        data: {
+          workspaceId: wsId,
+          accessTokenCiphertext: Buffer.from([1]),
+          accessTokenIv: Buffer.from(new Array(12).fill(2)),
+          itemId: `item_disc_${i}`,
+          institutionId: "ins_1",
+          institutionName: "Bank",
+          status: "disconnected",
+        },
+      });
+    }
+
+    // Exchange should succeed (only 3 active, limit is 5).
+    await connectAItem(app, owner, wsId, "_new");
+
+    const count = await prisma.plaidItem.count({ where: { workspaceId: wsId, status: "active" } });
+    expect(count).toBe(4); // 3 seeded + 1 just connected
+    await app.close();
+  });
+});

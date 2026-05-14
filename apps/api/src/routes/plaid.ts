@@ -3,7 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
-import { requireProTier } from "../auth/tier.js";
+import { effectiveTier } from "../auth/tier.js";
 import { plaidClient, mapPlaidError, PLAID_PRODUCTS, PLAID_COUNTRY_CODES } from "../plaid/client.js";
 import { storeAccessToken } from "../plaid/items.js";
 import { syncTransactions } from "../plaid/sync.js";
@@ -15,6 +15,20 @@ const ExchangeBody = z.object({
   institutionName: z.string().min(1),
 });
 
+async function checkPlaidItemLimit(
+  userId: string,
+  workspaceId: string,
+): Promise<{ error: string } | null> {
+  const t = await effectiveTier(userId);
+  if (t.plaidItemLimit === 0) return { error: "upgrade_required" };
+
+  const count = await prisma.plaidItem.count({
+    where: { workspaceId, status: { not: "disconnected" } },
+  });
+  if (count >= t.plaidItemLimit) return { error: "plaid_item_limit_reached" };
+  return null;
+}
+
 export async function plaidRoutes(app: FastifyInstance): Promise<void> {
   app.post("/workspaces/:id/plaid/link-token", async (req, reply) => {
     const params = req.params as { id: string };
@@ -23,7 +37,8 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      await requireProTier(ctx.session.userId);
+      const limitErr = await checkPlaidItemLimit(ctx.session.userId, params.id);
+      if (limitErr) return reply.code(402).send(limitErr);
       const res = await plaidClient(app.fina.env).linkTokenCreate({
         user: { client_user_id: ctx.session.userId },
         client_name: "Fina",
@@ -54,7 +69,8 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
       verifiedWsId = ctx.membership.workspaceId;
-      await requireProTier(ctx.session.userId);
+      const limitErr = await checkPlaidItemLimit(ctx.session.userId, verifiedWsId);
+      if (limitErr) return reply.code(402).send(limitErr);
 
       // ---- Step 1: Plaid exchange + accounts/get ----
       const exch = await plaidClient(app.fina.env).itemPublicTokenExchange({
