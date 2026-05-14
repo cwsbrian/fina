@@ -30,7 +30,7 @@ Process Plaid `ITEM` type webhooks so `plaid_items.status` reflects real-world r
 
 One enum addition. No new tables.
 
-**How:** edit `apps/api/prisma/schema.prisma` to add `disconnected` to `PlaidItemStatus`, then run `prisma migrate dev --name add_plaid_item_status_disconnected`. Prisma generates the migration; the resulting SQL must use `IF NOT EXISTS` for idempotent re-runs:
+**How:** edit `apps/api/prisma/schema.prisma` to add `disconnected` to `PlaidItemStatus`, then run `prisma migrate dev --create-only --name add_plaid_item_status_disconnected`. Prisma generates the migration SQL but does NOT apply it yet. Hand-edit the generated file to add `IF NOT EXISTS` (Prisma does not emit this automatically), then run `prisma migrate deploy` (or let `prisma migrate dev` pick it up on the next run). The resulting SQL:
 
 ```sql
 -- prisma/migrations/<timestamp>_add_plaid_item_status_disconnected/migration.sql
@@ -149,10 +149,15 @@ The dispatcher is `connectedBy`-agnostic — it acts on item identity (Plaid's i
       where: { id: ev.id },
       data: { processedAt: new Date(), processError: "item_disconnected" },
     });
-    gated++;  // reuse the gated counter; the log line shows it as a skip reason
+    disconnected++;  // separate counter — do NOT reuse gated (different semantics)
     continue;
   }
   // ... existing connectedBy / tier gate logic
+  ```
+
+  Add `disconnected` to the summary log alongside `attempted` and `gated`:
+  ```ts
+  console.info("retry-unprocessed complete", { found: events.length, attempted, gated, disconnected });
   ```
 
   Defense in depth: query filter avoids 99% of cases; in-loop guard catches the race.
@@ -188,15 +193,15 @@ Add cases for the route handler:
 ### 8.3 Cron — extend `cron.retry-unprocessed.test.ts`
 
 Add a test for the new disconnected filter:
-- Seed item with `status='disconnected'` + a recent NULL-processedAt SYNC event for it → `runRetryUnprocessed` does NOT call `dispatchWebhookSync`, and stamps `processedAt` + `processError='item_disconnected'`
+- Seed item with `status='disconnected'` + a recent NULL-processedAt SYNC event for it → `runRetryUnprocessed` does NOT call `dispatchWebhookSync`, stamps `processedAt` + `processError='item_disconnected'`, and increments the `disconnected` counter (assert via console.info spy or return value).
 
-### 8.3 E2E
+### 8.4 E2E
 
-Not added. The route + dispatcher are fully covered by unit + integration tests. Live Plaid ITEM webhooks require manual setup (Plaid sandbox `fire_webhook` accepts ITEM events too) — covered by smoke test.
+Not added. The route + dispatcher are fully covered by unit + integration tests. Smoke test covers the manual flow.
 
-### 8.4 Smoke
+### 8.5 Smoke
 
-Extend the 1B-webhooks smoke doc with a new section: trigger an `ITEM/ERROR ITEM_LOGIN_REQUIRED` webhook via Plaid sandbox `/sandbox/item/reset_login` (this is the dedicated sandbox endpoint for forcing an ITEM error; `/sandbox/item/fire_webhook` is for TRANSACTIONS-type events). Verify the item's `status` flips to `error` and `errorCode` is populated. Also exercise `PENDING_EXPIRATION` if Plaid sandbox supports it; otherwise rely on unit tests for that path.
+Extend the 1B-webhooks smoke doc with a new section: trigger an `ITEM/ERROR ITEM_LOGIN_REQUIRED` webhook via Plaid sandbox `/sandbox/item/reset_login` (the dedicated endpoint for forcing an ITEM error). Verify the item's `status` flips to `error` and `errorCode` is populated. Note: `/sandbox/item/fire_webhook` can also fire ITEM-type webhooks via the `webhook_type` parameter, but `reset_login` is the more realistic test since it actually invalidates the token.
 
 ## 9. Open Questions / Risks
 
@@ -206,6 +211,7 @@ Extend the 1B-webhooks smoke doc with a new section: trigger an `ITEM/ERROR ITEM
 | 2 | Recovery path per status | `error` / `relink_required`: the existing `POST /workspaces/:id/plaid-items/:itemId/sync` endpoint (`apps/api/src/routes/plaid-items.ts:46`) re-runs `syncTransactions`; success → `sync.ts:149` clears `errorCode` and flips to `active`. `disconnected`: no re-sync helps (token revoked) — mobile must call `POST /workspaces/:id/plaid/link-token` and run Plaid Link to mint a new access_token. |
 | 3 | Bulk re-link if many items expire at once? | Out of scope. Mobile UI handles per-item reconnect. |
 | 4 | Does `errorCode='unknown'` ever happen? | Plaid always provides `error.error_code` for ITEM/ERROR webhooks per their docs. The `?? 'unknown'` is defensive only. |
+| 5 | `ITEM_LOGIN_REQUIRED` status inconsistency | `sync.ts:162` sets `status='relink_required'` when Plaid throws `ITEM_LOGIN_REQUIRED` during a transaction sync. The `ITEM/ERROR ITEM_LOGIN_REQUIRED` webhook via this plan sets `status='error'`. These two code paths disagree for the same root cause. Last-write-wins (§5) applies; in practice the sync path fires first and the webhook arrives shortly after, leaving the item in `error` rather than `relink_required`. This is a pre-existing inconsistency not introduced here. Resolution: unify in a follow-up plan by mapping `ITEM_LOGIN_REQUIRED` error_code → `relink_required` in the dispatcher, consistent with `sync.ts`. Tracked here so it's a conscious decision. |
 
 ---
 
