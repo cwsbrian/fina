@@ -259,6 +259,33 @@ describe("POST /plaid/webhook", () => {
     await app.close();
   });
 
+  it("ITEM/USER_PERMISSION_REVOKED for known item → 200, status='disconnected'", async () => {
+    const app = await buildApp(env);
+    const { pi } = await seedItem();
+    const body = {
+      webhook_type: "ITEM",
+      webhook_code: "USER_PERMISSION_REVOKED",
+      item_id: pi.itemId,
+    };
+    const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+
+    const res = await postWebhook(app, body, jwt);
+
+    expect(res.statusCode).toBe(200);
+
+    // Poll until the detached dispatchItemEvent writes status (up to 500ms).
+    let updatedItem = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    for (let i = 0; i < 10 && updatedItem.status === "active"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      updatedItem = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    }
+
+    expect(updatedItem.status).toBe("disconnected");
+    expect(updatedItem.errorCode).toBeNull();
+    expect(dispatchWebhookSync).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it("ITEM/WEBHOOK_UPDATE_ACKNOWLEDGED for known item → 200, event row stored, status unchanged", async () => {
     const app = await buildApp(env);
     const { pi } = await seedItem();
