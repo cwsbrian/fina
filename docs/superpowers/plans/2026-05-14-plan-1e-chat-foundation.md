@@ -284,16 +284,14 @@ describe("applyManualCategorize", () => {
   });
 
   async function seedTx(merchantRaw: string, merchantNormalized?: string | null): Promise<string> {
-    const acct = await prisma.bankAccount.upsert({
-      where: { workspaceId_plaidAccountId: { workspaceId: wsId, plaidAccountId: "a" } },
-      create: { workspaceId: wsId, plaidAccountId: "a", name: "Checking", subtype: "checking" },
-      update: {},
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Checking", type: "depository" },
     });
     const tx = await prisma.transaction.create({
       data: {
         workspaceId: wsId, accountId: acct.id, plaidTransactionId: `t-${Math.random()}`,
-        amount: "5.00", currency: "CAD", merchantRaw, merchantNormalized: merchantNormalized ?? null,
-        occurredAt: new Date(), pending: false, source: "plaid",
+        amount: "5.00", merchantRaw, merchantNormalized: merchantNormalized ?? null,
+        occurredAt: new Date(), rawData: {},
       },
     });
     return tx.id;
@@ -343,13 +341,12 @@ describe("applyManualCategorize", () => {
   it("rejects cross-workspace txId", async () => {
     const otherWs = await prisma.workspace.create({ data: { name: "other" } });
     const otherAcct = await prisma.bankAccount.create({
-      data: { workspaceId: otherWs.id, plaidAccountId: "x", name: "x", subtype: "checking" },
+      data: { workspaceId: otherWs.id, name: "x", type: "depository" },
     });
     const foreign = await prisma.transaction.create({
       data: {
         workspaceId: otherWs.id, accountId: otherAcct.id, plaidTransactionId: "tf",
-        amount: "1.00", currency: "CAD", merchantRaw: "x", occurredAt: new Date(),
-        pending: false, source: "plaid",
+        amount: "1.00", merchantRaw: "x", occurredAt: new Date(), rawData: {},
       },
     });
     await expect(
@@ -794,12 +791,17 @@ import type { ToolContext } from "../src/chat/tools/types.js";
 describe("listTransactions tool", () => {
   let ctx: ToolContext;
   let wsId: string;
+  let acctId: string;
 
   beforeEach(async () => {
     const u = await prisma.user.create({ data: { email: `lt-${Date.now()}@t.co`, name: "LT" } });
     const ws = await prisma.workspace.create({ data: { name: "lt-ws" } });
     wsId = ws.id;
     await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "x", type: "depository" },
+    });
+    acctId = acct.id;
     ctx = { env: {} as never, workspaceId: wsId, userId: u.id };
   });
 
@@ -808,15 +810,10 @@ describe("listTransactions tool", () => {
   });
 
   async function seedTx(occurredAt: Date, amount: string): Promise<void> {
-    const acct = await prisma.bankAccount.upsert({
-      where: { workspaceId_plaidAccountId: { workspaceId: wsId, plaidAccountId: "a" } },
-      create: { workspaceId: wsId, plaidAccountId: "a", name: "x", subtype: "checking" },
-      update: {},
-    });
     await prisma.transaction.create({
       data: {
-        workspaceId: wsId, accountId: acct.id, plaidTransactionId: `t-${Math.random()}`,
-        amount, currency: "CAD", merchantRaw: "M", occurredAt, pending: false, source: "plaid",
+        workspaceId: wsId, accountId: acctId, plaidTransactionId: `t-${Math.random()}`,
+        amount, merchantRaw: "M", occurredAt, rawData: {},
       },
     });
   }
@@ -854,13 +851,12 @@ describe("listTransactions tool", () => {
   it("isolates by workspace", async () => {
     const other = await prisma.workspace.create({ data: { name: "other" } });
     const otherAcct = await prisma.bankAccount.create({
-      data: { workspaceId: other.id, plaidAccountId: "x", name: "x", subtype: "checking" },
+      data: { workspaceId: other.id, name: "x", type: "depository" },
     });
     await prisma.transaction.create({
       data: {
         workspaceId: other.id, accountId: otherAcct.id, plaidTransactionId: "x",
-        amount: "9.99", currency: "CAD", merchantRaw: "x",
-        occurredAt: new Date(), pending: false, source: "plaid",
+        amount: "9.99", merchantRaw: "x", occurredAt: new Date(), rawData: {},
       },
     });
     const result = await listTransactions.run(ctx, {});
@@ -1018,21 +1014,21 @@ describe("getSpendingSummary tool", () => {
     ctx = { env: {} as never, workspaceId: wsId, userId: u.id };
 
     const acct = await prisma.bankAccount.create({
-      data: { workspaceId: wsId, plaidAccountId: "a", name: "x", subtype: "checking" },
+      data: { workspaceId: wsId, name: "x", type: "depository" },
     });
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
     await prisma.transaction.createMany({
       data: [
         { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "5.00",
-          currency: "CAD", merchantRaw: "Starbucks", merchantNormalized: "starbucks",
-          categoryId: catCoffeeId, occurredAt: thisMonth, pending: false, source: "plaid" },
+          merchantRaw: "Starbucks", merchantNormalized: "starbucks",
+          categoryId: catCoffeeId, occurredAt: thisMonth, rawData: {} },
         { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "4.00",
-          currency: "CAD", merchantRaw: "Starbucks", merchantNormalized: "starbucks",
-          categoryId: catCoffeeId, occurredAt: thisMonth, pending: false, source: "plaid" },
+          merchantRaw: "Starbucks", merchantNormalized: "starbucks",
+          categoryId: catCoffeeId, occurredAt: thisMonth, rawData: {} },
         { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "12.00",
-          currency: "CAD", merchantRaw: "Subway", merchantNormalized: "subway",
-          categoryId: catFoodId, occurredAt: thisMonth, pending: false, source: "plaid" },
+          merchantRaw: "Subway", merchantNormalized: "subway",
+          categoryId: catFoodId, occurredAt: thisMonth, rawData: {} },
       ],
     });
   });
@@ -1063,11 +1059,11 @@ describe("getSpendingSummary tool", () => {
   it("isolates by workspace", async () => {
     const other = await prisma.workspace.create({ data: { name: "other" } });
     const oa = await prisma.bankAccount.create({
-      data: { workspaceId: other.id, plaidAccountId: "x", name: "x", subtype: "checking" },
+      data: { workspaceId: other.id, name: "x", type: "depository" },
     });
     await prisma.transaction.create({
       data: { workspaceId: other.id, accountId: oa.id, plaidTransactionId: "x", amount: "999.00",
-        currency: "CAD", merchantRaw: "x", occurredAt: new Date(), pending: false, source: "plaid" },
+        merchantRaw: "x", occurredAt: new Date(), rawData: {} },
     });
     const res = await getSpendingSummary.run(ctx, { period: "this_month" });
     const totals = res.groups.reduce((s, g) => s + parseFloat(g.total), 0);
@@ -1344,16 +1340,14 @@ describe("categorizeTransaction tool", () => {
   });
 
   async function seedTx(): Promise<string> {
-    const acct = await prisma.bankAccount.upsert({
-      where: { workspaceId_plaidAccountId: { workspaceId: wsId, plaidAccountId: "a" } },
-      create: { workspaceId: wsId, plaidAccountId: "a", name: "x", subtype: "checking" },
-      update: {},
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "x", type: "depository" },
     });
     const tx = await prisma.transaction.create({
       data: {
         workspaceId: wsId, accountId: acct.id, plaidTransactionId: `t-${Math.random()}`,
-        amount: "5.00", currency: "CAD", merchantRaw: "STARBUCKS", merchantNormalized: "starbucks",
-        occurredAt: new Date(), pending: false, source: "plaid",
+        amount: "5.00", merchantRaw: "STARBUCKS", merchantNormalized: "starbucks",
+        occurredAt: new Date(), rawData: {},
       },
     });
     return tx.id;
@@ -1370,12 +1364,11 @@ describe("categorizeTransaction tool", () => {
   it("rejects cross-workspace tx_id (throws)", async () => {
     const other = await prisma.workspace.create({ data: { name: "other" } });
     const oa = await prisma.bankAccount.create({
-      data: { workspaceId: other.id, plaidAccountId: "x", name: "x", subtype: "checking" },
+      data: { workspaceId: other.id, name: "x", type: "depository" },
     });
     const foreign = await prisma.transaction.create({
       data: { workspaceId: other.id, accountId: oa.id, plaidTransactionId: "x",
-        amount: "1.00", currency: "CAD", merchantRaw: "x", occurredAt: new Date(),
-        pending: false, source: "plaid" },
+        amount: "1.00", merchantRaw: "x", occurredAt: new Date(), rawData: {} },
     });
     await expect(
       categorizeTransaction.run(ctx, { tx_id: foreign, category: "Coffee" }),
@@ -1666,12 +1659,12 @@ describe("buildFinancialContext", () => {
   it("renders counts + latest tx date when populated", async () => {
     await prisma.category.create({ data: { workspaceId: wsId, name: "Coffee" } });
     const acct = await prisma.bankAccount.create({
-      data: { workspaceId: wsId, plaidAccountId: "a", name: "x", subtype: "checking" },
+      data: { workspaceId: wsId, name: "x", type: "depository" },
     });
     await prisma.transaction.create({
       data: { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "t",
-        amount: "5.00", currency: "CAD", merchantRaw: "M",
-        occurredAt: new Date("2026-04-30T00:00:00Z"), pending: false, source: "plaid" },
+        amount: "5.00", merchantRaw: "M",
+        occurredAt: new Date("2026-04-30T00:00:00Z"), rawData: {} },
     });
 
     const ctx = await buildFinancialContext(wsId);
@@ -2234,21 +2227,40 @@ POST `/workspaces/:id/chat/message` + GET `/workspaces/:id/chat/thread`.
 Create `apps/api/tests/chat.routes.test.ts`:
 
 ```ts
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../src/db.js";
 import { chatGeminiMock, geminiMockFactory, resetGeminiMock } from "./helpers/gemini-mock.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
+import { truncateAll, disconnect } from "./helpers/db.js";
 
 vi.mock("@google/genai", () => geminiMockFactory());
 
 import { buildApp } from "../src/server.js";
 
-let app: FastifyInstance;
-beforeAll(async () => { app = await buildApp(); await app.ready(); });
-afterAll(async () => { await app.close(); });
+const env = {
+  NODE_ENV: "test" as const,
+  PORT: 0,
+  DATABASE_URL: process.env.DATABASE_URL!,
+  BETTER_AUTH_SECRET: "x".repeat(48),
+  BETTER_AUTH_URL: "http://localhost:0",
+  EMAIL_FROM: "test@fina.app",
+  WEB_APP_URL: "http://localhost:3000",
+  PLAID_CLIENT_ID: "test_client_id",
+  PLAID_SECRET: "test_secret",
+  PLAID_ENV: "sandbox" as const,
+  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  GEMINI_API_KEY: "test_gemini_key",
+};
 
-afterEach(() => { resetGeminiMock(); });
+let app: FastifyInstance;
+beforeAll(async () => { app = await buildApp(env); await app.ready(); });
+afterAll(async () => { await app.close(); await disconnect(); });
+
+beforeEach(async () => {
+  await truncateAll();
+  resetGeminiMock();
+});
 
 async function makePro(userId: string): Promise<void> {
   // Active trial = Pro. trialEndsAt in the future.
@@ -2469,17 +2481,17 @@ describe("chat routes", () => {
 
     const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Coffee" } });
     const acct = await prisma.bankAccount.create({
-      data: { workspaceId: wsId, plaidAccountId: "a", name: "x", subtype: "checking" },
+      data: { workspaceId: wsId, name: "x", type: "depository" },
     });
     const tx1 = await prisma.transaction.create({
       data: { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "t1",
-        amount: "5", currency: "CAD", merchantRaw: "STARBUCKS", merchantNormalized: "starbucks",
-        occurredAt: new Date(), pending: false, source: "plaid" },
+        amount: "5", merchantRaw: "STARBUCKS", merchantNormalized: "starbucks",
+        occurredAt: new Date(), rawData: {} },
     });
     const tx2 = await prisma.transaction.create({
       data: { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "t2",
-        amount: "6", currency: "CAD", merchantRaw: "STARBUCKS #2", merchantNormalized: "starbucks",
-        occurredAt: new Date(), pending: false, source: "plaid" },
+        amount: "6", merchantRaw: "STARBUCKS #2", merchantNormalized: "starbucks",
+        occurredAt: new Date(), rawData: {} },
     });
 
     chatGeminiMock.responses.push({
@@ -2531,13 +2543,10 @@ import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import { processChatTurn } from "../chat/turn.js";
-import { loadEnv } from "../env.js";
 
 const Body = z.object({ text: z.string().min(1).max(4000) });
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
-  const env = loadEnv();
-
   app.post("/workspaces/:id/chat/message", async (req, reply) => {
     const params = req.params as { id: string };
     const parsed = Body.safeParse(req.body);
@@ -2570,7 +2579,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
       let turn: Awaited<ReturnType<typeof processChatTurn>>;
       try {
-        turn = await processChatTurn(env, { id: thread.id, workspaceId: thread.workspaceId }, ctx.session.userId);
+        turn = await processChatTurn(app.fina.env, { id: thread.id, workspaceId: thread.workspaceId }, ctx.session.userId);
       } catch (e) {
         console.error("chat provider failed", { threadId: thread.id, err: e });
         return reply.code(500).send({ error: "chat_provider_error" });
