@@ -12,4 +12,5 @@ export type EffectiveTier = {
   source: "trial" | "paid" | "default";
   trialActive: boolean;
   trialEndsAt: Date | null;
+  plaidItemLimit: number;  // 0 = no Plaid (Free), 2 = Lite, 5 = Pro
 };

@@ -3,7 +3,7 @@ import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { effectiveTier, requireProTier } from "../src/auth/tier.js";
+import { effectiveTier, requireProTier, computeEffectiveTier } from "../src/auth/tier.js";
 import { HttpError } from "../src/auth/context.js";
 
 const env = {
@@ -75,5 +75,22 @@ describe("requireProTier / effectiveTier", () => {
     });
     expect((await requireProTier(u.userId).catch((e) => e)) as HttpError).toBeInstanceOf(HttpError);
     await app.close();
+  });
+});
+
+describe("computeEffectiveTier — plaidItemLimit", () => {
+  it("active trial → plaidItemLimit: 5", () => {
+    const t = computeEffectiveTier({ trialEndsAt: new Date(Date.now() + 86_400_000) });
+    expect(t.plaidItemLimit).toBe(5);
+  });
+
+  it("expired trial → plaidItemLimit: 0", () => {
+    const t = computeEffectiveTier({ trialEndsAt: new Date(Date.now() - 1_000) });
+    expect(t.plaidItemLimit).toBe(0);
+  });
+
+  it("no trial (null) → plaidItemLimit: 0", () => {
+    const t = computeEffectiveTier({ trialEndsAt: null });
+    expect(t.plaidItemLimit).toBe(0);
   });
 });

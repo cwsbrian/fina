@@ -13,14 +13,16 @@ export function computeEffectiveTier(user: {
       source: "trial",
       trialActive: true,
       trialEndsAt: user.trialEndsAt,
+      plaidItemLimit: 5,
     };
   }
-  // Future: check active subscriptions for paid Pro/Lite — not in this plan.
+  // Future: check paid subscription column here → "lite" (2) or "pro" (5).
   return {
     tier: "free",
     source: "default",
     trialActive: false,
     trialEndsAt: user.trialEndsAt,
+    plaidItemLimit: 0,
   };
 }
 
