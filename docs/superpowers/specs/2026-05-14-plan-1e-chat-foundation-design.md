@@ -132,8 +132,9 @@ The generated SQL creates the two tables + new enum. No `IF NOT EXISTS` needed (
 **Flow:**
 
 ```
-1. requireWorkspaceContext (reads X-Workspace-Id header; throws 400 missing_workspace_header
-   or 404 no_membership if needed)
+1. requireWorkspaceContext(req, app, { requiredRole: "editor" }) — POSTing a chat message
+   is a write that may invoke `categorizeTransaction`, so editor is the minimum role.
+   Throws: 400 missing_workspace_header, 404 no_membership, 403 insufficient_role (viewer).
 2. Compare ctx.membership.workspaceId === params.id; mismatch → 400 workspace_mismatch
 3. effectiveTier(userId).tier === "pro"? else 402 upgrade_required
 4. Validate body (zod) — text is required, 1..4000 chars
@@ -149,6 +150,8 @@ The generated SQL creates the two tables + new enum. No `IF NOT EXISTS` needed (
 ```
 
 ### 3.2 `GET /workspaces/:id/chat/thread`
+
+Authn/authz: `requireWorkspaceContext(req, app, { requiredRole: "viewer" })` — read-only.
 
 **Response 200:**
 
@@ -170,6 +173,7 @@ If no thread exists yet, the endpoint upserts and returns an empty `messages: []
 | 400 | `workspace_mismatch` | path `:id` ≠ ctx `workspaceId` (matches existing routes — see `transactions.ts:57`, `invites.ts:60`) |
 | 401 | `unauthenticated` | no session cookie |
 | 402 | `upgrade_required` | `effectiveTier(userId).tier !== "pro"` |
+| 403 | `insufficient_role` | POST: caller is `viewer` (needs `editor`); thrown by `requireWorkspaceContext` |
 | 404 | `no_membership` | session valid but user not a member of `:id` |
 | 500 | `chat_provider_error` | Gemini SDK throws (network, malformed response, etc.) — full error logged server-side, generic message to client |
 
@@ -222,6 +226,7 @@ Convert zod schemas to JSON Schema for Gemini's `functionDeclarations`. Two impo
 2. **Omit the field entirely for zero-arg tools.** Gemini rejects `parameters: { type: "object", properties: {} }` ("properties: should be non-empty for OBJECT type"). For tools whose `args` is `z.object({})`, drop the field.
 
 ```ts
+import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import type { FunctionDeclaration } from "@google/genai";
 import type { ToolDef } from "./tools/types.js";
@@ -230,17 +235,13 @@ export function toGeminiFunctionDeclarations(tools: ToolDef[]): FunctionDeclarat
   return tools.map((t) => {
     const decl: FunctionDeclaration = { name: t.name, description: t.description };
     if (hasAnyKeys(t.args)) {
-      // Cast — Gemini SDK types `parametersJsonSchema` as `unknown`; zod-to-json-schema
-      // emits a JSON Schema object that Gemini's documented subset accepts.
       decl.parametersJsonSchema = zodToJsonSchema(t.args, { $refStrategy: "none" });
     }
     return decl;
   });
 }
 
-/** True when the zod object schema has at least one property. */
 function hasAnyKeys(schema: z.ZodType): boolean {
-  // ZodObject has a `.shape` getter; everything else (z.string(), z.array()) skips this guard.
   if (!(schema instanceof z.ZodObject)) return true;
   return Object.keys(schema.shape).length > 0;
 }
@@ -319,8 +320,8 @@ args: z.object({
 - All tools enforce workspace ownership via `ctx.workspaceId` on every query. Cross-workspace `tx_id` → tool throws → dispatcher returns `{ error }` → LLM explains.
 - `categorizeTransaction` matches Plan 1B-categorize's manual-categorize flow: in addition to `prisma.transaction.update({ categoryId })` for the target row, it **also**:
   1. Upserts a `merchant_mappings` row (`source: manual`, `confidence: 1.00`) for the transaction's `merchantNormalized` → category. This causes future imports from the same merchant to auto-categorize.
-  2. Back-fills sibling transactions in the same workspace with the same `merchantNormalized` and no current category. The `transactions.categorizationSource` enum is set to `manual` on the target and `mapping_backfill` on the back-filled siblings.
-  This matches the existing `POST /transactions/:txId/categorize` behavior (`apps/api/src/routes/transactions.ts`) — the chat tool delegates to the same service function rather than duplicating logic.
+  2. Back-fills sibling transactions in the same workspace with the same `merchantNormalized`. `transactions.categorizationSource` enum (`mapping | ai | manual`) is set to `manual` on the target and `mapping` on the back-filled siblings (matching the existing route's behavior at `apps/api/src/routes/transactions.ts:221`).
+  This matches the existing `POST /transactions/:txId/categorize` behavior — the chat tool delegates to the same service function rather than duplicating logic.
 
 ---
 
@@ -398,6 +399,13 @@ function toGeminiHistory(messages: ChatMessage[]): GeminiContent[] {
     out.push({ role: "model", parts: [{ functionCall: { name: t.toolName, args: t.args } }] });
     out.push({ role: "user", parts: [{ functionResponse: { name: t.toolName, response } }] });
   }
+  // Gemini requires the first content to have role "user". The HISTORY_LIMIT
+  // window can start with a `role:"tool"` row whose preceding user message
+  // has rolled out — that produces a leading `model(functionCall)` part which
+  // Gemini rejects. Drop leading non-user parts until we find a user role.
+  while (out.length > 0 && out[0].role !== "user") {
+    out.shift();
+  }
   return out;
 }
 ```
@@ -463,26 +471,35 @@ export async function processChatTurn(
     }
 
     // Dispatch all parallel calls in this round; append one (model, user) part-pair each.
+    // SDK types `FunctionCall.name` and `.args` as optional. A call without
+    // `name` is unusable (no tool to dispatch); skip with a logged warning.
     const newContents: GeminiContent[] = [...contents];
     for (const fc of fcs) {
-      const dispatch = await dispatchTool(ctx, fc.name, fc.args);
+      if (!fc.name) {
+        console.warn("chat: function call missing name", { threadId: thread.id });
+        continue;
+      }
+      const fcName = fc.name;
+      const fcArgs = fc.args ?? {};
+
+      const dispatch = await dispatchTool(ctx, fcName, fcArgs);
       const responseObj = dispatch.ok
         ? { output: dispatch.result }
         : { error: dispatch.error };
 
-      toolCalls.push({ toolName: fc.name, args: fc.args, result: responseObj });
+      toolCalls.push({ toolName: fcName, args: fcArgs, result: responseObj });
 
       await prisma.chatMessage.create({
         data: {
           threadId: thread.id,
           role: "tool",
-          blocks: [{ type: "tool", toolName: fc.name, args: fc.args, result: responseObj }],
+          blocks: [{ type: "tool", toolName: fcName, args: fcArgs, result: responseObj }],
         },
       });
 
       newContents.push(
-        { role: "model", parts: [{ functionCall: { name: fc.name, args: fc.args } }] },
-        { role: "user",  parts: [{ functionResponse: { name: fc.name, response: responseObj } }] },
+        { role: "model", parts: [{ functionCall: { name: fcName, args: fcArgs } }] },
+        { role: "user",  parts: [{ functionResponse: { name: fcName, response: responseObj } }] },
       );
       dispatched++;
     }
@@ -582,8 +599,9 @@ Real DB, no LLM. Seed workspace + transactions, call `tool.run(ctx, args)` direc
 - Pro user → GET `/chat/thread` → returns thread + messages oldest-first
 - Pro user → POST without `X-Workspace-Id` header → 400 `missing_workspace_header`
 - Pro user → POST with `:id` ≠ ctx workspace → 400 `workspace_mismatch`
-- Gemini mock throws → 500 `chat_provider_error`, user message NOT persisted, no assistant message
-- **`categorizeTransaction` chat-tool variant** → tool succeeds → DB shows: target tx categoryId set, `merchant_mappings` upserted with `source: "manual"`, sibling tx with same `merchantNormalized` back-filled with `categorizationSource: "mapping_backfill"` (matches Plan 1B-categorize behavior; catches I8 from review).
+- Gemini mock throws → 500 `chat_provider_error`, user message IS persisted (inserted before `processChatTurn` per §3.1 step 6 → §6.2), no assistant message
+- Pro user with `viewer` role → POST `/chat/message` → 403 `insufficient_role`
+- **`categorizeTransaction` chat-tool variant** → tool succeeds → DB shows: target tx `categoryId` set + `categorizationSource: "manual"`, `merchant_mappings` upserted with `source: "manual"`, sibling tx with same `merchantNormalized` back-filled with `categorizationSource: "mapping"` (matches Plan 1B-categorize behavior; catches I8 from review).
 
 ### 7.5 E2E (skip-guarded on `GEMINI_API_KEY`)
 
