@@ -26,6 +26,12 @@
 - LLM provider: Gemini 2.5 Flash Lite (env-configurable via `CHAT_MODEL`)
 - Loop guard: `CHAT_MAX_TOOL_CALLS_PER_TURN` (default 10)
 - History window: `CHAT_HISTORY_LIMIT` (default 20 messages)
+- Three new optional `Env` keys added to `apps/api/src/env.ts:3-53` (match existing `CATEGORIZE_BATCH_MAX` convention — `.optional()` not `.default()` so test env literals stay clean; defaults applied at use-site with `?? N`):
+  ```ts
+  CHAT_MODEL: z.string().optional(),                            // default "gemini-2.5-flash-lite"
+  CHAT_HISTORY_LIMIT: z.coerce.number().int().positive().optional(),     // default 20
+  CHAT_MAX_TOOL_CALLS_PER_TURN: z.coerce.number().int().positive().optional(), // default 10
+  ```
 - Tier gate: Pro only (`effectiveTier.tier !== "pro"` → 402)
 
 ### 1.2 Out of scope (future plans)
@@ -43,6 +49,15 @@
 ## 2. Data Model
 
 Two new tables. No `chat_blocks` table — blocks live as JSON on `chat_messages`.
+
+The `Workspace` model gets a new back-relation field — Prisma requires both sides of every relation. Add to the existing `Workspace` block in `apps/api/prisma/schema.prisma:89` alongside the other arrays (`memberships`, `plaidItems`, etc.):
+
+```prisma
+model Workspace {
+  // … existing fields …
+  chatThreads      ChatThread[]
+}
+```
 
 ```prisma
 model ChatThread {
@@ -163,6 +178,8 @@ Authn/authz: `requireWorkspaceContext(req, app, { requiredRole: "viewer" })` —
 ```
 
 If no thread exists yet, the endpoint upserts and returns an empty `messages: []`.
+
+**Design note (viewer + write side-effect):** the upsert creates a thread row from a `viewer`-role GET — a side-effect from a read endpoint. Accepted because (a) the row is an empty container with no content, (b) `ChatThread` cascades on `Workspace` delete so it doesn't outlive membership-revoke + workspace-delete, and (c) avoiding the upsert here would force the client to handle a "no thread yet" empty state separately, which is more API surface area for no user-visible gain. The morning-ritual plan reuses the same pattern for `type: daily`.
 
 ### 3.3 Error codes
 
@@ -318,10 +335,21 @@ args: z.object({
 **Tool implementation contracts:**
 
 - All tools enforce workspace ownership via `ctx.workspaceId` on every query. Cross-workspace `tx_id` → tool throws → dispatcher returns `{ error }` → LLM explains.
-- `categorizeTransaction` matches Plan 1B-categorize's manual-categorize flow: in addition to `prisma.transaction.update({ categoryId })` for the target row, it **also**:
-  1. Upserts a `merchant_mappings` row (`source: manual`, `confidence: 1.00`) for the transaction's `merchantNormalized` → category. This causes future imports from the same merchant to auto-categorize.
-  2. Back-fills sibling transactions in the same workspace with the same `merchantNormalized`. `transactions.categorizationSource` enum (`mapping | ai | manual`) is set to `manual` on the target and `mapping` on the back-filled siblings (matching the existing route's behavior at `apps/api/src/routes/transactions.ts:221`).
-  This matches the existing `POST /transactions/:txId/categorize` behavior — the chat tool delegates to the same service function rather than duplicating logic.
+- `categorizeTransaction` must execute the same 6-step manual-categorize algorithm Plan 1B-categorize implemented inline at `apps/api/src/routes/transactions.ts:126-246`:
+  1. Load tx (verify workspace ownership).
+  2. Resolve category — **filter `archivedAt: null`** + case-insensitive name match within workspace.
+  3. Inside one `prisma.$transaction`:
+     - Update target tx: `categoryId`, `categorizationSource: "manual"`, backfill `merchantNormalized` if null.
+     - Upsert `merchant_mappings` row: `source: "manual"`, `confidence: 1.00`.
+     - Normalize null-`merchantNormalized` siblings (load candidates whose raw merchant looks similar, normalize lazily).
+     - Back-fill siblings: `updateMany` with `merchantNormalized` match, `id: { not: tx.id }`, **NULL-safe predicate** `OR: [{ categorizationSource: null }, { categorizationSource: { not: "manual" } }]` so prior manual decisions are NOT clobbered. Set `categoryId` + `categorizationSource: "mapping"`.
+
+  **Refactor decision:** Plan 1E **extracts** this inline route logic into a shared service `apps/api/src/categorize/manual-categorize.ts` exporting `applyManualCategorize({ workspaceId, txId, categoryName })`. Both the existing `POST /transactions/:txId/categorize` route AND the new chat tool call it. Rationale:
+  - Single source of truth — the 100-line algorithm cannot drift between the two call sites.
+  - Existing route tests verify the algorithm; chat tool tests can be lean (just invocation + error paths).
+  - Cost: one refactor commit before the chat-tool commit; the route's HTTP-shape tests stay green because the service returns the same shape the route currently constructs inline.
+
+  Scope inside 1E: the extraction is part of the chat-tool task, not a separate plan. The plan splits this into two ordered commits: `refactor(categorize): extract applyManualCategorize service` → `feat(chat): categorizeTransaction tool calls applyManualCategorize`.
 
 ---
 
@@ -410,6 +438,8 @@ function toGeminiHistory(messages: ChatMessage[]): GeminiContent[] {
 }
 ```
 
+The caller (`processChatTurn`) must guard against an empty result before issuing the Gemini call. In the 1E flow the just-inserted user message is always last in `historyChrono` so `out` is non-empty in practice, but a future caller (e.g. morning-ritual `daily` thread) might invoke without a fresh user row. Throw a sentinel error so it surfaces as `chat_provider_error` with a useful log rather than an opaque Gemini 400.
+
 ### 5.4 Main loop — `apps/api/src/chat/turn.ts`
 
 Three subtleties:
@@ -474,6 +504,7 @@ export async function processChatTurn(
     // SDK types `FunctionCall.name` and `.args` as optional. A call without
     // `name` is unusable (no tool to dispatch); skip with a logged warning.
     const newContents: GeminiContent[] = [...contents];
+    let dispatchedThisRound = 0;
     for (const fc of fcs) {
       if (!fc.name) {
         console.warn("chat: function call missing name", { threadId: thread.id });
@@ -502,7 +533,22 @@ export async function processChatTurn(
         { role: "user",  parts: [{ functionResponse: { name: fcName, response: responseObj } }] },
       );
       dispatched++;
+      dispatchedThisRound++;
     }
+
+    // Safety: Gemini returned function calls but every one was unusable
+    // (e.g. all missing `name`). Re-issuing the same request with unchanged
+    // contents would loop forever. Bail with an apology.
+    if (dispatchedThisRound === 0) {
+      console.warn("chat: function-call round with no dispatchable calls", {
+        threadId: thread.id, requested: fcs.length,
+      });
+      return {
+        assistantText: "I couldn't complete that — try a simpler request.",
+        toolCalls,
+      };
+    }
+
     contents = newContents;
   }
 }
@@ -526,7 +572,7 @@ export async function processChatTurn(
 | Failure | Response |
 |---|---|
 | Gemini API throws (network, 5xx) | 500 `chat_provider_error`. User message persisted; assistant message NOT persisted. Tool side-effects from earlier in the turn ARE persisted (see below). Log sanitized error. |
-| Gemini returns neither text nor functionCall | Treat as empty turn — `assistantText: ""`. Log warning. |
+| Gemini returns neither text nor functionCall | Treat as empty turn — `assistantText: ""`. Route persists assistant message with empty `markdown: ""` (UI renders as blank bubble — acceptable degraded state, expected to be rare). Log warning. |
 | Tool throws | Caught in `dispatcher.ts` → `{ ok: false, error }` → LLM sees `{ error }` in functionResponse |
 | `MAX_TOOL_CALLS` exceeded | Apology assistant message. Log warning with thread id. |
 | Tier check fails | 402 `upgrade_required` before user message is persisted |
@@ -647,5 +693,5 @@ Real Gemini call validates: tool schema serialization, function call detection, 
 - [ ] Tool throw → LLM receives `{ error }`, produces a graceful explanation.
 - [ ] `MAX_TOOL_CALLS` exceeded → apology assistant message; warning logged.
 - [ ] GET `/chat/thread` returns the workspace's single thread with messages oldest-first.
-- [ ] All existing 288 API tests stay green; new tests pass.
+- [ ] All existing API tests stay green; new tests pass.
 - [ ] E2E (skip-guarded on `GEMINI_API_KEY`): real Gemini conversation completes with at least one tool call.
