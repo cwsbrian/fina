@@ -307,9 +307,20 @@ git commit -m "feat(plan 1c-item-webhooks): dispatchItemEvent — ITEM webhook s
 - Modify: `apps/api/src/routes/plaid-webhook.ts`
 - Modify: `apps/api/tests/plaid.webhook.routes.test.ts`
 
-- [ ] **Step 1: Write the failing integration tests**
+- [ ] **Step 1: Update the stale existing ITEM test, then add new failing integration tests**
 
-Add these tests at the end of the `describe("POST /plaid/webhook")` block in `apps/api/tests/plaid.webhook.routes.test.ts` (before the final closing `}`):
+In `apps/api/tests/plaid.webhook.routes.test.ts`, find the existing test at approximately line 149 (`"webhookType ITEM → 200, row stored, no dispatch"`). After Task 3, `dispatchItemEvent` fires in the background for known items, making "no dispatch" misleading. Rename it:
+
+```ts
+// Before:
+it("webhookType ITEM → 200, row stored, no dispatch", async () => {
+// After:
+it("webhookType ITEM/ITEM_ERROR → 200, row stored, TRANSACTIONS dispatch not called", async () => {
+```
+
+(The three assertions in the test body remain unchanged and still pass.)
+
+Then add these 3 new tests at the end of the `describe("POST /plaid/webhook")` block (before the final closing `}`):
 
 ```ts
   it("ITEM/ERROR for known item → 200, status='error', event row stored", async () => {
@@ -327,15 +338,20 @@ Add these tests at the end of the `describe("POST /plaid/webhook")` block in `ap
 
     expect(res.statusCode).toBe(200);
 
-    // Give the detached dispatchItemEvent a moment to write.
-    await new Promise((r) => setTimeout(r, 100));
+    // Poll until the detached dispatchItemEvent writes status (up to 500ms).
+    // The dispatch is a single local DB write — 500ms is very conservative.
+    let updatedItem = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    for (let i = 0; i < 10 && updatedItem.status === "active"; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      updatedItem = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    }
 
     const rows = await prisma.plaidWebhookEvent.findMany({});
     expect(rows).toHaveLength(1);
     expect(rows[0].webhookType).toBe("ITEM");
     expect(rows[0].plaidItemId).toBe(pi.id);
 
-    const updatedItem = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
+    // updatedItem already fetched by the polling loop above.
     expect(updatedItem.status).toBe("error");
     expect(updatedItem.errorCode).toBe("ITEM_LOGIN_REQUIRED");
 
@@ -377,12 +393,14 @@ Add these tests at the end of the `describe("POST /plaid/webhook")` block in `ap
     const res = await postWebhook(app, body, jwt);
 
     expect(res.statusCode).toBe(200);
+    // ACK events are no-ops — status stays active. Brief poll to ensure the
+    // detached dispatch (which logs + exits) has settled before asserting.
     await new Promise((r) => setTimeout(r, 100));
     const rows = await prisma.plaidWebhookEvent.findMany({});
     expect(rows).toHaveLength(1);
     expect(rows[0].plaidItemId).toBe(pi.id);
     const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
-    expect(item.status).toBe("active"); // unchanged
+    expect(item.status).toBe("active"); // unchanged — ACK is a no-op
     await app.close();
   });
 ```
@@ -422,19 +440,28 @@ To:
     });
 ```
 
-**c) Add ITEM dispatch block** after the existing `if (isSyncRelevant) { ... } else { ... }` block, before `return reply.code(200).send({})`:
+**c) Restructure the `isSyncRelevant` block into an `else if` chain** — this prevents ITEM events from double-logging "webhook received but not dispatched" before dispatching. Replace the existing `if (isSyncRelevant) { ... } else { app.log.info(...) }` block with:
 
 ```ts
     const isItemRelevant = parsed.webhook_type === "ITEM" && item !== null;
-    if (isItemRelevant) {
+    if (isSyncRelevant) {
+      void dispatchWebhookSync(app.fina.env, item.workspaceId, item.id, event.id).catch(() => {});
+    } else if (isItemRelevant) {
       void dispatchItemEvent(
         item,
         parsed as { webhook_code: string; error?: { error_code?: string | null } | null },
       ).catch((e) => {
         app.log.error({ err: e, itemId: parsed.item_id }, "ITEM webhook dispatch failed");
       });
+    } else {
+      app.log.info(
+        { webhookType: parsed.webhook_type, webhookCode: parsed.webhook_code, itemId: parsed.item_id },
+        "webhook received but not dispatched",
+      );
     }
 ```
+
+Define `isItemRelevant` immediately before the `isSyncRelevant` constant (or right above the chain) so it's in scope.
 
 - [ ] **Step 4: Run tests — expect all green**
 
@@ -569,7 +596,7 @@ Expected: all 10 tests pass (9 existing + 1 new).
 pnpm nx run api:test
 ```
 
-Expected: all tests pass (≥ 261 + 10 new = ≥ 271).
+Expected: all tests pass (≥ 261 + 11 new = ≥ 272; 7 from Task 2 + 3 from Task 3 + 1 from Task 4).
 
 - [ ] **Step 6: Commit**
 
