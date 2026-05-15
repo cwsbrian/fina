@@ -1,0 +1,56 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { prisma } from "../src/db.js";
+import { categorizeTransaction } from "../src/chat/tools/categorize-transaction.js";
+import type { ToolContext } from "../src/chat/tools/types.js";
+
+describe("categorizeTransaction tool", () => {
+  let ctx: ToolContext;
+  let wsId: string;
+  let catId: string;
+
+  beforeEach(async () => {
+    const u = await prisma.user.create({ data: { id: `ct-${Date.now()}`, email: `ct-${Date.now()}@t.co`, name: "CT" } });
+    const ws = await prisma.workspace.create({ data: { name: "ct-ws" } });
+    wsId = ws.id;
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
+    catId = (await prisma.category.create({ data: { workspaceId: wsId, name: "Coffee" } })).id;
+    ctx = { env: {} as never, workspaceId: wsId, userId: u.id };
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  async function seedTx(): Promise<string> {
+    const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "x", type: "depository" } });
+    const tx = await prisma.transaction.create({ data: { workspaceId: wsId, accountId: acct.id, plaidTransactionId: `t-${Math.random()}`, amount: "5.00", merchantRaw: "STARBUCKS", merchantNormalized: "starbucks", occurredAt: new Date(), rawData: {} } });
+    return tx.id;
+  }
+
+  it("sets categoryId and returns backfill count", async () => {
+    const id = await seedTx();
+    const res = await categorizeTransaction.run(ctx, { tx_id: id, category: "Coffee" });
+    expect(res.tx.categoryId).toBe(catId);
+    expect(res.tx.categorizationSource).toBe("manual");
+    expect(typeof res.backfilledCount).toBe("number");
+  });
+
+  it("rejects cross-workspace tx_id (throws)", async () => {
+    const other = await prisma.workspace.create({ data: { name: "other" } });
+    const oa = await prisma.bankAccount.create({ data: { workspaceId: other.id, name: "x", type: "depository" } });
+    const foreign = await prisma.transaction.create({ data: { workspaceId: other.id, accountId: oa.id, plaidTransactionId: "x", amount: "1.00", merchantRaw: "x", occurredAt: new Date(), rawData: {} } });
+    await expect(categorizeTransaction.run(ctx, { tx_id: foreign.id, category: "Coffee" })).rejects.toThrow();
+    await prisma.workspace.delete({ where: { id: other.id } });
+  });
+
+  it("rejects unknown category (throws)", async () => {
+    const id = await seedTx();
+    await expect(categorizeTransaction.run(ctx, { tx_id: id, category: "Nonexistent" })).rejects.toThrow();
+  });
+
+  it("zod requires both args (validation at schema layer)", () => {
+    expect(categorizeTransaction.args.safeParse({ tx_id: "" }).success).toBe(false);
+    expect(categorizeTransaction.args.safeParse({ category: "" }).success).toBe(false);
+    expect(categorizeTransaction.args.safeParse({ tx_id: "x", category: "y" }).success).toBe(true);
+  });
+});
