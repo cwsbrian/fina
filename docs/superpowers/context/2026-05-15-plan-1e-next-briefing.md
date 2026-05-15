@@ -230,7 +230,19 @@ Think about what a user would naturally ask their finance assistant that can't b
 1. **Identify gaps** — what common financial questions can't the current 4 tools answer?
 2. **Propose tools** — for each, define: name, description, zod args (with `.describe()`), return shape, implementation notes
 3. **Prioritize** — which 5-8 tools give the most value? rank by impact vs complexity
-4. **Self-review** — after drafting, check for: coverage gaps, arg design issues, missing edge cases, cross-workspace isolation, empty state handling
+4. **Self-review loop** — after drafting, review your own spec using the same Critical/Important/Minor classification below. Fix all Critical and Important issues. Repeat until you can honestly report **0 Critical + 0 Important**. Only then is the spec considered done.
+
+### Self-review classification
+
+| Severity | Definition | Required action |
+|---|---|---|
+| **Critical** | Would cause runtime failure, data corruption, type error, or implementation impossibility | Must fix before done |
+| **Important** | Design defect, contradiction between sections, missing edge case, unclear contract | Must fix before done |
+| **Minor** | Cosmetic, wording, non-blocking | Fix if quick, otherwise skip |
+
+**Exit condition:** You must reach 0 Critical + 0 Important in a review pass before your spec is considered production-ready. If you find issues, fix them and run another review pass. Document each round: what you found, what you fixed.
+
+This is the same bar as the established production workflow (Codex external review loop). The difference is you are reviewing your own work.
 
 ### Output format
 
@@ -239,13 +251,13 @@ Write a design spec to:
 docs/superpowers/specs/2026-05-15-plan-1e-next-<your-variant>-design.md
 ```
 
-Where `<your-variant>` is either `opus` or `codex`.
+Where `<your-variant>` is either `opus`, `codex`, or `claude-codex`.
 
 The spec should include:
 - **Proposed tools** (5-8) with full arg/return schemas and implementation notes
 - **Rationale** — why these tools, in this order
 - **Excluded scope** — what you deliberately left out and why
-- **Self-review findings** — what you caught in your own output
+- **Self-review log** — document each review round: issues found (classified as Critical/Important/Minor), fixes applied, and the final "0 Critical + 0 Important" confirmation
 
 ---
 

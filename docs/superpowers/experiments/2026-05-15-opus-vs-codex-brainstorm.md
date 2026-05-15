@@ -32,7 +32,8 @@ All three variants receive **identical starting documents** (no session context,
 - Model: `claude-opus-4-7`
 - Worktree: `.claude/worktrees/plan-1e-next-opus`
 - Branch: `plan-1e-next-opus`
-- Process: read briefing → brainstorm → write design spec → **self-review**
+- Process: read briefing → brainstorm → write design spec → **self-review loop until 0 Critical + 0 Important**
+- The model acts as both author and reviewer. It must iterate on its own output until it can honestly report 0 Critical and 0 Important issues — same production-ready bar as Variant C.
 - No external reviewer.
 
 ### Variant B — Codex + self-review
@@ -40,7 +41,8 @@ All three variants receive **identical starting documents** (no session context,
 - Model: Codex CLI (OpenAI o3 or codex-mini)
 - Worktree: `.claude/worktrees/plan-1e-next-codex`
 - Branch: `plan-1e-next-codex`
-- Process: read briefing → brainstorm → write design spec → **self-review**
+- Process: read briefing → brainstorm → write design spec → **self-review loop until 0 Critical + 0 Important**
+- Same bar as Variant A: must iterate until genuinely production-ready, not just "good enough."
 - No external reviewer.
 
 ### Variant C — Claude + Codex review (existing production workflow)
@@ -49,8 +51,19 @@ All three variants receive **identical starting documents** (no session context,
 - Review model: Codex CLI
 - Worktree: `.claude/worktrees/plan-1e-next-claude-codex`
 - Branch: `plan-1e-next-claude-codex`
-- Process: read briefing → brainstorm → write design spec → **Codex reviews** → Claude applies fixes → repeat until 0 Critical/Important
+- Process: read briefing → brainstorm → write design spec → **Codex reviews → Claude applies fixes → repeat until 0 Critical + 0 Important**
 - This is the established workflow that produced Plans 1B–1E.
+
+### Production-ready bar (all variants)
+
+All three variants must reach the same exit condition before the design is considered done:
+
+> **0 Critical issues + 0 Important issues** in the final review pass.
+
+- Critical = runtime failure, data corruption, security hole, migration failure
+- Important = design defect, contradiction, missing edge case, type error
+
+The only difference between variants is *who* does the reviewing. The bar is identical.
 
 ### Evaluation method
 
