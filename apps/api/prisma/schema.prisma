@@ -98,6 +98,7 @@ model Workspace {
   transactions     Transaction[]
   categories       Category[]
   merchantMappings MerchantMapping[]
+  chatThreads      ChatThread[]
 
   @@map("workspaces")
 }
@@ -349,4 +350,42 @@ enum CategorizationSource {
   mapping
   ai
   manual
+}
+
+model ChatThread {
+  id          String         @id @default(cuid())
+  workspaceId String
+  type        ChatThreadType @default(adhoc)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  messages  ChatMessage[]
+
+  @@unique([workspaceId, type])
+  @@map("chat_threads")
+}
+
+enum ChatThreadType {
+  adhoc
+  daily
+}
+
+model ChatMessage {
+  id        String          @id @default(cuid())
+  threadId  String
+  role      ChatMessageRole
+  blocks    Json
+  createdAt DateTime        @default(now())
+
+  thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@index([threadId, createdAt])
+  @@map("chat_messages")
+}
+
+enum ChatMessageRole {
+  user
+  assistant
+  tool
 }
