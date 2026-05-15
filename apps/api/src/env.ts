@@ -50,6 +50,10 @@ const Schema = z.object({
   ),
   // TTL for plaid_webhook_events rows in days. Default 30 applied at use site with ?? 30.
   CRON_EVENT_TTL_DAYS: z.coerce.number().int().positive().optional(),
+  // Chat — all .optional() (test-env friendly); use-site applies defaults via `?? N`.
+  CHAT_MODEL: z.string().optional(),
+  CHAT_HISTORY_LIMIT: z.coerce.number().int().positive().optional(),
+  CHAT_MAX_TOOL_CALLS_PER_TURN: z.coerce.number().int().positive().optional(),
 });
 
 export type Env = z.infer<typeof Schema>;
