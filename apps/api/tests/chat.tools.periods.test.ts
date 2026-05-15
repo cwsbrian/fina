@@ -99,6 +99,27 @@ describe("periods helpers", () => {
     expect(r.comparison.lt.toISOString()).toBe("2026-03-09T04:00:00.000Z");
   });
 
+  it("basicPeriodRange this_week works for Pacific/Auckland (UTC+13 NZDT)", async () => {
+    // Auckland is UTC+13 in March (NZDT). 2026-03-10T12:00:00Z = Wed 2026-03-11 01:00 NZDT.
+    // The current week starts Monday 2026-03-09 00:00 NZDT = 2026-03-08 11:00 UTC.
+    await prisma.user.update({ where: { id: userId }, data: { tz: "Pacific/Auckland" } });
+    const now = new Date("2026-03-10T12:00:00Z");
+    const r = await basicPeriodRange(userId, "this_week", now);
+    expect(r.gte.toISOString()).toBe("2026-03-08T11:00:00.000Z");
+    expect(r.lt.toISOString()).toBe("2026-03-15T11:00:00.000Z");
+  });
+
+  it("comparisonRanges previous_week works for Pacific/Kiritimati (UTC+14)", async () => {
+    // Kiritimati is UTC+14 year-round (no DST). 2026-03-10T12:00:00Z = Wed 2026-03-11 02:00 local.
+    // Current week: Mon 2026-03-09 - Mon 2026-03-16 local. Previous week one calendar week earlier.
+    await prisma.user.update({ where: { id: userId }, data: { tz: "Pacific/Kiritimati" } });
+    const now = new Date("2026-03-10T12:00:00Z");
+    const r = await comparisonRanges(userId, "this_week", "previous_week", now);
+    expect(r.current.gte.toISOString()).toBe("2026-03-08T10:00:00.000Z"); // Mon 2026-03-09 00:00 +14
+    expect(r.comparison.gte.toISOString()).toBe("2026-03-01T10:00:00.000Z"); // Mon 2026-03-02 00:00 +14
+    expect(r.comparison.lt.toISOString()).toBe("2026-03-08T10:00:00.000Z");
+  });
+
   it("lookbackMonthStart returns the user-local first-of-month converted to UTC", async () => {
     const { lookbackMonthStart, dateKeyInTz } = await import("../src/chat/tools/periods.js");
     const now = new Date("2026-05-15T12:00:00Z");

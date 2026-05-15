@@ -92,21 +92,21 @@ function startOfMonth(year: number, month: number, tz: string): Date {
   return localMidnightToUtc(year, month, 1, tz);
 }
 
-// Local calendar-day arithmetic: anchor at noon UTC of (Y, M, D+n) and read back the
-// local Y/M/D in the user's tz. Date.UTC handles month/year overflow. The noon anchor
-// keeps us comfortably away from midnight DST transitions in any IANA zone.
+// Local calendar-day arithmetic: do the day-overflow at the UTC-civil level via Date.UTC
+// (which handles month/year overflow), then convert the resulting civil Y/M/D to a UTC
+// instant by interpreting it as midnight in `tz`. Reading civil fields back from `Date`
+// (not from `partsInTz`) avoids an off-by-one error in UTC+13/+14 zones, where any
+// hour-of-day anchor in UTC can already be the next calendar day locally.
 function startOfWeek(year: number, month: number, day: number, weekday: number, tz: string): Date {
   const back = (weekday + 6) % 7; // Sun=0 → 6, Mon=1 → 0, ...
-  const anchor = new Date(Date.UTC(year, month - 1, day - back, 12, 0, 0));
-  const p = partsInTz(anchor, tz);
-  return localMidnightToUtc(p.year, p.month, p.day, tz);
+  const civil = new Date(Date.UTC(year, month - 1, day - back));
+  return localMidnightToUtc(civil.getUTCFullYear(), civil.getUTCMonth() + 1, civil.getUTCDate(), tz);
 }
 
 function addDaysLocal(d: Date, n: number, tz: string): Date {
   const p = partsInTz(d, tz);
-  const anchor = new Date(Date.UTC(p.year, p.month - 1, p.day + n, 12, 0, 0));
-  const target = partsInTz(anchor, tz);
-  return localMidnightToUtc(target.year, target.month, target.day, tz);
+  const civil = new Date(Date.UTC(p.year, p.month - 1, p.day + n));
+  return localMidnightToUtc(civil.getUTCFullYear(), civil.getUTCMonth() + 1, civil.getUTCDate(), tz);
 }
 
 // Public helper: first day, in the user's timezone, of the calendar month that begins
