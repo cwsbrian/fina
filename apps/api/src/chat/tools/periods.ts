@@ -56,7 +56,7 @@ function partsInTz(instant: Date, tz: string): Parts {
     year: Number(out.year),
     month: Number(out.month),
     day: Number(out.day),
-    weekday: weekdayMap[out.weekday] ?? 0,
+    weekday: out.weekday ? weekdayMap[out.weekday] ?? 0 : 0,
     hour,
     minute: Number(out.minute),
     second: Number(out.second),

@@ -55,7 +55,7 @@ function median(nums: number[]): number {
   if (nums.length === 0) return 0;
   const s = [...nums].sort((a, b) => a - b);
   const mid = Math.floor(s.length / 2);
-  return s.length % 2 === 0 ? (s[mid - 1] + s[mid]) / 2 : s[mid];
+  return s.length % 2 === 0 ? (s[mid - 1]! + s[mid]!) / 2 : s[mid]!;
 }
 
 function classifyCadence(medianGapDays: number): Candidate["cadence"] {
@@ -159,7 +159,7 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
       const sortedTimes = g.occurredAts.map((d) => d.getTime()).sort((a, b) => a - b);
       const gaps: number[] = [];
       for (let i = 1; i < sortedTimes.length; i++) {
-        gaps.push((sortedTimes[i] - sortedTimes[i - 1]) / (1000 * 60 * 60 * 24));
+        gaps.push((sortedTimes[i]! - sortedTimes[i - 1]!) / (1000 * 60 * 60 * 24));
       }
       const medianGap = median(gaps);
       const cadence = classifyCadence(medianGap);
@@ -175,17 +175,18 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
 
       // Find the amount for the latest occurrence by scanning the parallel arrays;
       // findIndex would return only the first match if timestamps collided.
-      let latestAmount = g.amounts[0];
-      let latestTs = g.occurredAts[0].getTime();
+      // Length is guaranteed >= minOccurrences (>= 2) by the continue guard above.
+      let latestAmount = g.amounts[0]!;
+      let latestTs = g.occurredAts[0]!.getTime();
       for (let i = 1; i < g.amounts.length; i++) {
-        const ts = g.occurredAts[i].getTime();
+        const ts = g.occurredAts[i]!.getTime();
         if (ts > latestTs) {
           latestTs = ts;
-          latestAmount = g.amounts[i];
+          latestAmount = g.amounts[i]!;
         }
       }
-      const firstTs = sortedTimes[0];
-      const lastTs = sortedTimes[sortedTimes.length - 1];
+      const firstTs = sortedTimes[0]!;
+      const lastTs = sortedTimes[sortedTimes.length - 1]!;
 
       candidates.push({
         key: g.key,
