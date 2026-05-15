@@ -25,7 +25,8 @@
     "jose": "^6",
     "plaid": "^42",
     "resend": "^6.12.3",
-    "zod": "^3.23.8"
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
     "dotenv": "^16.4.5",
