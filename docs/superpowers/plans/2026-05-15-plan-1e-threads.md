@@ -110,7 +110,10 @@ model ChatThread {
   workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
 
-  @@index([workspaceId, archivedAt, lastMessageAt(sort: Desc)])
+  // NOTE: list-by-recency index is created by the migration SQL with
+  // `lastMessageAt DESC NULLS LAST`. Prisma's @@index syntax cannot express
+  // NULLS LAST, so omitting the directive here avoids schema drift. The
+  // engineer should resist adding it back in `prisma migrate dev` outputs.
   @@map("chat_threads")
 }
 ```
@@ -140,9 +143,11 @@ SET "lastMessageAt" = (
   SELECT MAX("createdAt") FROM "chat_messages" WHERE "threadId" = ct.id
 );
 
--- CreateIndex (compound key for list-by-recency, excluding archived)
+-- CreateIndex (compound key for list-by-recency, excluding archived).
+-- NULLS LAST matches the list-route query (`lastMessageAt DESC NULLS LAST`);
+-- the default for `DESC` would be NULLS FIRST and the planner would skip the index.
 CREATE INDEX "chat_threads_workspaceId_archivedAt_lastMessageAt_idx"
-  ON "chat_threads"("workspaceId", "archivedAt", "lastMessageAt" DESC);
+  ON "chat_threads"("workspaceId", "archivedAt", "lastMessageAt" DESC NULLS LAST);
 ```
 
 ### Step 1.3: Reset `routes/chat.ts`
@@ -991,7 +996,7 @@ Run:
 ```bash
 pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.routes.test.ts
 ```
-Expected: 5 new tests FAIL with 404 (no route).
+Expected: 6 new tests FAIL with 404 (no route).
 
 ### Step 6.3: Add the detail route
 
