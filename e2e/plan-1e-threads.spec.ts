@@ -42,6 +42,10 @@ test.describe("plan 1e-threads — real Gemini, multi-thread isolation", () => {
   test.beforeEach(async () => { await new Promise((r) => setTimeout(r, GEMINI_PACE_MS)); });
   test.setTimeout(90_000);
 
+  // Chat turns can easily exceed playwright.config's 8s actionTimeout default
+  // because each turn waits on Gemini. Bump per-request timeout for this spec.
+  test.use({ actionTimeout: 45_000 });
+
   test.afterEach(async ({ page }) => {
     try {
       psql(`DELETE FROM workspaces WHERE name LIKE '%E2E Threads%'`);
