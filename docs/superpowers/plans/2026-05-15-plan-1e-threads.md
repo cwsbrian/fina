@@ -448,7 +448,13 @@ export const threadsService = {
         workspaceId: input.workspaceId,
         ...(input.includeArchived ? {} : { archivedAt: null }),
       },
-      orderBy: [{ lastMessageAt: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+      // Postgres' default for `DESC` is NULLS FIRST. We want empty threads (lastMessageAt is null)
+      // sorted last so active conversations show up first.
+      orderBy: [
+        { lastMessageAt: { sort: "desc", nulls: "last" } },
+        { createdAt: "desc" },
+        { id: "desc" },
+      ],
       take: input.limit,
     });
   },
@@ -565,10 +571,10 @@ async function makePro(userId: string): Promise<void> {
 }
 
 async function setupProUser(email: string): Promise<{ cookie: string; wsId: string; userId: string }> {
-  const { cookie, userId } = await signUpAndGetCookie(app, email);
-  const wsId = await getOwnerWorkspaceId(app, cookie);
-  await makePro(userId);
-  return { cookie, wsId, userId };
+  const u = await signUpAndGetCookie(app, { email });
+  const wsId = await getOwnerWorkspaceId(u.userId);
+  await makePro(u.userId);
+  return { cookie: u.cookie, wsId, userId: u.userId };
 }
 
 describe("POST /workspaces/:wsId/chat/threads", () => {
@@ -937,6 +943,29 @@ describe("GET /workspaces/:wsId/chat/threads/:tid", () => {
     expect(res.json().error).toBe("thread_not_found");
   });
 
+  it("returns the most recent 100 messages (newest 100, chronologically ordered)", async () => {
+    const { cookie, wsId } = await setupProUser(`d-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    // Seed 105 messages spread across distinct timestamps.
+    for (let i = 0; i < 105; i++) {
+      await prisma.chatMessage.create({
+        data: {
+          threadId: t.id,
+          role: "user",
+          blocks: [{ type: "text", markdown: `m-${i}` }],
+          createdAt: new Date(2026_000_000_000 + i * 1000),
+        },
+      });
+    }
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.messages).toHaveLength(100);
+    // newest 100 → m-5 through m-104, in chronological order
+    expect((body.messages[0].blocks as Array<{ markdown: string }>)[0].markdown).toBe("m-5");
+    expect((body.messages[99].blocks as Array<{ markdown: string }>)[0].markdown).toBe("m-104");
+  });
+
   it("returns 200 for archived threads (read access preserved)", async () => {
     const { cookie, wsId } = await setupProUser(`d-${Date.now()}@t.co`);
     const t = await prisma.chatThread.create({ data: { workspaceId: wsId, archivedAt: new Date() } });
@@ -979,11 +1008,14 @@ Append inside `chatRoutes` in `apps/api/src/routes/chat.ts`:
       const thread = await threadsService.findOwned({ threadId: params.tid, workspaceId: ctx.membership.workspaceId });
       if (!thread) return reply.code(404).send({ error: "thread_not_found" });
 
-      const messages = await prisma.chatMessage.findMany({
+      // Fetch the newest 100 messages and reverse to chronological order.
+      // Using orderBy asc + take 100 would return the oldest 100 — wrong for long threads.
+      const recent = await prisma.chatMessage.findMany({
         where: { threadId: thread.id },
-        orderBy: { createdAt: "asc" },
+        orderBy: { createdAt: "desc" },
         take: 100,
       });
+      const messages = recent.reverse();
 
       return {
         thread: serializeThread(thread),
@@ -1007,7 +1039,7 @@ Run:
 ```bash
 pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.routes.test.ts
 ```
-Expected: 15/15 PASS.
+Expected: 16/16 PASS.
 
 ### Step 6.5: Commit
 
@@ -1176,7 +1208,7 @@ Run:
 ```bash
 pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.routes.test.ts
 ```
-Expected: 22/22 PASS.
+Expected: 23/23 PASS.
 
 ### Step 7.5: Commit
 
@@ -1289,7 +1321,7 @@ Run:
 ```bash
 pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.routes.test.ts
 ```
-Expected: 28/28 PASS.
+Expected: 29/29 PASS.
 
 ### Step 8.5: Commit
 
@@ -1339,7 +1371,11 @@ Create `apps/api/tests/chat.history-window.test.ts`:
 import { describe, expect, it } from "vitest";
 import { selectHistoryWindow, type HistoryCandidate } from "../src/chat/history-window.js";
 
-function msg(id: string, blocks: unknown, createdAt = new Date("2026-05-15T00:00:00Z")): HistoryCandidate {
+function msg(
+  id: string,
+  blocks: unknown = [{ type: "text", markdown: id }],
+  createdAt = new Date("2026-05-15T00:00:00Z"),
+): HistoryCandidate {
   return { id, blocks, createdAt };
 }
 
@@ -1682,14 +1718,20 @@ Append to `apps/api/src/routes/chat.ts`:
          const thread = await threadsService.findOwned({ threadId: params.tid, workspaceId: ctx.membership.workspaceId });
          if (!thread || thread.archivedAt) return reply.code(404).send({ error: "thread_not_found" });
 
-         const userMessage = await prisma.chatMessage.create({
-           data: {
-             threadId: thread.id,
-             role: "user",
-             blocks: [{ type: "text", markdown: parsed.data.text }],
-           },
+         // Each (message create + thread lastMessageAt bump) is wrapped in a
+         // transaction so an unexpected error between the two writes can't leave
+         // list ordering stale relative to the message that exists.
+         const userMessage = await prisma.$transaction(async (tx) => {
+           const m = await tx.chatMessage.create({
+             data: {
+               threadId: thread.id,
+               role: "user",
+               blocks: [{ type: "text", markdown: parsed.data.text }],
+             },
+           });
+           await tx.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: m.createdAt } });
+           return m;
          });
-         await prisma.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: userMessage.createdAt } });
 
          let turn: Awaited<ReturnType<typeof processChatTurn>>;
          try {
@@ -1699,14 +1741,17 @@ Append to `apps/api/src/routes/chat.ts`:
            return reply.code(500).send({ error: "chat_provider_error" });
          }
 
-         const assistantMessage = await prisma.chatMessage.create({
-           data: {
-             threadId: thread.id,
-             role: "assistant",
-             blocks: [{ type: "text", markdown: turn.assistantText }],
-           },
+         const assistantMessage = await prisma.$transaction(async (tx) => {
+           const m = await tx.chatMessage.create({
+             data: {
+               threadId: thread.id,
+               role: "assistant",
+               blocks: [{ type: "text", markdown: turn.assistantText }],
+             },
+           });
+           await tx.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: m.createdAt } });
+           return m;
          });
-         await prisma.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: assistantMessage.createdAt } });
 
          return {
            threadId: thread.id,
@@ -1737,7 +1782,7 @@ Run:
 ```bash
 pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.routes.test.ts
 ```
-Expected: 35/35 PASS.
+Expected: 36/36 PASS.
 
 ### Step 10.5: Run the full api suite + typecheck
 
