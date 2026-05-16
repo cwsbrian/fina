@@ -171,4 +171,26 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
   });
+
+  app.delete("/workspaces/:id/chat/threads/:tid", async (req, reply) => {
+    const params = req.params as { id: string; tid: string };
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const tier = await effectiveTier(ctx.session.userId);
+      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+
+      const archived = await threadsService.archive({
+        threadId: params.tid,
+        workspaceId: ctx.membership.workspaceId,
+      });
+      if (!archived) return reply.code(404).send({ error: "thread_not_found" });
+      return reply.code(204).send();
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
 }

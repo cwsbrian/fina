@@ -346,3 +346,51 @@ describe("PATCH /workspaces/:wsId/chat/threads/:tid", () => {
     expect(res.statusCode).toBe(400);
   });
 });
+
+describe("DELETE /workspaces/:wsId/chat/threads/:tid", () => {
+  it("archives the thread (sets archivedAt) and returns 204", async () => {
+    const { cookie, wsId } = await setupProUser(`del-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    const res = await app.inject({ method: "DELETE", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(204);
+    const row = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
+    expect(row.archivedAt).not.toBeNull();
+  });
+
+  it("is idempotent: second DELETE on an archived thread also returns 204", async () => {
+    const { cookie, wsId } = await setupProUser(`del-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId, archivedAt: new Date() } });
+    const res = await app.inject({ method: "DELETE", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(204);
+  });
+
+  it("returns 404 for unknown thread", async () => {
+    const { cookie, wsId } = await setupProUser(`del-${Date.now()}@t.co`);
+    const res = await app.inject({ method: "DELETE", url: `/workspaces/${wsId}/chat/threads/does-not-exist`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("returns 404 for cross-workspace ids", async () => {
+    const a = await setupProUser(`del-${Date.now()}-a@t.co`);
+    const b = await setupProUser(`del-${Date.now()}-b@t.co`);
+    const bThread = await prisma.chatThread.create({ data: { workspaceId: b.wsId } });
+    const res = await app.inject({ method: "DELETE", url: `/workspaces/${a.wsId}/chat/threads/${bThread.id}`, headers: { cookie: a.cookie, "x-workspace-id": a.wsId } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("returns 403 for viewer", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`del-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    await prisma.membership.update({ where: { userId_workspaceId: { userId, workspaceId: wsId } }, data: { role: "viewer" } });
+    const res = await app.inject({ method: "DELETE", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("returns 402 for free tier", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`del-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    await prisma.user.update({ where: { id: userId }, data: { trialEndsAt: new Date(Date.now() - 86400000), trialConsumed: true } });
+    const res = await app.inject({ method: "DELETE", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(402);
+  });
+});
