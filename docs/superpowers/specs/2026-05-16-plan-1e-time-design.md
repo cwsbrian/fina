@@ -323,14 +323,28 @@ describe("plaidPostedAt", () => {
 ### 9.2 `apps/api/tests/chat.tools.tz-anchor.test.ts` (new)
 
 Integration: exercise both fixes (storage anchor AND query-layer migration)
-on Toronto-boundary rows whose classification differs between server-UTC and
-user-tz reasoning. The seed deliberately uses a row at `2026-05-01T02:00Z`,
-which is **April 30 22:00 local Toronto** — server-UTC says May, user-tz says
-April. The test pins "now" to mid-April so a `this_month` query asks for
-April. A correct user-tz implementation includes it; the pre-fix server-local
-math excluded it.
+on Toronto-boundary rows whose classification differs between server-local
+and user-tz reasoning.
+
+**Test process timezone is pinned to UTC** via `process.env.TZ = "UTC"` at the
+top of the file (read by Node's `Date` constructor before the first
+instantiation in the file). Without this pin, the pre-fix `new Date(y, m, d)`
+math would interpret in the host's local zone (e.g. America/Vancouver on the
+dev machine) and the test could accidentally pass under the old
+implementation. Pinning to UTC makes the pre-fix server-local boundary
+exactly `[Apr 1 00:00Z, May 1 00:00Z)` for April — predictable across CI
+hosts. The seed uses a row at `2026-05-01T02:00Z`, which is **April 30 22:00
+local Toronto** — server-UTC says May, user-tz Toronto says April. The test
+pins "now" to mid-April so a `this_month` query asks for April. A correct
+user-tz implementation includes it; the pre-fix server-local math (under
+TZ=UTC) excluded it.
 
 ```typescript
+// Pin BEFORE any Date() call in this module — Node reads TZ once per
+// Date construction; setting it here makes server-local math deterministic
+// across CI hosts (which may run in any zone).
+process.env.TZ = "UTC";
+
 import { describe, it, expect, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { listTransactions } from "../src/chat/tools/list-transactions.js";
@@ -424,10 +438,18 @@ This plan is complete when:
 - New unit test file 9.1 passes (10 cases).
 - New integration test file 9.2 passes (2+ cases, one per migrated tool).
 - Migration `<timestamp>_plaid_date_to_utc_noon` applied on dev DB:
-  - All `source='plaid'` rows whose `rawData` indicates a date-only origin and
-    whose stored time is `00:00:00` now have `12:00:00`.
-  - Rows with ISO `rawData.authorized_datetime` or `rawData.datetime` are
-    unchanged, including those at `00:00:00Z`.
+  - `occurredAt` shifts +12h for every `source='plaid'` row whose chosen
+    Plaid field (per the fallback chain `authorized_datetime > authorized_date
+    > datetime > date`) is the date-only `authorized_date` or `date`,
+    AND whose stored time is `00:00:00`. Concretely: any row with
+    `rawData.authorized_date` non-null and `rawData.authorized_datetime` null
+    is in scope, regardless of whether `rawData.datetime` is also present.
+  - `occurredAt` is unchanged when `rawData.authorized_datetime` is non-null
+    (chosen-ISO case), or when the chain falls through to `datetime`
+    (`authorized_date` null and `datetime` non-null) — again regardless of
+    the stored time value.
+  - `postedAt` shifts +12h when `rawData.datetime` is null and `rawData.date`
+    is non-null and `postedAt` is `00:00:00`; unchanged otherwise.
 - All 60+ existing API test files still pass (502+ tests).
 - The smoke doc (Section 11) records a manual before/after row check.
 
@@ -437,20 +459,31 @@ This plan is complete when:
 
 Document in the plan (not the spec). Outline:
 
-1. Capture pre-migration state, restricting to date-only-origin Plaid rows:
+1. Capture pre-migration state of in-scope rows (mirroring the migration's
+   `occurredAt` gate):
    ```sql
    SELECT COUNT(*) FROM transactions
    WHERE source='plaid'
      AND ("rawData"->>'authorized_datetime') IS NULL
-     AND ("rawData"->>'datetime') IS NULL
-     AND EXTRACT(HOUR FROM "occurredAt")=0;
+     AND (
+       ("rawData"->>'authorized_date') IS NOT NULL
+       OR (
+             ("rawData"->>'authorized_date') IS NULL
+         AND ("rawData"->>'datetime')        IS NULL
+         AND ("rawData"->>'date')            IS NOT NULL
+       )
+     )
+     AND EXTRACT(HOUR FROM "occurredAt")=0
+     AND EXTRACT(MINUTE FROM "occurredAt")=0
+     AND EXTRACT(SECOND FROM "occurredAt")=0;
    ```
-   Also capture: count of `source='plaid'` rows where `rawData.authorized_datetime`
-   is non-null AND `occurredAt` happens to be `00:00:00Z` — these must NOT
-   shift.
+   Also capture counts that MUST remain unchanged: rows with
+   `rawData.authorized_datetime` non-null at `00:00:00Z`, AND rows where the
+   chain falls through to ISO `datetime` (`authorized_datetime` and
+   `authorized_date` both null, `datetime` non-null) at `00:00:00Z`.
 2. Apply migration.
-3. Post-migration: rerun query 1 → expect count drop to 0. Rerun the
-   ISO-at-midnight count → expect unchanged.
+3. Post-migration: rerun the in-scope query → expect count drop to 0. Rerun
+   the must-not-change counts → expect unchanged.
 4. Run one chat turn: "이번 달 May 1일 거래 보여줘" with a Toronto user →
    expect the May 1 Plaid row to appear.
 
