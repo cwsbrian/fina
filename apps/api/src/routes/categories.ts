@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
+import { createCategoryService } from "../categories/create.js";
 
 const MAX_NAME_LEN = 40;
 const MAX_ACTIVE_CATEGORIES = 30;
@@ -50,30 +51,20 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
       const wsId = ctx.membership.workspaceId;
       const nameTrim = parsed.data.name.trim();
 
-      // Count active categories
-      const activeCount = await prisma.category.count({
-        where: { workspaceId: wsId, archivedAt: null },
-      });
-      if (activeCount >= MAX_ACTIVE_CATEGORIES) {
-        return reply.code(422).send({ error: "too_many_categories" });
+      try {
+        const created = await createCategoryService({ workspaceId: wsId, name: nameTrim });
+        return reply.code(201).send({ category: { id: created.id, name: created.name, icon: null, color: null } });
+      } catch (svcErr) {
+        if (svcErr instanceof Error) {
+          if (svcErr.message === "too_many_categories") {
+            return reply.code(422).send({ error: "too_many_categories" });
+          }
+          if (svcErr.message === "category_exists") {
+            return reply.code(422).send({ error: "duplicate_name" });
+          }
+        }
+        throw svcErr;
       }
-
-      // Case-insensitive active duplicate check
-      const dup = await prisma.category.findFirst({
-        where: {
-          workspaceId: wsId,
-          archivedAt: null,
-          name: { equals: nameTrim, mode: "insensitive" },
-        },
-        select: { id: true },
-      });
-      if (dup) return reply.code(422).send({ error: "duplicate_name" });
-
-      const created = await prisma.category.create({
-        data: { workspaceId: wsId, name: nameTrim },
-        select: { id: true, name: true, icon: true, color: true },
-      });
-      return reply.code(201).send({ category: created });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
