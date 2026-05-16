@@ -40,7 +40,8 @@ Survey results (2026-05-15) on the current implementation:
 | Token estimator | Local heuristic `Math.ceil(JSON.stringify(blocks).length / 4)`. No tokenizer dependency. |
 | Soft delete | `DELETE` sets `archivedAt`. Archived threads are inaccessible (404) for message routes. |
 | Backward compat | Existing single `adhoc` rows survive the migration. Their type column is dropped; `lastMessageAt` is backfilled from the latest message. |
-| Tier gate | All chat routes (POST + GET + PATCH + DELETE) are Pro-gated for consistency. |
+| Tier gate | Mutating routes (POST, PATCH, DELETE) require Pro tier. GET routes preserve the current behavior: no tier gate, so a downgraded user can still read their history. |
+| Role gate | POST/PATCH/DELETE require `editor` role (matches today's POST /chat/message). GET routes require `viewer`. |
 | Streaming responses | Not in scope (Gemini call is request/response, like today). |
 
 ---
@@ -77,8 +78,9 @@ Added: `title`, `lastMessageAt`, `archivedAt`, compound index.
 Single migration `<timestamp>_multi_thread_chat`:
 
 ```sql
--- Drop the unique constraint and type column.
-ALTER TABLE "chat_threads" DROP CONSTRAINT "chat_threads_workspaceId_type_key";
+-- The previous @@unique was created by Prisma as a unique INDEX, not a table CONSTRAINT,
+-- so drop the index (DROP CONSTRAINT would fail).
+DROP INDEX "chat_threads_workspaceId_type_key";
 ALTER TABLE "chat_threads" DROP COLUMN "type";
 DROP TYPE "ChatThreadType";
 
@@ -102,7 +104,18 @@ CREATE INDEX "chat_threads_workspaceId_archivedAt_lastMessageAt_idx"
 
 ## 5. API surface
 
-All routes are mounted under `/workspaces/:wsId/`. All require Pro tier (`upgrade_required` 402 otherwise) and a valid membership.
+All routes are mounted under `/workspaces/:wsId/`. Authorization per route:
+
+| Route | Role | Tier |
+|---|---|---|
+| POST /chat/threads | editor | Pro |
+| POST /chat/threads/:tid/messages | editor | Pro |
+| GET /chat/threads | viewer | — (no tier gate) |
+| GET /chat/threads/:tid | viewer | — (no tier gate) |
+| PATCH /chat/threads/:tid | editor | Pro |
+| DELETE /chat/threads/:tid | editor | Pro |
+
+Tier failures return 402 `upgrade_required`. Role failures bubble up from `requireWorkspaceContext` with its existing 403 code.
 
 ### 5.1 `POST /workspaces/:wsId/chat/threads`
 
@@ -124,7 +137,7 @@ Send a user message and run a turn. Replaces the deprecated `POST /chat/message`
 
 **Body:**
 ```ts
-{ text: string }  // min length 1
+{ text: string }  // min length 1, max length 4000 — preserved from the current POST /chat/message contract
 ```
 
 **Response 200:**
@@ -222,14 +235,21 @@ Soft delete by setting `archivedAt`.
 
 ### 6.1 Env vars
 
-Add to `apps/api/src/env.ts` Zod schema:
+Add to `apps/api/src/env.ts` Zod schema, mirroring the existing optional + use-site-default pattern (`CHAT_MODEL`, `CHAT_HISTORY_LIMIT`, `CHAT_MAX_TOOL_CALLS_PER_TURN`) so existing test code that constructs `Env` literals doesn't break:
 
 ```ts
-CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().default(200),
-CHAT_HISTORY_BUDGET_TOKENS:  z.coerce.number().int().positive().default(400_000),
+CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().optional(),
+CHAT_HISTORY_BUDGET_TOKENS:  z.coerce.number().int().positive().optional(),
 ```
 
-Remove: `CHAT_HISTORY_LIMIT` (the old single cap).
+Defaults are applied at the use site in `turn.ts`:
+
+```ts
+const HISTORY_LIMIT_MESSAGES = env.CHAT_HISTORY_LIMIT_MESSAGES ?? 200;
+const HISTORY_BUDGET_TOKENS  = env.CHAT_HISTORY_BUDGET_TOKENS  ?? 400_000;
+```
+
+Remove: `CHAT_HISTORY_LIMIT` (the old single cap) from `env.ts` and from `turn.ts`.
 
 ### 6.2 Token estimator
 
@@ -290,9 +310,10 @@ No changes:
 - Archived thread accessed via the messages route → 404 `thread_not_found`. Archived threads ARE accessible via the `GET /threads/:tid` and `PATCH` routes (so UI can tidy up).
 - Repeated `DELETE` on an already-archived thread → 204, idempotent. 404 only when the thread row doesn't exist at all.
 - `title` longer than 200 chars → 400 from Zod.
-- `text` empty → 400 from Zod.
+- `text` empty OR longer than 4000 chars → 400 from Zod.
 - Gemini failure → 500 `chat_provider_error`, unchanged.
-- Free tier on any chat route → 402 `upgrade_required`, unchanged.
+- Free tier on a mutating chat route (POST/PATCH/DELETE) → 402 `upgrade_required`. GET routes do not check tier.
+- Insufficient role → 403 via `requireWorkspaceContext` (existing behavior).
 
 ---
 
@@ -320,6 +341,9 @@ No changes:
 - POST messages: 200 with tool calls, `lastMessageAt` advanced.
 - POST messages 404 on cross-workspace or archived thread.
 - POST messages 402 for free tier.
+- POST messages 403 for viewer-role member.
+- POST messages 400 when `text` is empty or longer than 4000 chars.
+- PATCH/DELETE 403 for viewer-role member.
 - GET threads: returns the two threads sorted, excludes archived.
 - GET threads with `?include_archived=true` includes archived.
 - GET threads `firstMessagePreview` is the truncated first user text.
@@ -363,10 +387,10 @@ This phase is complete when:
 - A workspace can hold 2+ threads with no uniqueness conflict.
 - The five new routes (POST threads, POST messages, GET list, GET one, PATCH, DELETE) work as specified.
 - `POST /chat/message` and `GET /chat/thread` are removed; no backward-compat shim.
-- Every chat route requires Pro tier.
+- Mutating chat routes (POST, PATCH, DELETE) require Pro tier and `editor` role. GET routes require `viewer` role and are not tier-gated.
 - Cross-workspace thread access returns 404 with `thread_not_found`.
 - Archived thread message-send returns 404 with `thread_not_found`.
-- `CHAT_HISTORY_LIMIT_MESSAGES` (default 200) and `CHAT_HISTORY_BUDGET_TOKENS` (default 400 000) are honored; the older `CHAT_HISTORY_LIMIT` is gone.
+- `CHAT_HISTORY_LIMIT_MESSAGES` (use-site default 200) and `CHAT_HISTORY_BUDGET_TOKENS` (use-site default 400 000) are honored; the older `CHAT_HISTORY_LIMIT` is gone. Both env keys are optional in the Env schema; defaults applied in `turn.ts` via `?? value`.
 - History selection cuts at whichever cap hits first and is always passed chronologically.
 - `lastMessageAt` is updated in the same transaction as message inserts.
 - Existing `adhoc` thread rows survive the migration with backfilled `lastMessageAt`.
