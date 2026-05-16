@@ -33,7 +33,7 @@ describe("processChatTurn", () => {
 
   it("text-only response → returns assistantText, toolCalls empty", async () => {
     chatGeminiMock.responses.push({ text: "Hello!" });
-    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId);
+    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.assistantText).toBe("Hello!");
     expect(r.toolCalls).toHaveLength(0);
   });
@@ -41,7 +41,7 @@ describe("processChatTurn", () => {
   it("single function call → dispatched → final text", async () => {
     chatGeminiMock.responses.push({ functionCalls: [{ name: "listCategories", args: {} }] });
     chatGeminiMock.responses.push({ text: "You have 0 categories." });
-    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId);
+    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.toolCalls).toHaveLength(1);
     expect(r.toolCalls[0].toolName).toBe("listCategories");
     expect(r.assistantText).toBe("You have 0 categories.");
@@ -53,7 +53,7 @@ describe("processChatTurn", () => {
   it("parallel function calls in one round → both dispatched, both counted", async () => {
     chatGeminiMock.responses.push({ functionCalls: [{ name: "listCategories", args: {} }, { name: "listTransactions", args: {} }] });
     chatGeminiMock.responses.push({ text: "Summary." });
-    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId);
+    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.toolCalls).toHaveLength(2);
     const persisted = await prisma.chatMessage.count({ where: { threadId, role: "tool" } });
     expect(persisted).toBe(2);
@@ -64,13 +64,13 @@ describe("processChatTurn", () => {
     for (let i = 0; i < 5; i++) {
       chatGeminiMock.responses.push({ functionCalls: [{ name: "listCategories", args: {} }] });
     }
-    const r = await processChatTurn(env11, { id: threadId, workspaceId: wsId }, userId);
+    const r = await processChatTurn(env11, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.assistantText).toMatch(/couldn't complete/i);
   });
 
   it("missing fc.name in all calls of a round → bail with apology (no infinite loop)", async () => {
     chatGeminiMock.responses.push({ functionCalls: [{ args: {} }] });
-    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId);
+    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.assistantText).toMatch(/couldn't complete/i);
     expect(r.toolCalls).toHaveLength(0);
   });
@@ -78,7 +78,7 @@ describe("processChatTurn", () => {
   it("tool throws → LLM sees {error} → final text", async () => {
     chatGeminiMock.responses.push({ functionCalls: [{ name: "categorizeTransaction", args: { tx_id: "nope", category: "Coffee" } }] });
     chatGeminiMock.responses.push({ text: "I couldn't find that transaction." });
-    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId);
+    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.toolCalls).toHaveLength(1);
     expect(r.toolCalls[0].result).toMatchObject({ error: expect.any(String) });
     expect(r.assistantText).toBe("I couldn't find that transaction.");
@@ -89,18 +89,18 @@ describe("processChatTurn", () => {
       data: { threadId, role: "tool", blocks: [{ type: "tool", toolName: "listCategories", args: {}, result: { output: { categories: [] } } }] },
     });
     chatGeminiMock.responses.push({ text: "ok" });
-    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId);
+    const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.assistantText).toBe("ok");
     expect(r.toolCalls).toHaveLength(0);
   });
 
   it("Gemini SDK throws → exception propagates to caller", async () => {
     chatGeminiMock.responses.push(new Error("network kaput"));
-    await expect(processChatTurn(env, { id: threadId, workspaceId: wsId }, userId)).rejects.toThrow(/network kaput/);
+    await expect(processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner")).rejects.toThrow(/network kaput/);
   });
 
   it("empty history (no rows) → throws chat_history_empty", async () => {
     await prisma.chatMessage.deleteMany({ where: { threadId } });
-    await expect(processChatTurn(env, { id: threadId, workspaceId: wsId }, userId)).rejects.toThrow(/chat_history_empty/);
+    await expect(processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner")).rejects.toThrow(/chat_history_empty/);
   });
 });

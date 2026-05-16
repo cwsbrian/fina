@@ -232,7 +232,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
       let turn: Awaited<ReturnType<typeof processChatTurn>>;
       try {
-        turn = await processChatTurn(app.fina.env, { id: thread.id, workspaceId: thread.workspaceId }, ctx.session.userId);
+        turn = await processChatTurn(app.fina.env, { id: thread.id, workspaceId: thread.workspaceId }, ctx.session.userId, ctx.membership.role);
       } catch (e) {
         console.error("chat provider failed", { threadId: thread.id, err: e });
         return reply.code(500).send({ error: "chat_provider_error" });

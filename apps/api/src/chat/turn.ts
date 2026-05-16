@@ -7,6 +7,7 @@ import { toGeminiFunctionDeclarations } from "./gemini-adapter.js";
 import { buildFinancialContext } from "./context.js";
 import { selectHistoryWindow } from "./history-window.js";
 import type { ToolContext } from "./tools/types.js";
+import type { Role } from "@fina/shared";
 
 const SYSTEM_PROMPT = `You are Fina, a personal-finance assistant for Canadian users. You help users
 understand their spending, categorize transactions, and plan their budgets.
@@ -76,13 +77,14 @@ export async function processChatTurn(
   env: Env,
   thread: { id: string; workspaceId: string },
   userId: string,
+  role: Role,
 ): Promise<{ assistantText: string; toolCalls: ToolCallRecord[] }> {
   const HISTORY_LIMIT_MESSAGES = env.CHAT_HISTORY_LIMIT_MESSAGES ?? 200;
   const HISTORY_BUDGET_TOKENS = env.CHAT_HISTORY_BUDGET_TOKENS ?? 400_000;
   const MAX_TOOL_CALLS = env.CHAT_MAX_TOOL_CALLS_PER_TURN ?? 10;
   const MODEL = env.CHAT_MODEL ?? "gemini-2.5-flash-lite";
 
-  const toolCtx: ToolContext = { env, workspaceId: thread.workspaceId, userId };
+  const toolCtx: ToolContext = { env, workspaceId: thread.workspaceId, userId, role };
 
   const recent = await prisma.chatMessage.findMany({
     where: { threadId: thread.id },
