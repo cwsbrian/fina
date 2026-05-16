@@ -22,8 +22,8 @@ This is the 12th tool in the chat registry. Both the per-thread context window (
 | Date input | ISO `YYYY-MM-DD` only, strict parse. No named periods. |
 | Pagination | Hard cap (default 20, max 50). `totalCount` + `hasMore` exposed. No cursor, no page-based. |
 | Merchant matching | Case-insensitive substring on `merchantRaw` OR `merchantNormalized`. |
-| Category lookup | By exact name, case-insensitive. Unknown name → empty result, no throw. |
-| Account lookup | By exact name, case-insensitive. Unknown name → empty result, no throw. |
+| Category lookup | By exact name, case-insensitive. May resolve to multiple rows (names are not unique within a workspace); use `categoryId: { in: ids }`. Unknown name → empty result, no throw. |
+| Account lookup | By exact name, case-insensitive. May resolve to multiple rows (e.g. two banks each with a "Chequing"); use `accountId: { in: ids }`. Unknown name → empty result, no throw. |
 | Sort order | Fixed `occurredAt DESC, id DESC`. Not argument-controlled. |
 | Currency scope | CAD only. `excludedNonCadCount` in response. |
 | Tier gate | Inherited from chat route — Pro + `editor` role required; the tool itself does not check. |
@@ -164,10 +164,11 @@ async run(ctx, args) {
     throw new Error("invalid_amount_range");
   }
 
-  // Resolve name lookups → ids. Either null → return empty result.
-  let categoryId: string | undefined;
+  // Resolve name lookups → ids. Either resolves to zero → return empty result.
+  // Names are NOT unique within a workspace, so collect ALL matching ids and use `in`.
+  let categoryIds: string[] | undefined;
   if (args.category_name) {
-    const cat = await prisma.category.findFirst({
+    const cats = await prisma.category.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         name: { equals: args.category_name, mode: "insensitive" },
@@ -175,12 +176,12 @@ async run(ctx, args) {
       },
       select: { id: true },
     });
-    if (!cat) return emptyResult(args, limit);
-    categoryId = cat.id;
+    if (cats.length === 0) return emptyResult(args, limit);
+    categoryIds = cats.map((c) => c.id);
   }
-  let accountId: string | undefined;
+  let accountIds: string[] | undefined;
   if (args.account_name) {
-    const acct = await prisma.bankAccount.findFirst({
+    const accts = await prisma.bankAccount.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         name: { equals: args.account_name, mode: "insensitive" },
@@ -188,24 +189,26 @@ async run(ctx, args) {
       },
       select: { id: true },
     });
-    if (!acct) return emptyResult(args, limit);
-    accountId = acct.id;
+    if (accts.length === 0) return emptyResult(args, limit);
+    accountIds = accts.map((a) => a.id);
   }
 
-  // Assemble where
+  // Assemble where. Build occurredAt as a separate DateTimeFilter to avoid
+  // spreading the union-typed `Prisma.TransactionWhereInput["occurredAt"]`
+  // (Prisma's field type accepts Date | string | DateTimeFilter, which TS
+  // refuses to spread).
+  const occurredAt: Prisma.DateTimeFilter = {};
+  if (args.start_date) occurredAt.gte = new Date(`${args.start_date}T00:00:00.000Z`);
+  if (args.end_date) occurredAt.lte = new Date(`${args.end_date}T23:59:59.999Z`);
+
   const where: Prisma.TransactionWhereInput = {
     workspaceId: ctx.workspaceId,
     removedAt: null,
     currency: "CAD",
   };
-  if (categoryId) where.categoryId = categoryId;
-  if (accountId) where.accountId = accountId;
-  if (args.start_date) {
-    where.occurredAt = { ...(where.occurredAt ?? {}), gte: new Date(`${args.start_date}T00:00:00.000Z`) };
-  }
-  if (args.end_date) {
-    where.occurredAt = { ...(where.occurredAt ?? {}), lte: new Date(`${args.end_date}T23:59:59.999Z`) };
-  }
+  if (categoryIds) where.categoryId = { in: categoryIds };
+  if (accountIds) where.accountId = { in: accountIds };
+  if (occurredAt.gte || occurredAt.lte) where.occurredAt = occurredAt;
 
   // amount filter on abs(amount). Express as OR of (positive range) and (negative range).
   if (args.amount_min != null || args.amount_max != null) {
@@ -297,6 +300,8 @@ All thrown errors are `new Error("<snake_case_code>")` — consistent with the r
 ### 10.3 Edge cases
 - `category_name` not in workspace → empty `transactions`, `totalCount=0`
 - `account_name` not in workspace → empty `transactions`, `totalCount=0`
+- Two `BankAccount` rows share the same `name` ("Chequing") → results include transactions from BOTH accounts (verifies the `in: ids` resolution).
+- Two `Category` rows share the same `name` → results include transactions categorized to either.
 - `excludedNonCadCount` reflects non-CAD txns matching OTHER filters
 - Workspace isolation: cross-workspace data not returned
 - Soft-deleted transactions (`removedAt != null`) excluded from results AND count
