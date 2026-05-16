@@ -3,10 +3,15 @@ import { z } from "zod";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import { threadsService } from "../chat/threads.js";
+import { processChatTurn } from "../chat/turn.js";
 import { prisma } from "../db.js";
 
 const CreateBody = z.object({
   title: z.string().min(1).max(200).optional(),
+});
+
+const MessageBody = z.object({
+  text: z.string().min(1).max(4000),
 });
 
 const PatchBody = z.object({
@@ -188,6 +193,79 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       });
       if (!archived) return reply.code(404).send({ error: "thread_not_found" });
       return reply.code(204).send();
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.post("/workspaces/:id/chat/threads/:tid/messages", async (req, reply) => {
+    const params = req.params as { id: string; tid: string };
+    const parsed = MessageBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const tier = await effectiveTier(ctx.session.userId);
+      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+
+      const thread = await threadsService.findOwned({ threadId: params.tid, workspaceId: ctx.membership.workspaceId });
+      if (!thread || thread.archivedAt) return reply.code(404).send({ error: "thread_not_found" });
+
+      // Each (message create + thread lastMessageAt bump) is wrapped in a
+      // transaction so an unexpected error between the two writes can't leave
+      // list ordering stale relative to the message that exists.
+      const userMessage = await prisma.$transaction(async (tx) => {
+        const m = await tx.chatMessage.create({
+          data: {
+            threadId: thread.id,
+            role: "user",
+            blocks: [{ type: "text", markdown: parsed.data.text }],
+          },
+        });
+        await tx.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: m.createdAt } });
+        return m;
+      });
+
+      let turn: Awaited<ReturnType<typeof processChatTurn>>;
+      try {
+        turn = await processChatTurn(app.fina.env, { id: thread.id, workspaceId: thread.workspaceId }, ctx.session.userId);
+      } catch (e) {
+        console.error("chat provider failed", { threadId: thread.id, err: e });
+        return reply.code(500).send({ error: "chat_provider_error" });
+      }
+
+      const assistantMessage = await prisma.$transaction(async (tx) => {
+        const m = await tx.chatMessage.create({
+          data: {
+            threadId: thread.id,
+            role: "assistant",
+            blocks: [{ type: "text", markdown: turn.assistantText }],
+          },
+        });
+        await tx.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: m.createdAt } });
+        return m;
+      });
+
+      return {
+        threadId: thread.id,
+        userMessage: {
+          id: userMessage.id,
+          role: userMessage.role,
+          blocks: userMessage.blocks,
+          createdAt: userMessage.createdAt.toISOString(),
+        },
+        assistantMessage: {
+          id: assistantMessage.id,
+          role: assistantMessage.role,
+          blocks: assistantMessage.blocks,
+          createdAt: assistantMessage.createdAt.toISOString(),
+        },
+        toolCalls: turn.toolCalls,
+      };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;

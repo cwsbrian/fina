@@ -10,7 +10,7 @@ import { prisma } from "../src/db.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { buildApp } from "../src/server.js";
-import { resetGeminiMock } from "./helpers/gemini-mock.js";
+import { resetGeminiMock, chatGeminiMock } from "./helpers/gemini-mock.js";
 
 const env = {
   NODE_ENV: "test" as const,
@@ -392,5 +392,118 @@ describe("DELETE /workspaces/:wsId/chat/threads/:tid", () => {
     await prisma.user.update({ where: { id: userId }, data: { trialEndsAt: new Date(Date.now() - 86400000), trialConsumed: true } });
     const res = await app.inject({ method: "DELETE", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
     expect(res.statusCode).toBe(402);
+  });
+});
+
+describe("POST /workspaces/:wsId/chat/threads/:tid/messages", () => {
+  it("posts a user message, runs a turn, returns assistant message + tool calls", async () => {
+    const { cookie, wsId } = await setupProUser(`m-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    chatGeminiMock.responses.push({ text: "Hi back" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}/messages`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { text: "Hello" },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.threadId).toBe(t.id);
+    expect(body.userMessage.role).toBe("user");
+    expect(body.assistantMessage.role).toBe("assistant");
+    expect(body.toolCalls).toEqual([]);
+
+    const row = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
+    expect(row.lastMessageAt).not.toBeNull();
+  });
+
+  it("returns 404 for archived thread", async () => {
+    const { cookie, wsId } = await setupProUser(`m-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId, archivedAt: new Date() } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}/messages`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { text: "hi" },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("thread_not_found");
+  });
+
+  it("returns 404 for cross-workspace thread", async () => {
+    const a = await setupProUser(`m-${Date.now()}-a@t.co`);
+    const b = await setupProUser(`m-${Date.now()}-b@t.co`);
+    const bThread = await prisma.chatThread.create({ data: { workspaceId: b.wsId } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${a.wsId}/chat/threads/${bThread.id}/messages`,
+      headers: { cookie: a.cookie, "x-workspace-id": a.wsId, "content-type": "application/json" },
+      payload: { text: "hi" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("returns 402 for free tier", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`m-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    await prisma.user.update({ where: { id: userId }, data: { trialEndsAt: new Date(Date.now() - 86400000), trialConsumed: true } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}/messages`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { text: "hi" },
+    });
+    expect(res.statusCode).toBe(402);
+  });
+
+  it("returns 403 for viewer", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`m-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    await prisma.membership.update({ where: { userId_workspaceId: { userId, workspaceId: wsId } }, data: { role: "viewer" } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}/messages`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { text: "hi" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("rejects empty text and text longer than 4000 chars with 400", async () => {
+    const { cookie, wsId } = await setupProUser(`m-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    const empty = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}/messages`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { text: "" },
+    });
+    expect(empty.statusCode).toBe(400);
+    const huge = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}/messages`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { text: "x".repeat(4001) },
+    });
+    expect(huge.statusCode).toBe(400);
+  });
+
+  it("on Gemini failure returns 500 chat_provider_error and does NOT persist the assistant message", async () => {
+    const { cookie, wsId } = await setupProUser(`m-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    chatGeminiMock.responses.push(new Error("network down"));
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}/messages`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { text: "Hello" },
+    });
+    expect(res.statusCode).toBe(500);
+    expect(res.json().error).toBe("chat_provider_error");
+    const msgs = await prisma.chatMessage.findMany({ where: { threadId: t.id } });
+    // Existing behavior: the user message persists before the turn runs.
+    // The assistant message is not created, and lastMessageAt should reflect the user message only.
+    expect(msgs.every((m) => m.role !== "assistant")).toBe(true);
   });
 });
