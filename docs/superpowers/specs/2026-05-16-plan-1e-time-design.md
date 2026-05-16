@@ -8,10 +8,21 @@
 
 ## 1. Goal
 
-Fix the Plaid date-only storage policy so user-timezone period filters classify
-transactions into their intended local day. Backfill existing rows in a single
-migration. No schema changes; no per-tool code changes — the fix is concentrated
-in the sync layer and inherited by every downstream consumer.
+Fix user-timezone correctness in the transaction APIs end-to-end:
+
+1. **Sync layer:** Plaid date-only values land at UTC noon (not UTC midnight)
+   so user-tz day-boundary filters classify them into the intended local day.
+2. **Backfill:** existing date-only-origin Plaid rows shift forward 12 hours
+   via a single migration. The migration gate uses `rawData` JSONB so real
+   ISO Plaid timestamps that happen to land at `00:00:00Z` are not touched.
+3. **Query layer:** the two oldest chat tools, `listTransactions` and
+   `getSpendingSummary`, currently compute period bounds with server-local
+   `new Date(y, m, d)` and bypass `periods.ts`. Migrate them onto the shared
+   user-tz-aware helpers, and use `dateKeyInTz` for `getSpendingSummary`'s
+   per-day bucket key.
+
+No schema changes. The other 12 chat tools already route through `periods.ts`
+and inherit the fix without modification.
 
 ---
 
@@ -36,10 +47,19 @@ which is **April 30, 8:00 PM local** in Toronto. A `this_month` (May) filter
 running `gte: 2026-05-01T04:00:00Z` **excludes** it, mis-binning it to April.
 
 This affects every chat tool that uses `basicPeriodRange`, `reviewPeriodRange`,
-`comparisonRanges`, `lookbackMonthStart`, and `dateKeyInTz` — i.e. all of
-listTransactions, getSpendingSummary, getCategoryBreakdown,
-compareSpendingPeriods, detectRecurringMerchants, getCashflowSummary,
-findTransactions, findUncategorizedTransactions.
+`comparisonRanges`, `lookbackMonthStart`, or `dateKeyInTz` — i.e.
+findUncategorizedTransactions, getCategoryBreakdown, compareSpendingPeriods,
+detectRecurringMerchants, getCashflowSummary, findTransactions, and the
+review-period read tools.
+
+Separately, two chat tools never adopted `periods.ts` at all and still rely on
+server-local `new Date(y, m, d)` math — `listTransactions` and
+`getSpendingSummary`. For these the user-tz bug exists on a second axis: even
+if the storage anchor were perfect, the period boundary itself is computed
+against the **server's** wall clock instead of the user's. Both tools must
+migrate onto the shared helpers; `getSpendingSummary` additionally uses
+`occurredAt.toISOString().slice(0, 10)` for its day-bucket key, which renders
+in UTC — replace with `dateKeyInTz`.
 
 ---
 
@@ -50,46 +70,73 @@ findTransactions, findUncategorizedTransactions.
 | Storage anchor for Plaid date-only | UTC noon (`2026-05-01T12:00:00.000Z`) |
 | Schema | No new columns. No DDL. |
 | Existing data | Backfill in a single Prisma migration |
-| Backfill heuristic | `source='plaid' AND time component = 00:00:00 UTC` |
+| Backfill gate | `source='plaid'` AND `rawData` JSONB indicates the chosen field was date-only (mirrors the sync fallback chain), AND `occurredAt`/`postedAt` time component = `00:00:00` (defensive idempotence) |
 | Plaid ISO timestamps (with `T`) | Trust as-is, no shift |
+| `listTransactions` and `getSpendingSummary` | Migrate onto `periods.ts` (today/this_week/this_month/last_month) and `dateKeyInTz` |
+| Add `"today"` to `BasicPeriod` | Yes — extend `periods.ts` to handle it via `localMidnightToUtc(y, m, d) … addDaysLocal(+1)` |
 | Workspace-level tz | Out of scope — `User.tz` stays per-user |
 | Plaid `datetime` always preferred | Out of scope — keep current fallback chain |
 | Web list route `/transactions` `from`/`to` query parsing | Out of scope — UI concern |
-| UTC+14 zones (Kiribati Line Islands) | Known limitation, not addressed |
+| UTC±12 and beyond | Known limitation, not addressed |
 
 ---
 
 ## 4. Architecture
 
-A single helper, `parsePlaidInstant(s: string): Date`, encapsulates the policy:
+Three coordinated changes:
+
+**(a) Sync anchor.** A single helper, `parsePlaidInstant(s: string): Date`,
+encapsulates the policy:
 
 - Input contains `T` → ISO 8601 with time component → `new Date(s)` (unchanged).
 - Input is pure date-only (`"YYYY-MM-DD"`) → `new Date(\`${s}T12:00:00.000Z\`)`.
 
-Both `plaidOccurredAt` and `plaidPostedAt` route through it. Every existing
-transaction-querying code path inherits the fix without modification:
+Both `plaidOccurredAt` and `plaidPostedAt` route through it.
+
+**(b) Migration.** A Prisma migration shifts pre-existing Plaid rows whose
+stored timestamp came from a date-only Plaid field. The gate uses `rawData`
+JSONB to mirror the sync fallback chain — only rows where the chosen Plaid
+field was actually `date` or `authorized_date` (not `datetime` or
+`authorized_datetime`) are eligible. A defensive `time = 00:00:00` predicate
+makes the migration idempotent on rerun.
+
+**(c) Query layer.** `listTransactions` and `getSpendingSummary` migrate to
+`periods.ts`:
+
+- Add `"today"` to `BasicPeriod`; extend `basicPeriodRange` to handle it.
+- Both tools call `basicPeriodRange(userId, period)` instead of local `periodRange()`.
+- `getSpendingSummary`'s day-bucket key replaces
+  `r.occurredAt.toISOString().slice(0, 10)` with `dateKeyInTz(r.occurredAt, tz)`,
+  using the user's resolved timezone.
+
+After these changes, every transaction-querying code path is timezone-aware:
 
 - All 14 chat tools (via `periods.ts` helpers).
-- The web list route `GET /workspaces/:id/transactions` (uses raw `occurredAt`).
-- The categorize backfill (uses `occurredAt` for sibling match).
-
-A one-step Prisma migration shifts pre-existing Plaid rows by `INTERVAL '12 hours'`,
-gated on `source='plaid'` + zero time component (= came from date-only path).
-The shift is idempotent on rerun (a row at `12:00` no longer matches the
-`HOUR = 0` predicate).
+- The web list route `GET /workspaces/:id/transactions` consumes UI-supplied
+  date strings unchanged — it is the UI's responsibility to format them. Out
+  of scope.
+- The categorize backfill uses `occurredAt` for sibling match only (no period
+  filtering).
 
 ---
 
-## 5. Known limitation: UTC+14 zones
+## 5. Known limitation: far-east and far-west zones
 
-UTC noon is safe for all zones in `[UTC-12, UTC+13]`. For UTC+14 (Kiribati Line
-Islands, Christmas Island) and certain DST-shifted Pacific zones, a date-only
-Plaid transaction may be classified one local day later than intended.
+A fixed UTC-noon anchor preserves the intended local date only for zones in
+the half-open interval `(UTC-12, UTC+12)` — i.e. UTC-11 through UTC+11
+inclusive. At and beyond ±12 hours, `12:00 UTC` already crosses into the
+neighboring local day:
+
+- **UTC+12 (e.g. Pacific/Auckland NZST):** `2026-05-01T12:00Z` =
+  `2026-05-02T00:00 local`. A Plaid `date = "2026-05-01"` is read as May 2.
+- **UTC+13 / UTC+14 (NZDT, Kiribati Line Islands):** worse — `12:00 UTC` is
+  already 1 AM / 2 AM the next local day.
+- **UTC-12 (Baker Island, uninhabited):** symmetric problem on the other side.
 
 Mitigation: not applied. Real-world Fina user base is in Canada (default
-`America/Toronto`). If a UTC+14 user ever lands, a follow-up plan can switch
-the anchor to a user-tz-derived local-noon (requires `User.tz` lookup at sync
-time, which today's sync does not do).
+`America/Toronto`, UTC-4/-5). If a Pacific user ever lands, a follow-up plan
+can switch the anchor to a user-tz-derived local-noon (requires `User.tz`
+lookup at sync time, which today's sync does not do).
 
 ---
 
@@ -97,12 +144,25 @@ time, which today's sync does not do).
 
 - **Modify** `apps/api/src/plaid/sync.ts` — extract `parsePlaidInstant`; route
   `plaidOccurredAt` + `plaidPostedAt` through it.
+- **Modify** `apps/api/src/chat/tools/periods.ts` — extend `BasicPeriod` with
+  `"today"`; extend `basicPeriodRange` to handle it.
+- **Modify** `apps/api/src/chat/tools/list-transactions.ts` — drop local
+  `periodRange()`; use `basicPeriodRange(userId, period)`. `ToolDef.run`
+  receives `userId` via `ctx`.
+- **Modify** `apps/api/src/chat/tools/get-spending-summary.ts` — drop local
+  `periodRange()`; use `basicPeriodRange(userId, period)`; replace day-bucket
+  key with `dateKeyInTz(r.occurredAt, tz)` where `tz = await resolveUserTz(userId)`.
 - **Create** `apps/api/prisma/migrations/<timestamp>_plaid_date_to_utc_noon/migration.sql`
-  — backfill UPDATE.
+  — backfill UPDATEs gated by `rawData` JSONB.
 - **Create** `apps/api/tests/plaid.sync.date-anchor.test.ts` — unit tests for
   `parsePlaidInstant`, `plaidOccurredAt`, `plaidPostedAt`.
 - **Create** `apps/api/tests/chat.tools.tz-anchor.test.ts` — integration:
-  Plaid `"2026-05-01"` + Toronto user + `this_month` filter → 1 hit.
+  Plaid `"2026-05-01"` + Toronto user + `this_month` filter on
+  `listTransactions` and `getSpendingSummary` → 1 hit each, day-bucket key
+  reads `2026-05-01` (not `2026-04-30` which would result if grouping in UTC).
+- **Modify** `apps/api/tests/chat.tools.list-transactions.test.ts` and
+  `apps/api/tests/chat.tools.get-spending-summary.test.ts` — adjust any
+  assertions that hardcoded server-local boundaries.
 
 No file is renamed; no existing test is deleted. Existing tests that hardcode
 UTC midnight assertions on Plaid date input get adjusted to UTC noon.
@@ -149,12 +209,24 @@ unambiguous.
 ```sql
 -- Plan 1E-time: Plaid date-only transactions historically stored as UTC
 -- midnight. Shift to UTC noon so user-tz day-boundary filters classify
--- correctly. Heuristic: source='plaid' AND occurredAt has no time component
--- (= came from a date-only Plaid field). Idempotent on rerun.
+-- correctly.
+--
+-- Gate logic mirrors the sync.ts fallback chain so real ISO Plaid timestamps
+-- that happen to land at 00:00:00Z are NOT touched:
+--   plaidOccurredAt prefers authorized_datetime > authorized_date > datetime > date
+--   plaidPostedAt   prefers datetime > date
+-- A row's stored timestamp came from a date-only Plaid field iff every
+-- "earlier" ISO field in its chain is null AND a date-only field is set.
+-- The trailing `EXTRACT(HOUR/MINUTE/SECOND ...)=0` clauses make the migration
+-- idempotent (a row already shifted to 12:00 no longer matches).
 
 UPDATE "transactions"
 SET "occurredAt" = "occurredAt" + INTERVAL '12 hours'
 WHERE "source" = 'plaid'
+  AND ("rawData" ->> 'authorized_datetime') IS NULL
+  AND ("rawData" ->> 'datetime')            IS NULL
+  AND (   ("rawData" ->> 'authorized_date') IS NOT NULL
+       OR ("rawData" ->> 'date')            IS NOT NULL)
   AND EXTRACT(HOUR   FROM "occurredAt") = 0
   AND EXTRACT(MINUTE FROM "occurredAt") = 0
   AND EXTRACT(SECOND FROM "occurredAt") = 0;
@@ -163,14 +235,17 @@ UPDATE "transactions"
 SET "postedAt" = "postedAt" + INTERVAL '12 hours'
 WHERE "source" = 'plaid'
   AND "postedAt" IS NOT NULL
+  AND ("rawData" ->> 'datetime') IS NULL
+  AND ("rawData" ->> 'date')     IS NOT NULL
   AND EXTRACT(HOUR   FROM "postedAt") = 0
   AND EXTRACT(MINUTE FROM "postedAt") = 0
   AND EXTRACT(SECOND FROM "postedAt") = 0;
 ```
 
 The two UPDATEs run in the migration's implicit transaction; if one fails the
-other is rolled back. `postedAt` is nullable; the `IS NOT NULL` guard is for
-clarity (Postgres would skip nulls in the EXTRACT predicate regardless).
+other is rolled back. `rawData` is non-null (the column is `Json`, not
+`Json?`), so the JSONB `->>` extractors return `NULL` for absent keys and the
+gate behaves correctly.
 
 No automated test asserts the migration result (decided during brainstorm).
 The smoke section (Plan execution) includes a manual before/after psql check.
@@ -237,13 +312,14 @@ describe("plaidPostedAt", () => {
 ### 9.2 `apps/api/tests/chat.tools.tz-anchor.test.ts` (new)
 
 Integration: prove a Plaid date-only `"2026-05-01"` transaction is included
-in a Toronto user's `this_month=May 2026` filter, which the pre-fix storage
-would have mis-classified into April.
+in a Toronto user's `this_month=May 2026` filter for both migrated tools,
+which the pre-fix storage+query layer would have mis-classified into April.
 
 ```typescript
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { prisma } from "../src/db.js";
-import { listTransactionsTool } from "../src/chat/tools/list-transactions.js";
+import { listTransactions } from "../src/chat/tools/list-transactions.js";
+import { getSpendingSummary } from "../src/chat/tools/get-spending-summary.js";
 // ...standard test helpers, see existing chat.tools.list-transactions.test.ts pattern
 
 describe("[plan 1e-time] tz anchor", () => {
@@ -251,17 +327,29 @@ describe("[plan 1e-time] tz anchor", () => {
   // exactly one transaction with occurredAt = parsePlaidInstant("2026-05-01")
   // = 2026-05-01T12:00:00Z. Pin "now" to mid-May 2026 so this_month means May.
 
-  it("includes a May 1 Plaid transaction in this_month for Toronto user", async () => {
+  it("listTransactions includes a May 1 Plaid transaction in this_month", async () => {
     vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
     // ...seed user (tz=America/Toronto), workspace, account, transaction
     // at occurredAt=2026-05-01T12:00:00Z
 
-    const result = await listTransactionsTool.run(
+    const result = await listTransactions.run(
       { env, workspaceId, userId, role: "owner" },
       { period: "this_month", limit: 50 },
     );
     expect(result.transactions.length).toBe(1);
     expect(result.transactions[0]!.occurredAt).toBe("2026-05-01T12:00:00.000Z");
+  });
+
+  it("getSpendingSummary buckets the May 1 Plaid transaction under '2026-05-01' in user tz", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    // ...seed same data, group_by='day'
+
+    const result = await getSpendingSummary.run(
+      { env, workspaceId, userId, role: "owner" },
+      { period: "this_month", group_by: "day" },
+    );
+    expect(result.groups.length).toBe(1);
+    expect(result.groups[0]!.key).toBe("2026-05-01");
   });
 });
 ```
@@ -286,11 +374,19 @@ This plan is complete when:
 
 - `parsePlaidInstant` exists, exported, and the two existing helpers route
   through it.
+- `periods.ts` `BasicPeriod` includes `"today"`; `basicPeriodRange` handles it
+  via local-midnight + `addDaysLocal(+1)`.
+- `listTransactions` and `getSpendingSummary` no longer define local
+  `periodRange()` helpers; both call `basicPeriodRange(userId, period)`.
+- `getSpendingSummary`'s day-bucket key uses `dateKeyInTz`, not
+  `toISOString().slice(0, 10)`.
 - New unit test file 9.1 passes (10 cases).
-- New integration test file 9.2 passes (1 case).
+- New integration test file 9.2 passes (2+ cases, one per migrated tool).
 - Migration `<timestamp>_plaid_date_to_utc_noon` applied on dev DB:
-  - All `source='plaid'` rows that had time `00:00:00` now have `12:00:00`.
-  - Other rows unchanged.
+  - All `source='plaid'` rows whose `rawData` indicates a date-only origin and
+    whose stored time is `00:00:00` now have `12:00:00`.
+  - Rows with ISO `rawData.authorized_datetime` or `rawData.datetime` are
+    unchanged, including those at `00:00:00Z`.
 - All 60+ existing API test files still pass (502+ tests).
 - The smoke doc (Section 11) records a manual before/after row check.
 
@@ -300,10 +396,22 @@ This plan is complete when:
 
 Document in the plan (not the spec). Outline:
 
-1. Capture pre-migration row state: `SELECT COUNT(*), MIN("occurredAt"), MAX("occurredAt") FROM transactions WHERE source='plaid' AND EXTRACT(HOUR FROM "occurredAt")=0;`
+1. Capture pre-migration state, restricting to date-only-origin Plaid rows:
+   ```sql
+   SELECT COUNT(*) FROM transactions
+   WHERE source='plaid'
+     AND ("rawData"->>'authorized_datetime') IS NULL
+     AND ("rawData"->>'datetime') IS NULL
+     AND EXTRACT(HOUR FROM "occurredAt")=0;
+   ```
+   Also capture: count of `source='plaid'` rows where `rawData.authorized_datetime`
+   is non-null AND `occurredAt` happens to be `00:00:00Z` — these must NOT
+   shift.
 2. Apply migration.
-3. Capture post-migration: same query → expect count drop to 0.
-4. Run one chat turn: "이번 달 May 1일 거래 보여줘" with a Toronto user → expect the May 1 Plaid row to appear.
+3. Post-migration: rerun query 1 → expect count drop to 0. Rerun the
+   ISO-at-midnight count → expect unchanged.
+4. Run one chat turn: "이번 달 May 1일 거래 보여줘" with a Toronto user →
+   expect the May 1 Plaid row to appear.
 
 ---
 
@@ -316,7 +424,7 @@ The following are explicitly NOT in this plan:
 - Web list route `/workspaces/:id/transactions` query parameter parsing for
   `from`/`to` (UI concern; user is iterating on UI separately).
 - Per-workspace timezone (User.tz remains per-user).
-- UTC+14 Pacific zone correction.
+- Far-east and far-west zone correction (UTC±12 and beyond — see §5).
 - Auto thread title (separate follow-up plan).
 - Backfill verification automated test (smoke check only).
 
