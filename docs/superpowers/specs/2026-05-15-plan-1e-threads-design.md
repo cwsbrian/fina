@@ -343,7 +343,11 @@ No changes:
 - POST messages 402 for free tier.
 - POST messages 403 for viewer-role member.
 - POST messages 400 when `text` is empty or longer than 4000 chars.
+- POST threads 403 for viewer-role member.
+- POST threads 402 for free tier.
 - PATCH/DELETE 403 for viewer-role member.
+- GET threads succeeds (200) for a viewer on the free tier — GET routes are intentionally not tier-gated.
+- GET threads/:tid succeeds (200) for a viewer on the free tier.
 - GET threads: returns the two threads sorted, excludes archived.
 - GET threads with `?include_archived=true` includes archived.
 - GET threads `firstMessagePreview` is the truncated first user text.
