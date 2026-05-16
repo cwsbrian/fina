@@ -44,22 +44,28 @@ Budget and Goal features are explicitly out of scope — they require new data m
 | `createCategory` shape | Args: `name` (required), `parent_name` (optional). No `color`/`icon` — UI concern, YAGNI. |
 | `addTransactionNote` shape | Args: `tx_id` (required), `note` (required, `string \| null`). Replace semantics; `null` clears. Append is done by the LLM stitching old+new in its own arg. |
 | `addTransactionNote` on soft-deleted txns | Allowed — notes are historical metadata; same-id detail tool already returns soft-deleted rows. |
-| Tier / role gate | Inherited from chat route: Pro + `editor` role. Tools do not check themselves. |
+| Tier / role gate | Pro tier inherited from chat route. Role: `addTransactionNote` is editor-level (transaction metadata, matches `categorizeTransaction`). `createCategory` is owner-level (workspace-structural, matches existing `POST /workspaces/:id/categories`). `createCategory` checks role explicitly using a small `ToolContext.role` extension; `addTransactionNote` trusts the route-level editor gate. |
+| Service reuse | `createCategory` and the existing `POST /workspaces/:id/categories` route share identical validation/cap/duplicate rules. Extract a `createCategoryService(workspaceId, name, parentId?)` in `apps/api/src/categories/create.ts` that both call, so the two surfaces can't drift. |
 | Audit columns | None. Existing `Category.createdAt` and `Transaction.updatedAt` suffice. |
 
 ---
 
 ## 4. File location
 
-- Create: `apps/api/src/chat/tools/create-category.ts`
+- Create: `apps/api/src/categories/create.ts` — shared `createCategoryService(input)` used by the existing POST route AND the new chat tool. Centralizes trim, 30-cap, duplicate, parent resolution, P2002 mapping.
+- Create: `apps/api/src/chat/tools/create-category.ts` — thin chat tool wrapper.
 - Create: `apps/api/src/chat/tools/add-transaction-note.ts`
 - Create: `apps/api/tests/chat.tools.create-category.test.ts`
 - Create: `apps/api/tests/chat.tools.add-transaction-note.test.ts`
+- Create: `apps/api/tests/categories.create-service.test.ts` — service unit tests so route + tool can both rely on its contract.
+- Modify: `apps/api/src/routes/categories.ts` — POST route delegates to the new service. Existing route tests stay green.
+- Modify: `apps/api/src/chat/tools/types.ts` — extend `ToolContext` with `role: "owner" | "editor" | "viewer"` so tools can run targeted role checks.
+- Modify: `apps/api/src/chat/turn.ts` — propagate role into `ToolContext` when constructing it. Append confirmation paragraph to `SYSTEM_PROMPT`.
+- Modify: `apps/api/src/routes/chat.ts` — pass role from `ctx.membership.role` into `processChatTurn` so it reaches `ToolContext`.
 - Modify: `apps/api/src/chat/tools/index.ts` (add 13th and 14th entries)
 - Modify: `apps/api/tests/chat.tools.registry.test.ts` (add `plan 1e-write` describe block)
-- Modify: `apps/api/src/chat/turn.ts` — append one sentence to `SYSTEM_PROMPT` covering write confirmation behavior.
 
-No other files. No schema migration.
+No schema migration.
 
 ---
 
@@ -74,21 +80,26 @@ No other files. No schema migration.
 
 ### 5.2 Args (Zod)
 
+Validation aligned with the existing `POST /workspaces/:id/categories` route (`MAX_NAME_LEN = 40`, `.trim()` before `.min(1)` to reject whitespace-only input).
+
 ```typescript
 const Args = z.object({
-  name: z.string().min(1).max(80)
-    .describe("Category name. Stored as-is; uniqueness check is case-insensitive against existing active categories in the workspace."),
-  parent_name: z.string().min(1).max(80).optional()
+  name: z.string().trim().min(1).max(40)
+    .describe("Category name. Trimmed of surrounding whitespace; uniqueness check is case-insensitive against existing active categories."),
+  parent_name: z.string().trim().min(1).max(40).optional()
     .describe("Optional parent category name (case-insensitive exact match against active categories). Omit for a top-level category."),
 });
 ```
 
 ### 5.3 Behavior
 
-1. If `parent_name` is provided: `prisma.category.findFirst({ where: { workspaceId, name: { equals, mode: "insensitive" }, archivedAt: null } })`. If not found → throw `parent_not_found`. If found → record `parentId`.
-2. `prisma.category.create({ data: { workspaceId, name, parentId } })`.
-3. Postgres unique violation (`P2002`) on `categories_one_active_name_per_workspace_ci` → catch and throw `category_exists`. The race is handled at the DB layer, not via a pre-check.
-4. Return `{ category: { id, name, parentId, parentName } }` (parentName fetched from the `parent_name` arg or null).
+1. **Role check**: `ctx.role !== "owner"` → throw `insufficient_role`. The chat route gate is `editor` (so editors can send messages and use read tools), so this tool must check role on top.
+2. Resolve `parent_name` if given: `prisma.category.findFirst({ where: { workspaceId, name: { equals, mode: "insensitive" }, archivedAt: null } })`. Not found → throw `parent_not_found`. Found → keep both `parentId` and the canonical `parentName` (the row's stored `name`, not the user input).
+3. Delegate to `createCategoryService({ workspaceId, name, parentId })` which:
+   - Counts active categories. If `>= MAX_ACTIVE_CATEGORIES (30)` → throw `too_many_categories`.
+   - Case-insensitive duplicate check against active rows. Duplicate → throw `category_exists`.
+   - `prisma.category.create({ data: { workspaceId, name, parentId } })` inside a transaction. Maps Postgres P2002 to `category_exists` for the race.
+4. Return `{ category: { id, name, parentId, parentName } }`, where `parentName` is the canonical stored name (e.g., the row's `"Food"`, not the user's `"food"`).
 
 ### 5.4 Result type
 
@@ -107,9 +118,11 @@ type Result = {
 
 | Code | Trigger |
 |---|---|
+| `insufficient_role` | Caller is editor (or viewer); only owners may create categories |
 | `parent_not_found` | `parent_name` given but no active match in workspace |
-| `category_exists` | Postgres unique violation on the partial active-name index |
-| (Zod validation) | name/parent_name length out of range, types wrong |
+| `too_many_categories` | Active category count is already at `MAX_ACTIVE_CATEGORIES (30)` |
+| `category_exists` | Active duplicate (case-insensitive). Pre-check catches most; P2002 from the partial unique index covers the race |
+| (Zod validation) | name/parent_name length out of range (1-40 after trim), types wrong, whitespace-only |
 
 ---
 
@@ -203,16 +216,25 @@ Append a new `describe("REGISTRY (plan 1e-write)", () => { ... })` block to `app
 
 ### 8.3 Per-tool tests
 
-`apps/api/tests/chat.tools.create-category.test.ts` (~9 cases):
-1. Creates a top-level category, returns row with parent null.
-2. Creates a child under existing active parent (case-insensitive lookup).
+`apps/api/tests/chat.tools.create-category.test.ts` (~11 cases):
+1. Creates a top-level category as owner, returns row with parent null.
+2. Creates a child under existing active parent (case-insensitive lookup); `parentName` is the canonical stored name, not the user input.
 3. `parent_name` not found → throws `parent_not_found`.
 4. Duplicate active name → throws `category_exists`.
-5. Duplicate name where the existing row is `archivedAt != null` → creates successfully (partial unique allows it).
+5. Duplicate name where the existing row is `archivedAt != null` → creates successfully.
 6. Cross-workspace `parent_name` not visible → throws `parent_not_found`.
 7. Workspace isolation: row created in correct workspaceId, not visible from another.
-8. Zod: name length > 80 → fails before run.
-9. Zod: parent_name length > 80 → fails before run.
+8. **Editor caller → throws `insufficient_role`** (regression for the owner-only guard).
+9. **At 30 active categories → throws `too_many_categories`** (regression for the cap).
+10. Zod: name with only whitespace ("   ") → fails (trim + min(1)).
+11. Zod: name length > 40 (post-trim) → fails.
+
+`apps/api/tests/categories.create-service.test.ts` (~5 cases) — unit tests for the shared service so HTTP route + chat tool can rely on identical semantics:
+- Happy create + parent resolution.
+- Cap enforcement (`too_many_categories`).
+- Duplicate enforcement (`category_exists`).
+- Whitespace + length validation rejected upstream (these live in the Zod schemas, not the service; the service tests just confirm clean inputs work).
+- P2002 race mapped to `category_exists`.
 
 `apps/api/tests/chat.tools.add-transaction-note.test.ts` (~7 cases):
 1. Sets a note on an active transaction.
@@ -233,8 +255,14 @@ This plan is complete when:
 - `createCategory` and `addTransactionNote` registered as the 13th and 14th entries in `REGISTRY`.
 - Exact description strings from §5.1 and §6.1.
 - All args have `.describe()` text.
+- `createCategory` is owner-only — throws `insufficient_role` for editor/viewer callers, matching the existing POST route policy.
+- `createCategory` validation aligns with the existing route: `name` is trimmed, length 1-40, whitespace-only rejected.
+- `createCategory` enforces the 30-active-category cap (`too_many_categories`).
 - `createCategory` correctly looks up parent case-insensitively in active categories.
+- `createCategory` returns the canonical `parentName` from the stored row, not the user input.
 - `createCategory` throws `category_exists` on the partial unique violation; allows archived-sibling reuse of the name.
+- Shared `createCategoryService` is used by BOTH the chat tool and the existing `POST /workspaces/:id/categories` route; the route's existing tests still pass after refactor.
+- `ToolContext` now carries `role`; chat route propagates it.
 - `addTransactionNote` replaces (not appends); `null` clears; soft-deleted rows allowed.
 - Both tools enforce `workspaceId: ctx.workspaceId` in all queries.
 - Cross-workspace `tx_id` and `parent_name` return the same `_not_found` codes as in-workspace misses (no existence leak).
