@@ -46,6 +46,7 @@ Budget and Goal features are explicitly out of scope — they require new data m
 | `addTransactionNote` on soft-deleted txns | Allowed — notes are historical metadata; same-id detail tool already returns soft-deleted rows. |
 | Tier / role gate | Pro tier inherited from chat route. Role: `addTransactionNote` is editor-level (transaction metadata, matches `categorizeTransaction`). `createCategory` is owner-level (workspace-structural, matches existing `POST /workspaces/:id/categories`). `createCategory` checks role explicitly using a small `ToolContext.role` extension; `addTransactionNote` trusts the route-level editor gate. |
 | Service reuse | `createCategory` and the existing `POST /workspaces/:id/categories` route share identical validation/cap/duplicate rules. Extract a `createCategoryService(workspaceId, name, parentId?)` in `apps/api/src/categories/create.ts` that both call, so the two surfaces can't drift. |
+| Error code mapping | The service throws internal codes (`category_exists`, `too_many_categories`, `category_create_failed`). The chat tool propagates these as-is. The existing HTTP route, however, currently returns `duplicate_name` on duplicates (per `routes/categories.ts:70`). To preserve its public contract, the route catches `category_exists` from the service and re-throws it as `duplicate_name` before the Fastify reply. `too_many_categories` is identical on both sides — no translation needed. |
 | Audit columns | None. Existing `Category.createdAt` and `Transaction.updatedAt` suffice. |
 
 ---
@@ -261,12 +262,13 @@ This plan is complete when:
 - `createCategory` correctly looks up parent case-insensitively in active categories.
 - `createCategory` returns the canonical `parentName` from the stored row, not the user input.
 - `createCategory` throws `category_exists` on the partial unique violation; allows archived-sibling reuse of the name.
-- Shared `createCategoryService` is used by BOTH the chat tool and the existing `POST /workspaces/:id/categories` route; the route's existing tests still pass after refactor.
+- Shared `createCategoryService` is used by BOTH the chat tool and the existing `POST /workspaces/:id/categories` route; the route's existing tests still pass after refactor — the route maps the service's `category_exists` back to the existing `duplicate_name` HTTP error code.
 - `ToolContext` now carries `role`; chat route propagates it.
 - `addTransactionNote` replaces (not appends); `null` clears; soft-deleted rows allowed.
 - Both tools enforce `workspaceId: ctx.workspaceId` in all queries.
 - Cross-workspace `tx_id` and `parent_name` return the same `_not_found` codes as in-workspace misses (no existence leak).
-- Tier and role gating come entirely from the chat route — these tools do NOT call `effectiveTier` or `requireWorkspaceContext`.
+- Tier gate inherited from chat route (Pro). Neither tool calls `effectiveTier`.
+- Role: `addTransactionNote` trusts the chat route's editor gate (no internal role check). `createCategory` checks `ctx.role === "owner"` explicitly — chat route remains editor-level so editors can still send messages and use read tools.
 - System prompt has the new confirmation paragraph.
 - All per-tool tests pass; registry test bumped from 12 to 14 expected tools.
 - Existing 12 tool tests untouched and still passing.
