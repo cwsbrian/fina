@@ -128,11 +128,26 @@ describe("findTransactions tool", () => {
     expect(r.totalCount).toBe(2);
   });
 
-  it("merchant_query matches on merchantNormalized (when normalized differs from raw)", async () => {
-    // "whole foods" only matches the normalized key cleanly.
-    const r = await findTransactions.run(ctx, { merchant_query: "whole foods" });
+  it("merchant_query matches on merchantNormalized when raw doesn't contain the query", async () => {
+    // Seed a row with an asymmetric raw/normalized pair: the search term lives in
+    // normalized only. Proves the OR clause actually searches the normalized column.
+    await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: acctId,
+        plaidTransactionId: "ft-asym",
+        amount: "4.00",
+        currency: "CAD",
+        merchantRaw: "Espresso Bar",
+        merchantNormalized: "coffeehouse",
+        occurredAt: new Date("2026-04-08T12:00:00Z"),
+        rawData: {},
+      },
+    });
+    const r = await findTransactions.run(ctx, { merchant_query: "coffeehouse" });
     expect(r.transactions).toHaveLength(1);
-    expect(r.transactions[0]!.merchantRaw).toBe("Whole Foods Market");
+    expect(r.transactions[0]!.merchantRaw).toBe("Espresso Bar");
+    expect(r.transactions[0]!.merchantNormalized).toBe("coffeehouse");
   });
 
   it("start_date and end_date are inclusive (YYYY-MM-DD)", async () => {
