@@ -340,17 +340,25 @@ user-tz implementation includes it; the pre-fix server-local math (under
 TZ=UTC) excluded it.
 
 ```typescript
-// Pin BEFORE any Date() call in this module — Node reads TZ once per
-// Date construction; setting it here makes server-local math deterministic
-// across CI hosts (which may run in any zone).
+// Pin BEFORE any Date() call in this module — Node reads TZ on each Date
+// construction; setting it here makes server-local math deterministic across
+// CI hosts. We save+restore the original value because apps/api/vitest.config.ts
+// uses poolOptions.forks.singleFork, so all API test files share one process
+// and a leaked TZ would make downstream tests order-dependent.
+const ORIGINAL_TZ = process.env.TZ;
 process.env.TZ = "UTC";
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { listTransactions } from "../src/chat/tools/list-transactions.js";
 import { getSpendingSummary } from "../src/chat/tools/get-spending-summary.js";
 // Test helpers per existing chat.tools.list-transactions.test.ts pattern:
 // create user (tz='America/Toronto'), workspace, owner membership, account.
+
+afterAll(() => {
+  if (ORIGINAL_TZ === undefined) delete process.env.TZ;
+  else process.env.TZ = ORIGINAL_TZ;
+});
 
 describe("[plan 1e-time] tz anchor + tool migration", () => {
   it("listTransactions: rows at the Toronto/UTC day boundary classify by user-tz", async () => {
