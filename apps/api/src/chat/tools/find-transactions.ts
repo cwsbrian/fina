@@ -1,0 +1,239 @@
+import { z } from "zod";
+import { Prisma } from "@prisma/client";
+import { prisma } from "../../db.js";
+import type { ToolDef } from "./types.js";
+
+const Args = z.object({
+  merchant_query: z
+    .string()
+    .min(1)
+    .max(100)
+    .describe(
+      "Substring to match on merchant name. Matched case-insensitively against both the raw merchant string and the normalized merchant key. Example: 'starbucks' matches 'STARBUCKS #1234 SEATTLE'.",
+    )
+    .optional(),
+  start_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Earliest occurredAt date to include, ISO YYYY-MM-DD (inclusive). Example: '2026-04-01'.")
+    .optional(),
+  end_date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Latest occurredAt date to include, ISO YYYY-MM-DD (inclusive). Must be >= start_date if both provided.")
+    .optional(),
+  amount_min: z
+    .number()
+    .nonnegative()
+    .describe(
+      "Minimum absolute transaction amount (CAD). Inclusive. Matches expenses or refunds whose abs(amount) is >= this value.",
+    )
+    .optional(),
+  amount_max: z
+    .number()
+    .nonnegative()
+    .describe("Maximum absolute transaction amount (CAD). Inclusive. Must be >= amount_min if both provided.")
+    .optional(),
+  category_name: z
+    .string()
+    .min(1)
+    .max(80)
+    .describe("Exact category name (case-insensitive). Empty array result if the name doesn't match an existing category.")
+    .optional(),
+  account_name: z
+    .string()
+    .min(1)
+    .max(80)
+    .describe("Exact bank account name (case-insensitive). Empty array result if the name doesn't match an existing account.")
+    .optional(),
+  limit: z
+    .number()
+    .int()
+    .positive()
+    .max(50)
+    .describe("Maximum transactions to return. Default 20, hard cap 50.")
+    .optional(),
+});
+
+type Args = z.infer<typeof Args>;
+
+type Result = {
+  transactions: Array<{
+    id: string;
+    amount: string;
+    currency: string;
+    merchantRaw: string;
+    merchantNormalized: string | null;
+    occurredAt: string;
+    accountName: string;
+    accountId: string;
+    categoryId: string | null;
+    categoryName: string | null;
+    categorizationSource: "mapping" | "ai" | "manual" | null;
+  }>;
+  totalCount: number;
+  hasMore: boolean;
+  filtersApplied: {
+    merchantQuery: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    amountMin: number | null;
+    amountMax: number | null;
+    categoryName: string | null;
+    accountName: string | null;
+    limit: number;
+  };
+  excludedNonCadCount: number;
+};
+
+function isValidIsoDate(s: string): boolean {
+  const d = new Date(`${s}T00:00:00.000Z`);
+  return !isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+}
+
+function resolveFilters(args: Args, limit: number): Result["filtersApplied"] {
+  return {
+    merchantQuery: args.merchant_query ?? null,
+    startDate: args.start_date ?? null,
+    endDate: args.end_date ?? null,
+    amountMin: args.amount_min ?? null,
+    amountMax: args.amount_max ?? null,
+    categoryName: args.category_name ?? null,
+    accountName: args.account_name ?? null,
+    limit,
+  };
+}
+
+function emptyResult(args: Args, limit: number): Result {
+  return {
+    transactions: [],
+    totalCount: 0,
+    hasMore: false,
+    filtersApplied: resolveFilters(args, limit),
+    excludedNonCadCount: 0,
+  };
+}
+
+export const findTransactions: ToolDef<Args, Result> = {
+  name: "findTransactions",
+  description:
+    "Search transactions with filters: merchant text, date range, amount range, category name, account name. " +
+    "Returns up to 50 most recent matches with totalCount and hasMore for follow-up narrowing.",
+  args: Args,
+  async run(ctx, args) {
+    const limit = args.limit ?? 20;
+
+    // Strict date + range validation (after Zod regex).
+    if (args.start_date && !isValidIsoDate(args.start_date)) throw new Error("invalid_date");
+    if (args.end_date && !isValidIsoDate(args.end_date)) throw new Error("invalid_date");
+    if (args.start_date && args.end_date && args.start_date > args.end_date) {
+      throw new Error("invalid_date_range");
+    }
+    if (args.amount_min != null && args.amount_max != null && args.amount_max < args.amount_min) {
+      throw new Error("invalid_amount_range");
+    }
+
+    // Resolve name lookups → ids. Empty result on zero matches.
+    let categoryIds: string[] | undefined;
+    if (args.category_name) {
+      const cats = await prisma.category.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          name: { equals: args.category_name, mode: "insensitive" },
+          archivedAt: null,
+        },
+        select: { id: true },
+      });
+      if (cats.length === 0) return emptyResult(args, limit);
+      categoryIds = cats.map((c) => c.id);
+    }
+    let accountIds: string[] | undefined;
+    if (args.account_name) {
+      const accts = await prisma.bankAccount.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          name: { equals: args.account_name, mode: "insensitive" },
+          archivedAt: null,
+        },
+        select: { id: true },
+      });
+      if (accts.length === 0) return emptyResult(args, limit);
+      accountIds = accts.map((a) => a.id);
+    }
+
+    // Build a separate Prisma.DateTimeFilter — TransactionWhereInput["occurredAt"] is a union
+    // (Date | string | DateTimeFilter), which TS refuses to spread.
+    const occurredAt: Prisma.DateTimeFilter = {};
+    if (args.start_date) occurredAt.gte = new Date(`${args.start_date}T00:00:00.000Z`);
+    if (args.end_date) occurredAt.lte = new Date(`${args.end_date}T23:59:59.999Z`);
+
+    const where: Prisma.TransactionWhereInput = {
+      workspaceId: ctx.workspaceId,
+      removedAt: null,
+      currency: "CAD",
+    };
+    if (categoryIds) where.categoryId = { in: categoryIds };
+    if (accountIds) where.accountId = { in: accountIds };
+    if (occurredAt.gte || occurredAt.lte) where.occurredAt = occurredAt;
+
+    // Amount filter on abs(amount): two ranges OR'd, one for expenses (positive),
+    // one for refunds (negative).
+    if (args.amount_min != null || args.amount_max != null) {
+      const min = args.amount_min ?? 0;
+      const max = args.amount_max ?? Number.MAX_SAFE_INTEGER;
+      where.OR = [
+        { amount: { gte: min, lte: max } },
+        { amount: { gte: -max, lte: -min } },
+      ];
+    }
+
+    // Merchant ILIKE on both raw and normalized columns. If `where.OR` already exists
+    // (amount range), wrap in AND so the two ORs are AND'd together.
+    if (args.merchant_query) {
+      const merchantOr = [
+        { merchantRaw: { contains: args.merchant_query, mode: "insensitive" as const } },
+        { merchantNormalized: { contains: args.merchant_query, mode: "insensitive" as const } },
+      ];
+      if (where.OR) {
+        where.AND = [{ OR: where.OR }, { OR: merchantOr }];
+        delete where.OR;
+      } else {
+        where.OR = merchantOr;
+      }
+    }
+
+    const [rows, totalCount, excludedNonCadCount] = await Promise.all([
+      prisma.transaction.findMany({
+        where,
+        orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+        take: limit,
+        include: {
+          account: { select: { id: true, name: true } },
+          category: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.transaction.count({ where }),
+      prisma.transaction.count({ where: { ...where, currency: { not: "CAD" } } }),
+    ]);
+
+    return {
+      transactions: rows.map((r) => ({
+        id: r.id,
+        amount: r.amount.toString(),
+        currency: r.currency,
+        merchantRaw: r.merchantRaw,
+        merchantNormalized: r.merchantNormalized,
+        occurredAt: r.occurredAt.toISOString(),
+        accountName: r.account.name,
+        accountId: r.account.id,
+        categoryId: r.category?.id ?? null,
+        categoryName: r.category?.name ?? null,
+        categorizationSource: (r.categorizationSource ?? null) as Result["transactions"][number]["categorizationSource"],
+      })),
+      totalCount,
+      hasMore: totalCount > rows.length,
+      filtersApplied: resolveFilters(args, limit),
+      excludedNonCadCount,
+    };
+  },
+};
