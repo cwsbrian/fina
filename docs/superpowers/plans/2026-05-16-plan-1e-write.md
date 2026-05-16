@@ -246,7 +246,7 @@ Run:
 ```bash
 pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/categories.create-service.test.ts
 ```
-Expected: 6/6 PASS.
+Expected: 8/8 PASS.
 
 ### Step 1.5: Refactor the HTTP route to use the service
 
@@ -295,7 +295,7 @@ pnpm --filter @fina/api exec vitest run --config vitest.config.ts \
   tests/categories.routes.test.ts \
   tests/categories.create-service.test.ts
 ```
-Expected: all route tests still green (existing wire codes preserved), service tests 6/6 PASS.
+Expected: all route tests still green (existing wire codes preserved), service tests 8/8 PASS.
 
 ### Step 1.7: Commit
 
