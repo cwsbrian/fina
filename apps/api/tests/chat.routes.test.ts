@@ -118,3 +118,66 @@ describe("POST /workspaces/:wsId/chat/threads", () => {
     expect(res.json().error).toBe("invalid_body");
   });
 });
+
+describe("GET /workspaces/:wsId/chat/threads", () => {
+  it("returns non-archived threads sorted by lastMessageAt desc, with messageCount and firstMessagePreview", async () => {
+    const { cookie, wsId } = await setupProUser(`l-${Date.now()}@t.co`);
+    const t1 = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "older" } });
+    const t2 = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "newer" } });
+    await prisma.chatThread.update({ where: { id: t1.id }, data: { lastMessageAt: new Date("2026-05-10T00:00:00Z") } });
+    await prisma.chatThread.update({ where: { id: t2.id }, data: { lastMessageAt: new Date("2026-05-15T00:00:00Z") } });
+    await prisma.chatMessage.create({ data: { threadId: t1.id, role: "user", blocks: [{ type: "text", markdown: "Hello world" }] } });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/chat/threads`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.threads.map((t: { id: string }) => t.id)).toEqual([t2.id, t1.id]);
+    const older = body.threads.find((t: { id: string }) => t.id === t1.id);
+    expect(older.title).toBe("older");
+    expect(older.messageCount).toBe(1);
+    expect(older.firstMessagePreview).toBe("Hello world");
+  });
+
+  it("excludes archived threads by default; include_archived=true returns them", async () => {
+    const { cookie, wsId } = await setupProUser(`l-${Date.now()}@t.co`);
+    const archived = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "old", archivedAt: new Date() } });
+    const active = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "live" } });
+
+    const def = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(def.json().threads.map((t: { id: string }) => t.id)).toEqual([active.id]);
+
+    const full = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads?include_archived=true`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(full.json().threads.map((t: { id: string }) => t.id).sort()).toEqual([active.id, archived.id].sort());
+  });
+
+  it("respects limit (default 50, max 100)", async () => {
+    const { cookie, wsId } = await setupProUser(`l-${Date.now()}@t.co`);
+    for (let i = 0; i < 3; i++) await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads?limit=2`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.json().threads).toHaveLength(2);
+
+    const over = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads?limit=101`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(over.statusCode).toBe(400);
+    expect(over.json().error).toBe("invalid_query");
+  });
+
+  it("succeeds for viewer + free-tier (GET is not tier-gated)", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`l-${Date.now()}@t.co`);
+    await prisma.membership.update({ where: { userId_workspaceId: { userId, workspaceId: wsId } }, data: { role: "viewer" } });
+    await prisma.user.update({ where: { id: userId }, data: { trialEndsAt: new Date(Date.now() - 86400000), trialConsumed: true } });
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("isolates by workspace", async () => {
+    const a = await setupProUser(`l-${Date.now()}-a@t.co`);
+    const b = await setupProUser(`l-${Date.now()}-b@t.co`);
+    await prisma.chatThread.create({ data: { workspaceId: b.wsId, title: "B's thread" } });
+    const res = await app.inject({ method: "GET", url: `/workspaces/${a.wsId}/chat/threads`, headers: { cookie: a.cookie, "x-workspace-id": a.wsId } });
+    expect(res.json().threads).toHaveLength(0);
+  });
+});
