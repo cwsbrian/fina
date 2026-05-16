@@ -254,3 +254,95 @@ describe("GET /workspaces/:wsId/chat/threads/:tid", () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe("PATCH /workspaces/:wsId/chat/threads/:tid", () => {
+  it("renames the thread", async () => {
+    const { cookie, wsId } = await setupProUser(`r-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "before" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { title: "after" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().thread.title).toBe("after");
+  });
+
+  it("title: null clears the title", async () => {
+    const { cookie, wsId } = await setupProUser(`r-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "some" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { title: null },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().thread.title).toBeNull();
+  });
+
+  it("renames archived threads (read+tidy access preserved)", async () => {
+    const { cookie, wsId } = await setupProUser(`r-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "old", archivedAt: new Date() } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { title: "renamed-archive" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().thread.title).toBe("renamed-archive");
+  });
+
+  it("returns 404 for cross-workspace ids", async () => {
+    const a = await setupProUser(`r-${Date.now()}-a@t.co`);
+    const b = await setupProUser(`r-${Date.now()}-b@t.co`);
+    const bThread = await prisma.chatThread.create({ data: { workspaceId: b.wsId } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${a.wsId}/chat/threads/${bThread.id}`,
+      headers: { cookie: a.cookie, "x-workspace-id": a.wsId, "content-type": "application/json" },
+      payload: { title: "x" },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("returns 403 for viewer", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`r-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    await prisma.membership.update({ where: { userId_workspaceId: { userId, workspaceId: wsId } }, data: { role: "viewer" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { title: "x" },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("returns 402 for free tier", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`r-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    await prisma.user.update({ where: { id: userId }, data: { trialEndsAt: new Date(Date.now() - 86400000), trialConsumed: true } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { title: "x" },
+    });
+    expect(res.statusCode).toBe(402);
+  });
+
+  it("rejects title longer than 200 chars", async () => {
+    const { cookie, wsId } = await setupProUser(`r-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/chat/threads/${t.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { title: "x".repeat(201) },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});

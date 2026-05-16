@@ -9,6 +9,10 @@ const CreateBody = z.object({
   title: z.string().min(1).max(200).optional(),
 });
 
+const PatchBody = z.object({
+  title: z.union([z.string().min(1).max(200), z.null()]),
+});
+
 const ListQuery = z.object({
   include_archived: z.union([z.literal("true"), z.literal("false")]).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
@@ -136,6 +140,32 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           createdAt: m.createdAt.toISOString(),
         })),
       };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.patch("/workspaces/:id/chat/threads/:tid", async (req, reply) => {
+    const params = req.params as { id: string; tid: string };
+    const parsed = PatchBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const tier = await effectiveTier(ctx.session.userId);
+      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+
+      const updated = await threadsService.patch({
+        threadId: params.tid,
+        workspaceId: ctx.membership.workspaceId,
+        title: parsed.data.title,
+      });
+      if (!updated) return reply.code(404).send({ error: "thread_not_found" });
+      return { thread: serializeThread(updated) };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
