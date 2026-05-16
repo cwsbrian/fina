@@ -58,7 +58,17 @@ export function toGeminiHistory(messages: Array<{ role: string; blocks: unknown 
     out.push({ role: "model", parts: [{ functionCall: { name: t.toolName, args: (t.args as Record<string, unknown>) ?? {} } }] });
     out.push({ role: "user", parts: [{ functionResponse: { name: t.toolName, response: response as Record<string, unknown> } }] });
   }
-  while (out.length > 0 && out[0].role !== "user") { out.shift(); }
+  // Drop leading entries that Gemini would reject:
+  // - role "model" (assistant or tool functionCall) without preceding user text
+  // - role "user" but a functionResponse with no matching functionCall (happens when
+  //   history was trimmed and a tool row was kept while the user that triggered it was cut)
+  while (out.length > 0) {
+    const head = out[0]!;
+    const firstPart = head.parts[0];
+    const isUserText = head.role === "user" && firstPart != null && !("functionResponse" in firstPart);
+    if (isUserText) break;
+    out.shift();
+  }
   return out;
 }
 

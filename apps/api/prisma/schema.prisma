@@ -1,5 +1,10 @@
 generator client {
   provider = "prisma-client-js"
+  // nativeDistinct: Prisma's default `distinct` is applied client-side after fetching all rows,
+  // which is unbounded for the GET /chat/threads first-message-preview query (N threads × M
+  // messages each). Enabling this preview feature makes `distinct` translate to native
+  // `DISTINCT ON` SQL, which is O(N) at the DB layer.
+  previewFeatures = ["nativeDistinct"]
 }
 
 datasource db {
