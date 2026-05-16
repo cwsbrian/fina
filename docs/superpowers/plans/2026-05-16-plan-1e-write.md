@@ -48,7 +48,7 @@
 7. **Test framework.** Vitest. `prisma` imported from `"../src/db.js"` in tests. ctx shape: `{ env: {} as never, workspaceId, userId, role }`.
 8. **Commands.**
    - Single test: `pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/<file>.test.ts`
-   - Full suite: `pnpm --filter @fina/api test`
+   - Full suite: `pnpm nx run api:test` (the Nx target; `pnpm --filter @fina/api test` is a no-op because `apps/api/package.json` has no `test` script)
    - Typecheck: `pnpm --filter @fina/api exec tsc --noEmit -p tsconfig.app.json`
 9. **Pre-existing typecheck baseline.** `apps/api/src/chat/turn.ts:127` has one inherited `InputJsonValue` error from plan 1E-chat. Out of scope.
 
@@ -126,6 +126,21 @@ describe("createCategoryService", () => {
     const r = await createCategoryService({ workspaceId: otherWsId, name: "Food" });
     expect(r.id).toMatch(/^[a-z0-9]+$/);
   });
+
+  it("rejects parentId from another workspace → throws parent_not_found", async () => {
+    const otherParent = await createCategoryService({ workspaceId: otherWsId, name: "OtherParent" });
+    await expect(
+      createCategoryService({ workspaceId: wsId, name: "Child", parentId: otherParent.id }),
+    ).rejects.toThrow("parent_not_found");
+  });
+
+  it("rejects archived parentId → throws parent_not_found", async () => {
+    const parent = await createCategoryService({ workspaceId: wsId, name: "ArchivedParent" });
+    await prisma.category.update({ where: { id: parent.id }, data: { archivedAt: new Date() } });
+    await expect(
+      createCategoryService({ workspaceId: wsId, name: "Child", parentId: parent.id }),
+    ).rejects.toThrow("parent_not_found");
+  });
 });
 ```
 
@@ -169,6 +184,10 @@ export type CreateCategoryOutput = {
  * active categories. Throws `new Error("category_exists")` for a case-insensitive
  * active-name duplicate (both via the pre-check AND via P2002 from the partial
  * unique index `categories_one_active_name_per_workspace_ci`, to catch races).
+ * Throws `new Error("parent_not_found")` if `parentId` is given but doesn't
+ * refer to an active category in the SAME workspace (defense-in-depth: chat
+ * tool already pre-validates parent_name, but any future caller passing a raw
+ * parentId still gets the same invariant).
  *
  * The service does NOT trim or validate `name`; callers (HTTP Zod schema +
  * chat-tool Zod schema) trim and length-check before invoking.
@@ -176,6 +195,14 @@ export type CreateCategoryOutput = {
 export async function createCategoryService(
   input: CreateCategoryInput,
 ): Promise<CreateCategoryOutput> {
+  if (input.parentId != null) {
+    const parent = await prisma.category.findFirst({
+      where: { id: input.parentId, workspaceId: input.workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!parent) throw new Error("parent_not_found");
+  }
+
   const activeCount = await prisma.category.count({
     where: { workspaceId: input.workspaceId, archivedAt: null },
   });
@@ -385,7 +412,7 @@ There are roughly 9 call sites in `chat.turn.test.ts`; update every one.
 
 Run:
 ```bash
-pnpm --filter @fina/api test
+pnpm nx run api:test
 pnpm --filter @fina/api exec tsc --noEmit -p tsconfig.app.json
 ```
 Expected: all tests still green. Typecheck only shows the one pre-existing `turn.ts:127` error.
@@ -494,12 +521,16 @@ describe("createCategory chat tool", () => {
     await expect(createCategory.run(ctx, { name: "Overflow" })).rejects.toThrow("too_many_categories");
   });
 
-  it("Zod: whitespace-only name → fails before run", async () => {
-    await expect(createCategory.run(ctx, { name: "   " } as never)).rejects.toThrow();
+  it("Zod: whitespace-only name → fails parsing", async () => {
+    // run() receives already-parsed args from dispatchTool; the Zod schema
+    // is what enforces .trim().min(1). Test the schema directly.
+    const parsed = createCategory.args.safeParse({ name: "   " });
+    expect(parsed.success).toBe(false);
   });
 
-  it("Zod: name longer than 40 chars (post-trim) → fails before run", async () => {
-    await expect(createCategory.run(ctx, { name: "x".repeat(41) } as never)).rejects.toThrow();
+  it("Zod: name longer than 40 chars (post-trim) → fails parsing", async () => {
+    const parsed = createCategory.args.safeParse({ name: "x".repeat(41) });
+    expect(parsed.success).toBe(false);
   });
 });
 ```
@@ -718,14 +749,15 @@ describe("addTransactionNote chat tool", () => {
     await prisma.workspace.delete({ where: { id: other.id } });
   });
 
-  it("Zod: empty string note → fails before run", async () => {
-    const txId = await seedTx("5");
-    await expect(addTransactionNote.run(ctx, { tx_id: txId, note: "" } as never)).rejects.toThrow();
+  it("Zod: empty string note → fails parsing", async () => {
+    // run() receives already-parsed args from dispatchTool. Test the schema directly.
+    const parsed = addTransactionNote.args.safeParse({ tx_id: "any", note: "" });
+    expect(parsed.success).toBe(false);
   });
 
-  it("Zod: note longer than 1000 chars → fails before run", async () => {
-    const txId = await seedTx("6");
-    await expect(addTransactionNote.run(ctx, { tx_id: txId, note: "x".repeat(1001) } as never)).rejects.toThrow();
+  it("Zod: note longer than 1000 chars → fails parsing", async () => {
+    const parsed = addTransactionNote.args.safeParse({ tx_id: "any", note: "x".repeat(1001) });
+    expect(parsed.success).toBe(false);
   });
 });
 ```
@@ -951,7 +983,7 @@ The only change is the final paragraph being appended.
 Run:
 ```bash
 pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.tools.registry.test.ts
-pnpm --filter @fina/api test
+pnpm nx run api:test
 pnpm --filter @fina/api exec tsc --noEmit -p tsconfig.app.json
 ```
 
