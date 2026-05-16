@@ -15,20 +15,22 @@ const BASE = {
 };
 
 describe("chat env keys", () => {
-  it("CHAT_HISTORY_LIMIT, CHAT_MAX_TOOL_CALLS_PER_TURN, CHAT_MODEL are optional", () => {
+  it("CHAT_HISTORY_LIMIT_MESSAGES, CHAT_HISTORY_BUDGET_TOKENS, CHAT_MAX_TOOL_CALLS_PER_TURN, CHAT_MODEL are optional", () => {
     const env = loadEnv(BASE);
-    expect(env.CHAT_HISTORY_LIMIT).toBeUndefined();
+    expect(env.CHAT_HISTORY_LIMIT_MESSAGES).toBeUndefined();
+    expect(env.CHAT_HISTORY_BUDGET_TOKENS).toBeUndefined();
     expect(env.CHAT_MAX_TOOL_CALLS_PER_TURN).toBeUndefined();
     expect(env.CHAT_MODEL).toBeUndefined();
   });
 
   it("parses numeric strings via z.coerce", () => {
-    const env = loadEnv({ ...BASE, CHAT_HISTORY_LIMIT: "50", CHAT_MAX_TOOL_CALLS_PER_TURN: "25" });
-    expect(env.CHAT_HISTORY_LIMIT).toBe(50);
+    const env = loadEnv({ ...BASE, CHAT_HISTORY_LIMIT_MESSAGES: "200", CHAT_HISTORY_BUDGET_TOKENS: "400000", CHAT_MAX_TOOL_CALLS_PER_TURN: "25" });
+    expect(env.CHAT_HISTORY_LIMIT_MESSAGES).toBe(200);
+    expect(env.CHAT_HISTORY_BUDGET_TOKENS).toBe(400000);
     expect(env.CHAT_MAX_TOOL_CALLS_PER_TURN).toBe(25);
   });
 
   it("rejects non-positive integers", () => {
-    expect(() => loadEnv({ ...BASE, CHAT_HISTORY_LIMIT: "0" })).toThrow(/CHAT_HISTORY_LIMIT/);
+    expect(() => loadEnv({ ...BASE, CHAT_HISTORY_LIMIT_MESSAGES: "0" })).toThrow(/CHAT_HISTORY_LIMIT_MESSAGES/);
   });
 });

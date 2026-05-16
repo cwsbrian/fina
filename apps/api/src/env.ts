@@ -52,7 +52,8 @@ const Schema = z.object({
   CRON_EVENT_TTL_DAYS: z.coerce.number().int().positive().optional(),
   // Chat — all .optional() (test-env friendly); use-site applies defaults via `?? N`.
   CHAT_MODEL: z.string().optional(),
-  CHAT_HISTORY_LIMIT: z.coerce.number().int().positive().optional(),
+  CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().optional(),
+  CHAT_HISTORY_BUDGET_TOKENS: z.coerce.number().int().positive().optional(),
   CHAT_MAX_TOOL_CALLS_PER_TURN: z.coerce.number().int().positive().optional(),
 });
 
