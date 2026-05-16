@@ -10,6 +10,7 @@ import { getCategoryBreakdown } from "./get-category-breakdown.js";
 import { compareSpendingPeriods } from "./compare-spending-periods.js";
 import { detectRecurringMerchants } from "./detect-recurring-merchants.js";
 import { getCashflowSummary } from "./get-cashflow-summary.js";
+import { findTransactions } from "./find-transactions.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -23,4 +24,5 @@ export const REGISTRY: ToolDef[] = [
   compareSpendingPeriods as ToolDef,
   detectRecurringMerchants as ToolDef,
   getCashflowSummary as ToolDef,
+  findTransactions as ToolDef,
 ];

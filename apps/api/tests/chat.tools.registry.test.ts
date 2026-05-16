@@ -47,3 +47,46 @@ describe("REGISTRY (plan 1e-next)", () => {
     }
   });
 });
+
+describe("REGISTRY (plan 1e-search)", () => {
+  const EXPECTED = [
+    [
+      "findTransactions",
+      "Search transactions with filters: merchant text, date range, amount range, category name, account name. " +
+        "Returns up to 50 most recent matches with totalCount and hasMore for follow-up narrowing.",
+    ],
+  ] as const;
+
+  it("contains findTransactions", () => {
+    const names = REGISTRY.map((t) => t.name);
+    for (const [n] of EXPECTED) expect(names).toContain(n);
+  });
+
+  it("uses the exact description string from the spec", () => {
+    for (const [name, desc] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool?.description).toBe(desc);
+    }
+  });
+
+  it("has .describe() on every top-level arg field", () => {
+    for (const [name] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool).toBeDefined();
+      const shape = (tool!.args as z.ZodObject<z.ZodRawShape>).shape;
+      for (const [field, schema] of Object.entries(shape)) {
+        const desc = (schema as z.ZodTypeAny).description;
+        expect(desc, `${name}.${field} missing description`).toBeTruthy();
+      }
+    }
+  });
+
+  it("Gemini declaration emits parametersJsonSchema (has args)", () => {
+    const decls = toGeminiFunctionDeclarations(REGISTRY);
+    for (const [name] of EXPECTED) {
+      const decl = decls.find((d) => d.name === name);
+      expect(decl, `missing declaration for ${name}`).toBeDefined();
+      expect(decl!.parametersJsonSchema).toBeDefined();
+    }
+  });
+});
