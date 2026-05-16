@@ -353,22 +353,22 @@ enum CategorizationSource {
 }
 
 model ChatThread {
-  id          String         @id @default(cuid())
-  workspaceId String
-  type        ChatThreadType @default(adhoc)
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id            String    @id @default(cuid())
+  workspaceId   String
+  title         String?
+  lastMessageAt DateTime?
+  archivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
 
-  @@unique([workspaceId, type])
+  // NOTE: list-by-recency index is created by the migration SQL with
+  // `lastMessageAt DESC NULLS LAST`. Prisma's @@index syntax cannot express
+  // NULLS LAST, so omitting the directive here avoids schema drift. The
+  // engineer should resist adding it back in `prisma migrate dev` outputs.
   @@map("chat_threads")
-}
-
-enum ChatThreadType {
-  adhoc
-  daily
 }
 
 model ChatMessage {
