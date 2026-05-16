@@ -90,3 +90,50 @@ describe("REGISTRY (plan 1e-search)", () => {
     }
   });
 });
+
+describe("REGISTRY (plan 1e-write)", () => {
+  const EXPECTED = [
+    [
+      "createCategory",
+      "Create a new active category in the current workspace. Optional parent category by name. " +
+        "Throws category_exists if an active category with this name already exists.",
+    ],
+    [
+      "addTransactionNote",
+      "Set or clear the note on one transaction. Replaces the existing note entirely (pass null to clear).",
+    ],
+  ] as const;
+
+  it("contains both new tool names", () => {
+    const names = REGISTRY.map((t) => t.name);
+    for (const [n] of EXPECTED) expect(names).toContain(n);
+  });
+
+  it("uses the exact description strings from the spec", () => {
+    for (const [name, desc] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool?.description).toBe(desc);
+    }
+  });
+
+  it("has .describe() on every top-level arg field", () => {
+    for (const [name] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool).toBeDefined();
+      const shape = (tool!.args as z.ZodObject<z.ZodRawShape>).shape;
+      for (const [field, schema] of Object.entries(shape)) {
+        const desc = (schema as z.ZodTypeAny).description;
+        expect(desc, `${name}.${field} missing description`).toBeTruthy();
+      }
+    }
+  });
+
+  it("Gemini declarations emit parametersJsonSchema for both tools", () => {
+    const decls = toGeminiFunctionDeclarations(REGISTRY);
+    for (const [name] of EXPECTED) {
+      const decl = decls.find((d) => d.name === name);
+      expect(decl, `missing declaration for ${name}`).toBeDefined();
+      expect(decl!.parametersJsonSchema).toBeDefined();
+    }
+  });
+});

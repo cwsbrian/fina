@@ -20,7 +20,9 @@ Style:
 When you need data, call a tool. Don't make up transactions, balances, or categories.
 When a tool returns { error: ... }, briefly explain the issue and suggest what to try.
 
-Don't ask permission to look up data — just call the tool and show the result.`;
+Don't ask permission to look up data — just call the tool and show the result.
+
+For write tools (createCategory, addTransactionNote), briefly confirm with the user before invoking unless the request is unambiguous. Example unambiguous: '카테고리 만들어줘 — Coffee 라는 이름으로'. Example needs confirmation: 'Coffee 카테고리 따로 두는 게 좋을까?'`;
 
 export type ToolCallRecord = {
   toolName: string;
