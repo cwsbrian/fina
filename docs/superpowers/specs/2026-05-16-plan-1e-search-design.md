@@ -22,8 +22,8 @@ This is the 12th tool in the chat registry. Both the per-thread context window (
 | Date input | ISO `YYYY-MM-DD` only, strict parse. No named periods. |
 | Pagination | Hard cap (default 20, max 50). `totalCount` + `hasMore` exposed. No cursor, no page-based. |
 | Merchant matching | Case-insensitive substring on `merchantRaw` OR `merchantNormalized`. |
-| Category lookup | By exact name, case-insensitive. May resolve to multiple rows (names are not unique within a workspace); use `categoryId: { in: ids }`. Unknown name → empty result, no throw. |
-| Account lookup | By exact name, case-insensitive. May resolve to multiple rows (e.g. two banks each with a "Chequing"); use `accountId: { in: ids }`. Unknown name → empty result, no throw. |
+| Category lookup | By exact name, case-insensitive. In practice ≤ 1 active match because of the partial unique index `categories_one_active_name_per_workspace_ci` on `(workspaceId, lower(name)) WHERE archivedAt IS NULL`. Implementation still uses `findMany + categoryId: { in: ids }` for symmetry with accounts and future-proofing. Unknown name → empty result, no throw. |
+| Account lookup | By exact name, case-insensitive. May resolve to multiple rows — `bank_accounts.name` has no uniqueness constraint, so two Plaid items can each contribute an account named e.g. "Chequing". Use `accountId: { in: ids }`. Unknown name → empty result, no throw. |
 | Sort order | Fixed `occurredAt DESC, id DESC`. Not argument-controlled. |
 | Currency scope | CAD only. `excludedNonCadCount` in response. |
 | Tier gate | Inherited from chat route — Pro + `editor` role required; the tool itself does not check. |
@@ -300,8 +300,7 @@ All thrown errors are `new Error("<snake_case_code>")` — consistent with the r
 ### 10.3 Edge cases
 - `category_name` not in workspace → empty `transactions`, `totalCount=0`
 - `account_name` not in workspace → empty `transactions`, `totalCount=0`
-- Two `BankAccount` rows share the same `name` ("Chequing") → results include transactions from BOTH accounts (verifies the `in: ids` resolution).
-- Two `Category` rows share the same `name` → results include transactions categorized to either.
+- Two `BankAccount` rows share the same `name` ("Chequing", from two Plaid items) → results include transactions from BOTH accounts (verifies the `in: ids` resolution). No equivalent test for categories because the partial unique index forbids two active rows with the same case-insensitive name in a workspace.
 - `excludedNonCadCount` reflects non-CAD txns matching OTHER filters
 - Workspace isolation: cross-workspace data not returned
 - Soft-deleted transactions (`removedAt != null`) excluded from results AND count
