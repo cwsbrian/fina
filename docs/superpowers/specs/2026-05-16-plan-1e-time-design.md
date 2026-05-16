@@ -215,8 +215,11 @@ unambiguous.
 -- that happen to land at 00:00:00Z are NOT touched:
 --   plaidOccurredAt prefers authorized_datetime > authorized_date > datetime > date
 --   plaidPostedAt   prefers datetime > date
--- A row's stored timestamp came from a date-only Plaid field iff every
--- "earlier" ISO field in its chain is null AND a date-only field is set.
+-- A row's stored timestamp came from a date-only Plaid field iff the first
+-- non-null field in its chain is `authorized_date` or `date`. The earlier-ISO
+-- precedence is encoded literally: skip when `authorized_datetime` is present
+-- (occurredAt) or `datetime` is present (postedAt). Then accept either the
+-- second-slot date-only (authorized_date) OR the full fall-through to `date`.
 -- The trailing `EXTRACT(HOUR/MINUTE/SECOND ...)=0` clauses make the migration
 -- idempotent (a row already shifted to 12:00 no longer matches).
 
@@ -224,9 +227,17 @@ UPDATE "transactions"
 SET "occurredAt" = "occurredAt" + INTERVAL '12 hours'
 WHERE "source" = 'plaid'
   AND ("rawData" ->> 'authorized_datetime') IS NULL
-  AND ("rawData" ->> 'datetime')            IS NULL
-  AND (   ("rawData" ->> 'authorized_date') IS NOT NULL
-       OR ("rawData" ->> 'date')            IS NOT NULL)
+  AND (
+    -- Case A: chain falls to authorized_date (date-only) on the second slot.
+    ("rawData" ->> 'authorized_date') IS NOT NULL
+    -- Case B: chain falls through to datetime (ISO, skip) — handled by NOT.
+    -- Case C: chain falls all the way through to date (date-only).
+    OR (
+          ("rawData" ->> 'authorized_date') IS NULL
+      AND ("rawData" ->> 'datetime')        IS NULL
+      AND ("rawData" ->> 'date')            IS NOT NULL
+    )
+  )
   AND EXTRACT(HOUR   FROM "occurredAt") = 0
   AND EXTRACT(MINUTE FROM "occurredAt") = 0
   AND EXTRACT(SECOND FROM "occurredAt") = 0;
@@ -311,48 +322,78 @@ describe("plaidPostedAt", () => {
 
 ### 9.2 `apps/api/tests/chat.tools.tz-anchor.test.ts` (new)
 
-Integration: prove a Plaid date-only `"2026-05-01"` transaction is included
-in a Toronto user's `this_month=May 2026` filter for both migrated tools,
-which the pre-fix storage+query layer would have mis-classified into April.
+Integration: exercise both fixes (storage anchor AND query-layer migration)
+on Toronto-boundary rows whose classification differs between server-UTC and
+user-tz reasoning. The seed deliberately uses a row at `2026-05-01T02:00Z`,
+which is **April 30 22:00 local Toronto** — server-UTC says May, user-tz says
+April. The test pins "now" to mid-April so a `this_month` query asks for
+April. A correct user-tz implementation includes it; the pre-fix server-local
+math excluded it.
 
 ```typescript
 import { describe, it, expect, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { listTransactions } from "../src/chat/tools/list-transactions.js";
 import { getSpendingSummary } from "../src/chat/tools/get-spending-summary.js";
-// ...standard test helpers, see existing chat.tools.list-transactions.test.ts pattern
+// Test helpers per existing chat.tools.list-transactions.test.ts pattern:
+// create user (tz='America/Toronto'), workspace, owner membership, account.
 
-describe("[plan 1e-time] tz anchor", () => {
-  // Seed a user with tz="America/Toronto", a workspace, an account, and
-  // exactly one transaction with occurredAt = parsePlaidInstant("2026-05-01")
-  // = 2026-05-01T12:00:00Z. Pin "now" to mid-May 2026 so this_month means May.
-
-  it("listTransactions includes a May 1 Plaid transaction in this_month", async () => {
-    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
-    // ...seed user (tz=America/Toronto), workspace, account, transaction
-    // at occurredAt=2026-05-01T12:00:00Z
+describe("[plan 1e-time] tz anchor + tool migration", () => {
+  it("listTransactions: rows at the Toronto/UTC day boundary classify by user-tz", async () => {
+    vi.setSystemTime(new Date("2026-04-15T12:00:00Z"));
+    // Seed two transactions:
+    //   A. occurredAt = 2026-05-01T02:00:00Z = Apr 30 22:00 local Toronto
+    //   B. occurredAt = 2026-04-01T03:00:00Z = Mar 31 23:00 local Toronto
+    // A is locally April (in-range for this_month=April).
+    // B is locally March (out-of-range).
+    // Pre-fix server-local periodRange (Apr 1 00:00 UTC .. May 1 00:00 UTC)
+    // would have EXCLUDED A and INCLUDED B — exactly the wrong way around.
 
     const result = await listTransactions.run(
       { env, workspaceId, userId, role: "owner" },
       { period: "this_month", limit: 50 },
     );
-    expect(result.transactions.length).toBe(1);
-    expect(result.transactions[0]!.occurredAt).toBe("2026-05-01T12:00:00.000Z");
+    const ids = result.transactions.map((t) => t.id);
+    expect(ids).toContain("tx-A");
+    expect(ids).not.toContain("tx-B");
   });
 
-  it("getSpendingSummary buckets the May 1 Plaid transaction under '2026-05-01' in user tz", async () => {
-    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
-    // ...seed same data, group_by='day'
+  it("getSpendingSummary: day-bucket key renders in user tz, not UTC", async () => {
+    vi.setSystemTime(new Date("2026-04-15T12:00:00Z"));
+    // Seed one transaction:
+    //   occurredAt = 2026-05-01T02:00:00Z = Apr 30 22:00 local Toronto
+    // dateKeyInTz returns "2026-04-30".
+    // toISOString().slice(0, 10) (pre-fix) returns "2026-05-01" — wrong day.
 
     const result = await getSpendingSummary.run(
       { env, workspaceId, userId, role: "owner" },
       { period: "this_month", group_by: "day" },
     );
     expect(result.groups.length).toBe(1);
-    expect(result.groups[0]!.key).toBe("2026-05-01");
+    expect(result.groups[0]!.key).toBe("2026-04-30");
+  });
+
+  it("listTransactions: 'today' period uses user-tz day boundary", async () => {
+    // Pin "now" to 2026-05-02T03:00:00Z = May 1 23:00 local Toronto.
+    // 'today' in Toronto = May 1.
+    vi.setSystemTime(new Date("2026-05-02T03:00:00Z"));
+    // Seed:
+    //   occurredAt = 2026-05-01T15:00:00Z = May 1 11:00 local — in range.
+    //   occurredAt = 2026-05-02T05:00:00Z = May 2 01:00 local — out of range.
+
+    const result = await listTransactions.run(
+      { env, workspaceId, userId, role: "owner" },
+      { period: "today", limit: 50 },
+    );
+    expect(result.transactions.map((t) => t.id)).toEqual(["tx-today"]);
   });
 });
 ```
+
+The first two cases fail under the **pre-fix** implementation (server-local
+`periodRange` includes the wrong rows; UTC day-key produces `2026-05-01`),
+proving the tool migration is wired correctly. The third case exercises the
+new `today` entry in `BasicPeriod`.
 
 ### 9.3 Existing test adjustments
 
