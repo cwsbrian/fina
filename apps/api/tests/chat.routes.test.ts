@@ -181,3 +181,76 @@ describe("GET /workspaces/:wsId/chat/threads", () => {
     expect(res.json().threads).toHaveLength(0);
   });
 });
+
+describe("GET /workspaces/:wsId/chat/threads/:tid", () => {
+  it("returns the thread and messages (chronological)", async () => {
+    const { cookie, wsId } = await setupProUser(`d-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId, title: "Detail" } });
+    await prisma.chatMessage.create({ data: { threadId: t.id, role: "user", blocks: [{ type: "text", markdown: "first" }], createdAt: new Date("2026-05-15T10:00:00Z") } });
+    await prisma.chatMessage.create({ data: { threadId: t.id, role: "assistant", blocks: [{ type: "text", markdown: "second" }], createdAt: new Date("2026-05-15T10:01:00Z") } });
+
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.thread.title).toBe("Detail");
+    expect(body.messages).toHaveLength(2);
+    expect(body.messages[0].role).toBe("user");
+    expect(body.messages[1].role).toBe("assistant");
+  });
+
+  it("returns 404 for unknown thread id", async () => {
+    const { cookie, wsId } = await setupProUser(`d-${Date.now()}@t.co`);
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads/does-not-exist`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("thread_not_found");
+  });
+
+  it("returns 404 for cross-workspace ids", async () => {
+    const a = await setupProUser(`d-${Date.now()}-a@t.co`);
+    const b = await setupProUser(`d-${Date.now()}-b@t.co`);
+    const bThread = await prisma.chatThread.create({ data: { workspaceId: b.wsId } });
+    const res = await app.inject({ method: "GET", url: `/workspaces/${a.wsId}/chat/threads/${bThread.id}`, headers: { cookie: a.cookie, "x-workspace-id": a.wsId } });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("thread_not_found");
+  });
+
+  it("returns the most recent 100 messages (newest 100, chronologically ordered)", async () => {
+    const { cookie, wsId } = await setupProUser(`d-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    // Seed 105 messages spread across distinct timestamps.
+    for (let i = 0; i < 105; i++) {
+      await prisma.chatMessage.create({
+        data: {
+          threadId: t.id,
+          role: "user",
+          blocks: [{ type: "text", markdown: `m-${i}` }],
+          createdAt: new Date(2026_000_000_000 + i * 1000),
+        },
+      });
+    }
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.messages).toHaveLength(100);
+    // newest 100 → m-5 through m-104, in chronological order
+    expect((body.messages[0].blocks as Array<{ markdown: string }>)[0].markdown).toBe("m-5");
+    expect((body.messages[99].blocks as Array<{ markdown: string }>)[0].markdown).toBe("m-104");
+  });
+
+  it("returns 200 for archived threads (read access preserved)", async () => {
+    const { cookie, wsId } = await setupProUser(`d-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId, archivedAt: new Date() } });
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().thread.archivedAt).not.toBeNull();
+  });
+
+  it("succeeds for viewer + free-tier", async () => {
+    const { cookie, wsId, userId } = await setupProUser(`d-${Date.now()}@t.co`);
+    const t = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    await prisma.membership.update({ where: { userId_workspaceId: { userId, workspaceId: wsId } }, data: { role: "viewer" } });
+    await prisma.user.update({ where: { id: userId }, data: { trialEndsAt: new Date(Date.now() - 86400000), trialConsumed: true } });
+    const res = await app.inject({ method: "GET", url: `/workspaces/${wsId}/chat/threads/${t.id}`, headers: { cookie, "x-workspace-id": wsId } });
+    expect(res.statusCode).toBe(200);
+  });
+});
