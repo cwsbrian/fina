@@ -214,9 +214,20 @@ pnpm --filter @fina/api exec vitest run tests/chat.tools.periods.first-of-month-
 
 ### 2.2 Implement
 
-- [ ] **Step 3: Add `firstOfMonthDateInTz` to `apps/api/src/chat/tools/periods.ts`**
+- [ ] **Step 3: Add two exports to `apps/api/src/chat/tools/periods.ts`**
 
-Currently the file has private `partsInTz` and exported helpers `resolveUserTz`, `basicPeriodRange`, `comparisonRanges`, `lookbackMonthStart`, `dateKeyInTz`. Add at the bottom (after `comparisonRanges`):
+Currently the file has private `partsInTz` and exported helpers `resolveUserTz`, `basicPeriodRange`, `comparisonRanges`, `lookbackMonthStart`, `dateKeyInTz`.
+
+First, promote `partsInTz` from private to exported (just add the `export` keyword to its declaration around line 35):
+
+```typescript
+// Was:
+//   function partsInTz(instant: Date, tz: string): Parts { ... }
+// Becomes:
+export function partsInTz(instant: Date, tz: string): Parts { ... }
+```
+
+Then add `firstOfMonthDateInTz` at the bottom (after `comparisonRanges`):
 
 ```typescript
 // Public: first day of the calendar month at `monthsOffset` from the user's
@@ -238,6 +249,8 @@ export async function firstOfMonthDateInTz(
   return new Date(`${y}-${mm}-01T12:00:00.000Z`);
 }
 ```
+
+Also export the `Parts` type used by `partsInTz` (add the `export` keyword to its `type Parts = { ... }` declaration). Downstream consumers can then write `import { partsInTz, type Parts } from "./periods.js"`.
 
 - [ ] **Step 4: Run — expect PASS (6/6)**
 
@@ -808,7 +821,7 @@ pnpm --filter @fina/api exec vitest run tests/budgets.service.test.ts --reporter
 - [ ] **Step 3: Append to `apps/api/src/budgets/service.ts`**
 
 ```typescript
-import { basicPeriodRange } from "../chat/tools/periods.js";
+import { basicPeriodRange, resolveUserTz, partsInTz } from "../chat/tools/periods.js";
 
 export type CompareSpendingInput = { period: PeriodEnum };
 export type CompareSpendingOutput = {
@@ -880,19 +893,17 @@ export async function compareSpendingVsBudgetService(
     sums.map((s) => [s.categoryId!, s._sum.amount ?? new Prisma.Decimal(0)]),
   );
 
-  // todayPct
+  // todayPct — uses local day count in user's tz, not elapsed milliseconds.
+  // For "May 15" in Toronto, that's 15/31 ≈ 48.39%, regardless of time-of-day.
   const py = periodStart.getUTCFullYear();
   const pm = periodStart.getUTCMonth() + 1; // 1..12
   const dim = daysInMonth(py, pm);
   let todayPct = 0;
   if (input.period === "this_month") {
-    // Days elapsed in user-tz approximation: derive from gte/lt and "now".
-    const now = new Date();
-    const elapsedMs = now.getTime() - gte.getTime();
-    const totalMs = lt.getTime() - gte.getTime();
-    todayPct = Math.max(0, Math.min(100, (elapsedMs / totalMs) * 100));
-    // Snap to whole-day precision so tests are stable.
-    todayPct = Math.round(todayPct * 100) / 100;
+    const tz = await resolveUserTz(ctx.userId);
+    const nowParts = partsInTz(new Date(), tz);
+    // nowParts.day is the user's local day-of-month (1..31).
+    todayPct = Math.round((nowParts.day / dim) * 10000) / 100;
   } else if (input.period === "last_month") {
     todayPct = 100;
   }
@@ -1025,15 +1036,32 @@ import {
 } from "../budgets/service.js";
 
 const POST_PERIOD = z.enum(["this_month", "last_month", "next_month"]);
+// Note: amount is NOT constrained to positive() here so the service-level
+// validation (`invalid_amount`) is what surfaces for 0/negative/over-cap
+// values. Otherwise Zod would short-circuit with `invalid_body` and our
+// tested error contract would break.
 const PostBody = z.object({
   categoryId: z.string().min(1),
-  amount: z.number().positive(),
+  amount: z.number(),
   period: POST_PERIOD,
 });
 
 function isFirstOfMonth(s: string): boolean {
-  // YYYY-MM-DD format check + day == "01"
-  return /^\d{4}-\d{2}-01$/.test(s);
+  // Shape: YYYY-MM-01, day component must literally be "01".
+  if (!/^\d{4}-\d{2}-01$/.test(s)) return false;
+  // Parse and round-trip to catch bogus months like "2026-13-01" or "2026-00-01".
+  // new Date("2026-13-01") gives an Invalid Date; Date.UTC with month=12 (0-indexed)
+  // wraps to January of next year — round-trip check rejects both cases.
+  const [yStr, mStr] = s.split("-");
+  const y = Number(yStr);
+  const m = Number(mStr);
+  if (!Number.isFinite(y) || !Number.isFinite(m)) return false;
+  if (m < 1 || m > 12) return false;
+  const d = new Date(Date.UTC(y, m - 1, 1));
+  if (Number.isNaN(d.getTime())) return false;
+  // Round-trip: the parsed date's YYYY-MM-01 string must equal the input.
+  const back = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-01`;
+  return back === s;
 }
 
 export async function budgetsRoutes(app: FastifyInstance): Promise<void> {
@@ -1467,18 +1495,17 @@ pnpm --filter @fina/api exec vitest run tests/chat.tools.compare-spending-vs-bud
 
 - [ ] **Step 10: Register the 3 new tools in `apps/api/src/chat/tools/index.ts`**
 
-Open the file and add the imports (after the existing tool imports) and entries to the registry. The current registry has 14 tools; append the 3 new ones at positions 15/16/17.
+Open the file. Add the imports next to the existing tool imports, then append three entries to the `REGISTRY: ToolDef[]` array. The existing 14 entries use `as ToolDef` casts because `ToolDef<TArgs, TResult>` is not assignable to the unparameterized `ToolDef` (run's args are narrower); the new entries need the same cast or `pnpm nx run api:typecheck` will fail.
 
 ```typescript
 import { setBudget } from "./set-budget.js";
 import { getBudget } from "./get-budget.js";
 import { compareSpendingVsBudget } from "./compare-spending-vs-budget.js";
 
-// ... existing registry array ...
-// Append at the end:
-//   setBudget,
-//   getBudget,
-//   compareSpendingVsBudget,
+// In the REGISTRY array body, after the existing 14 entries:
+  setBudget as ToolDef,
+  getBudget as ToolDef,
+  compareSpendingVsBudget as ToolDef,
 ```
 
 - [ ] **Step 11: Update `apps/api/src/chat/turn.ts` SYSTEM_PROMPT**
