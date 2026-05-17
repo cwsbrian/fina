@@ -212,13 +212,11 @@ export async function compareSpendingVsBudgetService(ctx: { workspaceId: string;
 2. Return `count > 0`.
 
 **`compareSpendingVsBudgetService`:**
-1. Compute `periodStart` (DATE) AND `{ gte, lt }` (UTC instants) from
-   `basicPeriodRange(userId, period === "next_month" ? "this_month" : period)`.
-   — `compareSpendingVsBudget` with `next_month` shouldn't normally be called,
-   but if it is, return zero `spent` for all categories (transactions in the
-   future haven't happened yet). For semantics:
-   - `period = "this_month"` or `"last_month"`: use the period's actual bounds.
-   - `period = "next_month"`: `gte = lt = periodStart_as_utc_noon` (empty range), `todayPct = 0`.
+1. Compute `periodStart` (DATE) via `firstOfMonthDateInTz`. Compute the
+   transaction filter `{ gte, lt }` by period:
+   - `period = "this_month"`: `basicPeriodRange(userId, "this_month")`. `todayPct = days_elapsed_in_month / days_in_month * 100`.
+   - `period = "last_month"`: `basicPeriodRange(userId, "last_month")`. `todayPct = 100`.
+   - `period = "next_month"`: **explicit empty range** `{ gte: periodStart, lt: periodStart }` (UTC noon of next month's first day used as both bounds). `todayPct = 0`. Do NOT fall back to `basicPeriodRange(userId, "this_month")` — that returns the current month's window and would attribute this-month spending to next-month budgets.
 2. Fetch budgets for the period: `findMany({ where: { workspaceId, periodStart }, include: { category: { select: { name: true } } } })`.
 3. Fetch transaction sums per category: `groupBy({ by: ['categoryId'], where: { workspaceId, removedAt: null, occurredAt: { gte, lt }, categoryId: { in: budgetCategoryIds }, currency: "CAD", amount: { gt: 0 } }, _sum: { amount: true } })`. The `currency: "CAD"` + `amount: { gt: 0 }` filters match the existing convention in `get-category-breakdown.ts` and `get-cashflow-summary.ts` for "spending" — they exclude USD/foreign-currency transactions (since v1 budgets are implicitly CAD) and refund/inflow rows (negative amounts), so `spent`/`remaining`/pace are calculated against actual outflows only.
 4. For each budget, compute `spent` (sum or 0), `remaining = amount - spent`, `spentPct = spent / amount * 100` (or 0 if amount = 0 — but amount > 0 enforced), `todayPct = days_elapsed / days_in_month * 100`, `status` = `"on-pace"` if `spentPct <= todayPct * 1.05` else `"over-pace"`. For `last_month`, `todayPct = 100`. For `next_month`, `todayPct = 0` and `spent = 0`.
