@@ -1,0 +1,112 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prisma } from "../src/db.js";
+import { setBudgetService } from "../src/budgets/service.js";
+
+describe("setBudgetService", () => {
+  let userId: string;
+  let workspaceId: string;
+  let categoryId: string;
+
+  beforeEach(async () => {
+    const stamp = `bs-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "BS", tz: "America/Toronto" },
+    });
+    userId = stamp;
+    const ws = await prisma.workspace.create({ data: { name: "bs-ws" } });
+    workspaceId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
+    const cat = await prisma.category.create({ data: { workspaceId, name: "Coffee" } });
+    categoryId = cat.id;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  it("creates a new budget for this_month at Toronto May 1", async () => {
+    const r = await setBudgetService(
+      { workspaceId, userId },
+      { categoryId, amount: 500, period: "this_month" },
+    );
+    expect(r.budget.categoryId).toBe(categoryId);
+    expect(r.budget.amount).toBe("500.00");
+    expect(r.budget.periodStart).toBe("2026-05-01");
+  });
+
+  it("upserts on conflict: second call updates amount", async () => {
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 500, period: "this_month" });
+    const r = await setBudgetService(
+      { workspaceId, userId },
+      { categoryId, amount: 600, period: "this_month" },
+    );
+    expect(r.budget.amount).toBe("600.00");
+    const all = await prisma.budget.findMany({ where: { workspaceId } });
+    expect(all).toHaveLength(1);
+  });
+
+  it("rejects amount = 0 with invalid_amount", async () => {
+    await expect(
+      setBudgetService({ workspaceId, userId }, { categoryId, amount: 0, period: "this_month" }),
+    ).rejects.toThrow("invalid_amount");
+  });
+
+  it("rejects amount < 0 with invalid_amount", async () => {
+    await expect(
+      setBudgetService({ workspaceId, userId }, { categoryId, amount: -1, period: "this_month" }),
+    ).rejects.toThrow("invalid_amount");
+  });
+
+  it("rejects amount > 99999999.99 with invalid_amount", async () => {
+    await expect(
+      setBudgetService({ workspaceId, userId }, { categoryId, amount: 100_000_000, period: "this_month" }),
+    ).rejects.toThrow("invalid_amount");
+  });
+
+  it("rejects archived category with category_not_found", async () => {
+    await prisma.category.update({ where: { id: categoryId }, data: { archivedAt: new Date() } });
+    await expect(
+      setBudgetService({ workspaceId, userId }, { categoryId, amount: 500, period: "this_month" }),
+    ).rejects.toThrow("category_not_found");
+  });
+
+  it("rejects cross-workspace category with category_not_found", async () => {
+    const otherWs = await prisma.workspace.create({ data: { name: "other-ws" } });
+    const otherCat = await prisma.category.create({ data: { workspaceId: otherWs.id, name: "X" } });
+    await expect(
+      setBudgetService(
+        { workspaceId, userId },
+        { categoryId: otherCat.id, amount: 500, period: "this_month" },
+      ),
+    ).rejects.toThrow("category_not_found");
+    await prisma.workspace.delete({ where: { id: otherWs.id } });
+  });
+
+  it("computes periodStart in Toronto tz when server is UTC", async () => {
+    // Pinned 2026-05-01T03:00:00Z = Apr 30 23:00 local Toronto.
+    vi.setSystemTime(new Date("2026-05-01T03:00:00Z"));
+    const r = await setBudgetService(
+      { workspaceId, userId },
+      { categoryId, amount: 200, period: "this_month" },
+    );
+    // Toronto sees April → periodStart = 2026-04-01.
+    expect(r.budget.periodStart).toBe("2026-04-01");
+  });
+
+  it("supports last_month and next_month offsets", async () => {
+    const last = await setBudgetService(
+      { workspaceId, userId },
+      { categoryId, amount: 100, period: "last_month" },
+    );
+    expect(last.budget.periodStart).toBe("2026-04-01");
+    const next = await setBudgetService(
+      { workspaceId, userId },
+      { categoryId, amount: 200, period: "next_month" },
+    );
+    expect(next.budget.periodStart).toBe("2026-06-01");
+  });
+});
