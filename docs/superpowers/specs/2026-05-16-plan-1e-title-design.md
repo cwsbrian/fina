@@ -102,8 +102,10 @@ After `processChatTurn` resolves successfully, before sending the HTTP
 response, the handler checks:
 
 1. Fetch (or have in scope) the thread row to confirm `title IS NULL`.
-2. Count `chat_messages WHERE threadId = ? AND author = 'user'`. If `== 1`,
-   this was the first user message.
+2. Count `chat_messages WHERE threadId = ? AND role = 'user'`. If `== 1`,
+   this was the first user message. (The Prisma model is `ChatMessage` with
+   field `role: ChatMessageRole` whose enum values are `user | assistant |
+   tool`.)
 
 If both conditions hold, the handler fires:
 ```typescript
@@ -128,7 +130,7 @@ const thread = await prisma.chatThread.findUnique({
 });
 if (thread && thread.title === null && thread.workspaceId === workspaceId) {
   const userMsgCount = await prisma.chatMessage.count({
-    where: { threadId, author: "user" },
+    where: { threadId, role: "user" },
   });
   if (userMsgCount === 1) {
     void generateAndPersistThreadTitle(
