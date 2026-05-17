@@ -679,7 +679,7 @@ grep -rn "mapMerchantToCategory" apps/api/src/ | head -10
 - `chat/turn.ts` SYSTEM_PROMPT mentions it in the write-tool sentence.
 
 ```bash
-grep -n "mapMerchantToCategoryService" apps/api/src/
+grep -rn "mapMerchantToCategoryService" apps/api/src/
 ```
 
 **Expected:** defined in `categorize/map-merchant.ts`; consumed by `chat/tools/map-merchant-to-category.ts`.
