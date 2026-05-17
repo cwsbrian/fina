@@ -22,7 +22,7 @@ export async function resolveUserTz(userId: string): Promise<string> {
   return isValidTz(tz) ? tz : DEFAULT_TZ;
 }
 
-type Parts = {
+export type Parts = {
   year: number;
   month: number;
   day: number;
@@ -32,7 +32,7 @@ type Parts = {
   second: number;
 };
 
-function partsInTz(instant: Date, tz: string): Parts {
+export function partsInTz(instant: Date, tz: string): Parts {
   const fmt = new Intl.DateTimeFormat("en-US", {
     timeZone: tz,
     year: "numeric",
@@ -188,4 +188,23 @@ export async function comparisonRanges(
     return { current, comparison: { gte: comparisonGte, lt: current.gte } };
   }
   throw new Error("invalid_period_pair");
+}
+
+// Public: first day of the calendar month at `monthsOffset` from the user's
+// "now" (interpreted in their tz). Returns Date at 12:00:00.000Z on the
+// first-of-month so the @db.Date column receives the right calendar date
+// across UTC-11..+11 zones (matches 1E-time's UTC-noon storage policy).
+export async function firstOfMonthDateInTz(
+  userId: string,
+  monthsOffset: number,
+  now: Date = new Date(),
+): Promise<Date> {
+  const tz = await resolveUserTz(userId);
+  const p = partsInTz(now, tz);
+  let y = p.year;
+  let m = p.month + monthsOffset;
+  while (m <= 0) { m += 12; y -= 1; }
+  while (m > 12) { m -= 12; y += 1; }
+  const mm = String(m).padStart(2, "0");
+  return new Date(`${y}-${mm}-01T12:00:00.000Z`);
 }
