@@ -56,3 +56,48 @@ export async function setBudgetService(
     },
   };
 }
+
+export type GetBudgetInput =
+  | { categoryId?: string; period: PeriodEnum }
+  | { categoryId?: string; periodStart: Date };
+export type GetBudgetOutput = { budgets: Array<{ id: string; categoryId: string; amount: string; periodStart: string }> };
+
+export async function getBudgetService(
+  ctx: { workspaceId: string; userId: string },
+  input: GetBudgetInput,
+): Promise<GetBudgetOutput> {
+  const periodStart =
+    "periodStart" in input
+      ? input.periodStart
+      : await firstOfMonthDateInTz(ctx.userId, offsetFor(input.period));
+  const where: { workspaceId: string; periodStart: Date; categoryId?: string } = {
+    workspaceId: ctx.workspaceId,
+    periodStart,
+  };
+  if (input.categoryId) where.categoryId = input.categoryId;
+  const rows = await prisma.budget.findMany({
+    where,
+    orderBy: [{ categoryId: "asc" }],
+    select: { id: true, categoryId: true, amount: true, periodStart: true },
+  });
+  return {
+    budgets: rows.map((r) => ({
+      id: r.id,
+      categoryId: r.categoryId,
+      amount: r.amount.toFixed(2),
+      periodStart: r.periodStart.toISOString().slice(0, 10),
+    })),
+  };
+}
+
+export type DeleteBudgetInput = { budgetId: string };
+
+export async function deleteBudgetService(
+  ctx: { workspaceId: string },
+  input: DeleteBudgetInput,
+): Promise<boolean> {
+  const { count } = await prisma.budget.deleteMany({
+    where: { id: input.budgetId, workspaceId: ctx.workspaceId },
+  });
+  return count > 0;
+}
