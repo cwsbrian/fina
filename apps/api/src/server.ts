@@ -12,6 +12,7 @@ import { plaidItemsRoutes } from "./routes/plaid-items.js";
 import { accountsRoutes } from "./routes/accounts.js";
 import { transactionsRoutes } from "./routes/transactions.js";
 import { budgetsRoutes } from "./routes/budgets.js";
+import { recurringRoutes } from "./routes/recurring.js";
 import { categoriesRoutes } from "./routes/categories.js";
 import { chatRoutes } from "./routes/chat.js";
 import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
@@ -95,6 +96,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(transactionsRoutes);
   await app.register(categoriesRoutes);
   await app.register(budgetsRoutes);
+  await app.register(recurringRoutes);
   await app.register(chatRoutes);
 
   return app;
