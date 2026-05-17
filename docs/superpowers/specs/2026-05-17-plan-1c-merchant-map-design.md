@@ -231,7 +231,7 @@ Bump expected tool count from 17 to 18. Names assertion includes
 This plan is complete when:
 
 1. New chat tool registered; registry test passes 18 tools.
-2. Service throws the three documented error codes (`invalid_merchant`, `category_not_found`, plus chat-tool Zod for `invalid_body`).
+2. Service throws the two documented error codes (`invalid_merchant`, `category_not_found`); chat-tool Zod failures surface via the dispatcher as `invalid_args: <message>` (not `invalid_body`).
 3. Mapping row has `source = "manual"`, `confidence = 1.00` (verified by a service test).
 4. Backfilled transactions get `categorizationSource = "mapping"` (existing enum value).
 5. All new tests pass; baseline 70 files / 578 tests → 72 files / ~591 tests.
