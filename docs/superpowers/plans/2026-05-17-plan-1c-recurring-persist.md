@@ -407,10 +407,15 @@ function normalizeName(raw: string): string {
   return raw.trim().toLowerCase();
 }
 
-// Strict YYYY-MM-DD validation: shape + round-trip.
+// Strict YYYY-MM-DD validation: shape + round-trip. Avoids destructuring
+// the split result so noUncheckedIndexedAccess doesn't leave `number | undefined`
+// fields flowing into Date.UTC and arithmetic.
 function isValidDateOnly(s: string): boolean {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
-  const [y, m, d] = s.split("-").map(Number);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (!match) return false;
+  const y = Number(match[1]);
+  const m = Number(match[2]);
+  const d = Number(match[3]);
   if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return false;
   if (m < 1 || m > 12) return false;
   const date = new Date(Date.UTC(y, m - 1, d));
@@ -770,17 +775,22 @@ export async function recurringRoutes(app: FastifyInstance): Promise<void> {
       }
       const tier = await effectiveTier(ctx.session.userId);
       if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+      // Build the service input WITHOUT the optional keys when their values
+      // are undefined — tsconfig.base.json has `exactOptionalPropertyTypes: true`,
+      // which rejects `{ categoryId: undefined }` against `categoryId?: string | null`.
+      // Same fix shape as the chat-tool snippet in Task 5 (Parameters<…>[1] + conditional).
+      const serviceInput: Parameters<typeof addRecurringService>[1] = {
+        name: parsed.data.name,
+        amount: parsed.data.amount,
+        cadence: parsed.data.cadence,
+        nextOccurrenceDate: parsed.data.nextOccurrenceDate,
+      };
+      if (parsed.data.categoryId !== undefined) serviceInput.categoryId = parsed.data.categoryId;
+      if (parsed.data.merchant !== undefined) serviceInput.merchant = parsed.data.merchant;
+      if (parsed.data.currency !== undefined) serviceInput.currency = parsed.data.currency;
       const result = await addRecurringService(
         { workspaceId: ctx.membership.workspaceId },
-        {
-          name: parsed.data.name,
-          amount: parsed.data.amount,
-          cadence: parsed.data.cadence,
-          nextOccurrenceDate: parsed.data.nextOccurrenceDate,
-          categoryId: parsed.data.categoryId,
-          merchant: parsed.data.merchant,
-          currency: parsed.data.currency,
-        },
+        serviceInput,
       );
       return reply.code(201).send(result);
     } catch (e) {
@@ -1183,9 +1193,17 @@ export const listRecurring: ToolDef<
     const ids = out.recurring
       .map((r) => r.categoryId)
       .filter((id): id is string => id !== null);
+    // Hydrate canonical category names. Filter out archived categories AND
+    // scope to the workspace so an archived/cross-workspace category id
+    // (defense-in-depth) yields categoryName: null — matching the listRecurring
+    // test "Returns categoryName: null when … category was archived".
     const cats = ids.length
       ? await prisma.category.findMany({
-          where: { id: { in: ids } },
+          where: {
+            id: { in: ids },
+            workspaceId: ctx.workspaceId,
+            archivedAt: null,
+          },
           select: { id: true, name: true },
         })
       : [];
@@ -1376,7 +1394,11 @@ For write tools (createCategory, addTransactionNote, setBudget, mapMerchantToCat
 
 - [ ] **Step 3: Edit `apps/api/tests/chat.tools.registry.test.ts`**
 
-a) Find the existing `expect(REGISTRY).toHaveLength(18);` line in the `REGISTRY (plan 1c-merchant-map)` block and change to `expect(REGISTRY).toHaveLength(21);`.
+a) **Update BOTH existing length assertions** to `expect(REGISTRY).toHaveLength(21);`:
+- The `expect(REGISTRY).toHaveLength(17);` line inside the `REGISTRY (plan 1c-budget)` block.
+- The `expect(REGISTRY).toHaveLength(18);` line inside the `REGISTRY (plan 1c-merchant-map)` block.
+
+Both blocks were left in place by prior plans; the new total is 21 across the whole file.
 
 b) Append a new describe block at the END of the file:
 
