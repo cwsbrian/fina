@@ -60,7 +60,7 @@ the same heuristic.
 | Args pre-validation | Validate accept_action.args against target tool's Zod schema at `presentConfirmCard` time. Re-validate at consume time as defense. |
 | Consume race | Atomic `UPDATE … SET consumedAt = NOW() WHERE id = ? AND consumedAt IS NULL` → if zero rows updated, return `intent_gone`. |
 | Consume response | `200 { result: <tool output> }` so chat layer / future UI can show post-action feedback. |
-| Tool errors during consume | Propagate naturally as 500 from the route (e.g. `category_not_found` thrown by the dispatched tool surfaces to the consume caller). v1 doesn't translate them. |
+| Tool errors during consume | Propagate as 500 by default (e.g. `category_not_found`). Exception: `insufficient_role` is translated to 403 because an editor can issue a confirm card for an owner-only target (today only `createCategory` has this gate); 403 is the meaningful surface, not 500. |
 | Role gate (consume + presentConfirmCard) | editor+ inherited from chat route. |
 | Tier gate | Pro (consume route + chat route are both Pro-gated). |
 | Audit log entry on consume | Out of scope — separate 1C-audit plan. |
@@ -503,7 +503,7 @@ This plan is complete when:
 - Configurable TTL per intent (fixed 1 hour).
 - Forcing any specific write tool through the intent flow (LLM still chooses per system prompt).
 - Frontend renderer updates for `confirm_card` block (user's UI track).
-- Translating tool-thrown errors during consume to specific HTTP codes (v1 surfaces them as 500).
+- Translating tool-thrown errors during consume to specific HTTP codes — exception: `insufficient_role` is translated to 403 (see §3 + §8). Other tool errors (`category_not_found`, `invalid_amount`, etc.) surface as 500 in v1; a future plan can extend the mapping if needed.
 
 ---
 
