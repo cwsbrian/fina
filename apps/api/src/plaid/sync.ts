@@ -15,6 +15,14 @@ export type SyncResult =
   | { added: number; modified: number; removed: number; newTxIds: string[] }
   | { skipped: "lock_held"; added: number; modified: number; removed: number; newTxIds: string[] };
 
+// Plan 1E-time: anchor date-only Plaid input at UTC noon so user-timezone
+// day-boundary filters classify the row into the intended local day across
+// UTC-11..+11 zones. ISO-8601 inputs (those containing 'T') are trusted as-is.
+export function parsePlaidInstant(s: string): Date {
+  if (s.includes("T")) return new Date(s);
+  return new Date(`${s}T12:00:00.000Z`);
+}
+
 export function plaidOccurredAt(t: PlaidTxLike): Date {
   // Prefer authorized_* (when the user actually transacted), fall back to date.
   const v = t.authorized_datetime ?? t.authorized_date ?? t.datetime ?? t.date;
