@@ -3,6 +3,8 @@ import { prisma } from "../src/db.js";
 import {
   addRecurringService,
   listRecurringService,
+  removeRecurringByIdService,
+  removeRecurringByNameService,
 } from "../src/recurring/service.js";
 
 describe("addRecurringService", () => {
@@ -191,5 +193,81 @@ describe("listRecurringService", () => {
     const r = await listRecurringService({ workspaceId });
     const names = r.recurring.map((row) => row.name);
     expect(names).toEqual(["Beta", "Alpha", "Zeta"]);
+  });
+});
+
+describe("removeRecurringByIdService", () => {
+  let workspaceId: string;
+  let userId: string;
+  let recurringId: string;
+
+  beforeEach(async () => {
+    const stamp = `rid-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "RID", tz: "America/Toronto" },
+    });
+    userId = stamp;
+    const ws = await prisma.workspace.create({ data: { name: "rid-ws" } });
+    workspaceId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
+    const r = await addRecurringService(
+      { workspaceId },
+      { name: "Netflix", amount: 19.99, cadence: "monthly", nextOccurrenceDate: "2026-06-01" },
+    );
+    recurringId = r.recurring.id;
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  it("deletes and returns true for own row", async () => {
+    expect(await removeRecurringByIdService({ workspaceId }, { id: recurringId })).toBe(true);
+    expect(await prisma.recurringExpense.findUnique({ where: { id: recurringId } })).toBeNull();
+  });
+
+  it("returns false for cross-workspace id", async () => {
+    expect(await removeRecurringByIdService({ workspaceId: "other-ws" }, { id: recurringId })).toBe(false);
+    expect(await prisma.recurringExpense.findUnique({ where: { id: recurringId } })).not.toBeNull();
+  });
+});
+
+describe("removeRecurringByNameService", () => {
+  let workspaceId: string;
+  let userId: string;
+
+  beforeEach(async () => {
+    const stamp = `rnm-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "RNM", tz: "America/Toronto" },
+    });
+    userId = stamp;
+    const ws = await prisma.workspace.create({ data: { name: "rnm-ws" } });
+    workspaceId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
+    await addRecurringService(
+      { workspaceId },
+      { name: "Netflix", amount: 19.99, cadence: "monthly", nextOccurrenceDate: "2026-06-01" },
+    );
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  it("case-insensitive resolve + delete returns true", async () => {
+    expect(await removeRecurringByNameService({ workspaceId }, { name: "NETFLIX" })).toBe(true);
+    expect(await prisma.recurringExpense.count({ where: { workspaceId } })).toBe(0);
+  });
+
+  it("returns false for nonexistent name", async () => {
+    expect(await removeRecurringByNameService({ workspaceId }, { name: "DoesNotExist" })).toBe(false);
+  });
+
+  it("returns false for whitespace-only name", async () => {
+    expect(await removeRecurringByNameService({ workspaceId }, { name: "   " })).toBe(false);
+    expect(await prisma.recurringExpense.count({ where: { workspaceId } })).toBe(1);
   });
 });

@@ -144,3 +144,32 @@ export async function listRecurringService(
   });
   return { recurring: rows.map(formatRow) };
 }
+
+export async function removeRecurringByIdService(
+  ctx: { workspaceId: string },
+  input: { id: string },
+): Promise<boolean> {
+  const { count } = await prisma.recurringExpense.deleteMany({
+    where: { id: input.id, workspaceId: ctx.workspaceId },
+  });
+  return count > 0;
+}
+
+export async function removeRecurringByNameService(
+  ctx: { workspaceId: string },
+  input: { name: string },
+): Promise<boolean> {
+  const nameNormalized = normalizeName(input.name);
+  if (nameNormalized.length === 0) return false;
+  const row = await prisma.recurringExpense.findUnique({
+    where: {
+      workspaceId_nameNormalized: {
+        workspaceId: ctx.workspaceId,
+        nameNormalized,
+      },
+    },
+    select: { id: true },
+  });
+  if (!row) return false;
+  return removeRecurringByIdService(ctx, { id: row.id });
+}
