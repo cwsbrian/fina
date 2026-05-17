@@ -1394,11 +1394,16 @@ For write tools (createCategory, addTransactionNote, setBudget, mapMerchantToCat
 
 - [ ] **Step 3: Edit `apps/api/tests/chat.tools.registry.test.ts`**
 
-a) **Update BOTH existing length assertions** to `expect(REGISTRY).toHaveLength(21);`:
-- The `expect(REGISTRY).toHaveLength(17);` line inside the `REGISTRY (plan 1c-budget)` block.
-- The `expect(REGISTRY).toHaveLength(18);` line inside the `REGISTRY (plan 1c-merchant-map)` block.
+a) **Update BOTH existing length assertions** to `expect(REGISTRY).toHaveLength(21);`. In the current target file, BOTH instances are literally `expect(REGISTRY).toHaveLength(18);` (the 1c-merchant-map plan bumped both the budget block's `17` assertion to `18` and added its own `18` assertion):
 
-Both blocks were left in place by prior plans; the new total is 21 across the whole file.
+- The `expect(REGISTRY).toHaveLength(18);` inside the `REGISTRY (plan 1c-budget)` block (currently the second-to-last `it()` of that block; its label is misleadingly `"registry has 17 tools total"`).
+- The `expect(REGISTRY).toHaveLength(18);` inside the `REGISTRY (plan 1c-merchant-map)` block (label `"registry has 18 tools total"`).
+
+While editing, update the misleading label strings too:
+- `"registry has 17 tools total"` → `"registry has 21 tools total"`
+- `"registry has 18 tools total"` → `"registry has 21 tools total"`
+
+A `grep -n "toHaveLength" apps/api/tests/chat.tools.registry.test.ts` before editing confirms two matches — both need updating.
 
 b) Append a new describe block at the END of the file:
 
