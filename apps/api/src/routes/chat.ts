@@ -254,20 +254,27 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       // Plan 1E-title: auto-generate a concise title on the first user
       // message. Fire-and-forget — never delays the response, never propagates
       // errors. The orchestrator's DB write is gated on `title IS NULL` so a
-      // manual PATCH during the async window wins.
+      // manual PATCH during the async window wins. The trigger gate (count
+      // query) is wrapped in its own try/catch so a transient DB issue cannot
+      // turn an already-persisted chat turn into a 500 response, which would
+      // cause clients to retry and duplicate the turn.
       if (thread.title === null) {
-        const userMsgCount = await prisma.chatMessage.count({
-          where: { threadId: thread.id, role: "user" },
-        });
-        if (userMsgCount === 1) {
-          void generateAndPersistThreadTitle(
-            app.fina.env,
-            thread.workspaceId,
-            thread.id,
-            parsed.data.text,
-          ).catch(() => {
-            /* orchestrator logs internally */
+        try {
+          const userMsgCount = await prisma.chatMessage.count({
+            where: { threadId: thread.id, role: "user" },
           });
+          if (userMsgCount === 1) {
+            void generateAndPersistThreadTitle(
+              app.fina.env,
+              thread.workspaceId,
+              thread.id,
+              parsed.data.text,
+            ).catch(() => {
+              /* orchestrator logs internally */
+            });
+          }
+        } catch (err) {
+          console.warn("auto-title trigger gate failed", { threadId: thread.id, err });
         }
       }
 
