@@ -147,7 +147,13 @@ export async function consumeIntentService(
 ```
 
 **`createIntentService` steps:**
-1. Whitelist: `if (!CONFIRMABLE_TOOLS.includes(input.tool)) throw invalid_tool`.
+1. Whitelist via type guard (avoids TS error: `as const` tuple's `.includes()` rejects a plain `string` argument under strict settings):
+   ```typescript
+   function isConfirmable(t: string): t is ConfirmableTool {
+     return (CONFIRMABLE_TOOLS as readonly string[]).includes(t);
+   }
+   if (!isConfirmable(input.tool)) throw new Error("invalid_tool");
+   ```
 2. Resolve target tool: `const tool = REGISTRY.find(t => t.name === input.tool); if (!tool) throw invalid_tool` (defense — whitelist should already guarantee this).
 3. Pre-validate args: `tool.args.safeParse(input.args)`. If `!success`, throw `invalid_payload_args`.
 4. Compute `expiresAt = new Date(Date.now() + INTENT_TTL_MS)`.
@@ -354,7 +360,13 @@ export async function intentsRoutes(app: FastifyInstance): Promise<void> {
       if (msg === "intent_owner_mismatch")
         return reply.code(403).send({ error: "intent_owner_mismatch" });
       if (msg === "intent_gone") return reply.code(410).send({ error: "intent_gone" });
-      throw e;  // tool-thrown errors propagate as 500 — acceptable v1
+      // The dispatched tool may throw `insufficient_role` when an editor
+      // consumes an intent that wraps an owner-only target (today only
+      // createCategory has this gate). Translate to 403 so the client
+      // doesn't see a misleading 500.
+      if (msg === "insufficient_role")
+        return reply.code(403).send({ error: "insufficient_role" });
+      throw e;  // other tool-thrown errors propagate as 500 — acceptable v1
     }
   });
 }
@@ -371,6 +383,7 @@ Register in `apps/api/src/server.ts` after `recurringRoutes`.
 | `intent_gone` | 410 | already consumed or expired |
 | `workspace_mismatch` | 400 | path `:id` ≠ `X-Workspace-Id` |
 | `upgrade_required` | 402 | non-Pro |
+| `insufficient_role` | 403 | dispatched tool's role gate rejected (e.g. editor consuming an owner-only `createCategory` intent) |
 | `invalid_tool` / `invalid_payload_args` | 500 | thrown during consume re-validation (DB tamper or service bug) |
 
 ---
@@ -429,7 +442,7 @@ No new dependencies.
 9. Returns `intent_gone` for expired intent (manually set `expiresAt` in past).
 10. Race-safe: two `Promise.all` consumes — one returns result, one returns `intent_gone`.
 
-### 11.2 `intents.routes.test.ts` (~6 cases)
+### 11.2 `intents.routes.test.ts` (~7 cases)
 
 1. POST 200 happy → body shape `{ result: { category: { id, name, ... } } }`.
 2. POST 404 `intent_not_found` for unknown id.
@@ -437,6 +450,7 @@ No new dependencies.
 4. POST 410 `intent_gone` for already-consumed.
 5. POST 402 `upgrade_required` on Free tier.
 6. POST 400 `workspace_mismatch` when path `:id` ≠ X-Workspace-Id.
+7. POST 403 `insufficient_role` when an editor consumes an intent that wraps `createCategory` (owner-only). Seed via direct service call to create the intent, then sign in as an editor in the same workspace and POST consume.
 
 ### 11.3 `chat.tools.present-confirm-card.test.ts` (~5 cases)
 
