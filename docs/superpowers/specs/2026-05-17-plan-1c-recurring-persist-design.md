@@ -48,7 +48,7 @@ pattern: Pro for writes, all tiers for reads.
 | Cadence enum | `monthly | semimonthly | biweekly | weekly | yearly` |
 | `active` column | Out of scope — cancel via hard delete |
 | `lastOccurrenceDate` | Out of scope — derivable via join later |
-| Unique constraint | `(workspaceId, name)` — addRecurring upserts on this |
+| Unique constraint | `(workspaceId, nameNormalized)` where `nameNormalized = name.trim().toLowerCase()` — case-insensitive dedup with raw `name` preserved for display |
 | `currency` default | `"CAD"` (matches Transaction.currency convention) |
 | `categoryId` on delete | `SetNull` — preserve recurring even if category deleted |
 | `merchantNormalized` | Optional, server-normalized via `normalizeMerchant` |
@@ -79,7 +79,8 @@ enum RecurringCadence {
 model RecurringExpense {
   id                  String           @id @default(cuid())
   workspaceId         String
-  name                String
+  name                String                                    // user-facing display ("Netflix")
+  nameNormalized      String                                    // trim+lower("Netflix") = "netflix"
   amount              Decimal          @db.Decimal(10, 2)
   currency            String           @default("CAD")
   categoryId          String?
@@ -92,11 +93,16 @@ model RecurringExpense {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   category  Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
-  @@unique([workspaceId, name])
+  @@unique([workspaceId, nameNormalized])
   @@index([workspaceId, nextOccurrenceDate])
   @@map("recurring_expenses")
 }
 ```
+
+`nameNormalized` is computed server-side as `name.trim().toLowerCase()`
+and serves as the dedup key. The raw `name` is preserved verbatim for
+display so the user keeps their casing ("Netflix Premium" stays
+"Netflix Premium" in the listing).
 
 Inverse relations:
 - `Workspace { recurringExpenses RecurringExpense[] }`
@@ -119,12 +125,12 @@ Notes:
 export type Cadence = "monthly" | "semimonthly" | "biweekly" | "weekly" | "yearly";
 
 export type AddRecurringInput = {
-  name: string;
+  name: string;                 // raw display name; service computes nameNormalized
   amount: number;
   cadence: Cadence;
-  nextOccurrenceDate: string;  // YYYY-MM-DD
+  nextOccurrenceDate: string;   // YYYY-MM-DD
   categoryId?: string | null;
-  merchantNormalized?: string | null;
+  merchant?: string | null;     // raw merchant text; service normalizes via normalizeMerchant
   currency?: string;
 };
 
@@ -165,17 +171,20 @@ export async function removeRecurringByNameService(
 **`addRecurringService`:**
 1. Validate `amount > 0` AND `amount <= 99_999_999.99` AND `Number.isFinite` → throw `invalid_amount`.
 2. Validate `nextOccurrenceDate` matches `^\d{4}-\d{2}-\d{2}$`, parses to a real date, and round-trips back to the same string (rejects `2026-13-01`, `2026-02-30`, etc.) → throw `invalid_next_date`.
-3. If `categoryId` non-null, verify same-workspace + non-archived → throw `category_not_found`.
-4. Upsert on `(workspaceId, name)`: create with all fields; update sets `amount`, `currency`, `categoryId`, `merchantNormalized`, `cadence`, `nextOccurrenceDate`.
-5. Return formatted row.
+3. Compute `nameNormalized = input.name.trim().toLowerCase()`. If empty → throw `invalid_body` (Zod normally catches first via `.trim().min(1)`, this is defense-in-depth).
+4. If `input.merchant` provided (non-null, non-empty), call `normalizeMerchant`. Empty result → throw `invalid_merchant`. Otherwise resulting string becomes `merchantNormalized`. If `input.merchant` is null/undefined, `merchantNormalized = null`.
+5. If `categoryId` non-null, verify same-workspace + non-archived → throw `category_not_found`.
+6. Upsert on `(workspaceId, nameNormalized)`: create with all fields including `name` (raw) and `nameNormalized`; update sets `name`, `amount`, `currency`, `categoryId`, `merchantNormalized`, `cadence`, `nextOccurrenceDate` (NOT `nameNormalized` — same key, no-op).
+7. Return formatted row.
 
 **`listRecurringService`:** `findMany` for workspaceId, `orderBy: [{ nextOccurrenceDate: "asc" }, { name: "asc" }]`. Returns formatted rows.
 
 **`removeRecurringByIdService`:** `deleteMany({ where: { id, workspaceId } })`. Returns `count > 0`.
 
 **`removeRecurringByNameService`:**
-1. `findFirst` with case-insensitive name match in workspace. Not found → return `false`.
-2. Call `removeRecurringByIdService` with the resolved id.
+1. Compute `nameNormalized = input.name.trim().toLowerCase()`. If empty → return `false` (no row could match).
+2. `findUnique({ where: { workspaceId_nameNormalized: { workspaceId, nameNormalized } } })`. Not found → return `false`.
+3. Call `removeRecurringByIdService` with the resolved id.
 
 ---
 
@@ -220,9 +229,8 @@ Behavior:
 1. If `category_id` provided, verify it + capture canonical `category.name`.
 2. Else if `category_name` provided, resolve case-insensitively + capture canonical name. Not found → throw `category_not_found`.
 3. Else `categoryId = null`, `categoryName = null`.
-4. If `merchant` provided, call `normalizeMerchant`. Empty result → throw `invalid_merchant`. Pass result as `merchantNormalized` to service.
-5. Call `addRecurringService({ workspaceId }, { ...resolved })`.
-6. Return `{ recurring: { ...service-result, categoryName } }`.
+4. Call `addRecurringService({ workspaceId }, { ...resolvedFields, merchant: args.merchant })`. The service handles `normalizeMerchant` (and rejects whitespace-only via `invalid_merchant`).
+5. Return `{ recurring: { ...service-result, categoryName } }`.
 
 ### 7.2 `listRecurring`
 
@@ -282,7 +290,7 @@ const PostBody = z.object({
   cadence: z.enum(["monthly", "semimonthly", "biweekly", "weekly", "yearly"]),
   nextOccurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   categoryId: z.string().min(1).optional(),
-  merchantNormalized: z.string().min(1).optional(),
+  merchant: z.string().min(1).max(200).optional(),  // raw — server normalizes via normalizeMerchant; matches chat tool contract
   currency: z.string().length(3).optional(),
 });
 
@@ -295,8 +303,10 @@ export async function recurringRoutes(app: FastifyInstance): Promise<void> {
 
 Each handler:
 - Calls `requireWorkspaceContext(req, app, { requiredRole: <role> })`.
+- **Compare `params.id` against `ctx.membership.workspaceId`.** Mismatch → return `400 { error: "workspace_mismatch" }` (1C-budget and other 1C routes already do this; the routes test must cover this path). Without this check, a client could POST `/workspaces/B/recurring` while having `X-Workspace-Id: A` and silently write to workspace A.
 - For write ops: `effectiveTier(userId)` → 402 if not Pro.
 - POST body Zod: amount is `z.number()` (no `.positive()`), so 0/neg surface as `invalid_amount` from service. Same pattern as 1C-budget routes.
+- POST passes raw `merchant` (when present) to the service — service normalizes via `normalizeMerchant`. The HTTP body does NOT accept a pre-normalized `merchantNormalized` field; clients can't bypass normalization.
 - Catches `HttpError` and service-thrown error codes per §6.
 
 Register in `apps/api/src/server.ts` alongside `budgetsRoutes`:
@@ -353,29 +363,32 @@ enum + table); no existing model is altered.
 
 ## 11. Tests
 
-### 11.1 `recurring.service.test.ts` (~10 cases)
+### 11.1 `recurring.service.test.ts` (~13 cases)
 
-1. `addRecurringService` creates a row with `currency` defaulting to `"CAD"`.
-2. `addRecurringService` upserts on `(workspaceId, name)` — second call with same name updates `amount` and `nextOccurrenceDate`; row count stays 1.
+1. `addRecurringService` creates a row with `currency` defaulting to `"CAD"` and `nameNormalized = name.trim().toLowerCase()`.
+2. `addRecurringService` upserts on `(workspaceId, nameNormalized)` — second call with same name (different case, e.g. `"netflix"` vs `"Netflix"`) updates `amount` and replaces the `name` (raw) with the new casing; row count stays 1.
 3. Rejects `amount: 0` → `invalid_amount`.
 4. Rejects `amount: 100_000_000` → `invalid_amount`.
 5. Rejects `next_occurrence_date: "2026-13-01"` → `invalid_next_date`.
 6. Rejects `next_occurrence_date: "2026-02-30"` (not a real date) → `invalid_next_date`.
 7. Rejects cross-workspace `categoryId` → `category_not_found`.
 8. Rejects archived `categoryId` → `category_not_found`.
-9. `listRecurringService` returns rows ordered by `nextOccurrenceDate` ASC, then `name` ASC.
-10. `removeRecurringByIdService` returns `false` for cross-workspace id.
-11. `removeRecurringByNameService` case-insensitive match + delete + returns `true`; returns `false` for nonexistent name.
-12. `semimonthly` cadence is accepted and persisted.
+9. Rejects `merchant: "   "` (whitespace-only after `normalizeMerchant`) → `invalid_merchant`.
+10. Normalizes raw `merchant: "STARBUCKS #1234 TORONTO ON"` → stores `merchantNormalized: "starbucks"`.
+11. `listRecurringService` returns rows ordered by `nextOccurrenceDate` ASC, then `name` ASC.
+12. `removeRecurringByIdService` returns `false` for cross-workspace id.
+13. `removeRecurringByNameService` case-insensitive match (`"NETFLIX"` finds the row created as `"Netflix"`) + delete + returns `true`; returns `false` for nonexistent name and for whitespace-only name.
+14. `semimonthly` cadence is accepted and persisted.
 
-### 11.2 `recurring.routes.test.ts` (~6 cases)
+### 11.2 `recurring.routes.test.ts` (~7 cases)
 
 1. POST 201 with valid body.
 2. POST 400 `invalid_amount` on `amount: 0`.
 3. POST 404 `category_not_found` on missing category.
 4. POST 402 `upgrade_required` on Free tier (after expiring trial).
-5. GET 200 with viewer membership.
-6. DELETE 204 happy path + 404 `recurring_not_found` on cross-workspace id.
+5. POST 400 `workspace_mismatch` when path `:id` differs from `X-Workspace-Id` header.
+6. GET 200 with viewer membership.
+7. DELETE 204 happy path + 404 `recurring_not_found` on cross-workspace id.
 
 ### 11.3 `chat.tools.add-recurring.test.ts` (~5 cases)
 
