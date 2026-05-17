@@ -1,6 +1,6 @@
 import { prisma } from "../../db.js";
 
-export type BasicPeriod = "this_week" | "this_month" | "last_month";
+export type BasicPeriod = "today" | "this_week" | "this_month" | "last_month";
 export type ReviewPeriod = BasicPeriod | "all_time";
 export type CurrentPeriod = "this_week" | "this_month";
 export type ComparisonPeriod = "previous_week" | "last_month";
@@ -143,6 +143,10 @@ export async function basicPeriodRange(
 ): Promise<{ gte: Date; lt: Date }> {
   const tz = await resolveUserTz(userId);
   const p = partsInTz(now, tz);
+  if (period === "today") {
+    const gte = localMidnightToUtc(p.year, p.month, p.day, tz);
+    return { gte, lt: addDaysLocal(gte, 1, tz) };
+  }
   if (period === "this_month") {
     const gte = startOfMonth(p.year, p.month, tz);
     const next = nextMonth(p.year, p.month);
