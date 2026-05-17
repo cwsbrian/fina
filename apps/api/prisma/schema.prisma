@@ -38,6 +38,7 @@ model User {
   invitesSent     Invite[]     @relation("InvitesSent")
   invitesAccepted Invite[]     @relation("InvitesAccepted")
   plaidItems      PlaidItem[]
+  actionIntents   ActionIntent[]
 
   @@map("users")
 }
@@ -106,6 +107,7 @@ model Workspace {
   chatThreads        ChatThread[]
   budgets            Budget[]
   recurringExpenses  RecurringExpense[]
+  actionIntents      ActionIntent[]
 
   @@map("workspaces")
 }
@@ -372,6 +374,24 @@ model RecurringExpense {
   @@unique([workspaceId, nameNormalized])
   @@index([workspaceId, nextOccurrenceDate])
   @@map("recurring_expenses")
+}
+
+model ActionIntent {
+  id          String    @id @default(cuid())
+  workspaceId String
+  userId      String
+  messageId   String?
+  kind        String
+  payload     Json
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  createdAt   DateTime  @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId],      references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, userId, expiresAt])
+  @@map("action_intents")
 }
 
 model MerchantMapping {
