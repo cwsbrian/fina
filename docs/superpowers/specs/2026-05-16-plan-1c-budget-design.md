@@ -143,11 +143,14 @@ The `T12:00:00Z` anchor matches 1E-time's UTC-noon storage policy — the DATE
 column extracts the calendar date in UTC, which equals the user-local month's
 first day across UTC-11..+11 zones. (UTC±12 known limitation per 1E-time §5.)
 
-For `compareSpendingVsBudget`, the period start comes from `firstOfMonthDateInTz`;
-the transaction filter range `{ gte, lt }` comes from
-`basicPeriodRange(userId, period === "next_month" ? "this_month" : period)` —
-which already exists and is exported. For `next_month`, the range is empty
-(no transactions past today are counted) so a zero-spent result is correct.
+For `compareSpendingVsBudget`, the period start comes from `firstOfMonthDateInTz`.
+The transaction filter range `{ gte, lt }` is computed by period:
+
+- `period === "this_month"` → `basicPeriodRange(userId, "this_month")`.
+- `period === "last_month"` → `basicPeriodRange(userId, "last_month")`.
+- `period === "next_month"` → **explicit empty range** `{ gte: periodStart, lt: periodStart }` (UTC noon of next month's first day, used as both bounds so no transaction matches). This guarantees `spent = 0` for every budget regardless of current-month activity.
+
+DO NOT call `basicPeriodRange(userId, "this_month")` as a fallback for `next_month` — that returns the **current** month's window and would attribute current spending to next month's budgets.
 
 ---
 
@@ -452,7 +455,6 @@ This plan is complete when:
 - Bulk set across categories.
 - `action_intents` / two-phase confirmation flow.
 - `audit_events` write logging.
-- System prompt change for `setBudget` (covered by 1E-write generic guidance).
 - UI changes (user iterating separately).
 - `compareSpendingVsBudget` HTTP route (chat tool only v1).
 
