@@ -96,15 +96,16 @@ model Workspace {
   name         String
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
-  memberships      Membership[]
-  invites          Invite[]
-  plaidItems       PlaidItem[]
-  bankAccounts     BankAccount[]
-  transactions     Transaction[]
-  categories       Category[]
-  merchantMappings MerchantMapping[]
-  chatThreads      ChatThread[]
-  budgets          Budget[]
+  memberships        Membership[]
+  invites            Invite[]
+  plaidItems         PlaidItem[]
+  bankAccounts       BankAccount[]
+  transactions       Transaction[]
+  categories         Category[]
+  merchantMappings   MerchantMapping[]
+  chatThreads        ChatThread[]
+  budgets            Budget[]
+  recurringExpenses  RecurringExpense[]
 
   @@map("workspaces")
 }
@@ -315,12 +316,13 @@ model Category {
   archivedAt  DateTime?
   createdAt   DateTime  @default(now())
 
-  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  parent           Category?         @relation("CategoryTree", fields: [parentId], references: [id])
-  children         Category[]        @relation("CategoryTree")
-  transactions     Transaction[]
-  merchantMappings MerchantMapping[]
-  budgets          Budget[]
+  workspace          Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent             Category?         @relation("CategoryTree", fields: [parentId], references: [id])
+  children           Category[]        @relation("CategoryTree")
+  transactions       Transaction[]
+  merchantMappings   MerchantMapping[]
+  budgets            Budget[]
+  recurringExpenses  RecurringExpense[]
 
   @@map("categories")
 }
@@ -340,6 +342,36 @@ model Budget {
   @@unique([workspaceId, categoryId, periodStart])
   @@index([workspaceId, periodStart])
   @@map("budgets")
+}
+
+enum RecurringCadence {
+  monthly
+  semimonthly
+  biweekly
+  weekly
+  yearly
+}
+
+model RecurringExpense {
+  id                  String           @id @default(cuid())
+  workspaceId         String
+  name                String
+  nameNormalized      String
+  amount              Decimal          @db.Decimal(10, 2)
+  currency            String           @default("CAD")
+  categoryId          String?
+  merchantNormalized  String?
+  cadence             RecurringCadence
+  nextOccurrenceDate  DateTime         @db.Date
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  category  Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, nameNormalized])
+  @@index([workspaceId, nextOccurrenceDate])
+  @@map("recurring_expenses")
 }
 
 model MerchantMapping {
