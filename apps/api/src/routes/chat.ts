@@ -3,6 +3,7 @@ import { z } from "zod";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import { threadsService } from "../chat/threads.js";
+import { generateAndPersistThreadTitle } from "../chat/auto-title.js";
 import { processChatTurn } from "../chat/turn.js";
 import { prisma } from "../db.js";
 
@@ -249,6 +250,26 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         await tx.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: m.createdAt } });
         return m;
       });
+
+      // Plan 1E-title: auto-generate a concise title on the first user
+      // message. Fire-and-forget — never delays the response, never propagates
+      // errors. The orchestrator's DB write is gated on `title IS NULL` so a
+      // manual PATCH during the async window wins.
+      if (thread.title === null) {
+        const userMsgCount = await prisma.chatMessage.count({
+          where: { threadId: thread.id, role: "user" },
+        });
+        if (userMsgCount === 1) {
+          void generateAndPersistThreadTitle(
+            app.fina.env,
+            thread.workspaceId,
+            thread.id,
+            parsed.data.text,
+          ).catch(() => {
+            /* orchestrator logs internally */
+          });
+        }
+      }
 
       return {
         threadId: thread.id,
