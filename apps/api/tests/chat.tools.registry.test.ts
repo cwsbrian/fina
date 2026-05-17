@@ -137,3 +137,43 @@ describe("REGISTRY (plan 1e-write)", () => {
     }
   });
 });
+
+describe("REGISTRY (plan 1c-budget)", () => {
+  const EXPECTED = [
+    [
+      "setBudget",
+      "Set the monthly budget for a category. Upserts on (workspace, category, month). Use category_id when known, else category_name (case-insensitive). period defaults to this_month.",
+    ],
+    [
+      "getBudget",
+      "List monthly budgets. Returns a single-element array when category_id or category_name is provided, else all budgets for the period.",
+    ],
+    [
+      "compareSpendingVsBudget",
+      "Compare actual spending against budgets for the given period. Returns per-category amount/spent/remaining/pace status. period defaults to this_month.",
+    ],
+  ] as const;
+
+  it("contains all three new tool names", () => {
+    const names = REGISTRY.map((t) => t.name);
+    for (const [n] of EXPECTED) expect(names).toContain(n);
+  });
+
+  it("uses the exact description strings from the spec", () => {
+    for (const [name, desc] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool?.description).toBe(desc);
+    }
+  });
+
+  it("registry has 17 tools total", () => {
+    expect(REGISTRY).toHaveLength(17);
+  });
+
+  it("setBudget and getBudget and compareSpendingVsBudget are all registered", () => {
+    const names = REGISTRY.map((t) => t.name);
+    expect(names).toContain("setBudget");
+    expect(names).toContain("getBudget");
+    expect(names).toContain("compareSpendingVsBudget");
+  });
+});
