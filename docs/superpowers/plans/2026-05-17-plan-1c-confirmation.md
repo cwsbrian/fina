@@ -694,7 +694,7 @@ If `chat.turn.test.ts` mocks Gemini at a layer that makes injecting tool results
 // apps/api/src/chat/turn.ts (new export)
 export function collectPresentationBlocks(
   toolCalls: Array<{ result?: unknown }>,
-): Block[] { … }
+): PresentationBlock[] { … }
 ```
 
 and unit-test that directly.
@@ -748,7 +748,7 @@ Update the return type:
 // Existing return type (search for `Promise<{ assistantText: ...`):
 //   Promise<{ assistantText: string; toolCalls: ToolCall[] }>
 // Becomes:
-//   Promise<{ assistantText: string; toolCalls: ToolCall[]; presentationBlocks: Block[] }>
+//   Promise<{ assistantText: string; toolCalls: ToolCall[]; presentationBlocks: PresentationBlock[] }>
 ```
 
 ### 4.3 Redact presentConfirmCard args from client-facing tool-call list
