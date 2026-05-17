@@ -6,6 +6,7 @@ import { threadsService } from "../chat/threads.js";
 import { generateAndPersistThreadTitle } from "../chat/auto-title.js";
 import { processChatTurn } from "../chat/turn.js";
 import { prisma } from "../db.js";
+import type { PresentationBlock } from "../chat/blocks.js";
 
 const CreateBody = z.object({
   title: z.string().min(1).max(200).optional(),
@@ -240,11 +241,15 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const assistantMessage = await prisma.$transaction(async (tx) => {
+        const blocks: PresentationBlock[] = [
+          { type: "text", markdown: turn.assistantText },
+          ...turn.presentationBlocks,
+        ];
         const m = await tx.chatMessage.create({
           data: {
             threadId: thread.id,
             role: "assistant",
-            blocks: [{ type: "text", markdown: turn.assistantText }],
+            blocks: blocks as never,
           },
         });
         await tx.chatThread.update({ where: { id: thread.id }, data: { lastMessageAt: m.createdAt } });

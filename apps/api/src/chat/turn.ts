@@ -8,6 +8,7 @@ import { buildFinancialContext } from "./context.js";
 import { selectHistoryWindow } from "./history-window.js";
 import type { ToolContext } from "./tools/types.js";
 import type { Role } from "@fina/shared";
+import type { PresentationBlock } from "./blocks.js";
 
 const SYSTEM_PROMPT = `You are Fina, a personal-finance assistant for Canadian users. You help users
 understand their spending, categorize transactions, and plan their budgets.
@@ -75,12 +76,37 @@ export function toGeminiHistory(messages: Array<{ role: string; blocks: unknown 
   return out;
 }
 
+const REDACTED_TOOL_ARGS = new Set(["presentConfirmCard"]);
+
+export function redactToolCallArgs(toolName: string, args: unknown): unknown {
+  if (!REDACTED_TOOL_ARGS.has(toolName)) return args;
+  if (!args || typeof args !== "object") return args;
+  const { accept_action: _drop, ...rest } = args as Record<string, unknown>;
+  return rest;
+}
+
+export function collectPresentationBlocks(
+  toolCalls: Array<{ result?: unknown }>,
+): PresentationBlock[] {
+  const out: PresentationBlock[] = [];
+  for (const tc of toolCalls) {
+    const r = tc.result;
+    if (!r || typeof r !== "object") continue;
+    if (!("output" in r)) continue;
+    const out_ = (r as { output?: unknown }).output;
+    if (!out_ || typeof out_ !== "object") continue;
+    if (!("block" in out_)) continue;
+    out.push((out_ as { block: PresentationBlock }).block);
+  }
+  return out;
+}
+
 export async function processChatTurn(
   env: Env,
   thread: { id: string; workspaceId: string },
   userId: string,
   role: Role,
-): Promise<{ assistantText: string; toolCalls: ToolCallRecord[] }> {
+): Promise<{ assistantText: string; toolCalls: ToolCallRecord[]; presentationBlocks: PresentationBlock[] }> {
   const HISTORY_LIMIT_MESSAGES = env.CHAT_HISTORY_LIMIT_MESSAGES ?? 200;
   const HISTORY_BUDGET_TOKENS = env.CHAT_HISTORY_BUDGET_TOKENS ?? 400_000;
   const MAX_TOOL_CALLS = env.CHAT_MAX_TOOL_CALLS_PER_TURN ?? 10;
@@ -112,11 +138,11 @@ export async function processChatTurn(
     const resp = await ai.models.generateContent({ model: MODEL, contents, config: { systemInstruction: sysInstruction, tools } });
 
     const fcs: FunctionCall[] = resp.functionCalls ?? [];
-    if (fcs.length === 0) return { assistantText: resp.text ?? "", toolCalls };
+    if (fcs.length === 0) return { assistantText: resp.text ?? "", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
 
     if (dispatched + fcs.length > MAX_TOOL_CALLS) {
       console.warn("chat: max tool calls exceeded", { threadId: thread.id, dispatched, requested: fcs.length });
-      return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls };
+      return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
     }
 
     const newContents: GeminiContent[] = [...contents];
@@ -127,8 +153,9 @@ export async function processChatTurn(
       const fcArgs = (fc.args ?? {}) as Record<string, unknown>;
       const dispatch = await dispatchTool(toolCtx, fcName, fcArgs, REGISTRY);
       const responseObj = dispatch.ok ? { output: dispatch.result } : { error: dispatch.error };
-      toolCalls.push({ toolName: fcName, args: fcArgs, result: responseObj });
-      await prisma.chatMessage.create({ data: { threadId: thread.id, role: "tool", blocks: [{ type: "tool", toolName: fcName, args: fcArgs, result: responseObj }] } });
+      const redactedArgs = redactToolCallArgs(fcName, fcArgs);
+      toolCalls.push({ toolName: fcName, args: redactedArgs, result: responseObj });
+      await prisma.chatMessage.create({ data: { threadId: thread.id, role: "tool", blocks: [{ type: "tool", toolName: fcName, args: redactedArgs, result: responseObj }] } });
       newContents.push(
         { role: "model", parts: [{ functionCall: { name: fcName, args: fcArgs } }] },
         { role: "user", parts: [{ functionResponse: { name: fcName, response: responseObj } }] },
@@ -139,7 +166,7 @@ export async function processChatTurn(
 
     if (dispatchedThisRound === 0) {
       console.warn("chat: function-call round with no dispatchable calls", { threadId: thread.id, requested: fcs.length });
-      return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls };
+      return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
     }
 
     contents = newContents;
