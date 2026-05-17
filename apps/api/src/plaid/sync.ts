@@ -27,13 +27,13 @@ export function plaidOccurredAt(t: PlaidTxLike): Date {
   // Prefer authorized_* (when the user actually transacted), fall back to date.
   const v = t.authorized_datetime ?? t.authorized_date ?? t.datetime ?? t.date;
   if (!v) throw new Error(`Plaid transaction ${t.transaction_id} has no date field`);
-  return new Date(v);
+  return parsePlaidInstant(v);
 }
 
 export function plaidPostedAt(t: PlaidTxLike): Date | null {
   if (t.pending) return null;
   const v = t.datetime ?? t.date;
-  return new Date(v);
+  return parsePlaidInstant(v);
 }
 
 type PlaidTxLike = {
