@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
-import { setBudgetService, getBudgetService, deleteBudgetService } from "../src/budgets/service.js";
+import { setBudgetService, getBudgetService, deleteBudgetService, compareSpendingVsBudgetService } from "../src/budgets/service.js";
 
 describe("setBudgetService", () => {
   let userId: string;
@@ -199,5 +199,120 @@ describe("deleteBudgetService", () => {
     const ok = await deleteBudgetService({ workspaceId: "other-ws" }, { budgetId });
     expect(ok).toBe(false);
     expect(await prisma.budget.findUnique({ where: { id: budgetId } })).not.toBeNull();
+  });
+});
+
+describe("compareSpendingVsBudgetService", () => {
+  let userId: string;
+  let workspaceId: string;
+  let categoryId: string;
+  let acctId: string;
+
+  beforeEach(async () => {
+    const stamp = `bc-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "BC", tz: "America/Toronto" },
+    });
+    userId = stamp;
+    const ws = await prisma.workspace.create({ data: { name: "bc-ws" } });
+    workspaceId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
+    categoryId = (await prisma.category.create({ data: { workspaceId, name: "Coffee" } })).id;
+    acctId = (await prisma.bankAccount.create({ data: { workspaceId, name: "x", type: "depository" } })).id;
+    vi.useFakeTimers();
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  async function seedTx(occurredAt: Date, amount: string, currency = "CAD"): Promise<void> {
+    await prisma.transaction.create({
+      data: {
+        workspaceId,
+        accountId: acctId,
+        plaidTransactionId: `tx-${Math.random()}`,
+        amount,
+        currency,
+        merchantRaw: "M",
+        categoryId,
+        occurredAt,
+        rawData: {},
+      },
+    });
+  }
+
+  it("mid-month on-pace (spent ≤ pace + 5%)", async () => {
+    // May 15 noon UTC = 8 AM Toronto May 15. todayPct = 15/31 ≈ 48.4%.
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "this_month" });
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "30.00"); // 30% of budget
+
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    expect(r.items).toHaveLength(1);
+    const it = r.items[0]!;
+    expect(it.amount).toBe("100.00");
+    expect(it.spent).toBe("30.00");
+    expect(it.status).toBe("on-pace");
+  });
+
+  it("mid-month over-pace (spent > pace + 5%)", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "this_month" });
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "80.00"); // 80% vs ~48% pace
+
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    expect(r.items[0]!.status).toBe("over-pace");
+  });
+
+  it("last_month uses full-month baseline (todayPct = 100)", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "last_month" });
+    await seedTx(new Date("2026-04-15T12:00:00Z"), "90.00");
+
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "last_month" });
+    expect(r.items[0]!.todayPct).toBe(100);
+    expect(r.items[0]!.status).toBe("on-pace"); // 90 < 100 * 1.05
+  });
+
+  it("excludes categories without a budget for the period", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    const otherCat = await prisma.category.create({ data: { workspaceId, name: "Food" } });
+    // Budget set only for Coffee; spending exists on Food too — Food should not appear.
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "this_month" });
+    await prisma.transaction.create({
+      data: {
+        workspaceId, accountId: acctId, plaidTransactionId: "x",
+        amount: "50.00", currency: "CAD", merchantRaw: "M",
+        categoryId: otherCat.id, occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
+      },
+    });
+
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    expect(r.items).toHaveLength(1);
+    expect(r.items[0]!.categoryId).toBe(categoryId);
+  });
+
+  it("filters out USD and negative-amount (refund) transactions", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "this_month" });
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "30.00", "USD");   // wrong currency
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "-10.00", "CAD");  // refund
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "20.00", "CAD");   // counts
+
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    expect(r.items[0]!.spent).toBe("20.00");
+  });
+
+  it("next_month returns spent=0 even when current month has spending", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "next_month" });
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "30.00"); // this-month spend
+
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "next_month" });
+    expect(r.items[0]!.spent).toBe("0.00");
+    expect(r.items[0]!.todayPct).toBe(0);
   });
 });
