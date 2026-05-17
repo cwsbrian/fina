@@ -110,26 +110,32 @@ Notes:
 
 ## 5. Period→periodStart computation
 
-Given `period: "this_month" | "last_month" | "next_month"` and the request
-user, compute the DATE that goes into the column:
+The function uses a new **exported** helper added to `apps/api/src/chat/tools/periods.ts`. The existing helpers `partsInTz`, `startOfMonth`, etc. are private to that file — rather than export them all, this plan adds one focused export:
 
 ```typescript
-async function periodStartFor(userId: string, period: "this_month" | "last_month" | "next_month", now = new Date()): Promise<Date> {
+// apps/api/src/chat/tools/periods.ts (new export, alongside existing exports)
+export async function firstOfMonthDateInTz(
+  userId: string,
+  monthsOffset: number,        // 0 = this month, -1 = last, +1 = next
+  now: Date = new Date(),
+): Promise<Date> {
   const tz = await resolveUserTz(userId);
-  const p = partsInTz(now, tz);
-  let y = p.year;
-  let m = p.month;
-  if (period === "last_month") {
-    m -= 1;
-    if (m === 0) { m = 12; y -= 1; }
-  } else if (period === "next_month") {
-    m += 1;
-    if (m === 13) { m = 1; y += 1; }
-  }
-  // Construct "YYYY-MM-01" as a UTC-anchored Date so the DATE column
-  // receives the right calendar date regardless of server tz.
-  const mm = String(m).padStart(2, "0");
-  return new Date(`${y}-${mm}-01T12:00:00.000Z`);
+  // partsInTz is already used internally; this wrapper avoids exposing it.
+  // Implementation mirrors the existing basicPeriodRange month arithmetic.
+  // Returns Date at 12:00:00.000Z on the first of the resulting month —
+  // safe for the @db.Date column (calendar date is unambiguous across
+  // UTC-11..+11 zones, per 1E-time §5).
+}
+```
+
+The budget service then calls:
+
+```typescript
+import { firstOfMonthDateInTz, basicPeriodRange } from "../chat/tools/periods.js";
+
+async function periodStartFor(userId: string, period: "this_month" | "last_month" | "next_month"): Promise<Date> {
+  const offset = period === "this_month" ? 0 : period === "last_month" ? -1 : 1;
+  return firstOfMonthDateInTz(userId, offset);
 }
 ```
 
@@ -137,8 +143,11 @@ The `T12:00:00Z` anchor matches 1E-time's UTC-noon storage policy — the DATE
 column extracts the calendar date in UTC, which equals the user-local month's
 first day across UTC-11..+11 zones. (UTC±12 known limitation per 1E-time §5.)
 
-For `compareSpendingVsBudget`, the same helper produces the period start;
-the period end is `basicPeriodRange(userId, period === "this_month" ? "this_month" : "last_month").lt` — i.e. the next month's first day in user-tz, used as the transaction filter upper bound.
+For `compareSpendingVsBudget`, the period start comes from `firstOfMonthDateInTz`;
+the transaction filter range `{ gte, lt }` comes from
+`basicPeriodRange(userId, period === "next_month" ? "this_month" : period)` —
+which already exists and is exported. For `next_month`, the range is empty
+(no transactions past today are counted) so a zero-spent result is correct.
 
 ---
 
@@ -154,7 +163,9 @@ strings.
 export type SetBudgetInput = { categoryId: string; amount: number; period: "this_month" | "last_month" | "next_month" };
 export type SetBudgetOutput = { budget: { id: string; categoryId: string; amount: string; periodStart: string } };
 
-export type GetBudgetInput = { categoryId?: string; period: "this_month" | "last_month" | "next_month" };
+export type GetBudgetInput =
+  | { categoryId?: string; period: "this_month" | "last_month" | "next_month" }
+  | { categoryId?: string; periodStart: Date };
 export type GetBudgetOutput = { budgets: Array<{ id: string; categoryId: string; amount: string; periodStart: string }> };
 
 export type DeleteBudgetInput = { budgetId: string };
@@ -206,7 +217,7 @@ export async function compareSpendingVsBudgetService(ctx: { workspaceId: string;
    - `period = "this_month"` or `"last_month"`: use the period's actual bounds.
    - `period = "next_month"`: `gte = lt = periodStart_as_utc_noon` (empty range), `todayPct = 0`.
 2. Fetch budgets for the period: `findMany({ where: { workspaceId, periodStart }, include: { category: { select: { name: true } } } })`.
-3. Fetch transaction sums per category: `groupBy({ by: ['categoryId'], where: { workspaceId, removedAt: null, occurredAt: { gte, lt }, categoryId: { in: budgetCategoryIds } }, _sum: { amount: true } })`.
+3. Fetch transaction sums per category: `groupBy({ by: ['categoryId'], where: { workspaceId, removedAt: null, occurredAt: { gte, lt }, categoryId: { in: budgetCategoryIds }, currency: "CAD", amount: { gt: 0 } }, _sum: { amount: true } })`. The `currency: "CAD"` + `amount: { gt: 0 }` filters match the existing convention in `get-category-breakdown.ts` and `get-cashflow-summary.ts` for "spending" — they exclude USD/foreign-currency transactions (since v1 budgets are implicitly CAD) and refund/inflow rows (negative amounts), so `spent`/`remaining`/pace are calculated against actual outflows only.
 4. For each budget, compute `spent` (sum or 0), `remaining = amount - spent`, `spentPct = spent / amount * 100` (or 0 if amount = 0 — but amount > 0 enforced), `todayPct = days_elapsed / days_in_month * 100`, `status` = `"on-pace"` if `spentPct <= todayPct * 1.05` else `"over-pace"`. For `last_month`, `todayPct = 100`. For `next_month`, `todayPct = 0` and `spent = 0`.
 
 ---
@@ -294,7 +305,7 @@ import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { requireWorkspaceContext, HttpError } from "../auth/context.js";
-import { effectiveTier } from "../tier/effective.js";
+import { effectiveTier } from "../auth/tier.js";
 import {
   setBudgetService,
   getBudgetService,
@@ -314,9 +325,24 @@ Each handler:
 - Catches `HttpError` → maps to `reply.code(e.statusCode).send({ error: e.code })`.
 - Catches service errors (string-based) → maps to the table in §7.
 
-`GET` accepts `period_start` query param (`YYYY-MM-DD`); default is the user's
-current month first day. Validation: must parse as a Date and have
-day-of-month = 1, else `400 invalid_period_start`.
+`GET` accepts an optional `period_start` query param (`YYYY-MM-DD`).
+Validation: must parse as a Date and have day-of-month = 1, else `400 invalid_period_start`.
+
+To support arbitrary historical months (`/budgets?period_start=2026-03-01`)
+without forcing the route into the enum world, the **service** contract
+accepts an `inputPeriodStart?: Date` alternative path:
+
+```typescript
+export type GetBudgetInput =
+  | { categoryId?: string; period: "this_month" | "last_month" | "next_month" }
+  | { categoryId?: string; periodStart: Date };
+```
+
+`getBudgetService` resolves `periodStart` from whichever variant arrived,
+then proceeds identically. The chat tool only ever sends the enum variant
+(no raw dates from the LLM); the HTTP route uses the `Date` variant when
+`period_start` is supplied and falls back to `period: "this_month"` enum
+when it is not.
 
 Register the routes in `apps/api/src/server.ts` alongside existing route
 registrations.
@@ -325,11 +351,22 @@ registrations.
 
 ## 10. System prompt
 
-No change. `setBudget` is a low-stakes, idempotent write (upsert). The
-1E-write system prompt instructs the LLM to "briefly confirm with the user
-before invoking unless the request is unambiguous" for **write tools** in
-general — `setBudget` benefits from that guidance without needing its own
-sentence. The implementer is NOT to add a new sentence about `setBudget`.
+The 1E-write system-prompt sentence currently names two tools explicitly:
+
+> For write tools (createCategory, addTransactionNote), briefly confirm
+> with the user before invoking unless the request is unambiguous.
+
+To extend that guidance to `setBudget`, modify the existing sentence in
+`apps/api/src/chat/turn.ts` so the LLM sees `setBudget` in the same list:
+
+> For write tools (createCategory, addTransactionNote, setBudget), briefly
+> confirm with the user before invoking unless the request is unambiguous.
+> Example unambiguous: '카테고리 만들어줘 — Coffee 라는 이름으로' or '식비 예산 500
+> 달러로 설정해줘'. Example needs confirmation: 'Coffee 카테고리 따로 두는 게 좋을까?' or
+> '식비 예산 줄여야 할까?'
+
+`getBudget` and `compareSpendingVsBudget` are read tools — they do not
+need confirmation guidance.
 
 ---
 
