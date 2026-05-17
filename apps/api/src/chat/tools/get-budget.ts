@@ -34,9 +34,15 @@ export const getBudget: ToolDef<
       if (!cat) return { budgets: [] };
       categoryId = cat.id;
     }
+    // Omit `categoryId` from the service input when it is undefined —
+    // GetBudgetInput is `{ categoryId?: string; ... }` and tsconfig.base.json
+    // sets `exactOptionalPropertyTypes: true`, so an explicit
+    // `categoryId: undefined` is a type error.
     const out = await getBudgetService(
       { workspaceId: ctx.workspaceId, userId: ctx.userId },
-      { categoryId, period: args.period ?? "this_month" },
+      categoryId
+        ? { categoryId, period: args.period ?? "this_month" }
+        : { period: args.period ?? "this_month" },
     );
     const ids = out.budgets.map((b) => b.categoryId);
     const cats = await prisma.category.findMany({
