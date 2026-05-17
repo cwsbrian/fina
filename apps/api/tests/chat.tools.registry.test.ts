@@ -166,8 +166,8 @@ describe("REGISTRY (plan 1c-budget)", () => {
     }
   });
 
-  it("registry has 21 tools total", () => {
-    expect(REGISTRY).toHaveLength(21);
+  it("registry has 22 tools total", () => {
+    expect(REGISTRY).toHaveLength(22);
   });
 
   it("setBudget and getBudget and compareSpendingVsBudget are all registered", () => {
@@ -198,8 +198,8 @@ describe("REGISTRY (plan 1c-merchant-map)", () => {
     }
   });
 
-  it("registry has 21 tools total", () => {
-    expect(REGISTRY).toHaveLength(21);
+  it("registry has 22 tools total", () => {
+    expect(REGISTRY).toHaveLength(22);
   });
 
   it("mapMerchantToCategory is registered", () => {
@@ -236,8 +236,8 @@ describe("REGISTRY (plan 1c-recurring-persist)", () => {
     }
   });
 
-  it("registry has 21 tools total", () => {
-    expect(REGISTRY).toHaveLength(21);
+  it("registry has 22 tools total", () => {
+    expect(REGISTRY).toHaveLength(22);
   });
 
   it("addRecurring, listRecurring, removeRecurring are all registered", () => {
@@ -245,5 +245,35 @@ describe("REGISTRY (plan 1c-recurring-persist)", () => {
     expect(names).toContain("addRecurring");
     expect(names).toContain("listRecurring");
     expect(names).toContain("removeRecurring");
+  });
+});
+
+describe("REGISTRY (plan 1c-confirmation)", () => {
+  const EXPECTED = [
+    [
+      "presentConfirmCard",
+      "Display a Yes/No confirmation card for a deferred mutation. accept_action.tool must be one of: createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring. Server validates args against the target tool's schema before issuing the intent. Use this for destructive ops (removeRecurring) and ambiguous or large changes. The action runs only when the user taps accept.",
+    ],
+  ] as const;
+
+  it("contains the new tool name", () => {
+    const names = REGISTRY.map((t) => t.name);
+    for (const [n] of EXPECTED) expect(names).toContain(n);
+  });
+
+  it("uses the exact description string from the spec", () => {
+    for (const [name, desc] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool?.description).toBe(desc);
+    }
+  });
+
+  it("registry has 22 tools total", () => {
+    expect(REGISTRY).toHaveLength(22);
+  });
+
+  it("presentConfirmCard is registered", () => {
+    const names = REGISTRY.map((t) => t.name);
+    expect(names).toContain("presentConfirmCard");
   });
 });

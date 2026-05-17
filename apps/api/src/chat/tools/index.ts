@@ -20,6 +20,7 @@ import { mapMerchantToCategory } from "./map-merchant-to-category.js";
 import { addRecurring } from "./add-recurring.js";
 import { listRecurring } from "./list-recurring.js";
 import { removeRecurring } from "./remove-recurring.js";
+import { presentConfirmCard } from "./present-confirm-card.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -43,4 +44,5 @@ export const REGISTRY: ToolDef[] = [
   addRecurring as ToolDef,
   listRecurring as ToolDef,
   removeRecurring as ToolDef,
+  presentConfirmCard as ToolDef,
 ];
