@@ -160,7 +160,10 @@ export type ConfirmCardBlock = {
   expiresAt: string;
 };
 
-export type Block = TextBlock | ConfirmCardBlock;
+// Renamed from `Block` to `PresentationBlock` so it doesn't collide with
+// the existing `Block = TextBlock | ToolBlock` union local to turn.ts
+// (which represents chat_messages history rows for Gemini context replay).
+export type PresentationBlock = TextBlock | ConfirmCardBlock;
 ```
 
 ### 2.2 Failing tests for createIntentService
@@ -709,12 +712,12 @@ pnpm --filter @fina/api exec vitest run tests/chat.turn.presentation-blocks.test
 Add the helper near the top of the file (after imports):
 
 ```typescript
-import type { Block } from "./blocks.js";
+import type { PresentationBlock } from "./blocks.js";
 
 export function collectPresentationBlocks(
   toolCalls: Array<{ result?: unknown }>,
-): Block[] {
-  const out: Block[] = [];
+): PresentationBlock[] {
+  const out: PresentationBlock[] = [];
   for (const tc of toolCalls) {
     const r = tc.result;
     if (!r || typeof r !== "object") continue;
@@ -723,7 +726,7 @@ export function collectPresentationBlocks(
     const out_ = (r as { output?: unknown }).output;
     if (!out_ || typeof out_ !== "object") continue;
     if (!("block" in out_)) continue;
-    out.push((out_ as { block: Block }).block);
+    out.push((out_ as { block: PresentationBlock }).block);
   }
   return out;
 }
@@ -748,7 +751,52 @@ Update the return type:
 //   Promise<{ assistantText: string; toolCalls: ToolCall[]; presentationBlocks: Block[] }>
 ```
 
-### 4.3 Wire into route
+### 4.3 Redact presentConfirmCard args from client-facing tool-call list
+
+When `presentConfirmCard` runs, the chat response would echo back the LLM's
+raw `args.accept_action` in `toolCalls[].args` (and the persisted tool row
+contains the same). That contradicts the "client only sees opaque intent ID"
+property — a malicious client wouldn't gain new mutate capability (the
+intent ID is the only authorization token at consume time), but the noise
+in the response confuses the property the spec advertises and would surface
+the wrapped tool/args in any future "list past tool calls" UI.
+
+Redact in both the response and the persisted history.
+
+- [ ] **Step 3a: Add a redaction helper in `apps/api/src/chat/turn.ts`**
+
+Right next to `collectPresentationBlocks`, add:
+
+```typescript
+const REDACTED_TOOL_ARGS = new Set(["presentConfirmCard"]);
+
+// Strips raw `accept_action` (and any other large payload field) from
+// presentConfirmCard's args before the toolCall is echoed/stored.
+// The block already carries the public surface (intent id, question).
+export function redactToolCallArgs(
+  toolName: string,
+  args: unknown,
+): unknown {
+  if (!REDACTED_TOOL_ARGS.has(toolName)) return args;
+  if (!args || typeof args !== "object") return args;
+  const { accept_action: _drop, ...rest } = args as Record<string, unknown>;
+  return rest;
+}
+```
+
+- [ ] **Step 3b: Apply redaction inside `processChatTurn`'s tool-call output assembly**
+
+Wherever the function builds the `toolCalls` array entries (each `{ toolName, args, result }`), wrap the `args` with `redactToolCallArgs(toolName, args)` before pushing. Search for where the tool dispatcher's result is collected in turn.ts and apply there.
+
+Update `chat.context.test.ts` / `chat.turn.test.ts` if any existing assertion depended on `presentConfirmCard` args being verbatim — none currently exist, but worth a grep.
+
+- [ ] **Step 3c: Apply redaction to persisted tool history rows**
+
+If `processChatTurn` also writes `chat_messages` of `role: "tool"` (Gemini history pattern), apply the same redaction to the persisted JSON. Otherwise the consume payload becomes visible in `GET /chat/threads/:tid` responses that include tool rows.
+
+Search for where the tool row is created in turn.ts and wrap the stored args with `redactToolCallArgs`.
+
+### 4.4 Wire into route
 
 - [ ] **Step 4: Edit `apps/api/src/routes/chat.ts`** POST messages handler
 
@@ -771,10 +819,10 @@ const assistantMessage = await prisma.$transaction(async (tx) => {
 Replace the `blocks:` line:
 
 ```typescript
-import type { Block } from "../chat/blocks.js";  // add this import at top of file
+import type { PresentationBlock } from "../chat/blocks.js";  // add this import at top of file
 
 // Inside the handler:
-const blocks: Block[] = [
+const blocks: PresentationBlock[] = [
   { type: "text", markdown: turn.assistantText },
   ...turn.presentationBlocks,
 ];
@@ -790,7 +838,11 @@ const assistantMessage = await prisma.$transaction(async (tx) => {
 });
 ```
 
-- [ ] **Step 5: Run — expect PASS (turn-handler test + all existing tests)**
+- [ ] **Step 5a: Add a redaction unit case to `chat.turn.presentation-blocks.test.ts`**
+
+Append a third case asserting that `redactToolCallArgs("presentConfirmCard", { question: "Q", accept_action: { tool: "X", args: { name: "Y" } } })` returns `{ question: "Q" }` (no `accept_action`) AND that `redactToolCallArgs("createCategory", { name: "Z" })` returns `{ name: "Z" }` unchanged.
+
+- [ ] **Step 5b: Run — expect PASS (turn-handler test + all existing tests)**
 
 ```bash
 pnpm --filter @fina/api exec vitest run tests/chat.turn.presentation-blocks.test.ts tests/chat.turn.test.ts tests/chat.routes.test.ts --reporter=basic 2>&1 | tail -10
@@ -839,9 +891,21 @@ describe("POST /workspaces/:id/intents/:intentId/consume", () => {
   it("402 upgrade_required on Free tier", async () => { /* … */ });
   it("400 workspace_mismatch when :id ≠ X-Workspace-Id", async () => { /* … */ });
   it("403 insufficient_role: editor consuming createCategory intent", async () => {
-    // Owner creates the intent for createCategory; sign in as a second user
-    // who's a workspace editor; POST consume → 403 insufficient_role.
-    // (createCategory checks ctx.role === "owner" in its run, so dispatch throws.)
+    // The consume service's owner-mismatch check (row.userId !== ctx.userId)
+    // fires BEFORE the dispatch, so a second-user-consume always lands on
+    // intent_owner_mismatch, not insufficient_role. To exercise the dispatch
+    // path: have the same user create AND consume the intent, but at the
+    // role-editor level. Steps:
+    //   1. Sign up user U (becomes owner of their personal workspace).
+    //   2. Demote U to editor in their own workspace via direct prisma update
+    //      (`prisma.membership.update({ where: { userId_workspaceId }, data: { role: "editor" } })`).
+    //   3. Call createIntentService directly with U as ctx.userId + workspaceId.
+    //      (createIntentService doesn't check role — it just validates tool+args.)
+    //   4. POST /intents/:id/consume as U (now an editor).
+    //   5. consumeIntentService passes the owner-id check (same user), then
+    //      dispatches createCategory which throws `insufficient_role`.
+    //   6. Route maps → 403 { error: "insufficient_role" }.
+    // Assert response code === 403 and body.error === "insufficient_role".
   });
 });
 ```
