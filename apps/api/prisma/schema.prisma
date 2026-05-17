@@ -104,6 +104,7 @@ model Workspace {
   categories       Category[]
   merchantMappings MerchantMapping[]
   chatThreads      ChatThread[]
+  budgets          Budget[]
 
   @@map("workspaces")
 }
@@ -319,8 +320,26 @@ model Category {
   children         Category[]        @relation("CategoryTree")
   transactions     Transaction[]
   merchantMappings MerchantMapping[]
+  budgets          Budget[]
 
   @@map("categories")
+}
+
+model Budget {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  categoryId   String
+  amount       Decimal  @db.Decimal(10, 2)
+  periodStart  DateTime @db.Date
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  category     Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, categoryId, periodStart])
+  @@index([workspaceId, periodStart])
+  @@map("budgets")
 }
 
 model MerchantMapping {
