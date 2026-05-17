@@ -17,6 +17,9 @@ import { setBudget } from "./set-budget.js";
 import { getBudget } from "./get-budget.js";
 import { compareSpendingVsBudget } from "./compare-spending-vs-budget.js";
 import { mapMerchantToCategory } from "./map-merchant-to-category.js";
+import { addRecurring } from "./add-recurring.js";
+import { listRecurring } from "./list-recurring.js";
+import { removeRecurring } from "./remove-recurring.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -37,4 +40,7 @@ export const REGISTRY: ToolDef[] = [
   getBudget as ToolDef,
   compareSpendingVsBudget as ToolDef,
   mapMerchantToCategory as ToolDef,
+  addRecurring as ToolDef,
+  listRecurring as ToolDef,
+  removeRecurring as ToolDef,
 ];

@@ -166,8 +166,8 @@ describe("REGISTRY (plan 1c-budget)", () => {
     }
   });
 
-  it("registry has 17 tools total", () => {
-    expect(REGISTRY).toHaveLength(18);
+  it("registry has 21 tools total", () => {
+    expect(REGISTRY).toHaveLength(21);
   });
 
   it("setBudget and getBudget and compareSpendingVsBudget are all registered", () => {
@@ -198,12 +198,52 @@ describe("REGISTRY (plan 1c-merchant-map)", () => {
     }
   });
 
-  it("registry has 18 tools total", () => {
-    expect(REGISTRY).toHaveLength(18);
+  it("registry has 21 tools total", () => {
+    expect(REGISTRY).toHaveLength(21);
   });
 
   it("mapMerchantToCategory is registered", () => {
     const names = REGISTRY.map((t) => t.name);
     expect(names).toContain("mapMerchantToCategory");
+  });
+});
+
+describe("REGISTRY (plan 1c-recurring-persist)", () => {
+  const EXPECTED = [
+    [
+      "addRecurring",
+      "Add a recurring expense (subscription, bill). Upserts on case-insensitive name within the workspace. Use category_id when known, else category_name (case-insensitive). cadence: monthly | semimonthly | biweekly | weekly | yearly. next_occurrence_date: YYYY-MM-DD.",
+    ],
+    [
+      "listRecurring",
+      "List all recurring expenses in the workspace, ordered by next occurrence date. Includes the resolved category name (null if uncategorized).",
+    ],
+    [
+      "removeRecurring",
+      "Remove a recurring expense. Hard delete. Provide exactly one of recurring_id (preferred) or name (case-insensitive resolve).",
+    ],
+  ] as const;
+
+  it("contains all three new tool names", () => {
+    const names = REGISTRY.map((t) => t.name);
+    for (const [n] of EXPECTED) expect(names).toContain(n);
+  });
+
+  it("uses the exact description strings from the spec", () => {
+    for (const [name, desc] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool?.description).toBe(desc);
+    }
+  });
+
+  it("registry has 21 tools total", () => {
+    expect(REGISTRY).toHaveLength(21);
+  });
+
+  it("addRecurring, listRecurring, removeRecurring are all registered", () => {
+    const names = REGISTRY.map((t) => t.name);
+    expect(names).toContain("addRecurring");
+    expect(names).toContain("listRecurring");
+    expect(names).toContain("removeRecurring");
   });
 });
