@@ -16,6 +16,7 @@ import { addTransactionNote } from "./add-transaction-note.js";
 import { setBudget } from "./set-budget.js";
 import { getBudget } from "./get-budget.js";
 import { compareSpendingVsBudget } from "./compare-spending-vs-budget.js";
+import { mapMerchantToCategory } from "./map-merchant-to-category.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -35,4 +36,5 @@ export const REGISTRY: ToolDef[] = [
   setBudget as ToolDef,
   getBudget as ToolDef,
   compareSpendingVsBudget as ToolDef,
+  mapMerchantToCategory as ToolDef,
 ];

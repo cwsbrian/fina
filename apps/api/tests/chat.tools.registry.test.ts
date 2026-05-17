@@ -167,7 +167,7 @@ describe("REGISTRY (plan 1c-budget)", () => {
   });
 
   it("registry has 17 tools total", () => {
-    expect(REGISTRY).toHaveLength(17);
+    expect(REGISTRY).toHaveLength(18);
   });
 
   it("setBudget and getBudget and compareSpendingVsBudget are all registered", () => {
@@ -175,5 +175,35 @@ describe("REGISTRY (plan 1c-budget)", () => {
     expect(names).toContain("setBudget");
     expect(names).toContain("getBudget");
     expect(names).toContain("compareSpendingVsBudget");
+  });
+});
+
+describe("REGISTRY (plan 1c-merchant-map)", () => {
+  const EXPECTED = [
+    [
+      "mapMerchantToCategory",
+      "Bind a merchant to a category. Upserts the mapping and retroactively assigns null-category siblings whose merchantRaw normalizes to the same value. Use category_id when known, else category_name (case-insensitive).",
+    ],
+  ] as const;
+
+  it("contains the new tool name", () => {
+    const names = REGISTRY.map((t) => t.name);
+    for (const [n] of EXPECTED) expect(names).toContain(n);
+  });
+
+  it("uses the exact description string from the spec", () => {
+    for (const [name, desc] of EXPECTED) {
+      const tool = REGISTRY.find((t) => t.name === name);
+      expect(tool?.description).toBe(desc);
+    }
+  });
+
+  it("registry has 18 tools total", () => {
+    expect(REGISTRY).toHaveLength(18);
+  });
+
+  it("mapMerchantToCategory is registered", () => {
+    const names = REGISTRY.map((t) => t.name);
+    expect(names).toContain("mapMerchantToCategory");
   });
 });
