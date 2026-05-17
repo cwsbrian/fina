@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { listTransactions } from "../src/chat/tools/list-transactions.js";
 import type { ToolContext } from "../src/chat/tools/types.js";
@@ -9,13 +9,14 @@ describe("listTransactions tool", () => {
   let acctId: string;
 
   beforeEach(async () => {
-    const u = await prisma.user.create({ data: { id: `lt-${Date.now()}`, email: `lt-${Date.now()}@t.co`, name: "LT" } });
+    const stamp = `lt-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "LT" } });
     const ws = await prisma.workspace.create({ data: { name: "lt-ws" } });
     wsId = ws.id;
     await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
     const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "x", type: "depository" } });
     acctId = acct.id;
-    ctx = { env: {} as never, workspaceId: wsId, userId: u.id };
+    ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" };
   });
 
   afterEach(async () => {
@@ -42,13 +43,21 @@ describe("listTransactions tool", () => {
   });
 
   it("filters by period=this_month", async () => {
-    const now = new Date();
-    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
-    const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 5);
-    await seedTx(thisMonth, "1.00");
-    await seedTx(lastMonth, "2.00");
-    const result = await listTransactions.run(ctx, { period: "this_month" });
-    expect(result.transactions).toHaveLength(1);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    try {
+      // Pinned to mid-May. Toronto user → this_month = May 2026.
+      // Explicit UTC instants safely inside Toronto's May vs. April.
+      const thisMonth = new Date("2026-05-05T12:00:00Z");
+      const lastMonth = new Date("2026-04-05T12:00:00Z");
+      await seedTx(thisMonth, "10.00");
+      await seedTx(lastMonth, "20.00");
+      const result = await listTransactions.run(ctx, { period: "this_month" });
+      expect(result.transactions).toHaveLength(1);
+      expect(result.transactions[0]!.occurredAt).toBe("2026-05-05T12:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("clamps limit at 50", async () => {
