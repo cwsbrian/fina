@@ -126,9 +126,10 @@ Body:
 ```typescript
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import { normalizeMerchant } from "../merchants/normalize.js";
-import { dateKeyInTz } from "../tz/date.js";
+import { normalizeMerchant } from "../categorize/normalize.js";
+import { dateKeyInTz } from "../chat/tools/periods.js";
 
+// Optional-field shape under exactOptionalPropertyTypes — never `undefined`.
 export type CreateManualTxInput = {
   merchantRaw: string;
   amount: number;
@@ -168,23 +169,39 @@ export class CreateManualTxError extends Error {
 }
 
 export async function createManualTransactionService(
-  ctx: { workspaceId: string; userTz: string },
+  ctx: { workspaceId: string; userId: string },
   input: CreateManualTxInput,
 ): Promise<CreateManualTxResult>;
 ```
 
-Internals (sketch):
+The service looks up `User.tz` itself (via `userId`) rather than receiving
+`userTz` from the caller; this keeps the route slim and avoids a separate
+User lookup in the route layer.
+
+Internals (sketch — entire flow runs inside `prisma.$transaction` with a
+per-workspace advisory lock to prevent the "duplicate Cash account" race
+where two concurrent first-time requests both observe no manual account):
+
+```typescript
+return await prisma.$transaction(async (tx) => {
+  // Serialize per-workspace: any other concurrent manual-tx for this
+  // workspace waits behind us until COMMIT.
+  await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))`;
+  // ... steps 1–8 below, using `tx` for all reads/writes
+});
+```
 
 1. **Validate merchantRaw**: trim, reject empty or > 200 chars → `invalid_merchant`.
 2. **Validate amount**: must be a finite number > 0 and ≤ 999_999_999.99 → `invalid_amount`.
 3. **Validate note**: if provided and > 1000 → `invalid_note`.
-4. **Resolve date**: if `occurredAt` provided, regex-validate `^\d{4}-\d{2}-\d{2}$`, then `new Date(occurredAt + "T12:00:00Z")` and assert `!isNaN(d.getTime())` AND `d.toISOString().slice(0,10) === occurredAt` (round-trip check rejects `2026-05-32` etc.). On failure → `invalid_date`. If not provided, use `dateKeyInTz(new Date(), ctx.userTz)` to get today's YYYY-MM-DD in the user's tz, then anchor at UTC noon (matches 1E-time policy).
-5. **Validate categoryId**: if provided, `findFirst({ id, workspaceId, archivedAt: null })`. → `category_not_found`.
-6. **Resolve account**:
-   - If `input.accountId`: `findFirst({ id, workspaceId, plaidItemId: null })`. → `account_not_found` if not found OR if `plaidItemId IS NOT NULL`.
-   - Else: `findFirst({ workspaceId, plaidItemId: null })`. If none, auto-create:
+4. **Resolve date**: if `occurredAt` provided, regex-validate `^\d{4}-\d{2}-\d{2}$`, then `new Date(occurredAt + "T12:00:00Z")` and assert `!isNaN(d.getTime())` AND `d.toISOString().slice(0,10) === occurredAt` (round-trip check rejects `2026-05-32` etc.). On failure → `invalid_date`. If not provided, fetch `user.tz` (`await tx.user.findUniqueOrThrow({ where: { id: ctx.userId }, select: { tz: true } })`) → `dateKeyInTz(new Date(), user.tz)` to get today's YYYY-MM-DD, then anchor at UTC noon (matches 1E-time policy).
+5. **Validate categoryId**: if provided, `tx.category.findFirst({ where: { id, workspaceId, archivedAt: null } })` → `category_not_found`.
+6. **Read workspace.currency**: `await tx.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { currency: true } })`. Needed for `Transaction.currency` and (if creating the manual account) `BankAccount.currency`.
+7. **Resolve account**:
+   - If `input.accountId`: `tx.bankAccount.findFirst({ where: { id, workspaceId, plaidItemId: null } })` → `account_not_found` if not found.
+   - Else: `tx.bankAccount.findFirst({ where: { workspaceId, plaidItemId: null }, orderBy: { createdAt: "asc" } })`. If none, auto-create inside this transaction:
      ```typescript
-     await prisma.bankAccount.create({
+     await tx.bankAccount.create({
        data: {
          workspaceId,
          name: "Cash",
@@ -194,10 +211,10 @@ Internals (sketch):
        },
      });
      ```
-7. **Read workspace.currency**: `await prisma.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { currency: true } })`. Needed for `Transaction.currency` and (if creating the manual account) `BankAccount.currency`.
-8. **Insert Transaction**:
+   The advisory lock on `(workspaceId)` ensures the find-or-create is race-free: a second concurrent request waits, then observes the just-created account on its own find.
+9. **Insert Transaction** (inside the same `tx`):
    ```typescript
-   await prisma.transaction.create({
+   await tx.transaction.create({
      data: {
        workspaceId,
        accountId: account.id,
@@ -219,15 +236,18 @@ Internals (sketch):
    });
    ```
 
-9. **Return serialized row** matching `CreateManualTxResult`.
+10. **Return serialized row** matching `CreateManualTxResult`.
 
 ---
 
 ## 6. Route module
 
-`apps/api/src/routes/transactions.ts` — add handler:
+`apps/api/src/routes/transactions.ts` — add handler. Follow the auth API
+already used by `apps/api/src/routes/recurring.ts`:
 
 ```typescript
+import { requireWorkspaceContext, HttpError } from "../auth/context.js";
+
 const ManualTxBody = z.object({
   merchantRaw: z.string(),
   amount: z.number(),
@@ -237,31 +257,46 @@ const ManualTxBody = z.object({
   accountId: z.string().optional(),
 });
 
-fastify.post("/workspaces/:id/transactions/manual", async (req, reply) => {
-  const ctx = await requireWorkspaceContext(req, reply, "editor");
-  if (!ctx) return;
-  if (req.params.id !== ctx.workspaceId) {
-    return reply.code(400).send({ error: "workspace_mismatch" });
-  }
-  const parsed = ManualTxBody.safeParse(req.body);
-  if (!parsed.success) {
-    return reply.code(400).send({ error: "invalid_body" });
-  }
-  try {
-    const result = await createManualTransactionService(
-      { workspaceId: ctx.workspaceId, userTz: ctx.userTz },
-      parsed.data,
-    );
-    return reply.code(201).send(result);
-  } catch (err) {
-    if (err instanceof CreateManualTxError) {
-      const status = err.code.startsWith("invalid_") ? 400 : 404;
-      return reply.code(status).send({ error: err.code });
+app.post<{ Params: { id: string } }>(
+  "/workspaces/:id/transactions/manual",
+  async (req, reply) => {
+    const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+    if (req.params.id !== ctx.membership.workspaceId) {
+      return reply.code(400).send({ error: "workspace_mismatch" });
     }
-    throw err;
-  }
-});
+    const parsed = ManualTxBody.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid_body" });
+    }
+    // Strip undefined keys for exactOptionalPropertyTypes compatibility
+    // (same pattern as routes/recurring.ts addRecurring handler).
+    const d = parsed.data;
+    const input: CreateManualTxInput = { merchantRaw: d.merchantRaw, amount: d.amount };
+    if (d.occurredAt !== undefined) input.occurredAt = d.occurredAt;
+    if (d.categoryId !== undefined) input.categoryId = d.categoryId;
+    if (d.note       !== undefined) input.note       = d.note;
+    if (d.accountId  !== undefined) input.accountId  = d.accountId;
+    try {
+      const result = await createManualTransactionService(
+        { workspaceId: ctx.membership.workspaceId, userId: ctx.session.userId },
+        input,
+      );
+      return reply.code(201).send(result);
+    } catch (err) {
+      if (err instanceof CreateManualTxError) {
+        const status = err.code.startsWith("invalid_") ? 400 : 404;
+        return reply.code(status).send({ error: err.code });
+      }
+      throw err;
+    }
+  },
+);
 ```
+
+The `requireWorkspaceContext` call already throws `HttpError` for auth/role
+failures, and the Fastify error handler (in `apps/api/src/server.ts`) maps
+those to the documented 401/403/404 responses — so the route doesn't need
+to catch them explicitly. This matches `routes/recurring.ts`.
 
 **No Pro gate.** All tiers (Free/Lite/Pro) can POST.
 
@@ -273,13 +308,13 @@ fastify.post("/workspaces/:id/transactions/manual", async (req, reply) => {
 - **Create** `apps/api/prisma/migrations/<ts>_add_workspace_currency/migration.sql`
 - **Create** `apps/api/src/transactions/create-manual.ts`
 - **Modify** `apps/api/src/routes/transactions.ts` — add POST handler
-- **Create** `apps/api/tests/transactions.create-manual.test.ts` (~12 cases)
+- **Create** `apps/api/tests/transactions.create-manual.test.ts` (~13 cases)
 
 No new dependencies.
 
 ---
 
-## 8. Tests (~12 cases)
+## 8. Tests (~13 cases)
 
 ### Service-level (`createManualTransactionService`)
 
@@ -305,13 +340,14 @@ No new dependencies.
 ### Route-level (HTTP, included in same test file)
 
 12. **POST 201 for Free-tier user.** Create user with `trialEndsAt = NOW() - INTERVAL '1 day'` and `trialConsumed = true` → still gets 201, not 402.
+13. **Race safety:** Two `Promise.all` first-time calls on the same workspace produce exactly ONE manual `BankAccount` (assert `count = 1`) and both transactions reuse it.
 
 ---
 
 ## 9. Acceptance criteria
 
 1. Migration applies cleanly on both `fina` and `fina_test` DBs.
-2. All ~12 test cases pass.
+2. All ~13 test cases pass.
 3. Auto-created BankAccount has the documented shape.
 4. Free-tier users can POST (no 402).
 5. baseline 82/681 → **83 files / ~693 tests**. No regressions.
