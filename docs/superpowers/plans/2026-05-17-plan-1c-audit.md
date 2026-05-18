@@ -499,7 +499,9 @@ These tests prove the hooks actually fire (spec §9.2). Add them to `apps/api/te
 - [ ] **Step 8: Append integration cases to `apps/api/tests/audit.service.test.ts`**
 
 ```typescript
+import { waitFor } from "vitest";
 import { createIntentService } from "../src/intents/service.js";
+import { consumeIntentService } from "../src/intents/service.js";
 
 // These tests require the hooks to be wired (Task 3 must be complete).
 // Paste these cases AFTER the existing describe blocks.
@@ -525,7 +527,6 @@ describe("audit hook — intent consume (actorType: user)", () => {
   });
 
   it("consumeIntentService creates an audit row with actorType=user and intentId set", async () => {
-    const { consumeIntentService } = await import("../src/intents/service.js");
     const { intent } = await createIntentService(
       { workspaceId, userId },
       { tool: "createCategory", args: { name: "AuditMe" } },
@@ -539,17 +540,77 @@ describe("audit hook — intent consume (actorType: user)", () => {
       },
       intent.id,
     );
-    const row = await prisma.auditEvent.findFirst({ where: { workspaceId } });
-    expect(row?.actorType).toBe("user");
-    expect(row?.actorUserId).toBe(userId);
-    expect(row?.action).toBe("createCategory");
-    expect(row?.intentId).toBe(intent.id);
-    expect(row?.targetType).toBe("category");
+    // `void logAuditEvent(...)` is fire-and-forget — poll until the row lands
+    // (vitest's waitFor retries until the callback resolves or times out).
+    const row = await waitFor(
+      async () => {
+        const r = await prisma.auditEvent.findFirst({ where: { workspaceId } });
+        if (!r) throw new Error("audit row not yet written");
+        return r;
+      },
+      { timeout: 2000 },
+    );
+    expect(row.actorType).toBe("user");
+    expect(row.actorUserId).toBe(userId);
+    expect(row.action).toBe("createCategory");
+    expect(row.intentId).toBe(intent.id);
+    expect(row.targetType).toBe("category");
+  });
+});
+
+describe("audit hook — processChatTurn direct write (actorType: agent)", () => {
+  // Uses the existing chat.turn.test.ts stub pattern (Gemini mocked at the
+  // GoogleGenAI level). Read apps/api/tests/chat.turn.test.ts before
+  // implementing this; copy the boilerplate for creating a workspace,
+  // thread, and stubbing `ai.models.generateContent` to emit a single
+  // createCategory function call. Then assert the audit row.
+
+  let workspaceId: string;
+  let userId: string;
+
+  beforeEach(async () => {
+    const stamp = `ct-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "CT", tz: "America/Toronto" },
+    });
+    userId = u.id;
+    const ws = await prisma.workspace.create({ data: { name: "ct-ws" } });
+    workspaceId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
+    const acct = await prisma.bankAccount.create({ data: { workspaceId, name: "x", type: "depository" } });
+    // Note: the existing chat.turn.test.ts shows how to stub GoogleGenAI; mirror that setup.
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  it("processChatTurn write tool fires an audit row with actorType=agent", async () => {
+    // Use the same stub strategy as chat.turn.test.ts: mock `@google/genai`
+    // so that ai.models.generateContent returns a createCategory function call.
+    // Then call processChatTurn and poll for an audit_events row.
+    //
+    // The implementer should copy the GoogleGenAI mock from chat.turn.test.ts
+    // (vi.mock("@google/genai", ...)) and emit:
+    //   { functionCall: { name: "createCategory", args: { name: "Audit Test" } } }
+    // followed by a text turn that returns the result.
+    //
+    // After processChatTurn returns, poll for the audit row:
+    const row = await waitFor(
+      async () => {
+        const r = await prisma.auditEvent.findFirst({ where: { workspaceId } });
+        if (!r) throw new Error("audit row not yet written");
+        return r;
+      },
+      { timeout: 2000 },
+    );
+    expect(row.actorType).toBe("agent");
+    expect(row.actorUserId).toBe(userId);
+    expect(row.action).toBe("createCategory");
   });
 });
 ```
-
-Note: the direct-chat hook (`processChatTurn` actorType = "agent") is exercised via the intent consume test plus the unit tests. Adding a `processChatTurn` stub test is omitted because it requires mocking Gemini; the consume integration test above proves the shared `logAuditEvent` + hook mechanism works end-to-end.
 
 - [ ] **Step 9: Run the integration test — expect PASS**
 
