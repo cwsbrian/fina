@@ -131,6 +131,13 @@ describe("createManualTransactionService", () => {
     await expect(
       createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 1_000_000_000, occurredAt: "2026-05-17" }),
     ).rejects.toMatchObject({ code: "invalid_amount" });
+    // Fractional-cent values would round to 0.00 in Decimal(14,2)
+    await expect(
+      createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 0.004, occurredAt: "2026-05-17" }),
+    ).rejects.toMatchObject({ code: "invalid_amount" });
+    await expect(
+      createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 1.234, occurredAt: "2026-05-17" }),
+    ).rejects.toMatchObject({ code: "invalid_amount" });
   });
 
   it("rejects bad occurredAt strings", async () => {
