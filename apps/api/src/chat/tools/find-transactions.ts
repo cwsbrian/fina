@@ -83,7 +83,6 @@ type Result = {
     accountName: string | null;
     limit: number;
   };
-  excludedNonCadCount: number;
 };
 
 function isValidIsoDate(s: string): boolean {
@@ -110,7 +109,6 @@ function emptyResult(args: Args, limit: number): Result {
     totalCount: 0,
     hasMore: false,
     filtersApplied: resolveFilters(args, limit),
-    excludedNonCadCount: 0,
   };
 }
 
@@ -122,6 +120,10 @@ export const findTransactions: ToolDef<Args, Result> = {
   args: Args,
   async run(ctx, args) {
     const limit = args.limit ?? 20;
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: { currency: true },
+    });
 
     // Strict date + range validation (after Zod regex).
     if (args.start_date && !isValidIsoDate(args.start_date)) throw new Error("invalid_date");
@@ -170,7 +172,6 @@ export const findTransactions: ToolDef<Args, Result> = {
     const where: Prisma.TransactionWhereInput = {
       workspaceId: ctx.workspaceId,
       removedAt: null,
-      currency: "CAD",
     };
     if (categoryIds) where.categoryId = { in: categoryIds };
     if (accountIds) where.accountId = { in: accountIds };
@@ -202,7 +203,7 @@ export const findTransactions: ToolDef<Args, Result> = {
       }
     }
 
-    const [rows, totalCount, excludedNonCadCount] = await Promise.all([
+    const [rows, totalCount] = await Promise.all([
       prisma.transaction.findMany({
         where,
         orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
@@ -213,14 +214,13 @@ export const findTransactions: ToolDef<Args, Result> = {
         },
       }),
       prisma.transaction.count({ where }),
-      prisma.transaction.count({ where: { ...where, currency: { not: "CAD" } } }),
     ]);
 
     return {
       transactions: rows.map((r) => ({
         id: r.id,
         amount: r.amount.toString(),
-        currency: r.currency,
+        currency: workspace.currency,
         merchantRaw: r.merchantRaw,
         merchantNormalized: r.merchantNormalized,
         occurredAt: r.occurredAt.toISOString(),
@@ -233,7 +233,6 @@ export const findTransactions: ToolDef<Args, Result> = {
       totalCount,
       hasMore: totalCount > rows.length,
       filtersApplied: resolveFilters(args, limit),
-      excludedNonCadCount,
     };
   },
 };

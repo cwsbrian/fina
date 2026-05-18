@@ -26,11 +26,10 @@ type Group = {
 type Result = {
   period: BasicPeriod;
   groupBy: "day" | "account";
-  currency: "CAD";
+  currency: string;
   incomeTotal: string;
   expenseTotal: string;
   netTotal: string;
-  excludedNonCadCount: number;
   groups: Group[];
 };
 
@@ -40,35 +39,28 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
   args: Args,
   async run(ctx, args) {
     const groupBy = args.group_by ?? "day";
-    const [{ gte, lt }, tz] = await Promise.all([
+    const [{ gte, lt }, tz, workspace] = await Promise.all([
       basicPeriodRange(ctx.userId, args.period),
       resolveUserTz(ctx.userId),
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { currency: true },
+      }),
     ]);
 
-    const [rows, excludedNonCadCount] = await Promise.all([
-      prisma.transaction.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          removedAt: null,
-          currency: "CAD",
-          occurredAt: { gte, lt },
-        },
-        select: {
-          amount: true,
-          accountId: true,
-          account: { select: { id: true, name: true } },
-          occurredAt: true,
-        },
-      }),
-      prisma.transaction.count({
-        where: {
-          workspaceId: ctx.workspaceId,
-          removedAt: null,
-          currency: { not: "CAD" },
-          occurredAt: { gte, lt },
-        },
-      }),
-    ]);
+    const rows = await prisma.transaction.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        removedAt: null,
+        occurredAt: { gte, lt },
+      },
+      select: {
+        amount: true,
+        accountId: true,
+        account: { select: { id: true, name: true } },
+        occurredAt: true,
+      },
+    });
 
     type Agg = { key: string; label: string; income: Prisma.Decimal; expense: Prisma.Decimal; count: number };
     const buckets = new Map<string, Agg>();
@@ -125,11 +117,10 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
     return {
       period: args.period,
       groupBy,
-      currency: "CAD",
+      currency: workspace.currency,
       incomeTotal: totalIncome.toFixed(2),
       expenseTotal: totalExpense.toFixed(2),
       netTotal: totalIncome.minus(totalExpense).toFixed(2),
-      excludedNonCadCount,
       groups,
     };
   },

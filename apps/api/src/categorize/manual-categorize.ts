@@ -32,6 +32,10 @@ export async function applyManualCategorize(
   input: ManualCategorizeInput,
 ): Promise<ManualCategorizeResult> {
   const trimmedName = input.categoryName.trim();
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: input.workspaceId },
+    select: { currency: true },
+  });
 
   const tx = await prisma.transaction.findFirst({
     where: { id: input.txId, workspaceId: input.workspaceId },
@@ -115,7 +119,7 @@ export async function applyManualCategorize(
   const updated = await prisma.transaction.findUniqueOrThrow({
     where: { id: tx.id },
     select: {
-      id: true, amount: true, currency: true, merchantRaw: true, merchantNormalized: true,
+      id: true, amount: true, merchantRaw: true, merchantNormalized: true,
       categoryId: true, categorizationSource: true, occurredAt: true,
     },
   });
@@ -124,7 +128,7 @@ export async function applyManualCategorize(
     tx: {
       id: updated.id,
       amount: updated.amount.toString(),
-      currency: updated.currency,
+      currency: workspace.currency,
       merchantRaw: updated.merchantRaw,
       merchantNormalized: updated.merchantNormalized,
       categoryId: updated.categoryId,

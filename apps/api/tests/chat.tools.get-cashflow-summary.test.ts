@@ -25,11 +25,10 @@ describe("getCashflowSummary tool", () => {
     const d2 = new Date(now.getFullYear(), now.getMonth(), 7);
     await prisma.transaction.createMany({
       data: [
-        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "in-1", amount: "-1000.00", currency: "CAD", merchantRaw: "Payroll", occurredAt: d1, rawData: {} },
-        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "ex-1", amount: "150.00", currency: "CAD", merchantRaw: "Rent", occurredAt: d1, rawData: {} },
-        { workspaceId: wsId, accountId: a2.id, plaidTransactionId: "ex-2", amount: "50.00", currency: "CAD", merchantRaw: "Subway", occurredAt: d2, rawData: {} },
-        // non-CAD
-        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "us-1", amount: "20.00", currency: "USD", merchantRaw: "X", occurredAt: d2, rawData: {} },
+        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "in-1", amount: "-1000.00", merchantRaw: "Payroll", occurredAt: d1, rawData: {} },
+        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "ex-1", amount: "150.00", merchantRaw: "Rent", occurredAt: d1, rawData: {} },
+        { workspaceId: wsId, accountId: a2.id, plaidTransactionId: "ex-2", amount: "50.00", merchantRaw: "Subway", occurredAt: d2, rawData: {} },
+        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "ex-3", amount: "20.00", merchantRaw: "X", occurredAt: d2, rawData: {} },
       ],
     });
   });
@@ -38,12 +37,11 @@ describe("getCashflowSummary tool", () => {
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
-  it("computes income, expense, and net totals (CAD only)", async () => {
+  it("computes income, expense, and net totals", async () => {
     const res = await getCashflowSummary.run(ctx, { period: "this_month" });
     expect(res.incomeTotal).toBe("1000.00");
-    expect(res.expenseTotal).toBe("200.00");
-    expect(res.netTotal).toBe("800.00");
-    expect(res.excludedNonCadCount).toBe(1);
+    expect(res.expenseTotal).toBe("220.00");
+    expect(res.netTotal).toBe("780.00");
   });
 
   it("groups by day with YYYY-MM-DD keys when group_by=day (default)", async () => {
@@ -59,7 +57,7 @@ describe("getCashflowSummary tool", () => {
     const savings = res.groups.find((g) => g.key === acct2Id);
     expect(chequing?.label).toBe("Chequing");
     expect(chequing?.incomeTotal).toBe("1000.00");
-    expect(chequing?.expenseTotal).toBe("150.00");
+    expect(chequing?.expenseTotal).toBe("170.00");
     expect(savings?.expenseTotal).toBe("50.00");
   });
 
@@ -74,7 +72,6 @@ describe("getCashflowSummary tool", () => {
         accountId: acct1Id,
         plaidTransactionId: `tz-${Date.now()}`,
         amount: "1.00",
-        currency: "CAD",
         merchantRaw: "Tz",
         occurredAt: utc,
         rawData: {},

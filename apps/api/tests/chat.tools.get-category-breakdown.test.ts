@@ -26,14 +26,12 @@ describe("getCategoryBreakdown tool", () => {
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
     await prisma.transaction.createMany({
       data: [
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "10.00", currency: "CAD", merchantRaw: "Sb", categoryId: coffee.id, occurredAt: thisMonth, rawData: {} },
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "20.00", currency: "CAD", merchantRaw: "Sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "10.00", merchantRaw: "Sb", categoryId: coffee.id, occurredAt: thisMonth, rawData: {} },
+        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "20.00", merchantRaw: "Sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
         // uncategorized
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "5.00", currency: "CAD", merchantRaw: "X", occurredAt: thisMonth, rawData: {} },
+        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "5.00", merchantRaw: "X", occurredAt: thisMonth, rawData: {} },
         // negative (refund) — must be excluded from spending aggregate
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "4", amount: "-50.00", currency: "CAD", merchantRaw: "Refund", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
-        // non-CAD
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "5", amount: "30.00", currency: "USD", merchantRaw: "Foreign", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "4", amount: "-50.00", merchantRaw: "Refund", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
       ],
     });
   });
@@ -42,7 +40,7 @@ describe("getCategoryBreakdown tool", () => {
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
-  it("returns CAD totals with parent metadata", async () => {
+  it("returns totals with parent metadata", async () => {
     const res = await getCategoryBreakdown.run(ctx, { period: "this_month" });
     expect(res.currency).toBe("CAD");
     expect(res.total).toBe("35.00");
@@ -56,11 +54,6 @@ describe("getCategoryBreakdown tool", () => {
     const res = await getCategoryBreakdown.run(ctx, { period: "this_month" });
     const food = res.categories.find((c) => c.categoryId === foodId);
     expect(food?.total).toBe("20.00");
-  });
-
-  it("counts non-CAD exclusions separately", async () => {
-    const res = await getCategoryBreakdown.run(ctx, { period: "this_month" });
-    expect(res.excludedNonCadCount).toBe(1);
   });
 
   it("includes uncategorized bucket by default", async () => {

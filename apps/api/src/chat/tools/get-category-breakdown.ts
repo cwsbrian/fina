@@ -37,9 +37,8 @@ type Bucket = {
 
 type Result = {
   period: BasicPeriod;
-  currency: "CAD";
+  currency: string;
   total: string;
-  excludedNonCadCount: number;
   categories: Bucket[];
 };
 
@@ -51,45 +50,39 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
   async run(ctx, args) {
     const includeUncat = args.include_uncategorized ?? true;
     const limit = args.limit ?? 10;
-    const { gte, lt } = await basicPeriodRange(ctx.userId, args.period);
+    const [{ gte, lt }, workspace] = await Promise.all([
+      basicPeriodRange(ctx.userId, args.period),
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { currency: true },
+      }),
+    ]);
 
     const txWhere: Prisma.TransactionWhereInput = {
       workspaceId: ctx.workspaceId,
       removedAt: null,
-      currency: "CAD",
       amount: { gt: 0 },
       occurredAt: { gte, lt },
     };
     if (!includeUncat) txWhere.categoryId = { not: null };
 
-    const [rows, excludedNonCadCount] = await Promise.all([
-      prisma.transaction.findMany({
-        where: txWhere,
-        select: {
-          amount: true,
-          categoryId: true,
-          category: {
-            select: {
-              id: true,
-              name: true,
-              color: true,
-              icon: true,
-              parentId: true,
-              parent: { select: { id: true, name: true } },
-            },
+    const rows = await prisma.transaction.findMany({
+      where: txWhere,
+      select: {
+        amount: true,
+        categoryId: true,
+        category: {
+          select: {
+            id: true,
+            name: true,
+            color: true,
+            icon: true,
+            parentId: true,
+            parent: { select: { id: true, name: true } },
           },
         },
-      }),
-      prisma.transaction.count({
-        where: {
-          workspaceId: ctx.workspaceId,
-          removedAt: null,
-          currency: { not: "CAD" },
-          amount: { gt: 0 },
-          occurredAt: { gte, lt },
-        },
-      }),
-    ]);
+      },
+    });
 
     const buckets = new Map<string, { meta: Omit<Bucket, "total" | "count" | "share">; total: Prisma.Decimal; count: number }>();
     let total = new Prisma.Decimal(0);
@@ -140,9 +133,8 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
 
     return {
       period: args.period,
-      currency: "CAD",
+      currency: workspace.currency,
       total: total.toFixed(2),
-      excludedNonCadCount,
       categories,
     };
   },

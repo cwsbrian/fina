@@ -50,7 +50,13 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
     const period: ReviewPeriod = args.period ?? "this_month";
     const reviewMode = args.review_mode ?? "missing_category";
     const limit = args.limit ?? 20;
-    const range = await reviewPeriodRange(ctx.userId, period);
+    const [range, workspace] = await Promise.all([
+      reviewPeriodRange(ctx.userId, period),
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { currency: true },
+      }),
+    ]);
 
     const where: Prisma.TransactionWhereInput = {
       workspaceId: ctx.workspaceId,
@@ -78,7 +84,7 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
       transactions: rows.map((r) => ({
         id: r.id,
         amount: r.amount.toString(),
-        currency: r.currency,
+        currency: workspace.currency,
         merchantRaw: r.merchantRaw,
         merchantNormalized: r.merchantNormalized,
         occurredAt: r.occurredAt.toISOString(),

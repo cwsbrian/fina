@@ -46,27 +46,33 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
   description: "Get full details for one transaction, including account and category context.",
   args: Args,
   async run(ctx, args) {
-    const tx = await prisma.transaction.findFirst({
-      where: { id: args.tx_id, workspaceId: ctx.workspaceId },
-      include: {
-        account: { select: { id: true, name: true, type: true, subtype: true, currency: true } },
-        category: {
-          select: {
-            id: true,
-            name: true,
-            parentId: true,
-            parent: { select: { name: true } },
+    const [tx, workspace] = await Promise.all([
+      prisma.transaction.findFirst({
+        where: { id: args.tx_id, workspaceId: ctx.workspaceId },
+        include: {
+          account: { select: { id: true, name: true, type: true, subtype: true, currency: true } },
+          category: {
+            select: {
+              id: true,
+              name: true,
+              parentId: true,
+              parent: { select: { name: true } },
+            },
           },
         },
-      },
-    });
+      }),
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { currency: true },
+      }),
+    ]);
     if (!tx) throw new Error("transaction_not_found");
 
     return {
       transaction: {
         id: tx.id,
         amount: tx.amount.toString(),
-        currency: tx.currency,
+        currency: workspace.currency,
         merchantRaw: tx.merchantRaw,
         merchantNormalized: tx.merchantNormalized,
         occurredAt: tx.occurredAt.toISOString(),

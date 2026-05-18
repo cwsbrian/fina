@@ -46,6 +46,7 @@ type Candidate = {
   transactionIds: string[];
 };
 
+
 type Result = {
   lookbackMonths: number;
   candidates: Candidate[];
@@ -94,7 +95,13 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
     // First day of the calendar month that begins the lookback window, in the user's timezone,
     // converted to a UTC instant. The shared helper resolves User.tz (with America/Toronto
     // fallback for missing/invalid values) and handles DST.
-    const lookbackStart = await lookbackMonthStart(ctx.userId, lookbackMonths);
+    const [lookbackStart, workspace] = await Promise.all([
+      lookbackMonthStart(ctx.userId, lookbackMonths),
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { currency: true },
+      }),
+    ]);
 
     const rows = await prisma.transaction.findMany({
       where: {
@@ -106,7 +113,6 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
       select: {
         id: true,
         amount: true,
-        currency: true,
         merchantRaw: true,
         merchantNormalized: true,
         occurredAt: true,
@@ -117,7 +123,6 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
     type Group = {
       key: string;
       merchantKey: string;
-      currency: string;
       displayName: string;
       latestDisplayTs: number;
       transactionIds: string[];
@@ -129,13 +134,12 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
     for (const r of rows) {
       const merchantKey = (r.merchantNormalized ?? normalizeMerchant(r.merchantRaw)).trim();
       if (!merchantKey) continue;
-      const key = `${merchantKey}::${r.currency}`;
+      const key = merchantKey;
       let g = groups.get(key);
       if (!g) {
         g = {
           key,
           merchantKey,
-          currency: r.currency,
           displayName: r.merchantRaw,
           latestDisplayTs: r.occurredAt.getTime(),
           transactionIds: [],
@@ -197,7 +201,7 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
         lastSeenAt: new Date(lastTs).toISOString(),
         medianAmount: medianAmt.toFixed(2),
         latestAmount: latestAmount.toFixed(2),
-        currency: g.currency,
+        currency: workspace.currency,
         cadence,
         confidence: Math.round(confidence * 100) / 100,
         transactionIds: g.transactionIds,
