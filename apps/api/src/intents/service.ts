@@ -1,8 +1,18 @@
 import { Prisma } from "@prisma/client";
 import type { Role } from "@fina/shared";
 import { prisma } from "../db.js";
-import { REGISTRY } from "../chat/tools/index.js";
+import type { ToolDef } from "../chat/tools/types.js";
 import type { Env } from "../env.js";
+
+// Lazy dynamic import breaks the cycle:
+//   present-confirm-card → intents/service → chat/tools/index → present-confirm-card
+// A static `import { REGISTRY }` at module top causes the cycle to produce
+// `ReferenceError: Cannot access 'presentConfirmCard' before initialization`
+// when the barrel is read before initialization completes.
+async function getRegistry(): Promise<ToolDef[]> {
+  const { REGISTRY } = await import("../chat/tools/index.js");
+  return REGISTRY;
+}
 
 export const CONFIRMABLE_TOOLS = [
   "createCategory",
@@ -33,7 +43,8 @@ export async function createIntentService(
   input: CreateIntentInput,
 ): Promise<CreateIntentOutput> {
   if (!isConfirmable(input.tool)) throw new Error("invalid_tool");
-  const tool = REGISTRY.find((t) => t.name === input.tool);
+  const registry = await getRegistry();
+  const tool = registry.find((t) => t.name === input.tool);
   if (!tool) throw new Error("invalid_tool");
   const parsed = tool.args.safeParse(input.args);
   if (!parsed.success) throw new Error("invalid_payload_args");
@@ -69,7 +80,8 @@ export async function consumeIntentService(
   if (updated.count === 0) throw new Error("intent_gone");
   const payload = row.payload as IntentPayload;
   if (!isConfirmable(payload.tool)) throw new Error("invalid_tool");
-  const tool = REGISTRY.find((t) => t.name === payload.tool);
+  const registry = await getRegistry();
+  const tool = registry.find((t) => t.name === payload.tool);
   if (!tool) throw new Error("invalid_tool");
   const parsed = tool.args.safeParse(payload.args);
   if (!parsed.success) throw new Error("invalid_payload_args");
