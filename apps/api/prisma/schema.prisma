@@ -108,6 +108,7 @@ model Workspace {
   budgets            Budget[]
   recurringExpenses  RecurringExpense[]
   actionIntents      ActionIntent[]
+  auditEvents        AuditEvent[]
 
   @@map("workspaces")
 }
@@ -464,4 +465,23 @@ enum ChatMessageRole {
   user
   assistant
   tool
+}
+
+model AuditEvent {
+  id          String   @id @default(cuid())
+  workspaceId String
+  actorType   String
+  actorUserId String
+  action      String
+  targetType  String?
+  targetId    String?
+  intentId    String?
+  payload     Json?
+  result      Json?
+  createdAt   DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, createdAt])
+  @@map("audit_events")
 }
