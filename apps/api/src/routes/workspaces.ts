@@ -13,6 +13,10 @@ import {
 
 const PatchRoleBody = z.object({ role: z.enum(["owner", "editor", "viewer"]) });
 
+const PatchCurrencyBody = z.object({
+  currency: z.string().regex(/^[A-Z]{3}$/),
+});
+
 function mapMembersError(e: unknown): { statusCode: number; code: string } {
   if (e instanceof MembersServiceError) {
     switch (e.code) {
@@ -105,6 +109,44 @@ export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(m.statusCode).send({ error: m.code });
     }
   });
+
+  app.patch<{ Params: { id: string } }>(
+    "/workspaces/:id/currency",
+    async (req, reply) => {
+      try {
+        const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
+        if (req.params.id !== ctx.membership.workspaceId) {
+          return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const parsed = PatchCurrencyBody.safeParse(req.body);
+        if (!parsed.success) {
+          return reply.code(400).send({ error: "invalid_body" });
+        }
+        const wsId = ctx.membership.workspaceId;
+        const updated = await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${wsId}))`;
+          const [txCount, acctCount, recurringCount, budgetCount] = await Promise.all([
+            tx.transaction.count({ where: { workspaceId: wsId } }),
+            tx.bankAccount.count({ where: { workspaceId: wsId } }),
+            tx.recurringExpense.count({ where: { workspaceId: wsId } }),
+            tx.budget.count({ where: { workspaceId: wsId } }),
+          ]);
+          if (txCount + acctCount + recurringCount + budgetCount > 0) {
+            throw new HttpError(409, "workspace_has_data");
+          }
+          return await tx.workspace.update({
+            where: { id: wsId },
+            data: { currency: parsed.data.currency },
+            select: { id: true, name: true, currency: true },
+          });
+        });
+        return reply.send({ workspace: updated });
+      } catch (err) {
+        if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.code });
+        throw err;
+      }
+    },
+  );
 
   app.delete("/workspaces/:id/members/:userId", async (req, reply) => {
     const params = req.params as { id: string; userId: string };
