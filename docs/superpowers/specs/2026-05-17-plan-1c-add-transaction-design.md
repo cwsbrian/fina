@@ -178,23 +178,30 @@ The service looks up `User.tz` itself (via `userId`) rather than receiving
 `userTz` from the caller; this keeps the route slim and avoids a separate
 User lookup in the route layer.
 
-Internals (sketch — entire flow runs inside `prisma.$transaction` with a
-per-workspace advisory lock to prevent the "duplicate Cash account" race
-where two concurrent first-time requests both observe no manual account):
+Internals (sketch):
 
 ```typescript
+// 1. Validate inputs (synchronous, no DB) — steps 1, 2, 3, and the
+//    date-regex / round-trip parts of step 4.
+// 2. If occurredAt omitted, call resolveUserTz(ctx.userId) at the
+//    top-level (NOT inside the transaction) to avoid deadlock with
+//    the advisory lock and a small connection pool.
+const tz = input.occurredAt ? null : await resolveUserTz(ctx.userId);
+// 3. Enter the transaction: advisory lock + reads + writes all use `tx`.
 return await prisma.$transaction(async (tx) => {
-  // Serialize per-workspace: any other concurrent manual-tx for this
-  // workspace waits behind us until COMMIT.
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))`;
-  // ... steps 1–8 below, using `tx` for all reads/writes
+  // ... steps 5–10 below, using `tx` for all reads/writes
 });
 ```
+
+The advisory lock serializes any other concurrent manual-tx for the same
+workspace; the second request waits behind the COMMIT, then observes the
+just-created Cash account on its own find.
 
 1. **Validate merchantRaw**: trim, reject empty or > 200 chars → `invalid_merchant`.
 2. **Validate amount**: must be a finite number > 0 and ≤ 999_999_999.99 → `invalid_amount`.
 3. **Validate note**: if provided and > 1000 → `invalid_note`.
-4. **Resolve date**: if `occurredAt` provided, regex-validate `^\d{4}-\d{2}-\d{2}$`, then `new Date(occurredAt + "T12:00:00Z")` and assert `!isNaN(d.getTime())` AND `d.toISOString().slice(0,10) === occurredAt` (round-trip check rejects `2026-05-32` etc.). On failure → `invalid_date`. If not provided, resolve tz via `resolveUserTz(ctx.userId)` (handles invalid stored tz with a fallback to `DEFAULT_TZ`) and call `dateKeyInTz(new Date(), tz)` to get today's YYYY-MM-DD, then anchor at UTC noon (matches 1E-time policy). NOTE: `resolveUserTz` does its own `prisma.user.findUnique` call and is safe to invoke before/outside the transaction; either order is fine.
+4. **Resolve date**: if `occurredAt` provided, regex-validate `^\d{4}-\d{2}-\d{2}$`, then `new Date(occurredAt + "T12:00:00Z")` and assert `!isNaN(d.getTime())` AND `d.toISOString().slice(0,10) === occurredAt` (round-trip check rejects `2026-05-32` etc.). On failure → `invalid_date`. If not provided, resolve tz via `resolveUserTz(ctx.userId)` (handles invalid stored tz with a fallback to `DEFAULT_TZ`) and call `dateKeyInTz(new Date(), tz)` to get today's YYYY-MM-DD, then anchor at UTC noon (matches 1E-time policy). **`resolveUserTz` uses the top-level `prisma` client — it must run BEFORE `prisma.$transaction` to avoid a connection-pool deadlock (an open interactive transaction would hold one connection while `resolveUserTz` waits for another).** Resolve the tz first, then enter the transaction.
 5. **Validate categoryId**: if provided, `tx.category.findFirst({ where: { id, workspaceId, archivedAt: null } })` → `category_not_found`.
 6. **Read workspace.currency**: `await tx.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { currency: true } })`. Needed for `Transaction.currency` and (if creating the manual account) `BankAccount.currency`.
 7. **Resolve account**:
