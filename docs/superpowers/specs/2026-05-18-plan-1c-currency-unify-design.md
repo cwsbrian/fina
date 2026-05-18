@@ -197,9 +197,16 @@ Writers needing the lock:
   — wrap the upsert in `$transaction` + advisory lock.
 - Plaid item exchange (`apps/api/src/routes/plaid.ts`) — wrap the
   `PlaidItem.create` + `BankAccount.create` batch in `$transaction` +
-  advisory lock. The currency-mismatch check happens BEFORE the
-  transaction opens, the `itemRemove` cleanup happens OUTSIDE the
-  transaction.
+  advisory lock. **The currency-mismatch check is performed TWICE:**
+  - First, outside the lock against the cached workspace.currency from
+    the route handler (cheap reject before lock acquisition).
+  - Second, INSIDE the lock by re-reading `workspace.currency` and
+    re-comparing against the account currencies. If they no longer
+    match (concurrent PATCH won), throw inside the transaction to
+    trigger rollback, then call `itemRemove` AFTER the rollback (so
+    Plaid's upstream Item is cleaned up).
+  This dual check is required because PATCH can land between the
+  cheap reject and the lock acquisition.
 - Plaid sync (`apps/api/src/plaid/sync.ts`) — wrap the
   transaction-batch insert/upsert work in `$transaction` + advisory
   lock. (Sync writes can be large; the lock is held only for the duration
@@ -371,10 +378,13 @@ No new dependencies.
 6. PATCH 409 workspace_has_data: workspace with one manual transaction (which atomically creates its Cash bank_account) → 409 `workspace_has_data`
 7. PATCH 409 workspace_has_data: workspace with one RecurringExpense (no tx/account) → 409 `workspace_has_data`
 8. PATCH 409 workspace_has_data: workspace with one Budget (no tx/account/recurring) → 409 `workspace_has_data`
-9. **Race test:** `Promise.all([ PATCH /currency, createManualTransactionService ])` on a fresh workspace either:
+9. **Race test (createManualTransactionService):** `Promise.all([ PATCH /currency, createManualTransactionService ])` on a fresh workspace either:
    - PATCH wins → manual-tx returns and observes new currency in its response,
    - or manual-tx wins → PATCH returns 409 workspace_has_data.
    Never the silent-relabel outcome (PATCH 200 + transaction.currency=oldCurrency).
+10. **Race test (addRecurringService):** same shape as #9 but with `addRecurringService` as the concurrent writer. Either PATCH wins (recurring response shows new currency) or recurring wins (PATCH returns 409). Catches the case where addRecurringService is updated but the advisory lock is missed.
+11. **Race test (setBudgetService):** same shape as #9 but with `setBudgetService` (with a category seeded out-of-band — Budget requires categoryId). Either PATCH wins or setBudget wins; PATCH never silently relabels the new budget amount.
+12. **Plaid mismatch under race:** spec-driven mock — concurrent PATCH that wins between the route's outer mismatch check and the locked recheck must cause the locked exchange to abort with `currency_mismatch` and `itemRemove` to be called. Use Plaid client mock so we can assert `itemRemove` is invoked.
 
 ### 8.2 Plaid currency_mismatch (~2 cases)
 
