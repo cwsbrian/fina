@@ -378,16 +378,29 @@ No new dependencies.
 6. PATCH 409 workspace_has_data: workspace with one manual transaction (which atomically creates its Cash bank_account) → 409 `workspace_has_data`
 7. PATCH 409 workspace_has_data: workspace with one RecurringExpense (no tx/account) → 409 `workspace_has_data`
 8. PATCH 409 workspace_has_data: workspace with one Budget (no tx/account/recurring) → 409 `workspace_has_data`
-**Test infrastructure: `withWorkspaceLock(wsId, change)` helper.** A dedicated Prisma client opens a transaction and acquires `pg_advisory_xact_lock(hashtext(wsId))`. While the lock is held, the test runs a candidate operation and asserts it does NOT resolve within 300ms. If `change` is provided, the helper additionally `UPDATE`s the workspace inside the same transaction (changing `currency` from `CAD` → `USD`) before committing. Releasing commits the change + releases the lock; the candidate then proceeds.
+**Test infrastructure: `withWorkspaceLock(wsId, opts)` helper.** A dedicated Prisma client opens a transaction and runs `SELECT pg_advisory_xact_lock(hashtext(wsId))`. Inside the test body the helper exposes:
+- `expectBlocked(candidatePromise, 300)` — `Promise.race` against `setTimeout(300ms)`; asserts the candidate does NOT resolve.
+- `countRowsInTargetTable()` — runs from a SEPARATE non-locked connection.
+- `release(opts.newCurrency?)` — if `newCurrency` is provided, additionally `UPDATE workspaces SET currency = …` inside the lock-holding tx, then COMMIT.
 
-Used both ways:
-- **Pure lock-presence:** `change` = none. Candidate must block while lock held, must succeed after release. Proves the candidate acquires the lock somewhere.
-- **Lock-precedes-reads:** `change` = `UPDATE currency`. Candidate must block while lock held, then after release must observe the NEW currency. If the candidate reads `workspace.currency` BEFORE the lock (race-unsafe), it caches CAD and writes a row that PATCH then sees as USD — exactly the silent-relabel bug we want to catch. Proves the candidate's first DB statement is the lock.
+**The lock-precedes-writes pattern (used for every writer):**
 
-9. **createManualTransactionService — lock-presence + lock-precedes:** Run `withWorkspaceLock(wsId, { newCurrency: "USD" })`. While the lock is held, call `createManualTransactionService(...)`. Assert it does NOT resolve within 300ms. Release. Assert the result.transaction.currency === "USD" (the value of workspace.currency AFTER the holder's UPDATE). If the writer read workspace.currency pre-lock, it would have cached "CAD" and the assertion fails.
-10. **addRecurringService — same pattern.** Assert the recurring response.currency === "USD" after holder release.
-11. **setBudgetService — same pattern.** Seed a category out-of-band. Assert response.currency === "USD" after release.
-12. **Plaid exchange — same pattern.** Mock `plaid.itemPublicTokenExchange` + `accountsGet` to return CAD accounts. Hold the lock with the holder ALSO doing `UPDATE workspaces SET currency='USD'`. Run `POST /plaid/exchange`. Assert it blocks ≥300ms. Release. Then assert: response is 400 `currency_mismatch` (because the in-lock recheck now sees USD workspace vs CAD account), no `plaid_items` row, `itemRemove` was called on the mock.
+1. Snapshot initial row count of the writer's target table (Transaction / RecurringExpense / Budget / BankAccount).
+2. Holder acquires the lock and `UPDATE`s workspace.currency from CAD → USD inside its tx (does NOT commit yet).
+3. Test starts the candidate writer.
+4. After 300ms `expectBlocked` passes — candidate hasn't completed.
+5. Snapshot row count AGAIN — assert it equals the initial count. If a row appeared, the writer inserted BEFORE acquiring the lock (race-unsafe). **This is the critical statement-order check.**
+6. Holder commits + releases.
+7. Wait for candidate to resolve.
+8. Final row count == initial + 1 (the writer inserted AFTER the lock).
+9. If the writer's response includes a `currency` field, assert it equals the NEW workspace currency (USD) — proves the writer didn't cache the pre-lock value.
+
+This sequence proves the writer's FIRST DB statement against this workspace is the advisory lock acquisition: no inserts happened before the lock release, and (where applicable) the workspace.currency read happened after the holder's UPDATE.
+
+9. **createManualTransactionService — statement-order:** Run the helper sequence above with target table = `transactions`. Assert the row count check (step 5) passes, and `result.transaction.currency === "USD"` after release.
+10. **addRecurringService — statement-order:** Target table = `recurring_expenses`. Assert the row count check passes, and `result.recurring.currency === "USD"` after release.
+11. **setBudgetService — statement-order (no currency on response):** Target table = `budgets`. Seed a category out-of-band BEFORE the helper acquires the lock. Assert the row count check passes. Budget has no currency response field, so the test relies entirely on the row-count statement-order check.
+12. **Plaid exchange — statement-order + currency_mismatch:** Mock `plaid.itemPublicTokenExchange` + `accountsGet` to return CAD accounts. Holder acquires lock + updates workspace to USD. Start `POST /plaid/exchange`. Run row count snapshot at 300ms on BOTH `plaid_items` AND `bank_accounts` — both must be initial count. Holder commits. Plaid exchange's in-lock recheck sees workspace=USD vs account=CAD → throws inside its locked transaction → rollback. After rollback, route calls `plaid.itemRemove` on the mock. Final assertions: response 400 `currency_mismatch`, `plaid_items` count == initial, `bank_accounts` count == initial, `itemRemove` was called.
 13. **Silent-relabel tripwire (50× coarse run):** A loop of 50 fresh workspaces, each doing `Promise.all([PATCH /currency to "USD", addRecurringService])`. For each iteration assert one of two valid outcomes:
    - **PATCH wins:** PATCH 200, workspace.currency=USD; the recurring call (whichever order) completes successfully and its returned currency matches whatever workspace.currency was at insert time — never the silent-relabel outcome (recurring inserted as old "CAD" but workspace ends up "USD").
    - **Recurring wins:** Recurring 200 with currency="CAD", PATCH 409 `workspace_has_data` (recurring row already exists).
