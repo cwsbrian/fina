@@ -178,45 +178,62 @@ practice.
 
 ### 5.9 Advisory lock on all amount-row writers
 
-Every code path that inserts a row in `Transaction`, `BankAccount`,
-`RecurringExpense`, or `Budget` must wrap its DB work in
-`prisma.$transaction` with
-`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))` as the first
-statement. Without this, `PATCH /workspaces/:id/currency` cannot
-guarantee no amount rows slip in between its count and its update —
-the rows would be silently relabeled by the route handler reading
-`workspace.currency`.
+**Create** a shared helper `apps/api/src/db/workspace-lock.ts`:
 
-Writers needing the lock:
+```typescript
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { prisma as defaultPrisma } from "../db.js";
+
+export async function withWorkspaceLock<T>(
+  workspaceId: string,
+  callback: (tx: Prisma.TransactionClient) => Promise<T>,
+  client: PrismaClient = defaultPrisma,
+): Promise<T> {
+  return await client.$transaction(async (tx) => {
+    // Lock is ALWAYS the first DB statement in this transaction.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))`;
+    return await callback(tx);
+  });
+}
+```
+
+This guarantees `pg_advisory_xact_lock` is the first SQL emitted by the
+transaction's callback. Writers MUST use this helper instead of inlining
+the lock SQL.
+
+Writers using the helper:
 
 - `createManualTransactionService` (`apps/api/src/transactions/create-manual.ts`)
-  — **already has it** from plan 1C-add-transaction. No change.
+  — migrate from inline lock SQL to `withWorkspaceLock(wsId, async (tx) => {...})`.
 - `addRecurringService` (`apps/api/src/recurring/service.ts`)
-  — wrap the create call in `$transaction` + advisory lock.
+  — wrap the create call in `withWorkspaceLock`.
 - `setBudgetService` (`apps/api/src/budgets/service.ts`)
-  — wrap the upsert in `$transaction` + advisory lock.
+  — wrap the upsert in `withWorkspaceLock`.
 - Plaid item exchange (`apps/api/src/routes/plaid.ts`) — wrap the
-  `PlaidItem.create` + `BankAccount.create` batch in `$transaction` +
-  advisory lock. **The currency-mismatch check is performed TWICE:**
+  `PlaidItem.create` + `BankAccount.create` batch in `withWorkspaceLock`.
+  **The currency-mismatch check is performed TWICE:**
   - First, outside the lock against the cached workspace.currency from
     the route handler (cheap reject before lock acquisition).
   - Second, INSIDE the lock by re-reading `workspace.currency` and
     re-comparing against the account currencies. If they no longer
-    match (concurrent PATCH won), throw inside the transaction to
-    trigger rollback, then call `itemRemove` AFTER the rollback (so
-    Plaid's upstream Item is cleaned up).
-  This dual check is required because PATCH can land between the
-  cheap reject and the lock acquisition.
+    match (concurrent PATCH won), throw a sentinel inside the callback
+    to trigger rollback, then call `itemRemove` AFTER the rollback
+    completes (so Plaid's upstream Item is cleaned up).
 - Plaid sync (`apps/api/src/plaid/sync.ts`) — wrap the
-  transaction-batch insert/upsert work in `$transaction` + advisory
-  lock. (Sync writes can be large; the lock is held only for the duration
-  of the batch.)
+  transaction-batch insert/upsert work in `withWorkspaceLock`. (Sync
+  writes can be large; the lock is held only for the duration of the
+  batch.)
 
 The lock is per-workspace (keyed on `hashtext(workspaceId)`), so
-different workspaces never block each other. Within one workspace, a
-PATCH-currency request waits behind any in-flight writer, and writers
-wait behind PATCH. Both flows are infrequent (writes are user-driven)
-so contention is acceptable.
+different workspaces never block each other. Within one workspace, PATCH
+and writers serialize. Both flows are infrequent (user-driven) so
+contention is acceptable.
+
+The helper's existence + "first statement is the lock" invariant makes
+the test strategy straightforward: spy on `withWorkspaceLock` and assert
+every writer calls it before any other DB statement. The spy is
+deterministic (no timing) and catches the "writer forgot to use the
+helper" regression directly.
 
 ### 5.10 PATCH /workspaces/:id/currency (new)
 
@@ -322,12 +339,15 @@ token is discarded; user has to redo Link if they want to retry.
 **Schema:**
 - `apps/api/prisma/schema.prisma` — remove 3 currency columns
 
+**Shared helper:**
+- `apps/api/src/db/workspace-lock.ts` (new) — `withWorkspaceLock(workspaceId, callback)`. Lock-first transaction wrapper used by every amount-row writer.
+
 **Services:**
-- `apps/api/src/transactions/create-manual.ts`
-- `apps/api/src/recurring/service.ts`
+- `apps/api/src/transactions/create-manual.ts` (migrate to `withWorkspaceLock`)
+- `apps/api/src/recurring/service.ts` (wrap in `withWorkspaceLock`)
 - `apps/api/src/categorize/manual-categorize.ts`
-- `apps/api/src/budgets/service.ts`
-- `apps/api/src/plaid/sync.ts`
+- `apps/api/src/budgets/service.ts` (wrap `setBudgetService` in `withWorkspaceLock`)
+- `apps/api/src/plaid/sync.ts` (wrap in `withWorkspaceLock`)
 
 **Routes:**
 - `apps/api/src/routes/transactions.ts`
@@ -378,29 +398,21 @@ No new dependencies.
 6. PATCH 409 workspace_has_data: workspace with one manual transaction (which atomically creates its Cash bank_account) → 409 `workspace_has_data`
 7. PATCH 409 workspace_has_data: workspace with one RecurringExpense (no tx/account) → 409 `workspace_has_data`
 8. PATCH 409 workspace_has_data: workspace with one Budget (no tx/account/recurring) → 409 `workspace_has_data`
-**Test infrastructure: `withWorkspaceLock(wsId, opts)` helper.** A dedicated Prisma client opens a transaction and runs `SELECT pg_advisory_xact_lock(hashtext(wsId))`. Inside the test body the helper exposes:
-- `expectBlocked(candidatePromise, 300)` — `Promise.race` against `setTimeout(300ms)`; asserts the candidate does NOT resolve.
-- `countRowsInTargetTable()` — runs from a SEPARATE non-locked connection.
-- `release(opts.newCurrency?)` — if `newCurrency` is provided, additionally `UPDATE workspaces SET currency = …` inside the lock-holding tx, then COMMIT.
+**Test strategy:** Two layers.
 
-**The lock-precedes-writes pattern (used for every writer):**
+**Layer A — `withWorkspaceLock` spy (deterministic, fast):** Spy on the helper. Each writer test asserts the helper is called before any direct `prisma.transaction.create` / `prisma.budget.upsert` / etc. Because the helper enforces "lock first" internally, calling the helper is sufficient proof. The spy is exact and produces no timing dependence.
 
-1. Snapshot initial row count of the writer's target table (Transaction / RecurringExpense / Budget / BankAccount).
-2. Holder acquires the lock and `UPDATE`s workspace.currency from CAD → USD inside its tx (does NOT commit yet).
-3. Test starts the candidate writer.
-4. After 300ms `expectBlocked` passes — candidate hasn't completed.
-5. Snapshot row count AGAIN — assert it equals the initial count. If a row appeared, the writer inserted BEFORE acquiring the lock (race-unsafe). **This is the critical statement-order check.**
-6. Holder commits + releases.
-7. Wait for candidate to resolve.
-8. Final row count == initial + 1 (the writer inserted AFTER the lock).
-9. If the writer's response includes a `currency` field, assert it equals the NEW workspace currency (USD) — proves the writer didn't cache the pre-lock value.
+**Layer B — Integration race (deterministic via holder lock):** A dedicated holder Prisma client acquires the lock; the candidate writer must block on it; release; assert the writer completes and (where applicable) returns the new currency. Catches the case where a writer mistakenly bypasses the helper.
 
-This sequence proves the writer's FIRST DB statement against this workspace is the advisory lock acquisition: no inserts happened before the lock release, and (where applicable) the workspace.currency read happened after the holder's UPDATE.
+9. **`withWorkspaceLock` spy assertions (4 cases):** For each of `createManualTransactionService`, `addRecurringService`, `setBudgetService`, and the Plaid exchange route handler:
+   - Vi-spy on `withWorkspaceLock` from the helper module.
+   - Call the writer end-to-end.
+   - Assert the spy was called with `(workspaceId, callbackFn)`.
+   - Assert no `prisma.transaction.create`/`recurring.create`/`budget.upsert`/`bankAccount.create` was called OUTSIDE the spy's callback invocation. (Mock `prisma.<table>.create` and inspect call order: spy.firstCall < table-create.firstCall.)
 
-9. **createManualTransactionService — statement-order:** Run the helper sequence above with target table = `transactions`. Assert the row count check (step 5) passes, and `result.transaction.currency === "USD"` after release.
-10. **addRecurringService — statement-order:** Target table = `recurring_expenses`. Assert the row count check passes, and `result.recurring.currency === "USD"` after release.
-11. **setBudgetService — statement-order (no currency on response):** Target table = `budgets`. Seed a category out-of-band BEFORE the helper acquires the lock. Assert the row count check passes. Budget has no currency response field, so the test relies entirely on the row-count statement-order check.
-12. **Plaid exchange — statement-order + currency_mismatch:** Mock `plaid.itemPublicTokenExchange` + `accountsGet` to return CAD accounts. Holder acquires lock + updates workspace to USD. Start `POST /plaid/exchange`. Run row count snapshot at 300ms on BOTH `plaid_items` AND `bank_accounts` — both must be initial count. Holder commits. Plaid exchange's in-lock recheck sees workspace=USD vs account=CAD → throws inside its locked transaction → rollback. After rollback, route calls `plaid.itemRemove` on the mock. Final assertions: response 400 `currency_mismatch`, `plaid_items` count == initial, `bank_accounts` count == initial, `itemRemove` was called.
+10. **Integration race (1 case per writer = 4 cases):** Standard Promise.all pattern using a holder Prisma client. Hold `pg_advisory_xact_lock(hashtext(wsId))`. Run the candidate. Assert `Promise.race([candidate, 300ms sleep])` → the timeout wins (candidate is blocked). Release the holder. Assert the candidate resolves. For the manual-tx, recurring, and Plaid candidate that has a currency response field, also update the workspace currency in the holder's tx before release and assert the resolved response shows the new currency.
+
+11. **Plaid in-lock recheck (no race — same holder pattern):** Mock `plaid.itemPublicTokenExchange` + `accountsGet` to return CAD accounts. Holder acquires lock + updates workspace to USD + commits. Now run `POST /plaid/exchange`. The exchange's outer check (read against the pre-PATCH workspace state cached in route ctx) may or may not catch it depending on snapshot timing — what we care about is the IN-LOCK recheck. Assert: response 400 `currency_mismatch`, `plaid_items` count = initial, `bank_accounts` count = initial, mock `itemRemove` called once. (To force the path: pass a `?test_skip_outer_check=1` env-gated flag on the route, or use vi.spyOn to disable the outer check for this test.)
 13. **Silent-relabel tripwire (50× coarse run):** A loop of 50 fresh workspaces, each doing `Promise.all([PATCH /currency to "USD", addRecurringService])`. For each iteration assert one of two valid outcomes:
    - **PATCH wins:** PATCH 200, workspace.currency=USD; the recurring call (whichever order) completes successfully and its returned currency matches whatever workspace.currency was at insert time — never the silent-relabel outcome (recurring inserted as old "CAD" but workspace ends up "USD").
    - **Recurring wins:** Recurring 200 with currency="CAD", PATCH 409 `workspace_has_data` (recurring row already exists).
