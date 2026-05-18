@@ -277,7 +277,7 @@ describe("createManualTransactionService", () => {
   it("rejects archived category", async () => {
     const { wsId, userId } = await setupEditor("mtcat@t.co");
     const cat = await prisma.category.create({
-      data: { workspaceId: wsId, name: "Archived", nameNormalized: "archived", archivedAt: new Date() },
+      data: { workspaceId: wsId, name: "Archived", archivedAt: new Date() },
     });
     await expect(
       createManualTransactionService(
@@ -307,6 +307,34 @@ describe("createManualTransactionService", () => {
     expect(result.transaction.currency).toBe("USD");
     const acct = await prisma.bankAccount.findFirstOrThrow({ where: { workspaceId: wsId, plaidItemId: null } });
     expect(acct.currency).toBe("USD");
+  });
+
+  it("does NOT reuse a ghost ex-Plaid account (plaidItemId=null + plaidAccountId set + archived)", async () => {
+    const { wsId, userId } = await setupEditor("mtghost@t.co");
+    // Simulate state after strict Plaid disconnect: plaidItemId set to null,
+    // plaidAccountId retained, archivedAt stamped.
+    await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        plaidItemId: null,
+        plaidAccountId: `pa-ghost-${Date.now()}`,
+        name: "Old Plaid Chequing",
+        type: "depository",
+        currency: "CAD",
+        archivedAt: new Date(),
+      },
+    });
+    const result = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "X", amount: 1, occurredAt: "2026-05-17" },
+    );
+    // New Cash account is created, not the ghost reused.
+    const cashAccts = await prisma.bankAccount.findMany({
+      where: { workspaceId: wsId, plaidAccountId: null, archivedAt: null },
+    });
+    expect(cashAccts).toHaveLength(1);
+    expect(cashAccts[0]!.name).toBe("Cash");
+    expect(result.transaction.accountId).toBe(cashAccts[0]!.id);
   });
 
   it("race: two concurrent first-time calls produce exactly one Cash account", async () => {
@@ -449,17 +477,22 @@ export async function createManualTransactionService(
       select: { currency: true },
     });
 
+    // Manual-account discriminator: plaidAccountId IS NULL AND archivedAt IS NULL.
+    // After Plaid strict-disconnect, bank_accounts.plaidItemId is set to NULL
+    // (FK ON DELETE SET NULL) but plaidAccountId is retained and archivedAt is
+    // stamped — so { plaidItemId: null } alone would match ghost ex-Plaid accounts.
+    const MANUAL_WHERE = { plaidAccountId: null, archivedAt: null } as const;
     let account: { id: string };
     if (input.accountId !== undefined) {
       const found = await tx.bankAccount.findFirst({
-        where: { id: input.accountId, workspaceId: ctx.workspaceId, plaidItemId: null },
+        where: { id: input.accountId, workspaceId: ctx.workspaceId, ...MANUAL_WHERE },
         select: { id: true },
       });
       if (!found) throw new CreateManualTxError("account_not_found");
       account = found;
     } else {
       const existing = await tx.bankAccount.findFirst({
-        where: { workspaceId: ctx.workspaceId, plaidItemId: null },
+        where: { workspaceId: ctx.workspaceId, ...MANUAL_WHERE },
         orderBy: { createdAt: "asc" },
         select: { id: true },
       });
@@ -525,7 +558,7 @@ export async function createManualTransactionService(
 pnpm --filter @fina/api exec vitest run tests/transactions.create-manual.test.ts --reporter=basic 2>&1 | tail -10
 ```
 
-**Expected:** all 12 service cases pass.
+**Expected:** all 13 service cases pass.
 
 ### 2.3 Commit
 
@@ -575,6 +608,12 @@ describe("POST /workspaces/:id/transactions/manual", () => {
   it("400 workspace_mismatch when X-Workspace-Id differs from path", async () => {
     const a = await setupEditor("mtwm1@t.co");
     const b = await setupEditor("mtwm2@t.co");
+    // Grant user A membership in workspace B so requireWorkspaceContext
+    // passes for header X-Workspace-Id=B; the mismatch is then path :id=A
+    // vs header B, which is what we want to assert.
+    await prisma.membership.create({
+      data: { userId: a.userId, workspaceId: b.wsId, role: "editor" },
+    });
     const res = await app.inject({
       method: "POST",
       url: `/workspaces/${a.wsId}/transactions/manual`,
@@ -694,7 +733,7 @@ app.post<{ Params: { id: string } }>(
 pnpm --filter @fina/api exec vitest run tests/transactions.create-manual.test.ts --reporter=basic 2>&1 | tail -10
 ```
 
-**Expected:** all cases pass (12 service + 4 route = 16 in this file).
+**Expected:** all cases pass (13 service + 4 route = 17 in this file).
 
 ### 3.3 Commit
 
@@ -720,7 +759,7 @@ pnpm exec nx reset 2>&1 | tail -2
 pnpm nx run api:test --skipNxCache 2>&1 | tail -10
 ```
 
-**Expected:** 83 files / ~697 tests PASS (82 + 1 new file; 681 + 16 new cases).
+**Expected:** 83 files / ~698 tests PASS (82 + 1 new file; 681 + 17 new cases).
 
 ### 4.2 Sanity grep
 
