@@ -406,7 +406,12 @@ No new dependencies.
 
 9. **`withWorkspaceLock` spy assertions (4 cases):** For each of `createManualTransactionService`, `addRecurringService`, `setBudgetService`, and the Plaid exchange route handler:
    - Vi-spy on `withWorkspaceLock` from the helper module. The spy passes through to the real implementation.
-   - Vi-spy on the top-level `prisma.<table>.create` / `prisma.<table>.upsert` for the writer's target table (`prisma.transaction.create`, `prisma.recurringExpense.create`, `prisma.budget.upsert`, `prisma.bankAccount.create`). The spy on the TOP-LEVEL client catches direct (un-tx'd) writes that would bypass the lock.
+   - Vi-spy on every top-level amount-write method the writer COULD call. For each writer, the methods to spy on are:
+     - `createManualTransactionService`: `prisma.transaction.create`, `prisma.bankAccount.create` (auto-create Cash account path), `prisma.bankAccount.upsert`.
+     - `addRecurringService`: `prisma.recurringExpense.create`, `prisma.recurringExpense.upsert` (the actual method used is `upsert`).
+     - `setBudgetService`: `prisma.budget.create`, `prisma.budget.upsert` (the actual method used is `upsert`).
+     - Plaid exchange handler: `prisma.plaidItem.create`, `prisma.plaidItem.upsert`, `prisma.bankAccount.create`, `prisma.bankAccount.upsert`.
+   - Each of these top-level spies must be called **zero times** in the writer's happy path — all writes must go through the `tx` client provided by the helper callback.
    - Call the writer end-to-end.
    - Assert `withWorkspaceLock` was called with `(workspaceId, callbackFn)`.
    - Assert the top-level `prisma.<table>.create/upsert` spy was called **zero times** — the writer must use the `tx` client passed to the callback, never the top-level `prisma` instance for the amount-table write. This catches both "writer skipped the helper" AND "writer called helper with empty callback then wrote directly".
