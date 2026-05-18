@@ -178,7 +178,7 @@ practice.
 
 ### 5.9 Advisory lock on all amount-row writers
 
-**Create** a shared helper `apps/api/src/db/workspace-lock.ts`:
+**Create** a shared helper at `apps/api/src/locks/workspace.ts` (note: NOT `apps/api/src/db/workspace-lock.ts` — `apps/api/src/db.ts` already exists as a file, blocking a sibling `db/` directory):
 
 ```typescript
 import type { Prisma, PrismaClient } from "@prisma/client";
@@ -340,7 +340,7 @@ token is discarded; user has to redo Link if they want to retry.
 - `apps/api/prisma/schema.prisma` — remove 3 currency columns
 
 **Shared helper:**
-- `apps/api/src/db/workspace-lock.ts` (new) — `withWorkspaceLock(workspaceId, callback)`. Lock-first transaction wrapper used by every amount-row writer.
+- `apps/api/src/locks/workspace.ts` (new) — `withWorkspaceLock(workspaceId, callback)`. Lock-first transaction wrapper used by every amount-row writer.
 
 **Services:**
 - `apps/api/src/transactions/create-manual.ts` (migrate to `withWorkspaceLock`)
@@ -405,10 +405,11 @@ No new dependencies.
 **Layer B — Integration race (deterministic via holder lock):** A dedicated holder Prisma client acquires the lock; the candidate writer must block on it; release; assert the writer completes and (where applicable) returns the new currency. Catches the case where a writer mistakenly bypasses the helper.
 
 9. **`withWorkspaceLock` spy assertions (4 cases):** For each of `createManualTransactionService`, `addRecurringService`, `setBudgetService`, and the Plaid exchange route handler:
-   - Vi-spy on `withWorkspaceLock` from the helper module.
+   - Vi-spy on `withWorkspaceLock` from the helper module. The spy passes through to the real implementation.
+   - Vi-spy on the top-level `prisma.<table>.create` / `prisma.<table>.upsert` for the writer's target table (`prisma.transaction.create`, `prisma.recurringExpense.create`, `prisma.budget.upsert`, `prisma.bankAccount.create`). The spy on the TOP-LEVEL client catches direct (un-tx'd) writes that would bypass the lock.
    - Call the writer end-to-end.
-   - Assert the spy was called with `(workspaceId, callbackFn)`.
-   - Assert no `prisma.transaction.create`/`recurring.create`/`budget.upsert`/`bankAccount.create` was called OUTSIDE the spy's callback invocation. (Mock `prisma.<table>.create` and inspect call order: spy.firstCall < table-create.firstCall.)
+   - Assert `withWorkspaceLock` was called with `(workspaceId, callbackFn)`.
+   - Assert the top-level `prisma.<table>.create/upsert` spy was called **zero times** — the writer must use the `tx` client passed to the callback, never the top-level `prisma` instance for the amount-table write. This catches both "writer skipped the helper" AND "writer called helper with empty callback then wrote directly".
 
 10. **Integration race (1 case per writer = 4 cases):** Standard Promise.all pattern using a holder Prisma client. Hold `pg_advisory_xact_lock(hashtext(wsId))`. Run the candidate. Assert `Promise.race([candidate, 300ms sleep])` → the timeout wins (candidate is blocked). Release the holder. Assert the candidate resolves. For the manual-tx, recurring, and Plaid candidate that has a currency response field, also update the workspace currency in the holder's tx before release and assert the resolved response shows the new currency.
 
