@@ -136,8 +136,10 @@ git commit -m "feat(plan 1c-audit): AuditEvent model + migration"
 
 - [ ] **Step 1: Create `apps/api/tests/audit.service.test.ts`**
 
+Note: **`vi` must be in the Vitest import** for the Gemini mock in §3.4 (`vi.hoisted` and `vi.mock`). Use this import for the whole file:
+
 ```typescript
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import {
   AUDIT_WRITE_TOOLS,
@@ -565,7 +567,9 @@ describe("audit hook — intent consume (actorType: user)", () => {
 // This test file must declare the same hoist/mock block at the MODULE TOP
 // (before any non-hoist imports). Copy the block from chat.turn.test.ts verbatim.
 
-// ADD THESE LINES AT THE TOP OF THE FILE (before other imports):
+// ADD THESE LINES AT THE TOP OF THE FILE (before other non-hoist imports).
+// The vi.hoisted call must appear before vi.mock.
+// `vi` is already imported from "vitest" per the Task 2 instruction above.
 // ─────────────────────────────────────────────────────────────────────
 // import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 // const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
