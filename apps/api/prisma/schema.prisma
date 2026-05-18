@@ -97,6 +97,7 @@ model Workspace {
   name         String
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
+  currency           String        @default("CAD")
   memberships        Membership[]
   invites            Invite[]
   plaidItems         PlaidItem[]
