@@ -477,11 +477,18 @@ export async function createManualTransactionService(
       select: { currency: true },
     });
 
-    // Manual-account discriminator: plaidAccountId IS NULL AND archivedAt IS NULL.
-    // After Plaid strict-disconnect, bank_accounts.plaidItemId is set to NULL
-    // (FK ON DELETE SET NULL) but plaidAccountId is retained and archivedAt is
-    // stamped — so { plaidItemId: null } alone would match ghost ex-Plaid accounts.
-    const MANUAL_WHERE = { plaidAccountId: null, archivedAt: null } as const;
+    // Manual-account discriminator: all three of plaidItemId, plaidAccountId
+    // must be NULL AND archivedAt IS NULL.
+    // - plaidItemId null alone matches ghost ex-Plaid accounts (strict-disconnect
+    //   sets plaidItemId to NULL via FK ON DELETE SET NULL but keeps
+    //   plaidAccountId + stamps archivedAt) → exclude via archivedAt.
+    // - plaidAccountId null alone matches Plaid-linked rows whose
+    //   plaidAccountId happens to be NULL (schema permits) → exclude via plaidItemId.
+    const MANUAL_WHERE = {
+      plaidItemId: null,
+      plaidAccountId: null,
+      archivedAt: null,
+    } as const;
     let account: { id: string };
     if (input.accountId !== undefined) {
       const found = await tx.bankAccount.findFirst({
