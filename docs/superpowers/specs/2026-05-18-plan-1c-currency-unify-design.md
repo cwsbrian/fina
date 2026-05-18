@@ -72,15 +72,16 @@ model Workspace {
 }
 
 model BankAccount {
-  // currency String @default("CAD")   // STAYS — Plaid's per-account truth
+  currency String @default("CAD")   // STAYS — Plaid's per-account truth
+  // ... other fields unchanged
 }
 
 model Transaction {
-  // currency String @default("CAD")  ← REMOVE
+  // REMOVED: currency String @default("CAD")
 }
 
 model RecurringExpense {
-  // currency String @default("CAD")  ← REMOVE
+  // REMOVED: currency String @default("CAD")
 }
 ```
 
@@ -346,7 +347,7 @@ token is discarded; user has to redo Link if they want to retry.
 - `apps/api/prisma/migrations/<ts>_drop_per_row_currency/migration.sql`
 
 **Schema:**
-- `apps/api/prisma/schema.prisma` — remove 3 currency columns
+- `apps/api/prisma/schema.prisma` — remove `currency` columns on Transaction and RecurringExpense (BankAccount.currency stays)
 
 **Shared helper:**
 - `apps/api/src/locks/workspace.ts` (new) — `withWorkspaceLock(workspaceId, callback)`. Lock-first transaction wrapper used by every amount-row writer.
@@ -465,7 +466,8 @@ Add to existing `plaid.routes.test.ts` mocked exchange test pattern:
 5. No new dependency.
 6. Sanity grep: `grep -rn "currency" apps/api/src/` should show only:
    - `workspace.currency` reads (and `Workspace.currency` schema definition)
-   - `bankAccount.currency` / `a.currency` reads (column retained)
+   - `bankAccount.currency` / `a.currency` / `tx.account.currency` reads (column retained)
+   - **BankAccount writes** of `currency` (manual Cash auto-create from `workspace.currency`; Plaid exchange from `iso_currency_code`)
    - response/field assignments setting `currency: <workspaceCurrencyValue>` for non-account fields
    - the new PATCH route + Plaid mismatch handler
    No `transaction.currency` or `recurringExpense.currency` reads, no
@@ -478,8 +480,7 @@ Add to existing `plaid.routes.test.ts` mocked exchange test pattern:
 - FX conversion / multi-currency display
 - Cross-workspace data migration
 - Aggregation across workspaces in different currencies
-- Storing `iso_currency_code` from Plaid for audit/forensics (lost — we
-  validate at exchange time but don't persist the bank's reported value)
+- (no longer in scope: `iso_currency_code` is preserved on `BankAccount.currency`)
 - UI for "create another workspace in different currency" flow (frontend
   track)
 - Auto-suggest workspace.currency from user locale at signup
