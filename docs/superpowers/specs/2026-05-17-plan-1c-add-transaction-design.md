@@ -186,7 +186,9 @@ Internals (sketch):
 // 2. If occurredAt omitted, call resolveUserTz(ctx.userId) at the
 //    top-level (NOT inside the transaction) to avoid deadlock with
 //    the advisory lock and a small connection pool.
-const tz = input.occurredAt ? null : await resolveUserTz(ctx.userId);
+// Explicit undefined check — an empty string ("") is a provided value
+// that must fail invalid_date validation, not be treated as omitted.
+const tz = input.occurredAt === undefined ? await resolveUserTz(ctx.userId) : null;
 // 3. Enter the transaction: advisory lock + reads + writes all use `tx`.
 return await prisma.$transaction(async (tx) => {
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))`;
