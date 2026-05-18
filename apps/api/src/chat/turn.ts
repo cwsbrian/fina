@@ -78,10 +78,12 @@ export function toGeminiHistory(messages: Array<{ role: string; blocks: unknown 
 
 const REDACTED_TOOL_ARGS = new Set(["presentConfirmCard"]);
 
-export function redactToolCallArgs(toolName: string, args: unknown): unknown {
+export function redactToolCallArgs(
+  toolName: string,
+  args: Record<string, unknown>,
+): Record<string, unknown> {
   if (!REDACTED_TOOL_ARGS.has(toolName)) return args;
-  if (!args || typeof args !== "object") return args;
-  const { accept_action: _drop, ...rest } = args as Record<string, unknown>;
+  const { accept_action: _drop, ...rest } = args;
   return rest;
 }
 
