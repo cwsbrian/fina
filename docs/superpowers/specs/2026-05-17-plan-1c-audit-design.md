@@ -8,10 +8,16 @@
 
 ## 1. Goal
 
-Insert an `AuditEvent` row for every successful write-tool execution. Records
-who (user id), how (agent = LLM-driven, user = explicit intent consume), what
-(tool name + args + result + optional intent id), and when. Used for
-debugging, user trust, and future privacy review.
+Insert an `AuditEvent` row for every write-tool dispatch that completes
+without a framework-level error (`dispatch.ok = true`). Records who (user id),
+how (agent = LLM-driven, user = explicit intent consume), what (tool name +
+args + result + optional intent id), and when.
+
+Note: "dispatch.ok = true" means the dispatcher ran the tool and returned a
+result without throwing — it does NOT guarantee data was mutated (e.g.
+`removeRecurring` returns `{ removed: false }` when the target doesn't exist).
+The `result` field in the audit row tells the full story. This is standard
+audit behavior: log the attempt and outcome, not just confirmed mutations.
 
 No read surface (HTTP endpoint) in v1. No before/after state snapshots.
 
@@ -202,9 +208,12 @@ returning from the loop iteration), fire the audit log for write tools:
 import { AUDIT_WRITE_TOOLS, logAuditEvent, resolveTargetType, extractTargetId } from "../audit/service.js";
 
 // Inside the tool-execution loop, after dispatching and obtaining `dispatch`.
-// Only log when dispatch SUCCEEDED (mutation actually happened).
-// Failed dispatches (validation error, tool.run throw) must not produce
-// audit rows for actions that never happened.
+// Only log when dispatch completed without a framework error (dispatch.ok = true).
+// dispatch.ok = false means the dispatcher itself threw (invalid args, tool
+// threw an exception). In that case no audit row is created.
+// Note: some tools can return ok=true with a no-op result (e.g. removeRecurring
+// returns { removed: false } for a non-existent target) — those are still
+// logged because the attempt itself is auditable.
 if (AUDIT_WRITE_TOOLS.has(fcName) && dispatch.ok) {
   const toolResult = dispatch.result;
   void logAuditEvent({
