@@ -9,10 +9,13 @@
 ## 1. Goal
 
 Make `Workspace.currency` the sole source of truth for currency in a workspace.
-Drop per-row `currency` columns from `Transaction`, `BankAccount`, and
-`RecurringExpense`. Reject Plaid item connections whose account currencies
-differ from the workspace's. Make `PATCH /workspaces/:id/currency` available
-only while the workspace has zero transactions and zero bank accounts.
+Drop per-row `currency` columns from `Transaction` and `RecurringExpense`.
+**Keep** `BankAccount.currency` as a historical record of Plaid's reported
+`iso_currency_code` per account (not used for math; preserves Plaid's truth
+in case multi-currency support is needed later). Reject Plaid item
+connections whose account currencies differ from the workspace's. Make
+`PATCH /workspaces/:id/currency` available only while the workspace has
+zero amount-bearing rows.
 
 **Product axiom:** workspace == currency boundary. A user wanting to track
 multi-currency accounts creates separate workspaces — Fina does not perform
@@ -24,10 +27,10 @@ would silently produce nonsense.
 ## 2. Background
 
 Currently currency lives in four places (all defaulting to `"CAD"`):
-- `Workspace.currency` (added in 1C-add-transaction)
-- `BankAccount.currency`
-- `Transaction.currency`
-- `RecurringExpense.currency`
+- `Workspace.currency` (added in 1C-add-transaction) — **stays as source of truth**
+- `BankAccount.currency` — **stays** (Plaid's reported `iso_currency_code` per account; preserved for historical/forensic value)
+- `Transaction.currency` — **drop**
+- `RecurringExpense.currency` — **drop**
 
 `Budget` has no currency at all — implicit assumption that all transactions
 share the same currency, which is what we are now enforcing.
@@ -44,8 +47,9 @@ column carries no semantic information specific to the row.
 
 | Topic | Decision |
 |---|---|
-| Per-row currency columns | **Drop** `Transaction.currency`, `BankAccount.currency`, `RecurringExpense.currency` |
-| `Workspace.currency` | Stays; sole source of truth |
+| Per-row currency columns | **Drop** `Transaction.currency` and `RecurringExpense.currency`. **Keep** `BankAccount.currency` (Plaid's truth per account; preserved for forensic/future use; not consulted for math). |
+| `Workspace.currency` | Stays; sole source of truth for all amount math |
+| `BankAccount.currency` | Stays. On Plaid exchange, set from `account.balances.iso_currency_code` (already validated to match workspace.currency at exchange time). On manual "Cash" auto-create, set from `workspace.currency`. |
 | Read API responses | Continue to expose `currency` in response payloads; routes look up `workspace.currency` once per request and pass through |
 | `addRecurring` request body | Drop the `currency` field (was optional `string.length(3)`); ignore if sent |
 | Plaid Item exchange | If any returned account's `iso_currency_code` ≠ `workspace.currency`, reject the exchange with HTTP 400 `currency_mismatch`. No accounts/items persisted. |
@@ -64,11 +68,11 @@ column carries no semantic information specific to the row.
 ```prisma
 model Workspace {
   // ... unchanged
-  currency String @default("CAD")   // STAYS
+  currency String @default("CAD")   // STAYS — source of truth
 }
 
 model BankAccount {
-  // currency String @default("CAD")  ← REMOVE
+  // currency String @default("CAD")   // STAYS — Plaid's per-account truth
 }
 
 model Transaction {
@@ -83,13 +87,13 @@ model RecurringExpense {
 ### 4.2 Migration
 
 ```sql
-ALTER TABLE "bank_accounts"      DROP COLUMN "currency";
 ALTER TABLE "transactions"       DROP COLUMN "currency";
 ALTER TABLE "recurring_expenses" DROP COLUMN "currency";
 ```
 
-Irreversible. All current rows are `"CAD"` so no information is lost in
-practice.
+Irreversible for the two dropped columns. All current rows are `"CAD"` so
+no information is lost in practice. `bank_accounts.currency` is retained
+untouched.
 
 ---
 
@@ -98,8 +102,10 @@ practice.
 ### 5.1 Manual transaction service
 
 `apps/api/src/transactions/create-manual.ts`:
-- Drop `currency: workspace.currency` from the BankAccount create and
-  Transaction create payloads (columns no longer exist).
+- Drop `currency: workspace.currency` from the **Transaction** create
+  payload (column removed).
+- **Keep** `currency: workspace.currency` on the BankAccount create
+  payload (auto-create Cash account; column stays).
 - Response still includes `currency` — value comes from the `workspace`
   lookup that already happens in the transaction.
 
@@ -133,8 +139,10 @@ practice.
 ### 5.5 Accounts route
 
 `apps/api/src/routes/accounts.ts`:
-- Replace `a.currency` in the response mapper with the workspace's
-  currency.
+- **No change.** Continue reading `a.currency` from the row (column
+  retained). Per-account currency is the Plaid-reported truth and is
+  expected to equal workspace.currency for all rows in the workspace
+  (enforced at exchange time).
 
 ### 5.6 Plaid item exchange
 
@@ -155,8 +163,9 @@ practice.
 - Return `400 currency_mismatch` with body
   `{ error: "currency_mismatch", workspaceCurrency: "...", bankCurrency: "..." }`.
   Use `"unknown"` for `bankCurrency` if null/undefined.
-- Remove `currency: a.balances?.iso_currency_code ?? "CAD"` from the
-  account insert payload.
+- **Keep** `currency: a.balances?.iso_currency_code ?? "CAD"` on the
+  BankAccount insert payload (column retained; this stores Plaid's
+  reported value, which we've now verified matches workspace.currency).
 
 ### 5.7 Plaid sync
 
@@ -356,24 +365,24 @@ token is discarded; user has to redo Link if they want to retry.
 - `apps/api/src/routes/plaid.ts`
 - `apps/api/src/routes/workspaces.ts` — new PATCH handler
 
-**Chat tools (10 files):**
-Every tool that previously selected/output a `currency` field OR used a
-`{ currency: { not: "CAD" } }` filter to count "non-CAD" rows must change.
-After the column drop, `{ currency: ... }` in WHERE clauses fails the
-Prisma validator. Strip those filters (mismatched rows can't exist) and
-swap response currency for the workspace value.
+**Chat tools that touch Transaction or RecurringExpense currency:**
+After dropping `Transaction.currency` and `RecurringExpense.currency`,
+any `select: { currency: true }` or `where: { currency: ... }` against
+those models fails the Prisma validator. Strip filters (mismatched rows
+cannot exist when single-currency-per-workspace is enforced) and swap
+response currency for the workspace value.
 
-- `apps/api/src/chat/tools/find-transactions.ts` — drop `currency: { not: "CAD" }` filter, drop `currency: "CAD"` from schema, set response currency from workspace
+- `apps/api/src/chat/tools/find-transactions.ts` — drop `currency: { not: "CAD" }` filter on Transaction, drop `currency: "CAD"` from output schema, set response currency from workspace
 - `apps/api/src/chat/tools/get-cashflow-summary.ts` — same pattern
 - `apps/api/src/chat/tools/get-category-breakdown.ts` — same pattern
 - `apps/api/src/chat/tools/compare-spending-periods.ts` — same pattern
-- `apps/api/src/chat/tools/detect-recurring-merchants.ts` — same pattern
-- `apps/api/src/chat/tools/find-uncategorized-transactions.ts` — same pattern
-- `apps/api/src/chat/tools/get-transaction-details.ts` — set response currency from workspace
-- `apps/api/src/chat/tools/list-accounts.ts` — set response currency from workspace
-- `apps/api/src/chat/tools/list-recurring.ts` — set response currency from workspace
+- `apps/api/src/chat/tools/detect-recurring-merchants.ts` — drop `currency: true` from `prisma.transaction.findMany select`, drop `r.currency` from the merchant-grouping key (use just `merchantKey`), set response group currency from workspace
+- `apps/api/src/chat/tools/find-uncategorized-transactions.ts` — drop `r.currency`; use workspace currency in response
+- `apps/api/src/chat/tools/get-transaction-details.ts` — drop `tx.currency` read (column gone). The nested `tx.account.currency` read STAYS (BankAccount column retained); use it for the response's account-level currency. Top-level transaction currency comes from workspace.
+- `apps/api/src/chat/tools/list-accounts.ts` — **no change** (BankAccount.currency column retained)
+- `apps/api/src/chat/tools/list-recurring.ts` — drop RecurringExpense currency read; set response currency from workspace
 - `apps/api/src/chat/tools/add-recurring.ts` — drop the `currency` zod field; ignore if model sends it
-- `apps/api/src/chat/tools/compare-spending-vs-budget.ts` — set response currency from workspace; underlying `compareSpendingVsBudgetService` Prisma filter is fixed in §5.8
+- `apps/api/src/chat/tools/compare-spending-vs-budget.ts` — set response currency from workspace; underlying `compareSpendingVsBudgetService` Prisma filter on Transaction is fixed in §5.8
 
 **Tests:**
 - `apps/api/tests/workspaces.currency.test.ts` (new) — PATCH route ~6 cases
@@ -394,7 +403,7 @@ No new dependencies.
 2. PATCH 400 invalid_body: `currency: "us"` (lowercase) → 400
 3. PATCH 400 invalid_body: `currency: "DOLLAR"` (too long) → 400
 4. PATCH 403 insufficient_role: editor → 403
-5. PATCH 409 workspace_has_data: workspace with one bank_account but no transaction → 409 `workspace_has_data`
+5. PATCH 409 workspace_has_data: workspace with one bank_account (currency stays on row) but no transaction → 409 `workspace_has_data`
 6. PATCH 409 workspace_has_data: workspace with one manual transaction (which atomically creates its Cash bank_account) → 409 `workspace_has_data`
 7. PATCH 409 workspace_has_data: workspace with one RecurringExpense (no tx/account) → 409 `workspace_has_data`
 8. PATCH 409 workspace_has_data: workspace with one Budget (no tx/account/recurring) → 409 `workspace_has_data`
@@ -454,14 +463,13 @@ Add to existing `plaid.routes.test.ts` mocked exchange test pattern:
 4. baseline 83/699 → **84 files / ~707 tests** (one new test file + ~6
    cases + 2 plaid cases + small fix-ups).
 5. No new dependency.
-6. Sanity grep: `grep -rn "currency" apps/api/src/` (NOT just `.currency` —
-   chat tools use literal `currency: { not: "CAD" }` Prisma filters) should
-   show only:
+6. Sanity grep: `grep -rn "currency" apps/api/src/` should show only:
    - `workspace.currency` reads (and `Workspace.currency` schema definition)
-   - response/field assignments setting `currency: <workspaceCurrencyValue>`
+   - `bankAccount.currency` / `a.currency` reads (column retained)
+   - response/field assignments setting `currency: <workspaceCurrencyValue>` for non-account fields
    - the new PATCH route + Plaid mismatch handler
-   No `row.currency` reads, no `currency: { not: "CAD" }` filters, no
-   per-row writes for the 3 dropped columns.
+   No `transaction.currency` or `recurringExpense.currency` reads, no
+   `currency: { not: "CAD" }` filters on Transaction.
 
 ---
 
