@@ -51,7 +51,7 @@ column carries no semantic information specific to the row.
 | Plaid Item exchange | If any returned account's `iso_currency_code` ≠ `workspace.currency`, reject the exchange with HTTP 400 `currency_mismatch`. No accounts/items persisted. |
 | Plaid Item exchange — null iso_currency_code | Treat null/missing as mismatch (reject). Plaid Canada always provides it; null indicates anomalous data or unofficial currency. |
 | Plaid `iso_currency_code` on individual transactions during sync | Ignored — the item-level validation at exchange time guarantees workspace consistency, and we no longer have a column to store it. |
-| `PATCH /workspaces/:id/currency` | Owner-only. Body: `{ currency: string }` (3-char ISO regex). Reject (409 `workspace_has_data`) if **any of `Transaction`, `BankAccount`, `RecurringExpense`, or `Budget`** rows exist (all amount-bearing tables). The count+update must run inside `prisma.$transaction` with `pg_advisory_xact_lock(hashtext(workspaceId))` so concurrent writers cannot insert amount rows between the count and the update. |
+| `PATCH /workspaces/:id/currency` | Owner-only. Body: `{ currency: string }` (3-char ISO regex). Reject (409 `workspace_has_data`) if **any of `Transaction`, `BankAccount`, `RecurringExpense`, or `Budget`** rows exist (all amount-bearing tables). The count+update must run inside `prisma.$transaction` with `pg_advisory_xact_lock(hashtext(workspaceId))`. **All amount-row writers must also wrap their work in the same advisory lock** (see §5.10) so PATCH and writers serialize per-workspace and writers cannot insert between PATCH's count and update. |
 | Budget / categorize / spending math | Unchanged — already treats all amounts as same-currency. |
 | Migration data loss | Acceptable: all existing rows have `currency = "CAD"` (verified by inspection). No prod data. |
 
@@ -168,10 +168,50 @@ practice.
 ### 5.8 Budgets service
 
 `apps/api/src/budgets/service.ts`:
-- Replace the hardcoded `currency: "CAD"` in response with the workspace's
-  currency.
+- In `compareSpendingVsBudgetService` (the function the chat tool
+  `compareSpendingVsBudget` calls via `apps/api/src/chat/tools/compare-spending-vs-budget.ts`),
+  remove the `currency: "CAD"` predicate from the `prisma.transaction.groupBy({ where: { ... } })` clause. After the column drop, this filter would throw a Prisma validation error.
+- Replace the hardcoded `currency: "CAD"` response field with the
+  workspace's currency.
+- `setBudgetService` must wrap its `prisma.budget.upsert(...)` in
+  `prisma.$transaction` with the advisory lock (see §5.10).
 
-### 5.9 PATCH /workspaces/:id/currency (new)
+### 5.9 Advisory lock on all amount-row writers
+
+Every code path that inserts a row in `Transaction`, `BankAccount`,
+`RecurringExpense`, or `Budget` must wrap its DB work in
+`prisma.$transaction` with
+`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))` as the first
+statement. Without this, `PATCH /workspaces/:id/currency` cannot
+guarantee no amount rows slip in between its count and its update —
+the rows would be silently relabeled by the route handler reading
+`workspace.currency`.
+
+Writers needing the lock:
+
+- `createManualTransactionService` (`apps/api/src/transactions/create-manual.ts`)
+  — **already has it** from plan 1C-add-transaction. No change.
+- `addRecurringService` (`apps/api/src/recurring/service.ts`)
+  — wrap the create call in `$transaction` + advisory lock.
+- `setBudgetService` (`apps/api/src/budgets/service.ts`)
+  — wrap the upsert in `$transaction` + advisory lock.
+- Plaid item exchange (`apps/api/src/routes/plaid.ts`) — wrap the
+  `PlaidItem.create` + `BankAccount.create` batch in `$transaction` +
+  advisory lock. The currency-mismatch check happens BEFORE the
+  transaction opens, the `itemRemove` cleanup happens OUTSIDE the
+  transaction.
+- Plaid sync (`apps/api/src/plaid/sync.ts`) — wrap the
+  transaction-batch insert/upsert work in `$transaction` + advisory
+  lock. (Sync writes can be large; the lock is held only for the duration
+  of the batch.)
+
+The lock is per-workspace (keyed on `hashtext(workspaceId)`), so
+different workspaces never block each other. Within one workspace, a
+PATCH-currency request waits behind any in-flight writer, and writers
+wait behind PATCH. Both flows are infrequent (writes are user-driven)
+so contention is acceptable.
+
+### 5.10 PATCH /workspaces/:id/currency (new)
 
 `apps/api/src/routes/workspaces.ts`:
 
@@ -306,6 +346,7 @@ swap response currency for the workspace value.
 - `apps/api/src/chat/tools/list-accounts.ts` — set response currency from workspace
 - `apps/api/src/chat/tools/list-recurring.ts` — set response currency from workspace
 - `apps/api/src/chat/tools/add-recurring.ts` — drop the `currency` zod field; ignore if model sends it
+- `apps/api/src/chat/tools/compare-spending-vs-budget.ts` — set response currency from workspace; underlying `compareSpendingVsBudgetService` Prisma filter is fixed in §5.8
 
 **Tests:**
 - `apps/api/tests/workspaces.currency.test.ts` (new) — PATCH route ~6 cases
@@ -330,6 +371,10 @@ No new dependencies.
 6. PATCH 409 workspace_has_data: workspace with one manual transaction (which atomically creates its Cash bank_account) → 409 `workspace_has_data`
 7. PATCH 409 workspace_has_data: workspace with one RecurringExpense (no tx/account) → 409 `workspace_has_data`
 8. PATCH 409 workspace_has_data: workspace with one Budget (no tx/account/recurring) → 409 `workspace_has_data`
+9. **Race test:** `Promise.all([ PATCH /currency, createManualTransactionService ])` on a fresh workspace either:
+   - PATCH wins → manual-tx returns and observes new currency in its response,
+   - or manual-tx wins → PATCH returns 409 workspace_has_data.
+   Never the silent-relabel outcome (PATCH 200 + transaction.currency=oldCurrency).
 
 ### 8.2 Plaid currency_mismatch (~2 cases)
 
