@@ -275,7 +275,6 @@ model Transaction {
   plaidTransactionId        String?
   plaidPendingTransactionId String?
   amount                    Decimal           @db.Decimal(14, 2)
-  currency                  String            @default("CAD")
   merchantRaw               String
   merchantNormalized        String?
   categoryId                String?
@@ -362,7 +361,6 @@ model RecurringExpense {
   name                String
   nameNormalized      String
   amount              Decimal          @db.Decimal(10, 2)
-  currency            String           @default("CAD")
   categoryId          String?
   merchantNormalized  String?
   cadence             RecurringCadence
