@@ -55,15 +55,20 @@ function validateMerchantRaw(raw: string): string {
   return trimmed;
 }
 
+// Transaction.amount is Decimal(14, 2). Reject any input that wouldn't
+// round-trip cleanly at two decimal places.
+//
+// Cents-tolerance checks (e.g. cents - Math.round(cents) < 1e-6) accept
+// pathological inputs like 0.000000001 or 0.009999999999. Use the JS
+// string serialization instead: the value must match
+//   /^\d+(\.\d{1,2})?$/   (no scientific notation, ≤ 2 decimals)
+const AMOUNT_RE = /^\d+(\.\d{1,2})?$/;
+
 function validateAmount(amount: number): void {
   if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) {
     throw new CreateManualTxError("invalid_amount");
   }
-  // Transaction.amount is Decimal(14, 2). Reject inputs with more than two
-  // decimal places (e.g. 0.004) — they would silently round to 0.00 and
-  // create a row that violates the positive-amount contract.
-  const cents = amount * 100;
-  if (Math.abs(cents - Math.round(cents)) > 1e-6) {
+  if (!AMOUNT_RE.test(String(amount))) {
     throw new CreateManualTxError("invalid_amount");
   }
 }

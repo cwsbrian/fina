@@ -132,12 +132,22 @@ describe("createManualTransactionService", () => {
       createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 1_000_000_000, occurredAt: "2026-05-17" }),
     ).rejects.toMatchObject({ code: "invalid_amount" });
     // Fractional-cent values would round to 0.00 in Decimal(14,2)
-    await expect(
-      createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 0.004, occurredAt: "2026-05-17" }),
-    ).rejects.toMatchObject({ code: "invalid_amount" });
-    await expect(
-      createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 1.234, occurredAt: "2026-05-17" }),
-    ).rejects.toMatchObject({ code: "invalid_amount" });
+    for (const bad of [0.004, 1.234, 0.000000001, 0.009999999999]) {
+      await expect(
+        createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: bad, occurredAt: "2026-05-17" }),
+      ).rejects.toMatchObject({ code: "invalid_amount" });
+    }
+  });
+
+  it("accepts valid two-decimal amounts (0.01, 1, 6.75, 100, 999999999.99)", async () => {
+    const { wsId, userId } = await setupEditor("mtampos@t.co");
+    for (const ok of [0.01, 1, 6.75, 100, 999_999_999.99]) {
+      const r = await createManualTransactionService(
+        { workspaceId: wsId, userId },
+        { merchantRaw: "X", amount: ok, occurredAt: "2026-05-17" },
+      );
+      expect(Number(r.transaction.amount)).toBeCloseTo(ok, 2);
+    }
   });
 
   it("rejects bad occurredAt strings", async () => {
