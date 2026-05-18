@@ -127,7 +127,7 @@ Body:
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
-import { dateKeyInTz } from "../chat/tools/periods.js";
+import { dateKeyInTz, resolveUserTz } from "../chat/tools/periods.js";
 
 // Optional-field shape under exactOptionalPropertyTypes — never `undefined`.
 export type CreateManualTxInput = {
@@ -194,7 +194,7 @@ return await prisma.$transaction(async (tx) => {
 1. **Validate merchantRaw**: trim, reject empty or > 200 chars → `invalid_merchant`.
 2. **Validate amount**: must be a finite number > 0 and ≤ 999_999_999.99 → `invalid_amount`.
 3. **Validate note**: if provided and > 1000 → `invalid_note`.
-4. **Resolve date**: if `occurredAt` provided, regex-validate `^\d{4}-\d{2}-\d{2}$`, then `new Date(occurredAt + "T12:00:00Z")` and assert `!isNaN(d.getTime())` AND `d.toISOString().slice(0,10) === occurredAt` (round-trip check rejects `2026-05-32` etc.). On failure → `invalid_date`. If not provided, fetch `user.tz` (`await tx.user.findUniqueOrThrow({ where: { id: ctx.userId }, select: { tz: true } })`) → `dateKeyInTz(new Date(), user.tz)` to get today's YYYY-MM-DD, then anchor at UTC noon (matches 1E-time policy).
+4. **Resolve date**: if `occurredAt` provided, regex-validate `^\d{4}-\d{2}-\d{2}$`, then `new Date(occurredAt + "T12:00:00Z")` and assert `!isNaN(d.getTime())` AND `d.toISOString().slice(0,10) === occurredAt` (round-trip check rejects `2026-05-32` etc.). On failure → `invalid_date`. If not provided, resolve tz via `resolveUserTz(ctx.userId)` (handles invalid stored tz with a fallback to `DEFAULT_TZ`) and call `dateKeyInTz(new Date(), tz)` to get today's YYYY-MM-DD, then anchor at UTC noon (matches 1E-time policy). NOTE: `resolveUserTz` does its own `prisma.user.findUnique` call and is safe to invoke before/outside the transaction; either order is fine.
 5. **Validate categoryId**: if provided, `tx.category.findFirst({ where: { id, workspaceId, archivedAt: null } })` → `category_not_found`.
 6. **Read workspace.currency**: `await tx.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { currency: true } })`. Needed for `Transaction.currency` and (if creating the manual account) `BankAccount.currency`.
 7. **Resolve account**:
@@ -260,29 +260,32 @@ const ManualTxBody = z.object({
 app.post<{ Params: { id: string } }>(
   "/workspaces/:id/transactions/manual",
   async (req, reply) => {
-    const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
-    if (req.params.id !== ctx.membership.workspaceId) {
-      return reply.code(400).send({ error: "workspace_mismatch" });
-    }
-    const parsed = ManualTxBody.safeParse(req.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_body" });
-    }
-    // Strip undefined keys for exactOptionalPropertyTypes compatibility
-    // (same pattern as routes/recurring.ts addRecurring handler).
-    const d = parsed.data;
-    const input: CreateManualTxInput = { merchantRaw: d.merchantRaw, amount: d.amount };
-    if (d.occurredAt !== undefined) input.occurredAt = d.occurredAt;
-    if (d.categoryId !== undefined) input.categoryId = d.categoryId;
-    if (d.note       !== undefined) input.note       = d.note;
-    if (d.accountId  !== undefined) input.accountId  = d.accountId;
     try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (req.params.id !== ctx.membership.workspaceId) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const parsed = ManualTxBody.safeParse(req.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_body" });
+      }
+      // Strip undefined keys for exactOptionalPropertyTypes compatibility
+      // (same pattern as routes/recurring.ts addRecurring handler).
+      const d = parsed.data;
+      const input: CreateManualTxInput = { merchantRaw: d.merchantRaw, amount: d.amount };
+      if (d.occurredAt !== undefined) input.occurredAt = d.occurredAt;
+      if (d.categoryId !== undefined) input.categoryId = d.categoryId;
+      if (d.note       !== undefined) input.note       = d.note;
+      if (d.accountId  !== undefined) input.accountId  = d.accountId;
       const result = await createManualTransactionService(
         { workspaceId: ctx.membership.workspaceId, userId: ctx.session.userId },
         input,
       );
       return reply.code(201).send(result);
     } catch (err) {
+      if (err instanceof HttpError) {
+        return reply.code(err.statusCode).send({ error: err.code });
+      }
       if (err instanceof CreateManualTxError) {
         const status = err.code.startsWith("invalid_") ? 400 : 404;
         return reply.code(status).send({ error: err.code });
@@ -293,10 +296,9 @@ app.post<{ Params: { id: string } }>(
 );
 ```
 
-The `requireWorkspaceContext` call already throws `HttpError` for auth/role
-failures, and the Fastify error handler (in `apps/api/src/server.ts`) maps
-those to the documented 401/403/404 responses — so the route doesn't need
-to catch them explicitly. This matches `routes/recurring.ts`.
+The `HttpError` catch covers 401 unauthenticated, 400 missing workspace
+header, 404 no_membership, and 403 insufficient_role — same pattern as
+`routes/recurring.ts`.
 
 **No Pro gate.** All tiers (Free/Lite/Pro) can POST.
 
