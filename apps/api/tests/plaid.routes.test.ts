@@ -893,3 +893,89 @@ describe("Plaid connection limits", () => {
     await app.close();
   });
 });
+
+describe("POST /workspaces/:id/plaid/exchange — currency_mismatch", () => {
+  it("400 currency_mismatch when Plaid returns USD account for CAD workspace", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "cm-usd@x.com", name: "CM" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+
+    // Workspace currency defaults to CAD; Plaid returns a USD account.
+    plaidMock.itemPublicTokenExchange.push({
+      data: { access_token: "access_cm_usd", item_id: "item_cm_usd", request_id: "req" },
+    });
+    plaidMock.accountsGet.push({
+      data: {
+        accounts: [
+          { account_id: "acct_cm_usd", name: "Checking", official_name: null, mask: "0001", type: "depository", subtype: "checking", balances: { current: 100, available: 100, limit: null, iso_currency_code: "USD" } },
+        ],
+        item: { item_id: "item_cm_usd", institution_id: "ins_1" },
+        request_id: "req",
+      },
+    });
+    // itemRemove is called for cleanup — queue a success response.
+    plaidMock.itemRemove.push({ data: { request_id: "req_remove" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p_cm_usd", institutionId: "ins_1", institutionName: "USD Bank" }),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      error: "currency_mismatch",
+      workspaceCurrency: "CAD",
+      bankCurrency: "USD",
+    });
+    // No plaid_items or bank_accounts should have been created.
+    expect(await prisma.plaidItem.count({ where: { workspaceId: wsId } })).toBe(0);
+    expect(await prisma.bankAccount.count({ where: { workspaceId: wsId } })).toBe(0);
+    // itemRemove response was consumed (queue is now empty).
+    expect(plaidMock.itemRemove.length).toBe(0);
+    await app.close();
+  });
+
+  it("400 currency_mismatch when Plaid returns null iso_currency_code", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "cm-null@x.com", name: "CMN" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+
+    // Workspace currency defaults to CAD; Plaid returns null iso_currency_code.
+    plaidMock.itemPublicTokenExchange.push({
+      data: { access_token: "access_cm_null", item_id: "item_cm_null", request_id: "req" },
+    });
+    plaidMock.accountsGet.push({
+      data: {
+        accounts: [
+          { account_id: "acct_cm_null", name: "Checking", official_name: null, mask: "0002", type: "depository", subtype: "checking", balances: { current: 50, available: 50, limit: null, iso_currency_code: null } },
+        ],
+        item: { item_id: "item_cm_null", institution_id: "ins_1" },
+        request_id: "req",
+      },
+    });
+    // itemRemove is called for cleanup.
+    plaidMock.itemRemove.push({ data: { request_id: "req_remove_null" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p_cm_null", institutionId: "ins_1", institutionName: "Null Currency Bank" }),
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({
+      error: "currency_mismatch",
+      workspaceCurrency: "CAD",
+      bankCurrency: "unknown",
+    });
+    // No plaid_items or bank_accounts created.
+    expect(await prisma.plaidItem.count({ where: { workspaceId: wsId } })).toBe(0);
+    expect(await prisma.bankAccount.count({ where: { workspaceId: wsId } })).toBe(0);
+    // itemRemove response was consumed.
+    expect(plaidMock.itemRemove.length).toBe(0);
+    await app.close();
+  });
+});
