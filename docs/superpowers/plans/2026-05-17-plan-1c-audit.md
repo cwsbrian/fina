@@ -559,48 +559,68 @@ describe("audit hook — intent consume (actorType: user)", () => {
   });
 });
 
-// ─── Direct chat hook test ───────────────────────────────────────────────────
-// Read apps/api/tests/chat.turn.test.ts BEFORE adding this case.
-// Copy the exact vi.mock("@google/genai", ...) setup from that file verbatim.
-// The mock must configure ai.models.generateContent to emit:
-//   Round 1: { functionCall: { name: "createCategory", args: { name: "AuditTest" } } }
-//   Round 2 (tool result feed-back): a plain text response (e.g. "Done")
-// Then call processChatTurn pointing at a real thread row, and poll for the
-// audit row. Boilerplate sketch:
+// The test below uses the same Gemini mock pattern as chat.turn.test.ts.
+// The hoisted vi.mock + chatGeminiMock helpers already exist in
+// `apps/api/tests/helpers/gemini-mock.js` — they're shared across test files.
+// This test file must declare the same hoist/mock block at the MODULE TOP
+// (before any non-hoist imports). Copy the block from chat.turn.test.ts verbatim.
 
-/*
-import { vi } from "vitest";
-import { processChatTurn } from "../src/chat/turn.js";
-import { loadEnv } from "../src/env.js";
-
-// COPY vi.mock("@google/genai") block from chat.turn.test.ts here (line-for-line).
+// ADD THESE LINES AT THE TOP OF THE FILE (before other imports):
+// ─────────────────────────────────────────────────────────────────────
+// import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
+// const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
+//   async () => await import("./helpers/gemini-mock.js"),
+// );
+// vi.mock("@google/genai", hoistedGeminiMockFactory);
+// import { processChatTurn } from "../src/chat/turn.js";
+// ─────────────────────────────────────────────────────────────────────
 
 describe("audit hook — processChatTurn direct write (actorType: agent)", () => {
   let workspaceId: string;
   let userId: string;
   let threadId: string;
+  const env = { GEMINI_API_KEY: "x" } as never;
 
   beforeEach(async () => {
-    // Create user, workspace, membership, and chatThread in DB (see chat.turn.test.ts).
-    // Configure the GoogleGenAI mock for a two-round function-call sequence.
+    resetGeminiMock();
+    const stamp = `ct-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "CT", tz: "America/Toronto" },
+    });
+    userId = u.id;
+    const ws = await prisma.workspace.create({ data: { name: "ct-ws" } });
+    workspaceId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
+    const thread = await prisma.chatThread.create({ data: { workspaceId } });
+    threadId = thread.id;
+    await prisma.chatMessage.create({
+      data: { threadId, role: "user", blocks: [{ type: "text", markdown: "make me a Coffee cat" }] },
+    });
   });
 
   afterEach(async () => {
-    // Cleanup workspace + user.
-    vi.resetAllMocks();
+    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
   });
 
   it("processChatTurn write tool fires an audit row with actorType=agent", async () => {
-    const env = loadEnv(process.env);
+    // Round 1: Gemini emits a createCategory function call.
+    chatGeminiMock.responses.push({
+      functionCalls: [{ name: "createCategory", args: { name: "Coffee" } }],
+    });
+    // Round 2: Gemini responds after receiving the tool result.
+    chatGeminiMock.responses.push({ text: "Coffee category created." });
+
     await processChatTurn(env, { id: threadId, workspaceId }, userId, "owner");
+
+    // Audit row is fire-and-forget — poll until it lands.
     const row = await pollAuditRow(workspaceId);
     expect(row.actorType).toBe("agent");
     expect(row.actorUserId).toBe(userId);
     expect(row.action).toBe("createCategory");
+    expect(row.targetType).toBe("category");
   });
 });
-*/
-// ─────────────────────────────────────────────────────────────────────────────
 ```
 
 - [ ] **Step 9: Run the integration test — expect PASS**
