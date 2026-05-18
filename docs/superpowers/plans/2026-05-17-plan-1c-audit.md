@@ -499,9 +499,18 @@ These tests prove the hooks actually fire (spec §9.2). Add them to `apps/api/te
 - [ ] **Step 8: Append integration cases to `apps/api/tests/audit.service.test.ts`**
 
 ```typescript
-import { waitFor } from "vitest";
-import { createIntentService } from "../src/intents/service.js";
-import { consumeIntentService } from "../src/intents/service.js";
+import { createIntentService, consumeIntentService } from "../src/intents/service.js";
+
+// Polling helper — avoids waitFor API (not named-export in all vitest versions)
+async function pollAuditRow(wsId: string, maxMs = 2000) {
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    const r = await prisma.auditEvent.findFirst({ where: { workspaceId: wsId } });
+    if (r) return r;
+    await new Promise((res) => setTimeout(res, 100));
+  }
+  throw new Error("audit row never appeared");
+}
 
 // These tests require the hooks to be wired (Task 3 must be complete).
 // Paste these cases AFTER the existing describe blocks.
@@ -540,16 +549,8 @@ describe("audit hook — intent consume (actorType: user)", () => {
       },
       intent.id,
     );
-    // `void logAuditEvent(...)` is fire-and-forget — poll until the row lands
-    // (vitest's waitFor retries until the callback resolves or times out).
-    const row = await waitFor(
-      async () => {
-        const r = await prisma.auditEvent.findFirst({ where: { workspaceId } });
-        if (!r) throw new Error("audit row not yet written");
-        return r;
-      },
-      { timeout: 2000 },
-    );
+    // `void logAuditEvent(...)` is fire-and-forget — poll until the row lands.
+    const row = await pollAuditRow(workspaceId);
     expect(row.actorType).toBe("user");
     expect(row.actorUserId).toBe(userId);
     expect(row.action).toBe("createCategory");
@@ -558,58 +559,48 @@ describe("audit hook — intent consume (actorType: user)", () => {
   });
 });
 
-describe("audit hook — processChatTurn direct write (actorType: agent)", () => {
-  // Uses the existing chat.turn.test.ts stub pattern (Gemini mocked at the
-  // GoogleGenAI level). Read apps/api/tests/chat.turn.test.ts before
-  // implementing this; copy the boilerplate for creating a workspace,
-  // thread, and stubbing `ai.models.generateContent` to emit a single
-  // createCategory function call. Then assert the audit row.
+// ─── Direct chat hook test ───────────────────────────────────────────────────
+// Read apps/api/tests/chat.turn.test.ts BEFORE adding this case.
+// Copy the exact vi.mock("@google/genai", ...) setup from that file verbatim.
+// The mock must configure ai.models.generateContent to emit:
+//   Round 1: { functionCall: { name: "createCategory", args: { name: "AuditTest" } } }
+//   Round 2 (tool result feed-back): a plain text response (e.g. "Done")
+// Then call processChatTurn pointing at a real thread row, and poll for the
+// audit row. Boilerplate sketch:
 
+/*
+import { vi } from "vitest";
+import { processChatTurn } from "../src/chat/turn.js";
+import { loadEnv } from "../src/env.js";
+
+// COPY vi.mock("@google/genai") block from chat.turn.test.ts here (line-for-line).
+
+describe("audit hook — processChatTurn direct write (actorType: agent)", () => {
   let workspaceId: string;
   let userId: string;
+  let threadId: string;
 
   beforeEach(async () => {
-    const stamp = `ct-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-    const u = await prisma.user.create({
-      data: { id: stamp, email: `${stamp}@t.co`, name: "CT", tz: "America/Toronto" },
-    });
-    userId = u.id;
-    const ws = await prisma.workspace.create({ data: { name: "ct-ws" } });
-    workspaceId = ws.id;
-    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
-    const acct = await prisma.bankAccount.create({ data: { workspaceId, name: "x", type: "depository" } });
-    // Note: the existing chat.turn.test.ts shows how to stub GoogleGenAI; mirror that setup.
+    // Create user, workspace, membership, and chatThread in DB (see chat.turn.test.ts).
+    // Configure the GoogleGenAI mock for a two-round function-call sequence.
   });
 
   afterEach(async () => {
-    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
-    await prisma.user.deleteMany({ where: { id: userId } });
+    // Cleanup workspace + user.
+    vi.resetAllMocks();
   });
 
   it("processChatTurn write tool fires an audit row with actorType=agent", async () => {
-    // Use the same stub strategy as chat.turn.test.ts: mock `@google/genai`
-    // so that ai.models.generateContent returns a createCategory function call.
-    // Then call processChatTurn and poll for an audit_events row.
-    //
-    // The implementer should copy the GoogleGenAI mock from chat.turn.test.ts
-    // (vi.mock("@google/genai", ...)) and emit:
-    //   { functionCall: { name: "createCategory", args: { name: "Audit Test" } } }
-    // followed by a text turn that returns the result.
-    //
-    // After processChatTurn returns, poll for the audit row:
-    const row = await waitFor(
-      async () => {
-        const r = await prisma.auditEvent.findFirst({ where: { workspaceId } });
-        if (!r) throw new Error("audit row not yet written");
-        return r;
-      },
-      { timeout: 2000 },
-    );
+    const env = loadEnv(process.env);
+    await processChatTurn(env, { id: threadId, workspaceId }, userId, "owner");
+    const row = await pollAuditRow(workspaceId);
     expect(row.actorType).toBe("agent");
     expect(row.actorUserId).toBe(userId);
     expect(row.action).toBe("createCategory");
   });
 });
+*/
+// ─────────────────────────────────────────────────────────────────────────────
 ```
 
 - [ ] **Step 9: Run the integration test — expect PASS**
