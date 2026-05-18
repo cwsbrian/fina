@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { firstOfMonthDateInTz, basicPeriodRange, resolveUserTz, partsInTz } from "../chat/tools/periods.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
 
 export type PeriodEnum = "this_month" | "last_month" | "next_month";
 
@@ -30,21 +31,23 @@ export async function setBudgetService(
   });
   if (!cat) throw new Error("category_not_found");
 
-  const row = await prisma.budget.upsert({
-    where: {
-      workspaceId_categoryId_periodStart: {
+  const row = await withWorkspaceLock(ctx.workspaceId, async (tx) => {
+    return await tx.budget.upsert({
+      where: {
+        workspaceId_categoryId_periodStart: {
+          workspaceId: ctx.workspaceId,
+          categoryId: input.categoryId,
+          periodStart,
+        },
+      },
+      create: {
         workspaceId: ctx.workspaceId,
         categoryId: input.categoryId,
+        amount: new Prisma.Decimal(input.amount),
         periodStart,
       },
-    },
-    create: {
-      workspaceId: ctx.workspaceId,
-      categoryId: input.categoryId,
-      amount: new Prisma.Decimal(input.amount),
-      periodStart,
-    },
-    update: { amount: new Prisma.Decimal(input.amount) },
+      update: { amount: new Prisma.Decimal(input.amount) },
+    });
   });
 
   return {
@@ -155,6 +158,11 @@ export async function compareSpendingVsBudgetService(
     };
   }
 
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: ctx.workspaceId },
+    select: { currency: true },
+  });
+
   const budgetCategoryIds = budgets.map((b) => b.categoryId);
   const sums = await prisma.transaction.groupBy({
     by: ["categoryId"],
@@ -163,7 +171,6 @@ export async function compareSpendingVsBudgetService(
       removedAt: null,
       occurredAt: { gte, lt },
       categoryId: { in: budgetCategoryIds },
-      currency: "CAD",
       amount: { gt: 0 },
     },
     _sum: { amount: true },
