@@ -51,7 +51,7 @@ column carries no semantic information specific to the row.
 | Plaid Item exchange | If any returned account's `iso_currency_code` ≠ `workspace.currency`, reject the exchange with HTTP 400 `currency_mismatch`. No accounts/items persisted. |
 | Plaid Item exchange — null iso_currency_code | Treat null/missing as mismatch (reject). Plaid Canada always provides it; null indicates anomalous data or unofficial currency. |
 | Plaid `iso_currency_code` on individual transactions during sync | Ignored — the item-level validation at exchange time guarantees workspace consistency, and we no longer have a column to store it. |
-| `PATCH /workspaces/:id/currency` | Owner-only. Body: `{ currency: string }` (3-char ISO regex). Reject (409 `workspace_has_data`) if any `Transaction` OR `BankAccount` exists in the workspace. |
+| `PATCH /workspaces/:id/currency` | Owner-only. Body: `{ currency: string }` (3-char ISO regex). Reject (409 `workspace_has_data`) if **any of `Transaction`, `BankAccount`, `RecurringExpense`, or `Budget`** rows exist (all amount-bearing tables). The count+update must run inside `prisma.$transaction` with `pg_advisory_xact_lock(hashtext(workspaceId))` so concurrent writers cannot insert amount rows between the count and the update. |
 | Budget / categorize / spending math | Unchanged — already treats all amounts as same-currency. |
 | Migration data loss | Acceptable: all existing rows have `currency = "CAD"` (verified by inspection). No prod data. |
 
@@ -139,12 +139,22 @@ practice.
 ### 5.6 Plaid item exchange
 
 `apps/api/src/routes/plaid.ts`:
-- After Plaid's `linkTokenExchange` returns accounts, BEFORE the DB inserts,
-  validate every account's `balances?.iso_currency_code`:
-  - If any value differs from `workspace.currency`, return
-    `400 currency_mismatch` with body
-    `{ error: "currency_mismatch", workspaceCurrency: "...", bankCurrency: "..." }`.
-  - If any value is null/undefined, also treat as mismatch.
+- After Plaid's `itemPublicTokenExchange` returns an `access_token` + the
+  subsequent `accountsGet` call returns account list, BEFORE the local DB
+  inserts, validate every account's `balances?.iso_currency_code`:
+  - If any value differs from `workspace.currency`, OR is null/undefined,
+    treat as mismatch.
+- On mismatch: **call `plaid.itemRemove({ access_token })` BEFORE returning
+  the error.** Plaid has already created an Item upstream on its end; we
+  must un-create it or the user's Plaid "Items limit" is consumed by a
+  ghost connection they can't see in our UI. Wrap the `itemRemove` call
+  in a try/catch — if it fails (network, etc.), log a warning but still
+  return the mismatch error to the user. Persisting a stub `PlaidItem`
+  row with a "needs_unlink" flag for later cleanup is out of scope; we
+  document the rare-failure case in the route comment.
+- Return `400 currency_mismatch` with body
+  `{ error: "currency_mismatch", workspaceCurrency: "...", bankCurrency: "..." }`.
+  Use `"unknown"` for `bankCurrency` if null/undefined.
 - Remove `currency: a.balances?.iso_currency_code ?? "CAD"` from the
   account insert payload.
 
@@ -183,17 +193,28 @@ app.patch<{ Params: { id: string } }>(
         return reply.code(400).send({ error: "invalid_body" });
       }
       const wsId = ctx.membership.workspaceId;
-      const [txCount, acctCount] = await Promise.all([
-        prisma.transaction.count({ where: { workspaceId: wsId } }),
-        prisma.bankAccount.count({ where: { workspaceId: wsId } }),
-      ]);
-      if (txCount > 0 || acctCount > 0) {
-        return reply.code(409).send({ error: "workspace_has_data" });
-      }
-      const updated = await prisma.workspace.update({
-        where: { id: wsId },
-        data: { currency: parsed.data.currency },
-        select: { id: true, name: true, currency: true },
+      // Wrap count+update in $transaction with the same per-workspace
+      // advisory lock used by writers (createManualTransactionService).
+      // Without the lock, a concurrent manual-tx or Plaid exchange could
+      // insert amount rows between our count and update, silently
+      // relabeling them in the new currency.
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${wsId}))`;
+        const [txCount, acctCount, recurringCount, budgetCount] = await Promise.all([
+          tx.transaction.count({ where: { workspaceId: wsId } }),
+          tx.bankAccount.count({ where: { workspaceId: wsId } }),
+          tx.recurringExpense.count({ where: { workspaceId: wsId } }),
+          tx.budget.count({ where: { workspaceId: wsId } }),
+        ]);
+        if (txCount + acctCount + recurringCount + budgetCount > 0) {
+          // Signal failure via thrown sentinel; route maps to 409.
+          throw new HttpError(409, "workspace_has_data");
+        }
+        return await tx.workspace.update({
+          where: { id: wsId },
+          data: { currency: parsed.data.currency },
+          select: { id: true, name: true, currency: true },
+        });
       });
       return reply.send({ workspace: updated });
     } catch (err) {
@@ -268,6 +289,24 @@ token is discarded; user has to redo Link if they want to retry.
 - `apps/api/src/routes/plaid.ts`
 - `apps/api/src/routes/workspaces.ts` — new PATCH handler
 
+**Chat tools (10 files):**
+Every tool that previously selected/output a `currency` field OR used a
+`{ currency: { not: "CAD" } }` filter to count "non-CAD" rows must change.
+After the column drop, `{ currency: ... }` in WHERE clauses fails the
+Prisma validator. Strip those filters (mismatched rows can't exist) and
+swap response currency for the workspace value.
+
+- `apps/api/src/chat/tools/find-transactions.ts` — drop `currency: { not: "CAD" }` filter, drop `currency: "CAD"` from schema, set response currency from workspace
+- `apps/api/src/chat/tools/get-cashflow-summary.ts` — same pattern
+- `apps/api/src/chat/tools/get-category-breakdown.ts` — same pattern
+- `apps/api/src/chat/tools/compare-spending-periods.ts` — same pattern
+- `apps/api/src/chat/tools/detect-recurring-merchants.ts` — same pattern
+- `apps/api/src/chat/tools/find-uncategorized-transactions.ts` — same pattern
+- `apps/api/src/chat/tools/get-transaction-details.ts` — set response currency from workspace
+- `apps/api/src/chat/tools/list-accounts.ts` — set response currency from workspace
+- `apps/api/src/chat/tools/list-recurring.ts` — set response currency from workspace
+- `apps/api/src/chat/tools/add-recurring.ts` — drop the `currency` zod field; ignore if model sends it
+
 **Tests:**
 - `apps/api/tests/workspaces.currency.test.ts` (new) — PATCH route ~6 cases
 - `apps/api/tests/plaid.routes.test.ts` — add ~2 currency_mismatch cases
@@ -281,7 +320,7 @@ No new dependencies.
 
 ## 8. Tests
 
-### 8.1 `workspaces.currency.test.ts` (new, ~6 cases)
+### 8.1 `workspaces.currency.test.ts` (new, ~8 cases)
 
 1. PATCH 200 happy: fresh workspace, valid ISO → returns updated workspace
 2. PATCH 400 invalid_body: `currency: "us"` (lowercase) → 400
@@ -289,6 +328,8 @@ No new dependencies.
 4. PATCH 403 insufficient_role: editor → 403
 5. PATCH 409 workspace_has_data: workspace with one bank_account but no transaction → 409 `workspace_has_data`
 6. PATCH 409 workspace_has_data: workspace with one manual transaction (which atomically creates its Cash bank_account) → 409 `workspace_has_data`
+7. PATCH 409 workspace_has_data: workspace with one RecurringExpense (no tx/account) → 409 `workspace_has_data`
+8. PATCH 409 workspace_has_data: workspace with one Budget (no tx/account/recurring) → 409 `workspace_has_data`
 
 ### 8.2 Plaid currency_mismatch (~2 cases)
 
@@ -320,10 +361,14 @@ Add to existing `plaid.routes.test.ts` mocked exchange test pattern:
 4. baseline 83/699 → **84 files / ~707 tests** (one new test file + ~6
    cases + 2 plaid cases + small fix-ups).
 5. No new dependency.
-6. Sanity grep: `grep -rn "\.currency" apps/api/src/` should show only:
-   - `workspace.currency` reads
-   - response `currency: workspaceCurrency` assignments
-   No `row.currency` reads or per-row writes for the 3 dropped columns.
+6. Sanity grep: `grep -rn "currency" apps/api/src/` (NOT just `.currency` —
+   chat tools use literal `currency: { not: "CAD" }` Prisma filters) should
+   show only:
+   - `workspace.currency` reads (and `Workspace.currency` schema definition)
+   - response/field assignments setting `currency: <workspaceCurrencyValue>`
+   - the new PATCH route + Plaid mismatch handler
+   No `row.currency` reads, no `currency: { not: "CAD" }` filters, no
+   per-row writes for the 3 dropped columns.
 
 ---
 
