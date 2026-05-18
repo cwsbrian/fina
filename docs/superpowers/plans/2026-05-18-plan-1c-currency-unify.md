@@ -581,7 +581,7 @@ it("400 currency_mismatch when Plaid returns null iso_currency_code", async () =
     },
   ]);
   const res = await app.inject({
-    method: "POST", url: "/plaid/exchange",
+    method: "POST", url: `/workspaces/${wsId}/plaid/exchange`,
     headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
     payload: { publicToken: "public-test-token", institutionId: "ins_y", institutionName: "Weird" },
   });
@@ -761,6 +761,15 @@ grep -rn 'currency: "CAD"' apps/api/tests/ | head
 grep -rn 'currency: "USD"' apps/api/tests/ | head
 ```
 For each match, decide: (a) drop the key if it's an inline Prisma seed for `Transaction` or `RecurringExpense`, (b) keep if it's for `BankAccount` (column retained) or `Workspace`.
+
+**Test assertion updates (excludedNonCadCount):** Any chat-tool test that asserts an `excludedNonCadCount` field in the response payload (find-transactions, get-cashflow-summary, get-category-breakdown, compare-spending-periods) must be updated. Search:
+```bash
+grep -rn 'excludedNonCadCount\|excluded_non_cad\|nonCadExcluded' apps/api/tests/ | head
+```
+For each match:
+- If the assertion is `expect(result.excludedNonCadCount).toBe(0)`: delete the assertion (field no longer exists in response).
+- If the assertion is `expect(result.excludedNonCadCount).toBe(N)` where N > 0: the test was previously seeding non-CAD transactions to verify exclusion — that seed code also fails after the column drop. Delete both the seed code AND the assertion since the single-currency invariant makes the scenario impossible.
+- If the assertion is inside an object-shape match (e.g., `toEqual({ ... excludedNonCadCount: 0 })`): remove that key from the expected object.
 
 ### 4.8 Commit
 
