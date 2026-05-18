@@ -1,5 +1,4 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "../db.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
 import { dateKeyInTz, resolveUserTz } from "../chat/tools/periods.js";
 import { withWorkspaceLock } from "../locks/workspace.js";

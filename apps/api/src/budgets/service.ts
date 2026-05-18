@@ -158,11 +158,6 @@ export async function compareSpendingVsBudgetService(
     };
   }
 
-  const workspace = await prisma.workspace.findUniqueOrThrow({
-    where: { id: ctx.workspaceId },
-    select: { currency: true },
-  });
-
   const budgetCategoryIds = budgets.map((b) => b.categoryId);
   const sums = await prisma.transaction.groupBy({
     by: ["categoryId"],
