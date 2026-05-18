@@ -226,3 +226,71 @@ describe("createManualTransactionService", () => {
     expect(r2.transaction.accountId).toBe(accounts[0]!.id);
   });
 });
+
+async function makeFree(userId: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { trialEndsAt: new Date(Date.now() - 24 * 60 * 60 * 1000), trialConsumed: true },
+  });
+}
+
+describe("POST /workspaces/:id/transactions/manual", () => {
+  it("201 happy path for Free-tier user (no Pro gate)", async () => {
+    const { cookie, wsId, userId } = await setupEditor("mtroute@t.co");
+    await makeFree(userId);
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/transactions/manual`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { merchantRaw: "Tim Hortons", amount: 4.5, occurredAt: "2026-05-17" },
+    });
+    expect(res.statusCode).toBe(201);
+    const body = res.json() as { transaction: { source: string; merchantNormalized: string } };
+    expect(body.transaction.source).toBe("manual");
+    expect(body.transaction.merchantNormalized).toBe("tim hortons");
+  });
+
+  it("400 workspace_mismatch when X-Workspace-Id differs from path", async () => {
+    const a = await setupEditor("mtwm1@t.co");
+    const b = await setupEditor("mtwm2@t.co");
+    await prisma.membership.create({
+      data: { userId: a.userId, workspaceId: b.wsId, role: "editor" },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${a.wsId}/transactions/manual`,
+      headers: { cookie: a.cookie, "x-workspace-id": b.wsId, "content-type": "application/json" },
+      payload: { merchantRaw: "X", amount: 1 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "workspace_mismatch" });
+  });
+
+  it("400 invalid_body when required fields missing", async () => {
+    const { cookie, wsId } = await setupEditor("mtbad@t.co");
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/transactions/manual`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: { amount: 5 },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "invalid_body" });
+  });
+
+  it("403 insufficient_role for viewer", async () => {
+    const owner = await setupEditor("mtown@t.co");
+    const viewer = await setupEditor("mtvw@t.co");
+    await prisma.membership.create({
+      data: { userId: viewer.userId, workspaceId: owner.wsId, role: "viewer" },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${owner.wsId}/transactions/manual`,
+      headers: { cookie: viewer.cookie, "x-workspace-id": owner.wsId, "content-type": "application/json" },
+      payload: { merchantRaw: "X", amount: 1 },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toEqual({ error: "insufficient_role" });
+  });
+});

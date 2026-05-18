@@ -3,6 +3,11 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { applyManualCategorize, ManualCategorizeError } from "../categorize/manual-categorize.js";
+import {
+  createManualTransactionService,
+  CreateManualTxError,
+  type CreateManualTxInput,
+} from "../transactions/create-manual.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -19,6 +24,15 @@ const BoolFlag = z
   .transform((v) => v === "true")
   .optional()
   .default("false");
+
+const ManualTxBody = z.object({
+  merchantRaw: z.string(),
+  amount: z.number(),
+  occurredAt: z.string().optional(),
+  categoryId: z.string().optional(),
+  note: z.string().optional(),
+  accountId: z.string().optional(),
+});
 
 const QuerySchema = z.object({
   cursor: z.string().optional(),
@@ -154,4 +168,40 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
   });
+
+  app.post<{ Params: { id: string } }>(
+    "/workspaces/:id/transactions/manual",
+    async (req, reply) => {
+      try {
+        const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+        if (req.params.id !== ctx.membership.workspaceId) {
+          return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const parsed = ManualTxBody.safeParse(req.body);
+        if (!parsed.success) {
+          return reply.code(400).send({ error: "invalid_body" });
+        }
+        const d = parsed.data;
+        const input: CreateManualTxInput = { merchantRaw: d.merchantRaw, amount: d.amount };
+        if (d.occurredAt !== undefined) input.occurredAt = d.occurredAt;
+        if (d.categoryId !== undefined) input.categoryId = d.categoryId;
+        if (d.note       !== undefined) input.note       = d.note;
+        if (d.accountId  !== undefined) input.accountId  = d.accountId;
+        const result = await createManualTransactionService(
+          { workspaceId: ctx.membership.workspaceId, userId: ctx.session.userId },
+          input,
+        );
+        return reply.code(201).send(result);
+      } catch (err) {
+        if (err instanceof HttpError) {
+          return reply.code(err.statusCode).send({ error: err.code });
+        }
+        if (err instanceof CreateManualTxError) {
+          const status = err.code.startsWith("invalid_") ? 400 : 404;
+          return reply.code(status).send({ error: err.code });
+        }
+        throw err;
+      }
+    },
+  );
 }
