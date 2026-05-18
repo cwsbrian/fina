@@ -1,4 +1,10 @@
 import { Prisma } from "@prisma/client";
+import {
+  AUDIT_WRITE_TOOLS,
+  logAuditEvent,
+  resolveTargetType,
+  extractTargetId,
+} from "../audit/service.js";
 import type { Role } from "@fina/shared";
 import { prisma } from "../db.js";
 import type { ToolDef } from "../chat/tools/types.js";
@@ -89,5 +95,18 @@ export async function consumeIntentService(
     { env: ctx.env, workspaceId: ctx.workspaceId, userId: ctx.userId, role: ctx.role },
     parsed.data,
   );
+  if (AUDIT_WRITE_TOOLS.has(payload.tool)) {
+    void logAuditEvent({
+      workspaceId: ctx.workspaceId,
+      actorType: "user",
+      actorUserId: ctx.userId,
+      action: payload.tool,
+      targetType: resolveTargetType(payload.tool),
+      targetId:   extractTargetId(payload.tool, result),
+      intentId:   intentId,
+      payload:    payload.args,
+      result:     result,
+    });
+  }
   return { result };
 }

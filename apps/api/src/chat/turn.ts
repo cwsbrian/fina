@@ -9,6 +9,12 @@ import { selectHistoryWindow } from "./history-window.js";
 import type { ToolContext } from "./tools/types.js";
 import type { Role } from "@fina/shared";
 import type { PresentationBlock } from "./blocks.js";
+import {
+  AUDIT_WRITE_TOOLS,
+  logAuditEvent,
+  resolveTargetType,
+  extractTargetId,
+} from "../audit/service.js";
 
 const SYSTEM_PROMPT = `You are Fina, a personal-finance assistant for Canadian users. You help users
 understand their spending, categorize transactions, and plan their budgets.
@@ -154,6 +160,18 @@ export async function processChatTurn(
       const fcName = fc.name;
       const fcArgs = (fc.args ?? {}) as Record<string, unknown>;
       const dispatch = await dispatchTool(toolCtx, fcName, fcArgs, REGISTRY);
+      if (AUDIT_WRITE_TOOLS.has(fcName) && dispatch.ok) {
+        void logAuditEvent({
+          workspaceId: thread.workspaceId,
+          actorType: "agent",
+          actorUserId: userId,
+          action: fcName,
+          targetType: resolveTargetType(fcName),
+          targetId:   extractTargetId(fcName, dispatch.result),
+          payload:    redactToolCallArgs(fcName, fcArgs),
+          result:     dispatch.result,
+        });
+      }
       const responseObj = dispatch.ok ? { output: dispatch.result } : { error: dispatch.error };
       const redactedArgs = redactToolCallArgs(fcName, fcArgs);
       toolCalls.push({ toolName: fcName, args: redactedArgs, result: responseObj });
