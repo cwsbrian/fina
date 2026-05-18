@@ -455,7 +455,7 @@ if (mismatch) {
   // returning 400 so the user's Plaid Items quota isn't consumed by a
   // ghost connection invisible in our UI. Best-effort: log on failure.
   try {
-    await app.fina.plaid.itemRemove({ access_token: exch.data.access_token });
+    await plaidClient(app.fina.env).itemRemove({ access_token: exch.data.access_token });
   } catch (e) {
     app.log.warn({ err: e }, "plaid.itemRemove failed during currency_mismatch cleanup");
   }
@@ -517,7 +517,7 @@ try {
 } catch (e) {
   if ((e as { code?: string })?.code === "currency_mismatch_inlock") {
     try {
-      await app.fina.plaid.itemRemove({ access_token: exch.data.access_token });
+      await plaidClient(app.fina.env).itemRemove({ access_token: exch.data.access_token });
     } catch (ee) {
       app.log.warn({ err: ee }, "plaid.itemRemove failed during in-lock currency_mismatch cleanup");
     }
@@ -554,7 +554,7 @@ it("400 currency_mismatch when Plaid returns USD account for CAD workspace", asy
   ]);
   const res = await app.inject({
     method: "POST",
-    url: "/plaid/exchange",
+    url: `/workspaces/${wsId}/plaid/exchange`,
     headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
     payload: { publicToken: "public-test-token", institutionId: "ins_x", institutionName: "USBank" },
   });
@@ -657,30 +657,34 @@ const workspace = await prisma.workspace.findUniqueOrThrow({
 
 For each of these files, the pattern is the same:
 1. Read `workspace.currency` once at the top of the tool's `run` function.
-2. Remove `currency: { not: "CAD" }` filters from any Prisma `where` clauses (if present).
-3. Remove `currency: true` from Prisma `select` clauses on Transaction (if present).
-4. Replace `r.currency` / `t.currency` / `tx.currency` in response mappers with `workspace.currency`.
+2. **Remove BOTH `currency: "CAD"` AND `currency: { not: "CAD" }` filters** from any Prisma `where` clauses. The positive filter is in main `findMany`/`count`/`groupBy` queries; the negative filter is in companion "non-CAD-excluded" count queries. After the column drop, both are Prisma-invalid AND single-currency-per-workspace is enforced, so they're redundant.
+3. **Remove any `excludedNonCadCount` / "excluded non-CAD" companion logic** — these counts were tracking how many rows had a different currency. With the invariant, they're always 0. Drop the count query, drop the variable, and drop the field from the output schema/response.
+4. Remove `currency: true` from Prisma `select` clauses on Transaction (if present).
+5. Replace `r.currency` / `t.currency` / `tx.currency` in response mappers with `workspace.currency`.
 
 - [ ] **Step 3: Edit `apps/api/src/chat/tools/find-transactions.ts`**
-  - Drop `currency: { not: "CAD" }` from `prisma.transaction.count` where (line ~216)
-  - Drop `currency: "CAD"` from output schema (line ~173)
-  - Add workspace lookup; map response currency from workspace
-  - `r.currency` in the row mapper → `workspace.currency`
+  - In the `where: Prisma.TransactionWhereInput = { ... }` block (line ~170-173): **REMOVE** the `currency: "CAD",` line (it's a where-filter on Transaction, not an output value).
+  - Drop `currency: { not: "CAD" }` from the companion `prisma.transaction.count` where clause (line ~216) AND remove the entire `excludedNonCadCount` count query + variable + field if present.
+  - Add workspace lookup; map response currency from workspace.
+  - `r.currency` in the row mapper → `workspace.currency`.
 
 - [ ] **Step 4: Edit `apps/api/src/chat/tools/get-cashflow-summary.ts`**
-  - Drop `currency: { not: "CAD" }` filter (line ~67)
-  - Drop `currency: "CAD"` from schema (lines ~29, ~53, ~128)
-  - Add workspace lookup; use `workspace.currency` for response
+  - **REMOVE `currency: "CAD"`** from the main `prisma.transaction.findMany` `where` block (line ~53) — it's a Prisma filter, not an output value.
+  - Drop the companion `excludedNonCadCount` count query that uses `currency: { not: "CAD" }` (line ~67) plus its accumulator variable.
+  - Drop `currency: "CAD"` from the output type declaration (line ~29) and response builder (line ~128).
+  - Add workspace lookup; use `workspace.currency` for response.
 
 - [ ] **Step 5: Edit `apps/api/src/chat/tools/get-category-breakdown.ts`**
-  - Drop `currency: { not: "CAD" }` filter (line ~87)
-  - Drop `currency: "CAD"` from schema (lines ~40, ~59, ~143)
-  - Add workspace lookup; use `workspace.currency` for response
+  - **REMOVE `currency: "CAD"`** from the main Prisma `where` block (line ~59).
+  - Drop the companion `currency: { not: "CAD" }` count query (line ~87) and `excludedNonCadCount` variable/field.
+  - Drop `currency: "CAD"` from output type (line ~40) and response (line ~143).
+  - Add workspace lookup; use `workspace.currency` for response.
 
 - [ ] **Step 6: Edit `apps/api/src/chat/tools/compare-spending-periods.ts`**
-  - Drop `currency: { not: "CAD" }` filter (if present)
-  - Drop `currency: "CAD"` from schema (lines ~40, ~127, ~137)
-  - Add workspace lookup; use `workspace.currency` for response
+  - **REMOVE `currency: "CAD"`** from any Prisma `where` blocks (lines ~127, ~137 if they're filters; check context).
+  - Drop any companion `currency: { not: "CAD" }` count query.
+  - Drop `currency: "CAD"` from output type (line ~40).
+  - Add workspace lookup; use `workspace.currency` for response.
 
 - [ ] **Step 7: Edit `apps/api/src/chat/tools/detect-recurring-merchants.ts`**
   - Drop `currency: true` from `prisma.transaction.findMany` select (line ~109)
