@@ -199,11 +199,14 @@ In `processChatTurn`, after each tool call result is captured (but before
 returning from the loop iteration), fire the audit log for write tools:
 
 ```typescript
-import { AUDIT_WRITE_TOOLS, logAuditEvent, resolveTargetType, extractTargetId } from "../../audit/service.js";
+import { AUDIT_WRITE_TOOLS, logAuditEvent, resolveTargetType, extractTargetId } from "../audit/service.js";
 
-// Inside the tool-execution loop, after dispatching and obtaining `dispatch`:
-if (AUDIT_WRITE_TOOLS.has(fcName)) {
-  const toolResult = dispatch.ok ? dispatch.result : null;
+// Inside the tool-execution loop, after dispatching and obtaining `dispatch`.
+// Only log when dispatch SUCCEEDED (mutation actually happened).
+// Failed dispatches (validation error, tool.run throw) must not produce
+// audit rows for actions that never happened.
+if (AUDIT_WRITE_TOOLS.has(fcName) && dispatch.ok) {
+  const toolResult = dispatch.result;
   void logAuditEvent({
     workspaceId: ctx.workspaceId,
     actorType: "agent",
@@ -264,7 +267,7 @@ No new dependencies. No HTTP routes.
 2. `logAuditEvent` does NOT throw on DB error (insert into bad workspace → Prisma FK error → caught and warned, returns normally).
 3. `resolveTargetType("createCategory")` → `"category"`.
 4. `resolveTargetType("removeRecurring")` → `"recurring_expense"`.
-5. `resolveTargetType("mapMerchantToCategory")` → `null`.
+5. `resolveTargetType("mapMerchantToCategory")` → `"merchant_mapping"` (matches §5 table; it has a target type even though targetId is null because the key is merchantNormalized, not a row id).
 6. `extractTargetId("createCategory", { category: { id: "c1" } })` → `"c1"`.
 7. `extractTargetId("removeRecurring", { removed: true })` → `null`.
 
