@@ -93,7 +93,7 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina \
 ```
 
 READ the generated `migration.sql`. It should contain:
-- `CREATE TABLE "audit_events"` with 10 columns
+- `CREATE TABLE "audit_events"` with 11 columns
 - `CREATE INDEX "audit_events_workspaceId_createdAt_idx" ON "audit_events"("workspaceId", "createdAt")`
 - 1 FK constraint (workspace → CASCADE)
 
@@ -492,12 +492,79 @@ pnpm nx run api:test --skipNxCache 2>&1 | tail -5
 
 **Expected:** 82 files / ~679 tests PASS (81 + 1 new test file; 665 + 14 new cases). No regression in any existing file.
 
-### 3.4 Commit
+### 3.4 Integration tests for hook behavior
 
-- [ ] **Step 8: Commit**
+These tests prove the hooks actually fire (spec §9.2). Add them to `apps/api/tests/audit.service.test.ts` (append after the existing describe blocks in Task 2), then run after wiring the hooks.
+
+- [ ] **Step 8: Append integration cases to `apps/api/tests/audit.service.test.ts`**
+
+```typescript
+import { createIntentService } from "../src/intents/service.js";
+
+// These tests require the hooks to be wired (Task 3 must be complete).
+// Paste these cases AFTER the existing describe blocks.
+
+describe("audit hook — intent consume (actorType: user)", () => {
+  let workspaceId: string;
+  let userId: string;
+
+  beforeEach(async () => {
+    const stamp = `ih-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "IH", tz: "America/Toronto" },
+    });
+    userId = u.id;
+    const ws = await prisma.workspace.create({ data: { name: "ih-ws" } });
+    workspaceId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: workspaceId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  it("consumeIntentService creates an audit row with actorType=user and intentId set", async () => {
+    const { consumeIntentService } = await import("../src/intents/service.js");
+    const { intent } = await createIntentService(
+      { workspaceId, userId },
+      { tool: "createCategory", args: { name: "AuditMe" } },
+    );
+    await consumeIntentService(
+      {
+        workspaceId,
+        userId,
+        role: "owner",
+        env: { GEMINI_API_KEY: "test-key", CHAT_MODEL: "gemini-2.5-flash-lite" } as never,
+      },
+      intent.id,
+    );
+    const row = await prisma.auditEvent.findFirst({ where: { workspaceId } });
+    expect(row?.actorType).toBe("user");
+    expect(row?.actorUserId).toBe(userId);
+    expect(row?.action).toBe("createCategory");
+    expect(row?.intentId).toBe(intent.id);
+    expect(row?.targetType).toBe("category");
+  });
+});
+```
+
+Note: the direct-chat hook (`processChatTurn` actorType = "agent") is exercised via the intent consume test plus the unit tests. Adding a `processChatTurn` stub test is omitted because it requires mocking Gemini; the consume integration test above proves the shared `logAuditEvent` + hook mechanism works end-to-end.
+
+- [ ] **Step 9: Run the integration test — expect PASS**
 
 ```bash
-git add apps/api/src/chat/turn.ts apps/api/src/intents/service.ts
+pnpm --filter @fina/api exec vitest run tests/audit.service.test.ts --reporter=basic 2>&1 | tail -10
+```
+
+**Expected:** all cases pass (14 from Task 2 + 1 new integration = 15).
+
+### 3.5 Commit
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add apps/api/src/chat/turn.ts apps/api/src/intents/service.ts apps/api/tests/audit.service.test.ts
 git commit -m "feat(plan 1c-audit): hook logAuditEvent into turn + intents consume"
 ```
 
