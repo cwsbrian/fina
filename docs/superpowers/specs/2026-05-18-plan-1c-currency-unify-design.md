@@ -378,13 +378,12 @@ No new dependencies.
 6. PATCH 409 workspace_has_data: workspace with one manual transaction (which atomically creates its Cash bank_account) → 409 `workspace_has_data`
 7. PATCH 409 workspace_has_data: workspace with one RecurringExpense (no tx/account) → 409 `workspace_has_data`
 8. PATCH 409 workspace_has_data: workspace with one Budget (no tx/account/recurring) → 409 `workspace_has_data`
-9. **Race test (createManualTransactionService):** `Promise.all([ PATCH /currency, createManualTransactionService ])` on a fresh workspace either:
-   - PATCH wins → manual-tx returns and observes new currency in its response,
-   - or manual-tx wins → PATCH returns 409 workspace_has_data.
-   Never the silent-relabel outcome (PATCH 200 + transaction.currency=oldCurrency).
-10. **Race test (addRecurringService):** same shape as #9 but with `addRecurringService` as the concurrent writer. Either PATCH wins (recurring response shows new currency) or recurring wins (PATCH returns 409). Catches the case where addRecurringService is updated but the advisory lock is missed.
-11. **Race test (setBudgetService):** same shape as #9 but with `setBudgetService` (with a category seeded out-of-band — Budget requires categoryId). Either PATCH wins or setBudget wins; PATCH never silently relabels the new budget amount.
-12. **Plaid mismatch under race:** spec-driven mock — concurrent PATCH that wins between the route's outer mismatch check and the locked recheck must cause the locked exchange to abort with `currency_mismatch` and `itemRemove` to be called. Use Plaid client mock so we can assert `itemRemove` is invoked.
+9. **Lock-presence test (createManualTransactionService):** Acquire `pg_advisory_xact_lock(hashtext(workspaceId))` from a dedicated Prisma client holding an open transaction (`BEGIN; SELECT pg_advisory_xact_lock(...)`). While that lock is held, call PATCH — assert PATCH does NOT resolve within 300ms (`Promise.race` against a sleep). Then COMMIT the holder; assert PATCH resolves with 200. This **deterministically proves the lock is taken** by the PATCH path; the same test pattern applies to each writer below.
+10. **Lock-presence test (addRecurringService):** Same holder pattern. While the lock is held, call `addRecurringService(...)` — assert it does NOT resolve within 300ms. Release; assert it resolves. Failing-to-block proves the writer didn't acquire the lock.
+11. **Lock-presence test (setBudgetService):** Same holder pattern with `setBudgetService(...)` (Budget requires a seeded category).
+12. **Lock-presence test (Plaid exchange):** Same holder pattern. Mock `plaid.itemPublicTokenExchange` and `plaid.accountsGet` to return CAD accounts. While the workspace lock is held, hit `POST /plaid/exchange` — assert it does NOT resolve within 300ms. Release; assert it returns 200 (or the standard exchange success body). This proves the exchange path takes the lock.
+13. **Plaid in-lock recheck:** Same Plaid mocks. (a) Outer check passes (CAD account, CAD workspace). (b) Inject a PATCH-currency call that lands AFTER the outer check but BEFORE the locked transaction (use a `prisma.$transaction` spy or a manually held lock that's released right after PATCH commits). The locked exchange must then detect the new workspace currency, throw inside the transaction, and call `itemRemove` afterward. Assert: response 400 `currency_mismatch`, no `plaid_items` row, `itemRemove` was called on the mock.
+14. **Silent-relabel never happens (assertion):** A coarse integration test that does `Promise.all([PATCH, addRecurring])` 50 times across fresh workspaces and asserts every outcome is either (PATCH 200 + recurring 409/PATCH-locked-out) or (writer wins + PATCH 409). Acts as a tripwire if locks regress in either path.
 
 ### 8.2 Plaid currency_mismatch (~2 cases)
 
