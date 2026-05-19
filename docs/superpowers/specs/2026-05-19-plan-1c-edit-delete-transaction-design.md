@@ -45,7 +45,7 @@ no new column is needed.
 | Editable fields (PATCH) | `amount`, `merchantRaw`, `occurredAt`, `categoryId`, `note` |
 | PATCH only-manual rule | `source !== "manual"` → 400 `not_editable`. Plaid tx must use existing `/categorize` or future split flow. |
 | PATCH already-removed rule | `removedAt != null` → 400 `already_removed`. User must restore (out of scope) before editing. |
-| DELETE applies to | Both manual and Plaid tx |
+| DELETE applies to | Manual tx (any state). Plaid tx **only when `pending = false`** — see §6. Pending Plaid tx → 400 `cannot_delete_pending`. |
 | DELETE idempotent | Already-removed tx → 200 `{ removed: false, alreadyRemoved: true }`. No DB write, no audit row, no error. |
 | `categorizationSource` on edit | If PATCH sets `categoryId` to non-null → `categorizationSource = "manual"`. If PATCH clears (`null`) → `categorizationSource = null`. Otherwise untouched. |
 | `merchantNormalized` on edit | If PATCH changes `merchantRaw` → recompute via `normalizeMerchant` and write. Otherwise untouched. |
@@ -82,9 +82,10 @@ No schema changes. Reuses existing fields:
 
 **Body parser semantics:**
 
+- The Zod body schema is `.strict()` — unknown keys (typos like `merchant` instead of `merchantRaw`) → 400 `invalid_body`.
 - Omitted field → leave column unchanged.
 - Field set to `null` (for nullable columns: `categoryId`, `note`) → clear column.
-- For non-nullable columns (`amount`, `merchantRaw`, `occurredAt`): `null` is invalid → 400 `invalid_<field>`.
+- For non-nullable columns (`amount`, `merchantRaw`, `occurredAt`): the Zod schema does NOT mark them `.nullable()`. `null` fails Zod parsing → 400 `invalid_body`. No separate `invalid_<field>` path for nulls.
 - Empty body `{}` → no-op; return current tx unchanged (200).
 
 **Pre-checks (in lock):**
@@ -100,7 +101,7 @@ No schema changes. Reuses existing fields:
 {
   transaction: {
     id: string;
-    amount: string;            // toFixed(2)
+    amount: string;            // Prisma.Decimal.toString() — matches POST /manual and GET shape
     currency: string;          // workspace.currency
     merchantRaw: string;
     merchantNormalized: string;
@@ -110,7 +111,7 @@ No schema changes. Reuses existing fields:
     source: "manual";
     accountId: string;
     createdAt: string;         // ISO
-    updatedAt: string;         // ISO
+    updatedAt: string;         // ISO (always — even for empty-body no-op, return DB row's current updatedAt)
   }
 }
 ```
@@ -139,6 +140,7 @@ No schema changes. Reuses existing fields:
 **Pre-checks (in lock):**
 
 1. Tx exists in `:id` workspace → else 404 `not_found`.
+2. If `pending === true` AND `plaidTransactionId !== null` → 400 `cannot_delete_pending`. See §6 for the durability reason. Manual tx (`plaidTransactionId === null`) is never "pending" in the Plaid sense — its `pending` column is always `false` (per `create-manual.ts`), so the gate only ever rejects Plaid pending tx.
 
 **Logic:**
 
@@ -151,7 +153,7 @@ No schema changes. Reuses existing fields:
 { removed: boolean; alreadyRemoved?: true }
 ```
 
-**Errors:** same auth/role/workspace gates as PATCH. 404 `not_found` if tx missing.
+**Errors:** same auth/role/workspace gates as PATCH. 404 `not_found` if tx missing. 400 `cannot_delete_pending` for Plaid pending tx.
 
 ---
 
@@ -165,13 +167,14 @@ No schema changes. Reuses existing fields:
 | `apps/api/src/transactions/create-manual.ts` | MODIFY | Replace inline validators with imports from `validators.ts`. Behavior unchanged. |
 | `apps/api/src/transactions/edit.ts` | NEW | `editTransactionService(ctx, txId, input)` + `EditTxError`. |
 | `apps/api/src/transactions/remove.ts` | NEW | `removeTransactionService(ctx, txId)` + `RemoveTxError`. |
+| `apps/api/src/categorize/manual-categorize.ts` | MODIFY | Wrap the existing `$transaction` body in `withWorkspaceLock(workspaceId, ...)` and re-read the tx **inside** the lock so a concurrent PATCH (or anything writing `merchantRaw`/`merchantNormalized`) cannot leave `merchantNormalized` stale relative to `merchantRaw`. The category lookup may stay outside the lock (it's read-only and cheap; archiving races are pre-existing and out of scope). See §6 for the race scenario. |
 | `apps/api/src/routes/transactions.ts` | MODIFY | Add `PATCH` and `DELETE` handlers wiring to the services. |
 | `apps/api/tests/transactions.validators.test.ts` | NEW | Unit tests for the shared validators. |
 | `apps/api/tests/transactions.edit.service.test.ts` | NEW | Unit tests for `editTransactionService`. |
 | `apps/api/tests/transactions.remove.service.test.ts` | NEW | Unit tests for `removeTransactionService`. |
-| `apps/api/tests/transactions.edit.route.test.ts` | NEW | Route integration: status codes, body parsing, role gate. |
-| `apps/api/tests/transactions.remove.route.test.ts` | NEW | Route integration: status codes, idempotent path. |
-| `apps/api/tests/transactions.edit.race.test.ts` | NEW | Lock serialization test: two concurrent PATCHes resolve linearly. |
+| `apps/api/tests/transactions.edit.route.test.ts` | NEW | Route integration: status codes, body parsing (including `.strict()` reject of unknown keys), role gate. |
+| `apps/api/tests/transactions.remove.route.test.ts` | NEW | Route integration: status codes, idempotent path, `cannot_delete_pending` for Plaid pending. |
+| `apps/api/tests/transactions.edit.race.test.ts` | NEW | Lock serialization test: two concurrent PATCHes resolve linearly. Also covers PATCH-vs-categorize race (concurrent PATCH `merchantRaw` + categorize → final `merchantNormalized` matches final `merchantRaw`). |
 
 ### 5.2 Service signatures
 
@@ -306,7 +309,9 @@ const updated = await tx.transaction.update({
 
 ---
 
-## 6. Plaid sync interaction (documented edge case)
+## 6. Concurrency: Plaid sync + categorize interactions
+
+### 6.1 Plaid sync vs. user DELETE
 
 Three sync code paths touch `removedAt`:
 
@@ -314,11 +319,31 @@ Three sync code paths touch `removedAt`:
 |---|---|---|
 | `upsertModified` (Plaid `modified` event) | Updates amount/merchant/etc; does NOT touch `removedAt`. | ✓ User delete persists. |
 | `markRemoved` (Plaid `removed` event) | `updateMany where removedAt: null` → no-op if already removed. | ✓ User delete persists. |
-| Pending→posted promotion | Forces `removedAt: null` (intentional — re-link pending to posted). | ⚠ **Known issue.** User deletes a Plaid pending tx → Plaid promotes it to posted → tx reappears with `removedAt: null`. |
+| Pending→posted promotion | Forces `removedAt: null` (intentional — re-link pending to posted) at `apps/api/src/plaid/sync.ts:235`. | ✗ Would resurrect a user-deleted pending Plaid tx. |
 
-**Decision: accept the pending→posted resurrection.** Deleting a pending Plaid tx is unusual (typical flow: wait for posted, then categorize). If users complain, fix in `1C-audit-http` or its own micro-plan by adding a `removedReason` enum and gating the promotion's clear on `removedReason !== "user"`.
+**Mitigation: reject DELETE for `pending = true && plaidTransactionId != null`** (§4.2 pre-check 2). This avoids the resurrection without a schema change. Users wait for posted, then DELETE.
 
-This document is the authoritative record of this known behavior.
+A future plan (likely bundled with split or audit-http) can introduce `removedReason: PLAID_SYNC | USER` (or `userRemovedAt: DateTime?`) and gate the promotion's clear on the reason. Then we can lift the pending-DELETE restriction.
+
+### 6.2 PATCH vs. categorize race
+
+`applyManualCategorize` reads `merchantRaw` outside any lock, computes `merchantNormalized`, then writes `merchantNormalized` later. A concurrent PATCH that changes `merchantRaw` (which recomputes and writes its own `merchantNormalized`) can interleave such that the categorize's stale `merchantNormalized` overwrites the PATCH's fresh one:
+
+```
+T1 (categorize): read merchantRaw="Costco"  → norm="costco"
+T2 (PATCH):     write merchantRaw="Walmart", merchantNormalized="walmart"
+T1 (categorize): write merchantNormalized="costco"   ❌ inconsistent
+```
+
+**Fix in this plan:** `applyManualCategorize` adopts `withWorkspaceLock`. The lock acquires before the existing `prisma.$transaction` body, and the tx read moves inside the lock so it sees post-PATCH state. The category lookup may stay outside (read-only; pre-existing archive races are not introduced by this plan).
+
+### 6.3 PATCH vs. PATCH race
+
+Two concurrent PATCH calls on the same tx → serialized by `withWorkspaceLock`. Final state is one of {T1, T2} (whichever commits second wins), never an interleaved mix. Asserted by §8.5 race test.
+
+### 6.4 PATCH vs. Plaid sync race
+
+PATCH only edits manual tx (`source = "manual"`, no `plaidTransactionId`). Plaid sync only touches rows with a `plaidTransactionId`. Disjoint row sets → no row-level race. The advisory lock is still held by both, which serializes them, but no overlap is expected.
 
 ---
 
@@ -358,19 +383,21 @@ function validateNote(note: string | null | undefined): string | null {
 }
 ```
 
-The PATCH route distinguishes "field omitted" (Zod `undefined`) from "field set to `null`":
+The PATCH route distinguishes "field omitted" (Zod `undefined`) from "field set to `null`", and uses `.strict()` to reject unknown keys:
 
 ```ts
-const PatchBody = z.object({
-  amount: z.number().optional(),
-  merchantRaw: z.string().optional(),
-  occurredAt: z.string().optional(),
-  categoryId: z.string().nullable().optional(),  // null = clear, string = set, omitted = no-op
-  note: z.string().nullable().optional(),
-});
+const PatchBody = z
+  .object({
+    amount: z.number().optional(),
+    merchantRaw: z.string().optional(),
+    occurredAt: z.string().optional(),
+    categoryId: z.string().nullable().optional(),  // null = clear, string = set, omitted = no-op
+    note: z.string().nullable().optional(),
+  })
+  .strict();
 ```
 
-For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately do NOT use `.nullable()`. Sending `null` for these triggers Zod parse failure → 400 `invalid_body`.
+For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately do NOT use `.nullable()`. Sending `null` for these triggers Zod parse failure → 400 `invalid_body`. Sending unknown keys (e.g., `{ merchant: "Costco" }` typo) also fails parsing → 400 `invalid_body`.
 
 ---
 
@@ -413,8 +440,10 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 | Case | Setup | Assertion |
 |---|---|---|
 | happy manual | manual tx | `removed: true`, DB `removedAt != null` |
-| happy plaid | plaid tx | `removed: true`, DB `removedAt != null` |
+| happy plaid (posted) | plaid tx, `pending: false` | `removed: true`, DB `removedAt != null` |
+| reject plaid pending | plaid tx, `pending: true` | Throws `RemoveTxError("cannot_delete_pending")`, DB `removedAt` unchanged |
 | idempotent | tx already removed | `removed: false, alreadyRemoved: true`, DB `removedAt` unchanged (same value) |
+| idempotent pending plaid | plaid tx, `pending: true`, already `removedAt != null` | Returns idempotent `{ removed: false, alreadyRemoved: true }` — the pending check applies only to fresh-delete attempts, not to already-removed rows (otherwise an idempotent retry would start failing if Plaid flipped `pending` later) |
 | wrong workspace | tx in workspace B | Throws `RemoveTxError("not_found")` |
 | nonexistent | bad txId | Throws `RemoveTxError("not_found")` |
 
@@ -423,8 +452,10 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 `apps/api/tests/transactions.edit.route.test.ts`
 
 - PATCH 200 with full body → returns updated tx
-- PATCH 200 empty body → no-op
+- PATCH 200 empty body → no-op (returns current tx, no `update` call)
 - PATCH 400 `invalid_body` (bad Zod shape, e.g., `amount: "abc"`)
+- PATCH 400 `invalid_body` (null on non-nullable: `amount: null`, `merchantRaw: null`, `occurredAt: null`)
+- PATCH 400 `invalid_body` (unknown key: `{ merchant: "Costco" }` typo — `.strict()` rejects)
 - PATCH 400 `not_editable` (plaid tx)
 - PATCH 400 `already_removed`
 - PATCH 400 `workspace_mismatch`
@@ -436,7 +467,9 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 
 `apps/api/tests/transactions.remove.route.test.ts`
 
-- DELETE 200 `{ removed: true }` on first call
+- DELETE 200 `{ removed: true }` on first call (manual tx)
+- DELETE 200 `{ removed: true }` (posted Plaid tx)
+- DELETE 400 `cannot_delete_pending` (pending Plaid tx)
 - DELETE 200 `{ removed: false, alreadyRemoved: true }` on second call
 - DELETE 401 / 403 / 404 / `workspace_mismatch`
 
@@ -444,7 +477,8 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 
 `apps/api/tests/transactions.edit.race.test.ts`
 
-- Two concurrent PATCH calls on same tx with different `amount` → final value is one of the two (not interleaved). Verifies advisory lock serializes.
+- **PATCH vs. PATCH:** Two concurrent PATCH calls on same tx with different `amount` → final value is one of the two (not interleaved). Verifies advisory lock serializes.
+- **PATCH vs. categorize:** Concurrent PATCH (sets `merchantRaw = "Walmart"`) and `applyManualCategorize` (started before PATCH commit, originally reading `merchantRaw = "Costco"`) → final row has `merchantRaw = "Walmart"` AND `merchantNormalized = normalizeMerchant("Walmart")`. The categorize must see the post-PATCH `merchantRaw` thanks to the lock + re-read added in §5.1 to `manual-categorize.ts`. (Test pattern: use `pg_advisory_lock` from a separate connection to hold the workspace lock, fire categorize in background, release, then PATCH, then assert final state.)
 
 ### 8.6 Smoke
 
@@ -474,12 +508,16 @@ Rollout: ship behind no flag. PATCH/DELETE are net-new verbs at this URL — no 
 
 - [ ] PATCH only allows source = "manual" (Plaid edits routed elsewhere)
 - [ ] PATCH refuses already-removed tx (must use DELETE-restore flow, deferred)
-- [ ] DELETE is idempotent (no error on second call, no audit double-write when audit lands)
-- [ ] Validators are shared with `create-manual` (no duplication)
+- [ ] PATCH body uses `.strict()` — unknown keys → 400 `invalid_body`
+- [ ] DELETE rejects `pending && plaidTransactionId != null` fresh deletes with `cannot_delete_pending`
+- [ ] DELETE is idempotent for already-removed tx (no error on second call), and the pending-check does NOT block idempotent returns
+- [ ] Validators are shared with `create-manual` (no duplication); each service maps `TxValidationError.code` 1:1 to its own error
 - [ ] `categorizationSource` updates on category change (null → null, set → "manual")
 - [ ] `merchantNormalized` recomputed on `merchantRaw` change
 - [ ] Empty PATCH body returns current row (no update call)
-- [ ] All reads + writes happen inside `withWorkspaceLock`
-- [ ] Plaid sync edge case (§6) documented and accepted
+- [ ] All reads + writes happen inside `withWorkspaceLock` (PATCH, DELETE, AND the modified `applyManualCategorize`)
+- [ ] `applyManualCategorize` re-reads tx INSIDE the lock to avoid stale `merchantRaw` race
+- [ ] Plaid sync paths (§6.1) reviewed — pending-DELETE rejection is the gate against pending→posted resurrection
 - [ ] Audit log explicitly out of scope (defer to `1C-audit-http`)
-- [ ] Smoke test covers all paths including idempotent DELETE
+- [ ] Amount in response uses `Prisma.Decimal.toString()` (matches POST/GET) — NOT `toFixed(2)`
+- [ ] Smoke test covers all paths including idempotent DELETE and Plaid pending rejection
