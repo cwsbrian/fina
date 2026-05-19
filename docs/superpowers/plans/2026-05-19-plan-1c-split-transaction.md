@@ -1012,9 +1012,36 @@ EOF
 
 Strategy: per-row atomic update with where-clause guard. NO workspace lock. Where-clause guard (`categoryId: null, source: null`) makes the update idempotent and concurrency-safe against user PATCH.
 
-### Step 1: Update `categorize/service.ts` Step 2 (mapping)
+### Step 1: Update `categorize/service.ts` — Step 1 load filter + Step 2 mapping
 
-Open `apps/api/src/categorize/service.ts`. The mapping section currently filters tx by `categoryId: null` (today's column). Update to filter by allocation state instead.
+Open `apps/api/src/categorize/service.ts`. The function currently runs in 3 stages:
+1. Load `newTxIds` filtered by `categoryId: null` (today, around line 33).
+2. Apply merchant mappings to those tx (Step 2 mapping loop).
+3. Call Gemini for remaining tx (Step 3, around line 87-90 + 136-139).
+
+ALL THREE stages reference `Transaction.categoryId`. They must be rewritten so Step 1's load filter does not break after Task 8 drops the column.
+
+**1a. Rewrite the Step 1 load filter (around line 33):**
+
+Replace the existing filter:
+```ts
+// BEFORE:
+where: { id: { in: newTxIds }, workspaceId, categoryId: null },
+```
+with allocation-based equivalent:
+```ts
+// AFTER:
+where: {
+  id: { in: newTxIds },
+  workspaceId,
+  allocations: { some: {}, every: { categoryId: null, source: null } },
+},
+include: { allocations: { select: { id: true } } },
+```
+
+Then filter the returned list in JS to keep only tx with `allocations.length === 1` (per §6.2 — Prisma can't natively express "exactly one allocation, null cat, null source").
+
+**1b. Update Step 2 mapping section** (currently filters tx by `merchantNormalized: m.merchantNormalized` and `categoryId: null`).
 
 Find the `categorize` (or similarly named) function. The Step 2 mapping loop iterates over `merchantMappings` and updates tx with matching `merchantNormalized` AND `categoryId: null`. Replace that update logic with:
 
@@ -2078,17 +2105,19 @@ it("PATCH allocations clears needsReclassification flag", async () => {
 });
 ```
 
-Note: existing service tests that call `editTransactionService(ctx, txId, input)` (without flags) will fail to compile because of the new required `flags` argument. Update those callers to pass `flags`, deriving from the existing input shape:
+Note: existing service tests that call `editTransactionService(ctx, txId, input)` (without flags) will fail to compile because of the new required `flags` argument. Update those callers to pass `flags`, deriving via KEY PRESENCE (matching the spec §4.1.1 rule — so `note: null` is correctly classified as a manual-only edit):
 
 ```ts
 // At each existing test call site:
 {
-  manualOnlyFieldProvided: input.amount !== undefined || input.merchantRaw !== undefined
-                        || input.occurredAt !== undefined || "note" in input,
+  manualOnlyFieldProvided: "amount" in input || "merchantRaw" in input
+                        || "occurredAt" in input || "note" in input,
   categoryIdProvided: "categoryId" in input,
   allocationsProvided: "allocations" in input,
 }
 ```
+
+This matches the route handler's flag derivation in Step 3 (also `in body`).
 
 ### Step 5: Add new route tests to `transactions.edit.route.test.ts`
 
@@ -2321,16 +2350,18 @@ const where = {
 
 Use whichever existing variable holds the mode (look at the current arg parsing).
 
-**`find-transactions.ts`** — replace `categoryId: <input>` filter:
+**`find-transactions.ts`** — the existing filter resolves category names to a `categoryIds` array, then uses `categoryId: { in: categoryIds }` (around line 176). Replace with allocations predicate preserving the `in` semantics:
 
 ```ts
 where: {
   workspaceId: ctx.workspaceId,
   removedAt: null,
   // ... other filters ...
-  allocations: { some: { categoryId: input.categoryId } },
+  allocations: { some: { categoryId: { in: categoryIds } } },
 }
 ```
+
+Single-category and multi-category lookups both flow through this same pattern (`in` with a one-element array is fine).
 
 ### Step 3: Update each tool's test
 
@@ -2521,6 +2552,150 @@ For each tool, update tests to:
 - Where today's test asserts `t.categoryId === X`, also assert `t.allocations[0].categoryId === X` for N=1 cases.
 - Add at least one test per tool that exercises a split tx (N=2) returning both allocations.
 
+### Step 5b: Create new GET route test file
+
+The existing test files cover PATCH (`transactions.edit.route.test.ts`) and POST manual create. There is **no test file for the GET `/transactions` endpoint** — the route's response shape change here is otherwise untested.
+
+Create `apps/api/tests/transactions.list.route.test.ts`:
+
+```ts
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { FastifyInstance } from "fastify";
+import { prisma } from "../src/db.js";
+import { buildApp } from "../src/server.js";
+import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
+import { truncateAll, disconnect } from "./helpers/db.js";
+
+const env = {
+  NODE_ENV: "test" as const, PORT: 0,
+  DATABASE_URL: process.env.DATABASE_URL!,
+  BETTER_AUTH_SECRET: "x".repeat(48),
+  BETTER_AUTH_URL: "http://localhost:0",
+  EMAIL_FROM: "test@fina.app",
+  WEB_APP_URL: "http://localhost:3000",
+  PLAID_CLIENT_ID: "test_client_id",
+  PLAID_SECRET: "test_secret",
+  PLAID_ENV: "sandbox" as const,
+  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+  GEMINI_API_KEY: "test_gemini_key",
+};
+
+let app: FastifyInstance;
+beforeAll(async () => { app = await buildApp(env); await app.ready(); });
+afterAll(async () => { await app.close(); await disconnect(); });
+beforeEach(async () => { await truncateAll(); });
+
+async function setup(email: string) {
+  const u = await signUpAndGetCookie(app, { email });
+  const wsId = await getOwnerWorkspaceId(u.userId);
+  return { cookie: u.cookie, wsId, userId: u.userId };
+}
+
+async function seedTxWithAllocations(
+  wsId: string,
+  amount: string,
+  allocs: Array<{ categoryId: string | null; amount: string; source: "manual" | null }>,
+): Promise<string> {
+  const acct = await prisma.bankAccount.create({
+    data: { workspaceId: wsId, name: "Test", type: "depository" },
+  });
+  const tx = await prisma.transaction.create({
+    data: {
+      workspaceId: wsId, accountId: acct.id,
+      plaidTransactionId: null,
+      amount, merchantRaw: "Test", merchantNormalized: "test",
+      occurredAt: new Date("2026-05-19T12:00:00Z"),
+      pending: false, source: "manual", rawData: {},
+    },
+  });
+  await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+  await prisma.transactionAllocation.createMany({
+    data: allocs.map((a) => ({
+      transactionId: tx.id,
+      categoryId: a.categoryId,
+      amount: a.amount,
+      source: a.source,
+    })),
+  });
+  return tx.id;
+}
+
+describe("GET /workspaces/:id/transactions", () => {
+  it("response includes allocations array and needsReclassification per tx", async () => {
+    const { cookie, wsId } = await setup("tl1@t.co");
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-tl1" } });
+    await seedTxWithAllocations(wsId, "20", [{ categoryId: cat.id, amount: "20", source: "manual" }]);
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.transactions).toHaveLength(1);
+    expect(body.transactions[0].allocations).toHaveLength(1);
+    expect(body.transactions[0].allocations[0].categoryId).toBe(cat.id);
+    expect(body.transactions[0].needsReclassification).toBe(false);
+  });
+
+  it("split tx returns multiple allocations", async () => {
+    const { cookie, wsId } = await setup("tl2@t.co");
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-tl2" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-tl2" } });
+    await seedTxWithAllocations(wsId, "100", [
+      { categoryId: c1.id, amount: "60", source: "manual" },
+      { categoryId: c2.id, amount: "40", source: "manual" },
+    ]);
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    const body = res.json();
+    expect(body.transactions[0].allocations).toHaveLength(2);
+  });
+
+  it("filter ?categoryId=X matches via allocation predicate (incl. split tx)", async () => {
+    const { cookie, wsId } = await setup("tl3@t.co");
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-tl3" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-tl3" } });
+    // Single-category tx
+    await seedTxWithAllocations(wsId, "10", [{ categoryId: c1.id, amount: "10", source: "manual" }]);
+    // Split tx (c1+c2)
+    await seedTxWithAllocations(wsId, "20", [
+      { categoryId: c1.id, amount: "5", source: "manual" },
+      { categoryId: c2.id, amount: "15", source: "manual" },
+    ]);
+    // Unrelated tx
+    await seedTxWithAllocations(wsId, "5", [{ categoryId: c2.id, amount: "5", source: "manual" }]);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?categoryId=${c1.id}`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    const body = res.json();
+    expect(body.transactions).toHaveLength(2); // single c1 + split c1+c2
+  });
+
+  it("filter ?uncategorizedOnly=true matches tx with ≥1 null-cat allocation", async () => {
+    const { cookie, wsId } = await setup("tl4@t.co");
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-tl4" } });
+    await seedTxWithAllocations(wsId, "10", [{ categoryId: null, amount: "10", source: null }]);
+    await seedTxWithAllocations(wsId, "20", [{ categoryId: cat.id, amount: "20", source: "manual" }]);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?uncategorizedOnly=true`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    const body = res.json();
+    expect(body.transactions).toHaveLength(1);
+    expect(body.transactions[0].allocations[0].categoryId).toBeNull();
+  });
+});
+```
+
 ### Step 6: Run targeted tests
 
 ```bash
@@ -2528,10 +2703,8 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina
   tests/chat.tools.list-transactions.test.ts \
   tests/chat.tools.get-transaction-details.test.ts \
   tests/chat.tools.categorize-transaction.test.ts \
-  tests/transactions.test.ts
+  tests/transactions.list.route.test.ts
 ```
-
-(Replace `transactions.test.ts` with whatever file exercises the GET endpoint — check `ls apps/api/tests | grep transactions` to find the right one.)
 
 Expected: PASS.
 
@@ -2553,7 +2726,7 @@ git add apps/api/src/chat/tools/list-transactions.ts \
         apps/api/tests/chat.tools.list-transactions.test.ts \
         apps/api/tests/chat.tools.get-transaction-details.test.ts \
         apps/api/tests/chat.tools.categorize-transaction.test.ts \
-        apps/api/tests/transactions.test.ts 2>/dev/null
+        apps/api/tests/transactions.list.route.test.ts
 git commit -m "$(cat <<'EOF'
 feat(plan 1c-split-transaction): read paths — chat tools group B + GET response
 
@@ -2584,6 +2757,10 @@ EOF
 - Modify: `apps/api/src/categorize/map-merchant.ts` (drop mirror-write)
 - Modify: `apps/api/src/plaid/sync.ts` (drop categoryId/categorizationSource from updateMany/update data)
 - Modify: `apps/api/src/routes/transactions.ts` (drop categoryId from GET response)
+- Modify: `apps/api/src/chat/tools/find-transactions.ts` (drop `categorizationSource` from result type + response, drop `tx.categoryId` field if present)
+- Modify: `apps/api/src/chat/tools/get-transaction-details.ts` (drop `categorizationSource` + top-level `categoryId` from result; rely on `allocations`)
+- Modify: `apps/api/src/chat/tools/find-uncategorized-transactions.ts` (drop `categorizationSource` from result type + response)
+- Modify: `apps/api/src/chat/tools/list-transactions.ts` (drop top-level `categoryId`/`categorizationSource` if present)
 - Modify: all corresponding test files (drop assertions on the dropped fields)
 
 **Spec refs:** §3.2, §3.4 (final drop), §10 reviewer checklist line 762.
@@ -2668,13 +2845,26 @@ This is the big sweep. Each service that wrote `tx.categoryId` or `categorizatio
 - In `upsertModified` invalidation branch, remove `categoryId: null, categorizationSource: null` from the data field.
 - In `upsertAdded` and promotion branches, check there are no lingering categoryId references.
 
-### Step 4: Update response shapes
+### Step 4: Update response shapes — services + route
 
 **`create-manual.ts`**: drop `categoryId: string | null` from `CreateManualTxResult.transaction`. Drop the field from the response construction.
 
 **`edit.ts`**: drop `categoryId: string | null` from `EditTxResult.transaction`. Drop from `TX_SELECT`. Drop from `shape()` helper.
 
 **`routes/transactions.ts`** GET handler: drop `categoryId` from response item construction.
+
+**`manual-categorize.ts`**: drop `categoryId` and `categorizationSource` from `ManualCategorizeResult.tx`. Drop from the post-lock final read `select` and from the response builder.
+
+### Step 4b: Update chat tool response shapes
+
+Several chat tools today expose `tx.categoryId` and/or `tx.categorizationSource` in their tool result. Drop these references; rely on `tx.allocations` as the sole category surface:
+
+- **`apps/api/src/chat/tools/find-transactions.ts`** (lines ~70-72, ~229-231 today): drop `categorizationSource` from `Result` type AND from the per-tx response mapping. If `categoryId` appears at the tx top level, drop it too.
+- **`apps/api/src/chat/tools/get-transaction-details.ts`** (lines ~26, ~83 today): drop `categoryId` and `categorizationSource` from `Result.tx` type; drop from response builder. `tx.allocations` already includes per-allocation `categoryId` + `source`.
+- **`apps/api/src/chat/tools/find-uncategorized-transactions.ts`** (lines ~41, ~93 today): drop `categorizationSource` from `Result` type + response.
+- **`apps/api/src/chat/tools/list-transactions.ts`**: same — drop any top-level `categoryId`/`categorizationSource` from `Result` and response. (Allocations array already added in Task 7.)
+
+For each tool, verify with `grep -n "categoryId\|categorizationSource" apps/api/src/chat/tools/<file>.ts` that no lingering references remain post-edit.
 
 ### Step 5: Update tests
 
