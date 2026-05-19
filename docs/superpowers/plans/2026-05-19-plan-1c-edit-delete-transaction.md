@@ -73,7 +73,11 @@ describe("validateAmount", () => {
   it("rejects NaN", () => expect(() => validateAmount(Number.NaN)).toThrow(TxValidationError));
   it("rejects > max", () => expect(() => validateAmount(1_000_000_000)).toThrow(TxValidationError));
   it("rejects 0.005 (3 decimals)", () => expect(() => validateAmount(0.005)).toThrow(TxValidationError));
-  it("rejects 1e20 (scientific notation)", () => expect(() => validateAmount(1e20)).toThrow(TxValidationError));
+  it("rejects 1e20 (exceeds MAX_AMOUNT)", () => expect(() => validateAmount(1e20)).toThrow(TxValidationError));
+  it("rejects 1e-7 (scientific notation in toString)", () => {
+    // String(1e-7) === "1e-7" which fails the AMOUNT_RE digits-only check.
+    expect(() => validateAmount(1e-7)).toThrow(TxValidationError);
+  });
   it("error code is invalid_amount", () => {
     try { validateAmount(0); }
     catch (e) { expect((e as TxValidationError).code).toBe("invalid_amount"); }
@@ -412,6 +416,13 @@ import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
+// Static imports at top — cold-module loading must NOT happen inside the race
+// test where it could be misread as "blocked by lock". When Tasks 4/5 add their
+// race tests, append the corresponding import here (`editTransactionService`,
+// `removeTransactionService`) so the import-load cost is paid once at file
+// load, not during the timed lock test.
+import { applyManualCategorize } from "../src/categorize/manual-categorize.js";
+import { createManualTransactionService } from "../src/transactions/create-manual.js";
 
 const env = {
   NODE_ENV: "test" as const, PORT: 0,
@@ -482,16 +493,25 @@ async function seedManualTx(wsId: string, opts?: { merchantRaw?: string }): Prom
 describe("transactions race tests — lock acquisition proofs", () => {
   it("Test C: applyManualCategorize blocks while holder owns the workspace advisory lock", async () => {
     const { wsId } = await setupEditor("race-c@t.co");
-    const txId = await seedManualTx(wsId);
+    const txIdBaseline = await seedManualTx(wsId);
     await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } });
 
-    const { applyManualCategorize } = await import("../src/categorize/manual-categorize.js");
+    // Unlocked baseline: the same call without a holder must complete quickly
+    // (well under the locked-threshold). Proves the timeout-vs-finish race in
+    // the locked phase isn't just measuring DB warmup cost.
+    const tBaseline = Date.now();
+    await applyManualCategorize({ workspaceId: wsId, txId: txIdBaseline, categoryName: "Groceries" });
+    const baselineMs = Date.now() - tBaseline;
+    expect(baselineMs).toBeLessThan(800);
+
+    // Now run the locked phase with a fresh seed so the call has actual work to do.
+    const txIdLocked = await seedManualTx(wsId, { merchantRaw: "Walmart" });
     const holder = await holdLock(wsId);
-    const candidate = applyManualCategorize({ workspaceId: wsId, txId, categoryName: "Groceries" });
+    const candidate = applyManualCategorize({ workspaceId: wsId, txId: txIdLocked, categoryName: "Groceries" });
 
     const winner = await Promise.race([
       candidate.then(() => "candidate"),
-      new Promise<string>((r) => setTimeout(() => r("timeout"), 300)),
+      new Promise<string>((r) => setTimeout(() => r("timeout"), 800)),
     ]);
     expect(winner).toBe("timeout");
 
@@ -1091,7 +1111,10 @@ export async function editTransactionService(
       if (!cat) throw new EditTxError("category_not_found");
     }
 
-    const data: Prisma.TransactionUpdateInput = {};
+    // Use TransactionUncheckedUpdateInput (NOT TransactionUpdateInput):
+    // the latter exposes the `category` relation but not the scalar `categoryId`
+    // FK column, so `data.categoryId = ...` would fail typecheck.
+    const data: Prisma.TransactionUncheckedUpdateInput = {};
     if (input.amount !== undefined) data.amount = new Prisma.Decimal(input.amount);
     if (trimmedMerchant !== undefined) {
       data.merchantRaw = trimmedMerchant;
@@ -1128,23 +1151,38 @@ Expected: all 13 tests PASS.
 
 - [ ] **Step 5: Append Test A (PATCH lock proof) to race file**
 
-Add this test inside the existing `describe("transactions race tests — lock acquisition proofs", () => { ... })` block in `apps/api/tests/transactions.edit.race.test.ts`:
+First, add `editTransactionService` to the static-imports block at the top of `apps/api/tests/transactions.edit.race.test.ts`:
+
+```ts
+import { editTransactionService } from "../src/transactions/edit.js";
+```
+
+Then add this test inside the existing `describe("transactions race tests — lock acquisition proofs", () => { ... })` block:
 
 ```ts
   it("Test A: editTransactionService blocks while holder owns the workspace advisory lock", async () => {
     const { wsId, userId } = await setupEditor("race-a@t.co");
-    const { transaction } = await (await import("../src/transactions/create-manual.js")).createManualTransactionService(
+    const { transaction: tBaselineTx } = await createManualTransactionService(
       { workspaceId: wsId, userId },
       { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
     );
 
-    const { editTransactionService } = await import("../src/transactions/edit.js");
+    // Unlocked baseline: same call must finish well under 800ms.
+    const tBaseline = Date.now();
+    await editTransactionService({ workspaceId: wsId }, tBaselineTx.id, { amount: 11 });
+    expect(Date.now() - tBaseline).toBeLessThan(800);
+
+    // Locked phase: new tx so the work isn't a no-op.
+    const { transaction: tLockedTx } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Walmart", amount: 20, occurredAt: "2026-05-19" },
+    );
     const holder = await holdLock(wsId);
-    const candidate = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 25 });
+    const candidate = editTransactionService({ workspaceId: wsId }, tLockedTx.id, { amount: 25 });
 
     const winner = await Promise.race([
       candidate.then(() => "candidate"),
-      new Promise<string>((r) => setTimeout(() => r("timeout"), 300)),
+      new Promise<string>((r) => setTimeout(() => r("timeout"), 800)),
     ]);
     expect(winner).toBe("timeout");
 
@@ -1408,23 +1446,38 @@ Expected: 8 tests PASS.
 
 - [ ] **Step 5: Append Test B (DELETE lock proof) to race file**
 
-Add inside the `describe("transactions race tests — lock acquisition proofs")` block in `apps/api/tests/transactions.edit.race.test.ts`:
+First, add `removeTransactionService` to the static-imports block at the top of `apps/api/tests/transactions.edit.race.test.ts`:
+
+```ts
+import { removeTransactionService } from "../src/transactions/remove.js";
+```
+
+Then add this test inside the existing `describe("transactions race tests — lock acquisition proofs")` block:
 
 ```ts
   it("Test B: removeTransactionService blocks while holder owns the workspace advisory lock", async () => {
     const { wsId, userId } = await setupEditor("race-b@t.co");
-    const { transaction } = await (await import("../src/transactions/create-manual.js")).createManualTransactionService(
+    const { transaction: tBaselineTx } = await createManualTransactionService(
       { workspaceId: wsId, userId },
       { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
     );
 
-    const { removeTransactionService } = await import("../src/transactions/remove.js");
+    // Unlocked baseline: same call must finish well under 800ms.
+    const tBaseline = Date.now();
+    await removeTransactionService({ workspaceId: wsId }, tBaselineTx.id);
+    expect(Date.now() - tBaseline).toBeLessThan(800);
+
+    // Locked phase.
+    const { transaction: tLockedTx } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Walmart", amount: 20, occurredAt: "2026-05-19" },
+    );
     const holder = await holdLock(wsId);
-    const candidate = removeTransactionService({ workspaceId: wsId }, transaction.id);
+    const candidate = removeTransactionService({ workspaceId: wsId }, tLockedTx.id);
 
     const winner = await Promise.race([
       candidate.then(() => "candidate"),
-      new Promise<string>((r) => setTimeout(() => r("timeout"), 300)),
+      new Promise<string>((r) => setTimeout(() => r("timeout"), 800)),
     ]);
     expect(winner).toBe("timeout");
 
@@ -1698,6 +1751,28 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     });
     expect(res.statusCode).toBe(401);
   });
+
+  it("403 insufficient_role: viewer cannot PATCH", async () => {
+    // Editor owns the tx; viewer is a different user with viewer role in the same workspace.
+    const editor = await signUpAndGetCookie(app, { email: "ep12-editor@t.co" });
+    const wsId = await getOwnerWorkspaceId(editor.userId);
+    const txId = await seedManual(editor.cookie, wsId);
+
+    const viewer = await signUpAndGetCookie(app, { email: "ep12-viewer@t.co" });
+    // Editor adds viewer membership directly via DB (no invite flow in this test).
+    await prisma.membership.create({
+      data: { userId: viewer.userId, workspaceId: wsId, role: "viewer" },
+    });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${txId}`,
+      headers: { cookie: viewer.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ amount: 1 }),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("insufficient_role");
+  });
 });
 ```
 
@@ -1850,6 +1925,25 @@ describe("DELETE /workspaces/:id/transactions/:txId", () => {
     });
     expect(res.statusCode).toBe(404);
     expect(res.json().error).toBe("not_found");
+  });
+
+  it("403 insufficient_role: viewer cannot DELETE", async () => {
+    const editor = await signUpAndGetCookie(app, { email: "d8-editor@t.co" });
+    const wsId = await getOwnerWorkspaceId(editor.userId);
+    const txId = await seedManual(editor.cookie, wsId);
+
+    const viewer = await signUpAndGetCookie(app, { email: "d8-viewer@t.co" });
+    await prisma.membership.create({
+      data: { userId: viewer.userId, workspaceId: wsId, role: "viewer" },
+    });
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/workspaces/${wsId}/transactions/${txId}`,
+      headers: { cookie: viewer.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("insufficient_role");
   });
 });
 ```
@@ -2010,16 +2104,14 @@ Add inside the `describe("transactions race tests — lock acquisition proofs")`
 
 ```ts
   it("Test D: end-state consistency — concurrent PATCH(merchantRaw) + categorize → final merchantNormalized matches final merchantRaw", async () => {
+    // Uses the static-imported createManualTransactionService, editTransactionService,
+    // applyManualCategorize from the top of the file.
     const { wsId, userId } = await setupEditor("race-d@t.co");
-    const { createManualTransactionService } = await import("../src/transactions/create-manual.js");
     const { transaction } = await createManualTransactionService(
       { workspaceId: wsId, userId },
       { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
     );
     await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } });
-
-    const { editTransactionService } = await import("../src/transactions/edit.js");
-    const { applyManualCategorize } = await import("../src/categorize/manual-categorize.js");
 
     const holder = await holdLock(wsId);
     const patchP = editTransactionService({ workspaceId: wsId }, transaction.id, { merchantRaw: "Walmart" });
@@ -2028,7 +2120,7 @@ Add inside the `describe("transactions race tests — lock acquisition proofs")`
     // Both should be blocked at the lock.
     const winner = await Promise.race([
       Promise.all([patchP, catP]).then(() => "both"),
-      new Promise<string>((r) => setTimeout(() => r("timeout"), 300)),
+      new Promise<string>((r) => setTimeout(() => r("timeout"), 800)),
     ]);
     expect(winner).toBe("timeout");
 
@@ -2044,13 +2136,11 @@ Add inside the `describe("transactions race tests — lock acquisition proofs")`
 
   it("Test E: PATCH-vs-PATCH last-writer-wins under lock", async () => {
     const { wsId, userId } = await setupEditor("race-e@t.co");
-    const { createManualTransactionService } = await import("../src/transactions/create-manual.js");
     const { transaction } = await createManualTransactionService(
       { workspaceId: wsId, userId },
       { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
     );
 
-    const { editTransactionService } = await import("../src/transactions/edit.js");
     const a = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 20 });
     const b = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 30 });
     const [ra, rb] = await Promise.all([a, b]);
