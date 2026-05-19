@@ -60,6 +60,7 @@ const QuerySchema = z.object({
   to: IsoDate.optional(),
   includeRemoved: BoolFlag,
   uncategorizedOnly: BoolFlag,
+  categoryId: z.string().optional(),
 });
 
 type Cursor = { occurredAtMs: number; id: string };
@@ -117,7 +118,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return {};
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
-        ...(q.uncategorizedOnly ? { categoryId: null } : {}),
+        ...(q.uncategorizedOnly ? { allocations: { some: { categoryId: null } } } : {}),
+        ...(q.categoryId ? { allocations: { some: { categoryId: q.categoryId } } } : {}),
         ...(cursor
           ? {
               OR: [
@@ -136,6 +138,12 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         where,
         orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
         take: q.limit + 1,
+        include: {
+          allocations: {
+            select: { id: true, categoryId: true, amount: true, source: true },
+            orderBy: { createdAt: "asc" },
+          },
+        },
       });
       const hasMore = rows.length > q.limit;
       const page = hasMore ? rows.slice(0, q.limit) : rows;
@@ -152,13 +160,20 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           currency: workspace.currency,
           merchantRaw: t.merchantRaw,
           merchantNormalized: t.merchantNormalized,
-          categoryId: t.categoryId,
+          categoryId: t.categoryId,                       // mirror; dropped Task 8
           occurredAt: t.occurredAt.toISOString(),
           postedAt: t.postedAt?.toISOString() ?? null,
           pending: t.pending,
           source: t.source,
           note: t.note,
           removedAt: t.removedAt?.toISOString() ?? null,
+          needsReclassification: t.needsReclassification,
+          allocations: t.allocations.map((a) => ({
+            id: a.id,
+            categoryId: a.categoryId,
+            amount: a.amount.toString(),
+            source: a.source,
+          })),
         })),
         nextCursor,
       };

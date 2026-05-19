@@ -25,6 +25,13 @@ type Result = {
     note: string | null;
     categorizationSource: "mapping" | "ai" | "manual" | null;
     removedAt: string | null;
+    needsReclassification: boolean;
+    allocations: Array<{
+      id: string;
+      categoryId: string | null;
+      amount: string;
+      source: string | null;
+    }>;
     account: {
       id: string;
       name: string;
@@ -59,6 +66,10 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
               parent: { select: { name: true } },
             },
           },
+          allocations: {
+            select: { id: true, categoryId: true, amount: true, source: true },
+            orderBy: { createdAt: "asc" },
+          },
         },
       }),
       prisma.workspace.findUniqueOrThrow({
@@ -82,6 +93,13 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
         note: tx.note,
         categorizationSource: (tx.categorizationSource ?? null) as Result["transaction"]["categorizationSource"],
         removedAt: tx.removedAt?.toISOString() ?? null,
+        needsReclassification: tx.needsReclassification,
+        allocations: tx.allocations.map((a) => ({
+          id: a.id,
+          categoryId: a.categoryId,
+          amount: a.amount.toString(),
+          source: a.source,
+        })),
         account: {
           id: tx.account.id,
           name: tx.account.name,

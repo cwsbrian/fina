@@ -23,10 +23,32 @@ describe("listTransactions tool", () => {
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
-  async function seedTx(occurredAt: Date, amount: string): Promise<void> {
-    await prisma.transaction.create({
+  async function seedTx(occurredAt: Date, amount: string): Promise<string> {
+    const tx = await prisma.transaction.create({
       data: { workspaceId: wsId, accountId: acctId, plaidTransactionId: `t-${Math.random()}`, amount, merchantRaw: "M", occurredAt, rawData: {} },
     });
+    return tx.id;
+  }
+
+  async function seedSplitTx(
+    occurredAt: Date,
+    amount: string,
+    allocs: Array<{ categoryId: string | null; amount: string }>,
+  ): Promise<string> {
+    const tx = await prisma.transaction.create({
+      data: { workspaceId: wsId, accountId: acctId, plaidTransactionId: `t-split-${Math.random()}`, amount, merchantRaw: "M-split", occurredAt, rawData: {} },
+    });
+    // Replace the auto-backfilled allocation with explicit split allocations
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.createMany({
+      data: allocs.map((a) => ({
+        transactionId: tx.id,
+        categoryId: a.categoryId,
+        amount: a.amount,
+        source: "manual" as const,
+      })),
+    });
+    return tx.id;
   }
 
   it("returns last 20 by default, newest first", async () => {
@@ -63,6 +85,39 @@ describe("listTransactions tool", () => {
   it("clamps limit at 50", async () => {
     const parsed = listTransactions.args.safeParse({ limit: 100 });
     expect(parsed.success).toBe(false);
+  });
+
+  it("result includes allocations array and needsReclassification per tx", async () => {
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-lt-alloc" } });
+    const txId = await seedTx(new Date("2026-05-01T12:00:00Z"), "15.00");
+    // Replace auto-backfilled allocation with a categorized one
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: txId } });
+    await prisma.transactionAllocation.createMany({
+      data: [{ transactionId: txId, categoryId: cat.id, amount: "15.00", source: "manual" }],
+    });
+    const result = await listTransactions.run(ctx, { limit: 1 });
+    expect(result.transactions).toHaveLength(1);
+    const t = result.transactions[0]!;
+    expect(t.allocations).toHaveLength(1);
+    expect(t.allocations[0]!.categoryId).toBe(cat.id);
+    expect(t.allocations[0]!.amount).toBe("15");
+    expect(t.allocations[0]!.source).toBe("manual");
+    expect(t.needsReclassification).toBe(false);
+  });
+
+  it("split tx (N=2) returns both allocations", async () => {
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-lt-split" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-lt-split" } });
+    await seedSplitTx(new Date("2026-05-02T12:00:00Z"), "100.00", [
+      { categoryId: c1.id, amount: "60.00" },
+      { categoryId: c2.id, amount: "40.00" },
+    ]);
+    const result = await listTransactions.run(ctx, { limit: 1 });
+    const t = result.transactions[0]!;
+    expect(t.allocations).toHaveLength(2);
+    const catIds = t.allocations.map((a) => a.categoryId);
+    expect(catIds).toContain(c1.id);
+    expect(catIds).toContain(c2.id);
   });
 
   it("isolates by workspace", async () => {

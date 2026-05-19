@@ -712,9 +712,14 @@ describe("GET /workspaces/:id/transactions", () => {
     const { owner, wsId } = await setupItemAndTxs(app, 3);
     const cat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Other" } });
     const tx = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
+    // Update both the mirror-write field and the allocation (new source of truth for ?uncategorizedOnly filter)
     await prisma.transaction.update({
       where: { id: tx.id },
       data: { categoryId: cat.id, categorizationSource: "manual" },
+    });
+    await prisma.transactionAllocation.updateMany({
+      where: { transactionId: tx.id },
+      data: { categoryId: cat.id, source: "manual" },
     });
     const all = await app.inject({
       method: "GET",
