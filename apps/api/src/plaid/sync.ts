@@ -279,7 +279,15 @@ export async function upsertAdded(
       pending: t.pending,
       rawData: t as unknown as Prisma.InputJsonValue,
     },
-    select: { id: true },
+    select: { id: true, amount: true },
+  });
+  await tx.transactionAllocation.create({
+    data: {
+      transactionId: created.id,
+      categoryId: null,
+      amount: created.amount,
+      source: null,
+    },
   });
   return { kind: "inserted", localId: created.id };
 }

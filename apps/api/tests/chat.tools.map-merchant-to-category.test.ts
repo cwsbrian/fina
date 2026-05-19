@@ -51,7 +51,7 @@ describe("mapMerchantToCategory chat tool", () => {
     const acct = await prisma.bankAccount.create({
       data: { workspaceId: wsId, name: "x", type: "depository" },
     });
-    await prisma.transaction.create({
+    const tx = await prisma.transaction.create({
       data: {
         workspaceId: wsId,
         accountId: acct.id,
@@ -63,6 +63,10 @@ describe("mapMerchantToCategory chat tool", () => {
         occurredAt: new Date("2026-05-10T12:00:00Z"),
         rawData: {},
       },
+    });
+    // Seed a null-cat allocation to simulate Migration A backfill.
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: null, amount: "10.00", source: null },
     });
     const out = await mapMerchantToCategory.run(ctx, {
       merchant: "Starbucks",

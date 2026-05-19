@@ -22,7 +22,7 @@ export async function mapMerchantToCategoryService(
   });
   if (!category) throw new Error("category_not_found");
 
-  const backfilledCount = await prisma.$transaction(async (db) => {
+  await prisma.$transaction(async (db) => {
     await db.merchantMapping.upsert({
       where: {
         workspaceId_merchantNormalized: {
@@ -64,24 +64,38 @@ export async function mapMerchantToCategoryService(
         });
       }
     }
-
-    // Step 2: assign categoryId to all null-category, non-removed siblings
-    // whose merchantNormalized now matches (covers both pre-normalized and
-    // just-normalized rows from step 1).
-    const { count } = await db.transaction.updateMany({
-      where: {
-        workspaceId: ctx.workspaceId,
-        merchantNormalized,
-        categoryId: null,
-        removedAt: null,
-      },
-      data: {
-        categoryId: input.categoryId,
-        categorizationSource: "mapping",
-      },
-    });
-    return count;
   });
+
+  // Step 2: assign category to all null-category, non-removed siblings whose
+  // merchantNormalized now matches (covers both pre-normalized and just-
+  // normalized rows from step 1). Use per-row atomic guard to avoid clobbering
+  // split tx (N≥2 allocations) or already-categorized allocations.
+  const candidates = await prisma.transaction.findMany({
+    where: {
+      workspaceId: ctx.workspaceId,
+      merchantNormalized,
+      removedAt: null,
+      allocations: { some: {}, every: { categoryId: null, source: null } },
+    },
+    include: { allocations: { select: { id: true } } },
+  });
+  let backfilledCount = 0;
+  for (const c of candidates) {
+    if (c.allocations.length !== 1) continue;
+    const a = c.allocations[0]!;
+    const upd = await prisma.transactionAllocation.updateMany({
+      where: { id: a.id, categoryId: null, source: null },
+      data: { categoryId: input.categoryId, source: "mapping" },
+    });
+    if (upd.count > 0) {
+      // Mirror-write Transaction.categoryId for compat (Task 8 removes).
+      await prisma.transaction.update({
+        where: { id: c.id },
+        data: { categoryId: input.categoryId, categorizationSource: "mapping" },
+      });
+      backfilledCount += 1;
+    }
+  }
 
   return {
     mapping: { merchantNormalized, categoryId: input.categoryId },

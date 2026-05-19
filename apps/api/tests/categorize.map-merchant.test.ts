@@ -45,6 +45,16 @@ describe("mapMerchantToCategoryService", () => {
         rawData: {},
       },
     });
+    // Seed a single allocation to simulate Migration A backfill.
+    // Set allocation's categoryId/source to match tx's category/source state.
+    await prisma.transactionAllocation.create({
+      data: {
+        transactionId: tx.id,
+        categoryId: opts.categoryId,
+        amount: "10.00",
+        source: opts.categorizationSource ?? null,
+      },
+    });
     return tx.id;
   }
 
@@ -90,6 +100,12 @@ describe("mapMerchantToCategoryService", () => {
     const tx = await prisma.transaction.findUnique({ where: { id: txId } });
     expect(tx?.categoryId).toBe(categoryId);
     expect(tx?.categorizationSource).toBe("mapping");
+
+    // Allocation state assertion.
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.categoryId).toBe(categoryId);
+    expect(allocs[0]!.source).toBe("mapping");
   });
 
   it("backfills siblings whose merchantNormalized IS NULL when merchantRaw normalizes to target", async () => {
@@ -107,6 +123,12 @@ describe("mapMerchantToCategoryService", () => {
     expect(tx?.merchantNormalized).toBe("starbucks");
     expect(tx?.categoryId).toBe(categoryId);
     expect(tx?.categorizationSource).toBe("mapping");
+
+    // Allocation state assertion.
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.categoryId).toBe(categoryId);
+    expect(allocs[0]!.source).toBe("mapping");
   });
 
   it("does NOT touch already-categorized siblings", async () => {

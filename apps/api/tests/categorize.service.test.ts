@@ -60,6 +60,10 @@ async function makeTx(wsId: string, accountId: string, merchant: string, idSuffi
       rawData: {},
     },
   });
+  // Seed a null-cat allocation to simulate Migration A backfill.
+  await prisma.transactionAllocation.create({
+    data: { transactionId: tx.id, categoryId: null, amount: "10", source: null },
+  });
   return tx.id;
 }
 
@@ -90,6 +94,12 @@ describe("categorizeNewTransactions", () => {
     expect(after.categoryId).toBe(diningId);
     expect(after.categorizationSource).toBe("mapping");
     expect(after.merchantNormalized).toBe("starbucks");
+
+    // Allocation state assertion.
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.categoryId).toBe(diningId);
+    expect(allocs[0]!.source).toBe("mapping");
   });
 
   it("no mappings → LLM returns valid categories → source='ai'", async () => {
@@ -106,6 +116,12 @@ describe("categorizeNewTransactions", () => {
     const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
     expect(after.categoryId).toBe(await categoryId(wsId, "Groceries"));
     expect(after.categorizationSource).toBe("ai");
+
+    // Allocation state assertion.
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.source).toBe("ai");
+    expect(allocs[0]!.categoryId).toBe(await categoryId(wsId, "Groceries"));
   });
 
   it("mixed: 1 mapped, 2 unmapped → LLM called for 2 only", async () => {
@@ -255,9 +271,14 @@ describe("categorizeNewTransactions", () => {
     }
 
     // Now simulate the concurrent manual categorize firing while service is blocked.
+    // Update both the tx row AND the allocation (as manual-categorize service does).
     await prisma.transaction.update({
       where: { id: txId },
       data: { categoryId: diningId, categorizationSource: "manual", merchantNormalized: "loblaws" },
+    });
+    await prisma.transactionAllocation.updateMany({
+      where: { transactionId: txId },
+      data: { categoryId: diningId, source: "manual" },
     });
 
     // Resolve Gemini with a Groceries result for the same tx.
@@ -360,5 +381,74 @@ describe("categorizeNewTransactions", () => {
     // No mapping must have been created.
     const mappings = await prisma.merchantMapping.count({ where: { workspaceId: wsId } });
     expect(mappings).toBe(0);
+  });
+
+  it("mapping application writes a single allocation with source=mapping", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+    const diningId = await categoryId(wsId, "Dining");
+    await prisma.merchantMapping.create({
+      data: { workspaceId: wsId, merchantNormalized: "wendys", categoryId: diningId, source: "manual" },
+    });
+    const txId = await makeTx(wsId, accountId, "Wendys", "alloc-mapping");
+
+    await categorizeNewTransactions(env, wsId, [txId]);
+
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.categoryId).toBe(diningId);
+    expect(allocs[0]!.source).toBe("mapping");
+  });
+
+  it("Gemini result writes a single allocation with source=ai", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+    const txId = await makeTx(wsId, accountId, "Loblaws", "alloc-ai");
+
+    geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "Groceries" }] });
+    await categorizeNewTransactions(env, wsId, [txId]);
+
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.source).toBe("ai");
+    expect(allocs[0]!.categoryId).toBe(await categoryId(wsId, "Groceries"));
+  });
+
+  it("split tx (N≥2) is NOT clobbered by auto-categorize", async () => {
+    // Set up a tx with 2 manual allocations — must not be touched by auto-categorize.
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-noclobber" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-noclobber" } });
+    // Create a merchant mapping for the same merchant to ensure mapping path would fire if not guarded.
+    await prisma.merchantMapping.create({
+      data: { workspaceId: wsId, merchantNormalized: "splitmerch", categoryId: c1.id, source: "manual" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId,
+        amount: "10",
+        merchantRaw: "SplitMerch",
+        merchantNormalized: "splitmerch",
+        occurredAt: new Date("2026-05-10"),
+        pending: false,
+        rawData: {},
+        plaidTransactionId: `p-noclobber-${Date.now()}`,
+      },
+    });
+    // Remove any auto-seeded allocation then add 2 manual ones.
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: tx.id, categoryId: c1.id, amount: "4", source: "manual" },
+        { transactionId: tx.id, categoryId: c2.id, amount: "6", source: "manual" },
+      ],
+    });
+
+    // Even with a matching mapping + Gemini result, the split tx must not be touched.
+    geminiMock.generateContent.push({ results: [{ tx_id: tx.id, category: "C1-noclobber" }] });
+    await categorizeNewTransactions(env, wsId, [tx.id]);
+
+    const after = await prisma.transactionAllocation.findMany({ where: { transactionId: tx.id } });
+    expect(after).toHaveLength(2);
+    expect(after.every((a) => a.source === "manual")).toBe(true);
   });
 });
