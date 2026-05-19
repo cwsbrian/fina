@@ -242,6 +242,19 @@ describe("createManualTransactionService", () => {
     expect(r1.transaction.accountId).toBe(accounts[0]!.id);
     expect(r2.transaction.accountId).toBe(accounts[0]!.id);
   });
+
+  it("response includes updatedAt, removedAt:null, pending:false, plaidTransactionId:null", async () => {
+    // Reuse the file's existing setup helper for ctx; adjust if your local helper differs.
+    const { wsId, userId } = await setupEditor("shape@t.co");
+    const { transaction: r } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Costco", amount: 9.99, occurredAt: "2026-05-19" },
+    );
+    expect(r.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(r.removedAt).toBeNull();
+    expect(r.pending).toBe(false);
+    expect(r.plaidTransactionId).toBeNull();
+  });
 });
 
 async function makeFree(userId: string): Promise<void> {

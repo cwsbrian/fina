@@ -8,6 +8,8 @@ import {
   CreateManualTxError,
   type CreateManualTxInput,
 } from "../transactions/create-manual.js";
+import { editTransactionService, EditTxError, type EditTxInput } from "../transactions/edit.js";
+import { removeTransactionService, RemoveTxError } from "../transactions/remove.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -24,6 +26,16 @@ const BoolFlag = z
   .transform((v) => v === "true")
   .optional()
   .default("false");
+
+const PatchTxBody = z
+  .object({
+    amount: z.number().optional(),
+    merchantRaw: z.string().optional(),
+    occurredAt: z.string().optional(),
+    categoryId: z.string().nullable().optional(),
+    note: z.string().nullable().optional(),
+  })
+  .strict();
 
 const ManualTxBody = z.object({
   merchantRaw: z.string(),
@@ -57,6 +69,17 @@ function decodeCursor(s: string | undefined): Cursor | null {
 }
 function encodeCursor(c: Cursor): string {
   return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
+}
+
+function editTxErrorStatus(code: EditTxError["code"]): number {
+  if (code === "not_found") return 404;
+  if (code === "category_not_found") return 404;
+  return 400; // not_editable, already_removed, invalid_*
+}
+
+function removeTxErrorStatus(code: RemoveTxError["code"]): number {
+  if (code === "not_found") return 404;
+  return 400; // cannot_delete_pending
 }
 
 export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
@@ -204,6 +227,58 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           const status = err.code.startsWith("invalid_") ? 400 : 404;
           return reply.code(status).send({ error: err.code });
         }
+        throw err;
+      }
+    },
+  );
+
+  app.patch<{ Params: { id: string; txId: string } }>(
+    "/workspaces/:id/transactions/:txId",
+    async (req, reply) => {
+      try {
+        const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+        if (req.params.id !== ctx.membership.workspaceId) {
+          return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const parsed = PatchTxBody.safeParse(req.body);
+        if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+        const d = parsed.data;
+        const input: EditTxInput = {};
+        if (d.amount       !== undefined) input.amount       = d.amount;
+        if (d.merchantRaw  !== undefined) input.merchantRaw  = d.merchantRaw;
+        if (d.occurredAt   !== undefined) input.occurredAt   = d.occurredAt;
+        if (d.categoryId   !== undefined) input.categoryId   = d.categoryId;
+        if (d.note         !== undefined) input.note         = d.note;
+        const result = await editTransactionService(
+          { workspaceId: ctx.membership.workspaceId },
+          req.params.txId,
+          input,
+        );
+        return reply.code(200).send(result);
+      } catch (err) {
+        if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.code });
+        if (err instanceof EditTxError) return reply.code(editTxErrorStatus(err.code)).send({ error: err.code });
+        throw err;
+      }
+    },
+  );
+
+  app.delete<{ Params: { id: string; txId: string } }>(
+    "/workspaces/:id/transactions/:txId",
+    async (req, reply) => {
+      try {
+        const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+        if (req.params.id !== ctx.membership.workspaceId) {
+          return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const result = await removeTransactionService(
+          { workspaceId: ctx.membership.workspaceId },
+          req.params.txId,
+        );
+        return reply.code(200).send(result);
+      } catch (err) {
+        if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.code });
+        if (err instanceof RemoveTxError) return reply.code(removeTxErrorStatus(err.code)).send({ error: err.code });
         throw err;
       }
     },
