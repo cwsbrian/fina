@@ -121,7 +121,7 @@ describe("transactions race tests — lock acquisition proofs", () => {
 
     // Unlocked baseline: same call must finish well under 800ms.
     const tBaseline = Date.now();
-    await editTransactionService({ workspaceId: wsId }, tBaselineTx.id, { amount: 11 });
+    await editTransactionService({ workspaceId: wsId }, tBaselineTx.id, { amount: 11 }, { manualOnlyFieldProvided: true });
     expect(Date.now() - tBaseline).toBeLessThan(800);
 
     // Locked phase: new tx so the work isn't a no-op.
@@ -130,7 +130,7 @@ describe("transactions race tests — lock acquisition proofs", () => {
       { merchantRaw: "Walmart", amount: 20, occurredAt: "2026-05-19" },
     );
     const holder = await holdLock(wsId);
-    const candidate = editTransactionService({ workspaceId: wsId }, tLockedTx.id, { amount: 25 });
+    const candidate = editTransactionService({ workspaceId: wsId }, tLockedTx.id, { amount: 25 }, { manualOnlyFieldProvided: true });
 
     const winner = await Promise.race([
       candidate.then(() => "candidate"),
@@ -187,7 +187,7 @@ describe("transactions race tests — lock acquisition proofs", () => {
     await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries-race-d" } });
 
     const holder = await holdLock(wsId);
-    const patchP = editTransactionService({ workspaceId: wsId }, transaction.id, { merchantRaw: "Walmart" });
+    const patchP = editTransactionService({ workspaceId: wsId }, transaction.id, { merchantRaw: "Walmart" }, { manualOnlyFieldProvided: true });
     const catP = applyManualCategorize({ workspaceId: wsId, txId: transaction.id, categoryName: "Groceries-race-d" });
 
     // Both should be blocked at the lock.
@@ -214,8 +214,8 @@ describe("transactions race tests — lock acquisition proofs", () => {
       { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
     );
 
-    const a = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 20 });
-    const b = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 30 });
+    const a = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 20 }, { manualOnlyFieldProvided: true });
+    const b = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 30 }, { manualOnlyFieldProvided: true });
     const [ra, rb] = await Promise.all([a, b]);
     expect(["20", "30"]).toContain(ra.transaction.amount);
     expect(["20", "30"]).toContain(rb.transaction.amount);

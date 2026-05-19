@@ -9,32 +9,51 @@ import {
   validateNote,
   parseOccurredAt,
 } from "./validators.js";
+import { applyAllocations, AllocationError } from "./allocations.js";
 
 export type EditTxInput = {
   amount?: number;
   merchantRaw?: string;
   occurredAt?: string;
-  categoryId?: string | null;
   note?: string | null;
+  // NEW: single-category shortcut (mutually exclusive with allocations).
+  categoryId?: string | null;
+  // NEW: full allocations replacement.
+  allocations?: Array<{ categoryId: string | null; amount: number }>;
+};
+
+// Type signal that the caller used the categoryId field (the route layer
+// must set this when present so the service can validate exclusivity).
+export type EditTxInputFlags = {
+  categoryIdProvided?: boolean;
+  allocationsProvided?: boolean;
+  manualOnlyFieldProvided?: boolean;
 };
 
 export type EditTxResult = {
   transaction: {
     id: string;
     accountId: string;
-    plaidTransactionId: null;
+    plaidTransactionId: string | null;
     amount: string;
     currency: string;
     merchantRaw: string;
     merchantNormalized: string;
-    categoryId: string | null;
+    categoryId: string | null;             // mirror-write; dropped Task 8
     occurredAt: string;
-    pending: false;
-    source: "manual";
+    pending: boolean;
+    source: "manual" | "plaid" | "csv";    // widen from "manual" — Plaid posted can PATCH allocations
     note: string | null;
     removedAt: null;
+    needsReclassification: boolean;
     createdAt: string;
     updatedAt: string;
+    allocations: Array<{
+      id: string;
+      categoryId: string | null;
+      amount: string;
+      source: "manual" | "mapping" | "ai" | null;
+    }>;
   };
 };
 
@@ -42,11 +61,16 @@ export type EditTxErrorCode =
   | "not_found"
   | "not_editable"
   | "already_removed"
+  | "cannot_split_pending"
   | "category_not_found"
   | "invalid_amount"
   | "invalid_date"
   | "invalid_merchant"
-  | "invalid_note";
+  | "invalid_note"
+  | "invalid_allocation_amount"
+  | "sum_mismatch"
+  | "empty_allocations"
+  | "conflicting_body";
 
 export class EditTxError extends Error {
   readonly code: EditTxErrorCode;
@@ -70,7 +94,12 @@ const TX_SELECT = {
   amount: true, merchantRaw: true, merchantNormalized: true,
   categoryId: true, occurredAt: true, pending: true,
   source: true, note: true, removedAt: true,
+  needsReclassification: true,
   createdAt: true, updatedAt: true,
+  allocations: {
+    select: { id: true, categoryId: true, amount: true, source: true },
+    orderBy: { createdAt: "asc" as const },
+  },
 } as const;
 
 function shape(
@@ -80,19 +109,26 @@ function shape(
   return {
     id: row.id,
     accountId: row.accountId,
-    plaidTransactionId: null,
+    plaidTransactionId: row.plaidTransactionId,
     amount: row.amount.toString(),
     currency,
     merchantRaw: row.merchantRaw,
     merchantNormalized: row.merchantNormalized ?? normalizeMerchant(row.merchantRaw),
     categoryId: row.categoryId,
     occurredAt: row.occurredAt.toISOString(),
-    pending: false,
-    source: "manual",
+    pending: row.pending,
+    source: row.source as "manual" | "plaid" | "csv",
     note: row.note,
     removedAt: null,
+    needsReclassification: row.needsReclassification,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
+    allocations: row.allocations.map((a) => ({
+      id: a.id,
+      categoryId: a.categoryId,
+      amount: a.amount.toString(),
+      source: a.source as "manual" | "mapping" | "ai" | null,
+    })),
   };
 }
 
@@ -100,9 +136,15 @@ export async function editTransactionService(
   ctx: { workspaceId: string },
   txId: string,
   input: EditTxInput,
+  flags: EditTxInputFlags,
 ): Promise<EditTxResult> {
-  // Validate input fields up-front (purely input-shape checks). Mapping
-  // TxValidationError → EditTxError preserves the 1:1 code names.
+  // 1. Conflicting body check.
+  if (flags.categoryIdProvided && flags.allocationsProvided) {
+    throw new EditTxError("conflicting_body");
+  }
+
+  // 2. Validate input fields up-front (purely input-shape checks). Mapping
+  //    TxValidationError → EditTxError preserves the 1:1 code names.
   if (input.amount !== undefined) rethrowValidation(() => validateAmount(input.amount as number));
   let trimmedMerchant: string | undefined;
   if (input.merchantRaw !== undefined) trimmedMerchant = rethrowValidation(() => validateMerchantRaw(input.merchantRaw as string));
@@ -115,26 +157,42 @@ export async function editTransactionService(
     normalizedNote = rethrowValidation(() => validateNote(input.note));
   }
 
+  // 3. Workspace read outside lock.
   const workspace = await prisma.workspace.findUniqueOrThrow({
     where: { id: ctx.workspaceId },
     select: { currency: true },
   });
 
   return await withWorkspaceLock(ctx.workspaceId, async (tx) => {
+    // 4a. Read tx.
     const row = await tx.transaction.findFirst({
       where: { id: txId, workspaceId: ctx.workspaceId },
       select: TX_SELECT,
     });
     if (!row) throw new EditTxError("not_found");
-    if (row.source !== "manual") throw new EditTxError("not_editable");
+
+    // 4b. Per-field source check — uses key presence semantics (set by caller).
+    if (flags.manualOnlyFieldProvided && row.source !== "manual") {
+      throw new EditTxError("not_editable");
+    }
+
     if (row.removedAt !== null) throw new EditTxError("already_removed");
 
-    if (input.categoryId !== undefined && input.categoryId !== null) {
-      const cat = await tx.category.findFirst({
-        where: { id: input.categoryId, workspaceId: ctx.workspaceId, archivedAt: null },
-        select: { id: true },
-      });
-      if (!cat) throw new EditTxError("category_not_found");
+    // 4c. cannot_split_pending gate.
+    const willWriteAllocations = flags.categoryIdProvided || flags.allocationsProvided;
+    if (willWriteAllocations && row.pending === true && row.plaidTransactionId !== null) {
+      throw new EditTxError("cannot_split_pending");
+    }
+
+    // 4d. Validate categoryId when using the shortcut path (not allocations path).
+    if (flags.categoryIdProvided && !flags.allocationsProvided) {
+      if (input.categoryId !== undefined && input.categoryId !== null) {
+        const cat = await tx.category.findFirst({
+          where: { id: input.categoryId, workspaceId: ctx.workspaceId, archivedAt: null },
+          select: { id: true },
+        });
+        if (!cat) throw new EditTxError("category_not_found");
+      }
     }
 
     // Use TransactionUncheckedUpdateInput (NOT TransactionUpdateInput):
@@ -147,21 +205,55 @@ export async function editTransactionService(
       data.merchantNormalized = normalizeMerchant(trimmedMerchant);
     }
     if (parsedOccurredAt !== undefined) data.occurredAt = parsedOccurredAt;
-    if (input.categoryId !== undefined) {
-      data.categoryId = input.categoryId;
-      data.categorizationSource = input.categoryId === null ? null : "manual";
-    }
     if (noteProvided) data.note = normalizedNote;
 
-    if (Object.keys(data).length === 0) {
-      return { transaction: shape(row, workspace.currency) };
+    // Determine effectiveAmount for allocations (new amount if changed, else row amount).
+    const effectiveAmount = data.amount instanceof Prisma.Decimal ? data.amount : row.amount;
+
+    // 4e. Apply allocations.
+    if (flags.allocationsProvided) {
+      try {
+        await applyAllocations(
+          tx, ctx.workspaceId, txId, effectiveAmount, "manual",
+          input.allocations!,
+        );
+      } catch (e) {
+        if (e instanceof AllocationError) {
+          throw new EditTxError(e.code as EditTxErrorCode);
+        }
+        throw e;
+      }
+      // Mirror-write: clear tx.categoryId since the source of truth is allocations now.
+      data.categoryId = null;
+      data.categorizationSource = null;
+    } else if (flags.categoryIdProvided) {
+      try {
+        await applyAllocations(
+          tx, ctx.workspaceId, txId, effectiveAmount, "manual",
+          [{ categoryId: input.categoryId ?? null, amount: Number(effectiveAmount.toString()) }],
+        );
+      } catch (e) {
+        if (e instanceof AllocationError) throw new EditTxError(e.code as EditTxErrorCode);
+        throw e;
+      }
+      // Mirror-write tx.categoryId for compat.
+      data.categoryId = input.categoryId ?? null;
+      data.categorizationSource = input.categoryId === null ? null : "manual";
     }
 
-    const updated = await tx.transaction.update({
+    if (Object.keys(data).length > 0) {
+      await tx.transaction.update({
+        where: { id: txId },
+        data,
+        select: { id: true },
+      });
+    }
+
+    // 5. Read back with allocations for response.
+    const finalRow = await tx.transaction.findUniqueOrThrow({
       where: { id: txId },
-      data,
       select: TX_SELECT,
     });
-    return { transaction: shape(updated, workspace.currency) };
+    return { transaction: shape(finalRow, workspace.currency) };
   });
 }
