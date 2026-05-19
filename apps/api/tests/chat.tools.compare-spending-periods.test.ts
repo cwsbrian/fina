@@ -21,15 +21,20 @@ describe("compareSpendingPeriods tool", () => {
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
     const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 10);
-    await prisma.transaction.createMany({
-      data: [
-        // this month — food 30 (20 + 10)
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-1", amount: "20.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-2", amount: "10.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
-        // last month — food 50
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "lm-1", amount: "50.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: lastMonth, rawData: {} },
-      ],
-    });
+    const txData = [
+      // this month — food 30 (20 + 10)
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-1", amount: "20.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-2", amount: "10.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+      // last month — food 50
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "lm-1", amount: "50.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: lastMonth, rawData: {} },
+    ];
+    for (const d of txData) {
+      const tx = await prisma.transaction.create({ data: { ...d } });
+      await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+      await prisma.transactionAllocation.create({
+        data: { transactionId: tx.id, categoryId: d.categoryId, amount: d.amount, source: null },
+      });
+    }
   });
 
   afterEach(async () => {

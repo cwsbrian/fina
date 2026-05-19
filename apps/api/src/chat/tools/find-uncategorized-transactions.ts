@@ -66,9 +66,17 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
       where.occurredAt = { gte: range.gte, lt: range.lt };
     }
     if (reviewMode === "missing_category") {
-      where.categoryId = null;
+      where.allocations = { some: { categoryId: null } };
     } else {
-      where.OR = [{ categorizationSource: null }, { categorizationSource: { not: "manual" } }];
+      where.allocations = {
+        some: {
+          OR: [
+            { source: { not: "manual" } },
+            { source: null },
+            { categoryId: null },
+          ],
+        },
+      };
     }
 
     const rows = await prisma.transaction.findMany({

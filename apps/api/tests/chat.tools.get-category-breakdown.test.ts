@@ -24,16 +24,21 @@ describe("getCategoryBreakdown tool", () => {
 
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
-    await prisma.transaction.createMany({
-      data: [
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "10.00", merchantRaw: "Sb", categoryId: coffee.id, occurredAt: thisMonth, rawData: {} },
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "20.00", merchantRaw: "Sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
-        // uncategorized
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "5.00", merchantRaw: "X", occurredAt: thisMonth, rawData: {} },
-        // negative (refund) — must be excluded from spending aggregate
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "4", amount: "-50.00", merchantRaw: "Refund", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
-      ],
-    });
+    const txData = [
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "10.00", merchantRaw: "Sb", categoryId: coffee.id, occurredAt: thisMonth, rawData: {} },
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "20.00", merchantRaw: "Sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+      // uncategorized
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "5.00", merchantRaw: "X", occurredAt: thisMonth, rawData: {} },
+      // negative (refund) — must be excluded from spending aggregate
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "4", amount: "-50.00", merchantRaw: "Refund", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+    ] as const;
+    for (const d of txData) {
+      const tx = await prisma.transaction.create({ data: { ...d } });
+      await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+      await prisma.transactionAllocation.create({
+        data: { transactionId: tx.id, categoryId: d.categoryId ?? null, amount: d.amount, source: null },
+      });
+    }
   });
 
   afterEach(async () => {

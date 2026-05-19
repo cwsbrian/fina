@@ -27,18 +27,23 @@ describe("findTransactions tool", () => {
     foodCatId = foodCat.id;
 
     // Seed transactions across April 2026 in Chequing, plus 1 Savings, plus 1 soft-deleted.
-    await prisma.transaction.createMany({
-      data: [
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-1", amount: "5.00",   merchantRaw: "Starbucks Downtown",  merchantNormalized: "starbucks", categoryId: foodCatId, occurredAt: new Date("2026-04-02T12:00:00Z"), rawData: {} },
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-2", amount: "8.50",   merchantRaw: "Starbucks Pike",       merchantNormalized: "starbucks", categoryId: foodCatId, occurredAt: new Date("2026-04-10T12:00:00Z"), rawData: {} },
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-3", amount: "120.00", merchantRaw: "Whole Foods Market",   merchantNormalized: "whole foods", categoryId: foodCatId, occurredAt: new Date("2026-04-15T12:00:00Z"), rawData: {} },
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-4", amount: "-50.00", merchantRaw: "Refund Inc",           merchantNormalized: "refund inc", categoryId: null,      occurredAt: new Date("2026-04-20T12:00:00Z"), rawData: {} },
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-5", amount: "1000.00",merchantRaw: "Rent April",           merchantNormalized: "rent",       categoryId: null,      occurredAt: new Date("2026-04-25T12:00:00Z"), rawData: {} },
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-6", amount: "9.99",   merchantRaw: "Foreign Coffee",       merchantNormalized: "foreign coffee", categoryId: null, occurredAt: new Date("2026-04-12T12:00:00Z"), rawData: {} },
-        { workspaceId: wsId, accountId: acctOtherId, plaidTransactionId: "ft-7", amount: "30.00", merchantRaw: "Subway",          merchantNormalized: "subway",     categoryId: foodCatId, occurredAt: new Date("2026-04-18T12:00:00Z"), rawData: {} },
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-8", amount: "2.00",   merchantRaw: "Deleted Latte",        merchantNormalized: "deleted latte", categoryId: null,  occurredAt: new Date("2026-04-22T12:00:00Z"), rawData: {}, removedAt: new Date() },
-      ],
-    });
+    const ftData = [
+      { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-1", amount: "5.00",   merchantRaw: "Starbucks Downtown",  merchantNormalized: "starbucks", categoryId: foodCatId, occurredAt: new Date("2026-04-02T12:00:00Z"), rawData: {} },
+      { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-2", amount: "8.50",   merchantRaw: "Starbucks Pike",       merchantNormalized: "starbucks", categoryId: foodCatId, occurredAt: new Date("2026-04-10T12:00:00Z"), rawData: {} },
+      { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-3", amount: "120.00", merchantRaw: "Whole Foods Market",   merchantNormalized: "whole foods", categoryId: foodCatId, occurredAt: new Date("2026-04-15T12:00:00Z"), rawData: {} },
+      { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-4", amount: "-50.00", merchantRaw: "Refund Inc",           merchantNormalized: "refund inc", categoryId: null,      occurredAt: new Date("2026-04-20T12:00:00Z"), rawData: {} },
+      { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-5", amount: "1000.00",merchantRaw: "Rent April",           merchantNormalized: "rent",       categoryId: null,      occurredAt: new Date("2026-04-25T12:00:00Z"), rawData: {} },
+      { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-6", amount: "9.99",   merchantRaw: "Foreign Coffee",       merchantNormalized: "foreign coffee", categoryId: null, occurredAt: new Date("2026-04-12T12:00:00Z"), rawData: {} },
+      { workspaceId: wsId, accountId: acctOtherId, plaidTransactionId: "ft-7", amount: "30.00", merchantRaw: "Subway",          merchantNormalized: "subway",     categoryId: foodCatId, occurredAt: new Date("2026-04-18T12:00:00Z"), rawData: {} },
+      { workspaceId: wsId, accountId: acctId, plaidTransactionId: "ft-8", amount: "2.00",   merchantRaw: "Deleted Latte",        merchantNormalized: "deleted latte", categoryId: null,  occurredAt: new Date("2026-04-22T12:00:00Z"), rawData: {}, removedAt: new Date() },
+    ] as const;
+    for (const d of ftData) {
+      const tx = await prisma.transaction.create({ data: { ...d } });
+      await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+      await prisma.transactionAllocation.create({
+        data: { transactionId: tx.id, categoryId: d.categoryId ?? null, amount: d.amount, source: null },
+      });
+    }
   });
 
   afterEach(async () => {

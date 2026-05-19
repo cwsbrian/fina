@@ -159,14 +159,17 @@ export async function compareSpendingVsBudgetService(
   }
 
   const budgetCategoryIds = budgets.map((b) => b.categoryId);
-  const sums = await prisma.transaction.groupBy({
+  const sums = await prisma.transactionAllocation.groupBy({
     by: ["categoryId"],
     where: {
-      workspaceId: ctx.workspaceId,
-      removedAt: null,
-      occurredAt: { gte, lt },
       categoryId: { in: budgetCategoryIds },
       amount: { gt: 0 },
+      transaction: {
+        workspaceId: ctx.workspaceId,
+        removedAt: null,
+        occurredAt: { gte, lt },
+        amount: { gt: 0 },
+      },
     },
     _sum: { amount: true },
   });

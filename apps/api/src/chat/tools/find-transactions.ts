@@ -173,7 +173,7 @@ export const findTransactions: ToolDef<Args, Result> = {
       workspaceId: ctx.workspaceId,
       removedAt: null,
     };
-    if (categoryIds) where.categoryId = { in: categoryIds };
+    if (categoryIds) where.allocations = { some: { categoryId: { in: categoryIds } } };
     if (accountIds) where.accountId = { in: accountIds };
     if (occurredAt.gte || occurredAt.lte) where.occurredAt = occurredAt;
 
