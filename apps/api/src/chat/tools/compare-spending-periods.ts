@@ -37,13 +37,11 @@ type Result = {
   currentPeriod: CurrentPeriod;
   comparisonPeriod: ComparisonPeriod;
   groupBy: "category" | "merchant";
-  currency: "CAD";
+  currency: string;
   currentTotal: string;
   comparisonTotal: string;
   delta: string;
   percentChange: number | null;
-  currentExcludedNonCadCount: number;
-  comparisonExcludedNonCadCount: number;
   changes: Change[];
 };
 
@@ -108,7 +106,13 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
       throw new Error("invalid_period_pair");
     }
     const limit = args.limit ?? 10;
-    const ranges = await comparisonRanges(ctx.userId, args.current_period, args.comparison_period);
+    const [ranges, workspace] = await Promise.all([
+      comparisonRanges(ctx.userId, args.current_period, args.comparison_period),
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { currency: true },
+      }),
+    ]);
 
     const selectSpec = {
       amount: true,
@@ -119,12 +123,11 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
       occurredAt: true,
     };
 
-    const [currentRows, comparisonRows, currentExcluded, comparisonExcluded] = await Promise.all([
+    const [currentRows, comparisonRows] = await Promise.all([
       prisma.transaction.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           removedAt: null,
-          currency: "CAD",
           amount: { gt: 0 },
           occurredAt: { gte: ranges.current.gte, lt: ranges.current.lt },
         },
@@ -134,29 +137,10 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
         where: {
           workspaceId: ctx.workspaceId,
           removedAt: null,
-          currency: "CAD",
           amount: { gt: 0 },
           occurredAt: { gte: ranges.comparison.gte, lt: ranges.comparison.lt },
         },
         select: selectSpec,
-      }),
-      prisma.transaction.count({
-        where: {
-          workspaceId: ctx.workspaceId,
-          removedAt: null,
-          currency: { not: "CAD" },
-          amount: { gt: 0 },
-          occurredAt: { gte: ranges.current.gte, lt: ranges.current.lt },
-        },
-      }),
-      prisma.transaction.count({
-        where: {
-          workspaceId: ctx.workspaceId,
-          removedAt: null,
-          currency: { not: "CAD" },
-          amount: { gt: 0 },
-          occurredAt: { gte: ranges.comparison.gte, lt: ranges.comparison.lt },
-        },
       }),
     ]);
 
@@ -200,13 +184,11 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
       currentPeriod: args.current_period,
       comparisonPeriod: args.comparison_period,
       groupBy: args.group_by,
-      currency: "CAD",
+      currency: workspace.currency,
       currentTotal: current.total.toFixed(2),
       comparisonTotal: comparison.total.toFixed(2),
       delta: overallDelta.toFixed(2),
       percentChange: overallPercent,
-      currentExcludedNonCadCount: currentExcluded,
-      comparisonExcludedNonCadCount: comparisonExcluded,
       changes: changes.slice(0, limit),
     };
   },

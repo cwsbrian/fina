@@ -34,7 +34,7 @@ describe("compareSpendingVsBudget chat tool", () => {
     await prisma.transaction.create({
       data: {
         workspaceId: wsId, accountId: acct.id, plaidTransactionId: "t1",
-        amount: "30.00", currency: "CAD", merchantRaw: "M", categoryId: coffeeCatId,
+        amount: "30.00", merchantRaw: "M", categoryId: coffeeCatId,
         occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
       },
     });

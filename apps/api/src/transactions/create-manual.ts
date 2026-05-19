@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
-import { prisma } from "../db.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
 import { dateKeyInTz, resolveUserTz } from "../chat/tools/periods.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
 
 export type CreateManualTxInput = {
   merchantRaw: string;
@@ -107,8 +107,7 @@ export async function createManualTransactionService(
 
   const merchantNormalized = normalizeMerchant(merchantRaw);
 
-  return await prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${ctx.workspaceId}))`;
+  return await withWorkspaceLock(ctx.workspaceId, async (tx) => {
 
     if (input.categoryId !== undefined) {
       const cat = await tx.category.findFirst({
@@ -166,7 +165,6 @@ export async function createManualTransactionService(
         plaidItemId: null,
         plaidTransactionId: null,
         amount: new Prisma.Decimal(input.amount),
-        currency: workspace.currency,
         merchantRaw,
         merchantNormalized,
         categoryId: input.categoryId ?? null,
@@ -184,7 +182,7 @@ export async function createManualTransactionService(
       transaction: {
         id: row.id,
         amount: row.amount.toString(),
-        currency: row.currency,
+        currency: workspace.currency,
         merchantRaw: row.merchantRaw,
         merchantNormalized: row.merchantNormalized ?? merchantNormalized,
         categoryId: row.categoryId,

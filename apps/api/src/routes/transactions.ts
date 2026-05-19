@@ -70,6 +70,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
+      const workspace = await prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.membership.workspaceId },
+        select: { currency: true },
+      });
       const cursor = decodeCursor(q.cursor);
       const where = {
         workspaceId: ctx.membership.workspaceId,
@@ -116,7 +120,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           accountId: t.accountId,
           plaidTransactionId: t.plaidTransactionId,
           amount: t.amount.toString(),
-          currency: t.currency,
+          currency: workspace.currency,
           merchantRaw: t.merchantRaw,
           merchantNormalized: t.merchantNormalized,
           categoryId: t.categoryId,

@@ -57,7 +57,6 @@ describe("mapMerchantToCategory chat tool", () => {
         accountId: acct.id,
         plaidTransactionId: "t1",
         amount: "10.00",
-        currency: "CAD",
         merchantRaw: "Starbucks",
         merchantNormalized: "starbucks",
         categoryId: null,

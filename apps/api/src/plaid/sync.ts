@@ -5,6 +5,7 @@ import { plaidClient, isPlaidErrorCode, isPlaidApiError, sanitizePlaidError, map
 import { readAccessToken } from "./items.js";
 import { lockPlaidItem, SyncLockHeld } from "./lock.js";
 import { HttpError } from "../auth/context.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
 
 // `skipped` carries the partial counters from any pages that DID commit
 // before the lock was lost (final-tx race) — the page-level commits are
@@ -121,7 +122,7 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
       // failure the next sync simply re-fetches from the original cursor;
       // partial-unique index makes the upserts idempotent.
       try {
-        await prisma.$transaction(async (tx) => {
+        await withWorkspaceLock(workspaceId, async (tx) => {
           await lockPlaidItem(tx, plaidItemId); // FOR UPDATE NOWAIT — throws SyncLockHeld if held
           for (const t of pageData.added) {
             const result = await upsertAdded(tx, t, plaidItemId, workspaceId);
@@ -130,7 +131,7 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
           }
           for (const t of pageData.modified) { await upsertModified(tx, t, workspaceId); modified++; }
           for (const t of pageData.removed)  { await markRemoved(tx, t.transaction_id, workspaceId); removed++; }
-        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+        });
       } catch (e) {
         if (e instanceof SyncLockHeld) {
           // Pass through whatever counters previous pages already committed
@@ -272,7 +273,6 @@ export async function upsertAdded(
       plaidTransactionId: t.transaction_id,
       plaidPendingTransactionId: t.pending_transaction_id ?? null,
       amount: t.amount,
-      currency: t.iso_currency_code ?? "CAD",
       merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
       occurredAt: plaidOccurredAt(t),
       postedAt: plaidPostedAt(t),

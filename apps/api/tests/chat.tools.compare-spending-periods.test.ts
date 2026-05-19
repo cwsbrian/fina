@@ -24,12 +24,10 @@ describe("compareSpendingPeriods tool", () => {
     await prisma.transaction.createMany({
       data: [
         // this month — food 30 (20 + 10)
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-1", amount: "20.00", currency: "CAD", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-2", amount: "10.00", currency: "CAD", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-1", amount: "20.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "tm-2", amount: "10.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
         // last month — food 50
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "lm-1", amount: "50.00", currency: "CAD", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: lastMonth, rawData: {} },
-        // non-CAD this month
-        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "us-1", amount: "10.00", currency: "USD", merchantRaw: "X", occurredAt: thisMonth, rawData: {} },
+        { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "lm-1", amount: "50.00", merchantRaw: "Sub", merchantNormalized: "sub", categoryId: food.id, occurredAt: lastMonth, rawData: {} },
       ],
     });
   });
@@ -67,16 +65,6 @@ describe("compareSpendingPeriods tool", () => {
       group_by: "category",
     });
     expect(res.percentChange).toBeNull();
-  });
-
-  it("counts non-CAD exclusions per period", async () => {
-    const res = await compareSpendingPeriods.run(ctx, {
-      current_period: "this_month",
-      comparison_period: "last_month",
-      group_by: "category",
-    });
-    expect(res.currentExcludedNonCadCount).toBe(1);
-    expect(res.comparisonExcludedNonCadCount).toBe(0);
   });
 
   it("group_by=merchant uses normalized merchant key", async () => {

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
 
 export type Cadence = "monthly" | "semimonthly" | "biweekly" | "weekly" | "yearly";
 
@@ -13,7 +14,6 @@ export type AddRecurringInput = {
   nextOccurrenceDate: string;
   categoryId?: string | null;
   merchant?: string | null;
-  currency?: string;
 };
 
 export type RecurringRow = {
@@ -52,21 +52,23 @@ function isValidDateOnly(s: string): boolean {
   return back === s;
 }
 
-function formatRow(row: {
-  id: string;
-  name: string;
-  amount: Prisma.Decimal;
-  currency: string;
-  cadence: Cadence;
-  nextOccurrenceDate: Date;
-  categoryId: string | null;
-  merchantNormalized: string | null;
-}): RecurringRow {
+function formatRow(
+  row: {
+    id: string;
+    name: string;
+    amount: Prisma.Decimal;
+    cadence: Cadence;
+    nextOccurrenceDate: Date;
+    categoryId: string | null;
+    merchantNormalized: string | null;
+  },
+  workspaceCurrency: string,
+): RecurringRow {
   return {
     id: row.id,
     name: row.name,
     amount: row.amount.toFixed(2),
-    currency: row.currency,
+    currency: workspaceCurrency,
     cadence: row.cadence,
     nextOccurrenceDate: row.nextOccurrenceDate.toISOString().slice(0, 10),
     categoryId: row.categoryId,
@@ -103,46 +105,56 @@ export async function addRecurringService(
   }
 
   const periodDate = new Date(`${input.nextOccurrenceDate}T12:00:00.000Z`);
-  const data = {
+  const createData = {
     workspaceId: ctx.workspaceId,
     name: input.name,
     nameNormalized,
     amount: new Prisma.Decimal(input.amount),
-    currency: (input.currency ?? "CAD").toUpperCase(),
     categoryId: input.categoryId ?? null,
     merchantNormalized,
     cadence: input.cadence,
     nextOccurrenceDate: periodDate,
   };
-  const row = await prisma.recurringExpense.upsert({
-    where: {
-      workspaceId_nameNormalized: {
-        workspaceId: ctx.workspaceId,
-        nameNormalized,
+  const row = await withWorkspaceLock(ctx.workspaceId, async (tx) => {
+    return await tx.recurringExpense.upsert({
+      where: {
+        workspaceId_nameNormalized: {
+          workspaceId: ctx.workspaceId,
+          nameNormalized,
+        },
       },
-    },
-    create: data,
-    update: {
-      name: data.name,
-      amount: data.amount,
-      currency: data.currency,
-      categoryId: data.categoryId,
-      merchantNormalized: data.merchantNormalized,
-      cadence: data.cadence,
-      nextOccurrenceDate: data.nextOccurrenceDate,
-    },
+      create: createData,
+      update: {
+        name: createData.name,
+        amount: createData.amount,
+        categoryId: createData.categoryId,
+        merchantNormalized: createData.merchantNormalized,
+        cadence: createData.cadence,
+        nextOccurrenceDate: createData.nextOccurrenceDate,
+      },
+    });
   });
-  return { recurring: formatRow(row) };
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: ctx.workspaceId },
+    select: { currency: true },
+  });
+  return { recurring: formatRow(row, workspace.currency) };
 }
 
 export async function listRecurringService(
   ctx: { workspaceId: string },
 ): Promise<ListRecurringOutput> {
-  const rows = await prisma.recurringExpense.findMany({
-    where: { workspaceId: ctx.workspaceId },
-    orderBy: [{ nextOccurrenceDate: "asc" }, { name: "asc" }],
-  });
-  return { recurring: rows.map(formatRow) };
+  const [rows, workspace] = await Promise.all([
+    prisma.recurringExpense.findMany({
+      where: { workspaceId: ctx.workspaceId },
+      orderBy: [{ nextOccurrenceDate: "asc" }, { name: "asc" }],
+    }),
+    prisma.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: { currency: true },
+    }),
+  ]);
+  return { recurring: rows.map((r) => formatRow(r, workspace.currency)) };
 }
 
 export async function removeRecurringByIdService(

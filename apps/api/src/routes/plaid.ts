@@ -8,6 +8,7 @@ import { plaidClient, mapPlaidError, PLAID_PRODUCTS, PLAID_COUNTRY_CODES } from 
 import { storeAccessToken } from "../plaid/items.js";
 import { syncTransactions } from "../plaid/sync.js";
 import { categorizeNewTransactions } from "../categorize/service.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
 
 const ExchangeBody = z.object({
   publicToken: z.string().min(1),
@@ -63,6 +64,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
     let plaidItemId: string;
     let accountCount: number;
     let verifiedWsId: string; // hoisted so Step 3 uses the ctx-verified value, not a raw header re-read
+    let exchAccessToken: string | undefined; // hoisted so in-lock catch can call itemRemove
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
       if (ctx.membership.workspaceId !== params.id) {
@@ -76,12 +78,59 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       const exch = await plaidClient(app.fina.env).itemPublicTokenExchange({
         public_token: parsed.data.publicToken,
       });
+      exchAccessToken = exch.data.access_token as string;
       const accountsRes = await plaidClient(app.fina.env).accountsGet({
         access_token: exch.data.access_token,
       });
 
-      // ---- Step 2: Item + accounts in one tx ----
-      const result = await prisma.$transaction(async (tx) => {
+      // ---- Step 2: Outer currency check (before acquiring lock) ----
+      // Cached read of workspace.currency before lock.
+      const wsOuter = await prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.membership.workspaceId },
+        select: { currency: true },
+      });
+      const mismatch = accountsRes.data.accounts.find(
+        (a) => (a.balances?.iso_currency_code ?? null) !== wsOuter.currency,
+      );
+      if (mismatch) {
+        // Plaid has already created the Item on its side. Clean up upstream
+        // so the user's Plaid Items quota isn't consumed by a ghost.
+        try {
+          await plaidClient(app.fina.env).itemRemove({ access_token: exch.data.access_token });
+        } catch (e) {
+          app.log.warn({ err: e }, "plaid.itemRemove failed during currency_mismatch cleanup");
+        }
+        const bankCurrency = mismatch.balances?.iso_currency_code ?? "unknown";
+        return reply.code(400).send({
+          error: "currency_mismatch",
+          workspaceCurrency: wsOuter.currency,
+          bankCurrency,
+        });
+      }
+
+      // ---- Step 3: Item + accounts in one workspace-locked tx ----
+      const result = await withWorkspaceLock(ctx.membership.workspaceId, async (tx) => {
+        // In-lock recheck: defend against concurrent PATCH winning between
+        // the outer check and lock acquisition.
+        const wsLocked = await tx.workspace.findUniqueOrThrow({
+          where: { id: ctx.membership.workspaceId },
+          select: { currency: true },
+        });
+        const mismatch2 = accountsRes.data.accounts.find(
+          (a) => (a.balances?.iso_currency_code ?? null) !== wsLocked.currency,
+        );
+        if (mismatch2) {
+          const err = new Error("currency_mismatch_inlock") as Error & {
+            code: "currency_mismatch_inlock";
+            bankCurrency: string;
+            workspaceCurrency: string;
+          };
+          err.code = "currency_mismatch_inlock";
+          err.bankCurrency = mismatch2.balances?.iso_currency_code ?? "unknown";
+          err.workspaceCurrency = wsLocked.currency;
+          throw err;
+        }
+
         const itemRowId = await storeAccessToken(app.fina.env, tx, {
           workspaceId: ctx.membership.workspaceId,
           connectedBy: ctx.session.userId,
@@ -116,6 +165,21 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       plaidItemId = result.itemRowId;
       accountCount = result.accountCount;
     } catch (e) {
+      if ((e as { code?: string })?.code === "currency_mismatch_inlock") {
+        if (exchAccessToken) {
+          try {
+            await plaidClient(app.fina.env).itemRemove({ access_token: exchAccessToken });
+          } catch (ee) {
+            app.log.warn({ err: ee }, "plaid.itemRemove failed during in-lock currency_mismatch cleanup");
+          }
+        }
+        const e2 = e as { bankCurrency: string; workspaceCurrency: string };
+        return reply.code(400).send({
+          error: "currency_mismatch",
+          workspaceCurrency: e2.workspaceCurrency,
+          bankCurrency: e2.bankCurrency,
+        });
+      }
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
         return reply.code(422).send({ error: "already_connected" });

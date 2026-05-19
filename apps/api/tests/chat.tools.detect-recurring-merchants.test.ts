@@ -22,14 +22,13 @@ describe("detectRecurringMerchants tool", () => {
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
-  async function addTx(merchantNormalized: string, amount: string, occurredAt: Date, currency = "CAD") {
+  async function addTx(merchantNormalized: string, amount: string, occurredAt: Date) {
     await prisma.transaction.create({
       data: {
         workspaceId: wsId,
         accountId: acctId,
-        plaidTransactionId: `r-${merchantNormalized}-${currency}-${occurredAt.toISOString()}`,
+        plaidTransactionId: `r-${merchantNormalized}-${occurredAt.toISOString()}`,
         amount,
-        currency,
         merchantRaw: merchantNormalized,
         merchantNormalized,
         occurredAt,
@@ -81,7 +80,6 @@ describe("detectRecurringMerchants tool", () => {
           accountId: acctId,
           plaidTransactionId: `fb-${i}`,
           amount: "9.99",
-          currency: "CAD",
           merchantRaw: "Spotify   ON",
           merchantNormalized: null,
           occurredAt: d,
@@ -93,18 +91,17 @@ describe("detectRecurringMerchants tool", () => {
     expect(res.candidates.some((c) => c.merchantNormalized === "spotify")).toBe(true);
   });
 
-  it("groups by (merchant, currency) separately", async () => {
+  it("groups by merchant key and uses workspace currency", async () => {
     const base = new Date();
     for (let i = 0; i < 4; i++) {
       const d = new Date(base.getFullYear(), base.getMonth() - i, 1);
-      await addTx("gym", "20.00", d, "CAD");
-      await addTx("gym", "15.00", d, "USD");
+      await addTx("gym", "20.00", d);
     }
     const res = await detectRecurringMerchants.run(ctx, {});
-    const cad = res.candidates.find((c) => c.key === "gym::CAD");
-    const usd = res.candidates.find((c) => c.key === "gym::USD");
-    expect(cad?.currency).toBe("CAD");
-    expect(usd?.currency).toBe("USD");
+    const gym = res.candidates.find((c) => c.key === "gym");
+    expect(gym).toBeDefined();
+    expect(gym?.currency).toBe("CAD");
+    expect(gym?.occurrences).toBe(4);
   });
 
   it("excludes low-confidence irregular candidates", async () => {

@@ -11,7 +11,6 @@ const Args = z.object({
   category_id: z.string().min(1).optional(),
   category_name: z.string().min(1).max(40).optional(),
   merchant: z.string().min(1).max(200).optional(),
-  currency: z.string().length(3).optional(),
 }).refine(
   (a) => !(a.category_id && a.category_name),
   { message: "Provide at most one of category_id or category_name" },
@@ -72,7 +71,6 @@ export const addRecurring: ToolDef<
     };
     if (categoryId) serviceInput.categoryId = categoryId;
     if (args.merchant) serviceInput.merchant = args.merchant;
-    if (args.currency) serviceInput.currency = args.currency;
 
     const out = await addRecurringService({ workspaceId: ctx.workspaceId }, serviceInput);
     return {

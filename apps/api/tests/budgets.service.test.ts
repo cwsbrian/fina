@@ -228,14 +228,13 @@ describe("compareSpendingVsBudgetService", () => {
     await prisma.user.deleteMany({ where: { id: userId } });
   });
 
-  async function seedTx(occurredAt: Date, amount: string, currency = "CAD"): Promise<void> {
+  async function seedTx(occurredAt: Date, amount: string): Promise<void> {
     await prisma.transaction.create({
       data: {
         workspaceId,
         accountId: acctId,
         plaidTransactionId: `tx-${Math.random()}`,
         amount,
-        currency,
         merchantRaw: "M",
         categoryId,
         occurredAt,
@@ -285,7 +284,7 @@ describe("compareSpendingVsBudgetService", () => {
     await prisma.transaction.create({
       data: {
         workspaceId, accountId: acctId, plaidTransactionId: "x",
-        amount: "50.00", currency: "CAD", merchantRaw: "M",
+        amount: "50.00", merchantRaw: "M",
         categoryId: otherCat.id, occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
       },
     });
@@ -295,12 +294,11 @@ describe("compareSpendingVsBudgetService", () => {
     expect(r.items[0]!.categoryId).toBe(categoryId);
   });
 
-  it("filters out USD and negative-amount (refund) transactions", async () => {
+  it("filters out negative-amount (refund) transactions", async () => {
     vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
     await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "this_month" });
-    await seedTx(new Date("2026-05-10T12:00:00Z"), "30.00", "USD");   // wrong currency
-    await seedTx(new Date("2026-05-10T12:00:00Z"), "-10.00", "CAD");  // refund
-    await seedTx(new Date("2026-05-10T12:00:00Z"), "20.00", "CAD");   // counts
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "-10.00");  // refund — excluded by amount > 0 filter
+    await seedTx(new Date("2026-05-10T12:00:00Z"), "20.00");   // counts
 
     const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
     expect(r.items[0]!.spent).toBe("20.00");

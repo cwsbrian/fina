@@ -16,7 +16,6 @@ const PostBody = z.object({
   nextOccurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   categoryId: z.string().min(1).optional(),
   merchant: z.string().min(1).max(200).optional(),
-  currency: z.string().length(3).optional(),
 });
 
 export async function recurringRoutes(app: FastifyInstance): Promise<void> {
@@ -43,7 +42,6 @@ export async function recurringRoutes(app: FastifyInstance): Promise<void> {
       };
       if (parsed.data.categoryId !== undefined) serviceInput.categoryId = parsed.data.categoryId;
       if (parsed.data.merchant !== undefined) serviceInput.merchant = parsed.data.merchant;
-      if (parsed.data.currency !== undefined) serviceInput.currency = parsed.data.currency;
       const result = await addRecurringService(
         { workspaceId: ctx.membership.workspaceId },
         serviceInput,
