@@ -60,6 +60,9 @@ export async function applyManualCategorize(
   if (!category) throw new ManualCategorizeError("category_not_found");
 
   const result = await withWorkspaceLock(input.workspaceId, async (tx) => {
+    // Re-read INSIDE the lock so a concurrent PATCH that writes merchantRaw +
+    // merchantNormalized is visible here — we must normalize from the post-PATCH
+    // merchantRaw, not a stale snapshot.
     const txRow = await tx.transaction.findFirst({
       where: { id: input.txId, workspaceId: input.workspaceId },
       select: { id: true, amount: true, merchantRaw: true, merchantNormalized: true },
@@ -69,6 +72,9 @@ export async function applyManualCategorize(
     const merchantNorm = txRow.merchantNormalized ?? normalizeMerchant(txRow.merchantRaw);
 
     // Primary: write allocations via the helper (single entry).
+    // Amount is Decimal(14, 2); Number(d.toString()) round-trips cleanly for
+    // any value in that range. applyAllocations will re-stringify the number
+    // for its AMOUNT_RE regex validator.
     await applyAllocations(
       tx,
       input.workspaceId,
