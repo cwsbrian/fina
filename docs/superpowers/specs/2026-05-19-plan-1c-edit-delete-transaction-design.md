@@ -479,10 +479,28 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 
 The "final state OK" pattern alone does NOT prove either service acquires the advisory lock (row-level Prisma updates and the categorize re-read can mask a missing PATCH lock). The race file must therefore include direct **block-while-lock-held** assertions for each service, plus an end-state consistency test:
 
-**Helper — `holdLock(workspaceId, barrier)`** uses a dedicated `PrismaClient` (not the shared singleton, since `$transaction` is bound to one connection) to:
-1. Start `client.$transaction(async (tx) => { await tx.$executeRaw\`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))\`; await barrier; })`.
-2. Return immediately (the holding tx is in-flight in the background).
-3. Callers `resolve(barrier)` to release.
+**Helper — `holdLock(workspaceId)`** uses a dedicated `PrismaClient` (not the shared singleton, since `$transaction` is bound to one connection). It returns `{ release, done }`:
+
+```ts
+async function holdLock(workspaceId: string): Promise<{ release: () => void; done: Promise<void> }> {
+  const client = new PrismaClient();
+  let resolveBarrier!: () => void;
+  const barrier = new Promise<void>((r) => { resolveBarrier = r; });
+  let resolveAcquired!: () => void;
+  const acquired = new Promise<void>((r) => { resolveAcquired = r; });
+
+  const done = client.$transaction(async (tx) => {
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))`;
+    resolveAcquired();    // signal that we are inside the lock
+    await barrier;        // wait for caller to release
+  }).finally(() => client.$disconnect());
+
+  await acquired;          // do NOT return until the lock is actually held
+  return { release: () => resolveBarrier(), done };
+}
+```
+
+Tests `await holdLock(wsId)`, then start the candidate service. After verifying it blocked, the test calls `release()` and `await done` to ensure the holder transaction finished cleanly (and surfaces any holder errors). Without the `acquired` handshake, the candidate could acquire the lock first and the test would silently lose its proof of blocking.
 
 **Test A — PATCH blocks on the advisory lock.** Seed manual tx. `holdLock` for workspaceId. Call `editTransactionService(ctx, txId, { amount: 9.99 })` in the background. Sleep 200 ms; assert the promise is still pending (use a sentinel race: `Promise.race([patch, sleep(200).then(() => "still-blocked")])` resolves to `"still-blocked"`). Resolve the barrier; await PATCH; assert it succeeded and the row reflects the update. **Reverting `withWorkspaceLock` in `editTransactionService` makes this test deadlock-then-resolve-too-early.**
 
