@@ -13,6 +13,7 @@ import { truncateAll, disconnect } from "./helpers/db.js";
 import { applyManualCategorize } from "../src/categorize/manual-categorize.js";
 import { createManualTransactionService } from "../src/transactions/create-manual.js";
 import { editTransactionService } from "../src/transactions/edit.js";
+import { removeTransactionService } from "../src/transactions/remove.js";
 
 const env = {
   NODE_ENV: "test" as const, PORT: 0,
@@ -141,5 +142,37 @@ describe("transactions race tests — lock acquisition proofs", () => {
     await holder.done;
     const result = await candidate;
     expect(result.transaction.amount).toBe("25");
+  });
+
+  it("Test B: removeTransactionService blocks while holder owns the workspace advisory lock", async () => {
+    const { wsId, userId } = await setupEditor("race-b@t.co");
+    const { transaction: tBaselineTx } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
+    );
+
+    // Unlocked baseline: same call must finish well under 800ms.
+    const tBaseline = Date.now();
+    await removeTransactionService({ workspaceId: wsId }, tBaselineTx.id);
+    expect(Date.now() - tBaseline).toBeLessThan(800);
+
+    // Locked phase.
+    const { transaction: tLockedTx } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Walmart", amount: 20, occurredAt: "2026-05-19" },
+    );
+    const holder = await holdLock(wsId);
+    const candidate = removeTransactionService({ workspaceId: wsId }, tLockedTx.id);
+
+    const winner = await Promise.race([
+      candidate.then(() => "candidate"),
+      new Promise<string>((r) => setTimeout(() => r("timeout"), 800)),
+    ]);
+    expect(winner).toBe("timeout");
+
+    holder.release();
+    await holder.done;
+    const result = await candidate;
+    expect(result).toEqual({ removed: true });
   });
 });
