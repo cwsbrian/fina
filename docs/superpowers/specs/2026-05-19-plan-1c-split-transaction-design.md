@@ -227,7 +227,7 @@ The DO-block safety guard fails the migration loudly if any tx ends up with a su
 
 **Pre-checks (in lock):**
 1. Tx exists in workspace → else 404 `not_found`.
-2. **Per-field source check** — let `manualOnlyFieldProvided = (amount || merchantRaw || occurredAt || note) is in body`. If `manualOnlyFieldProvided && tx.source !== "manual"` → 400 `not_editable`. Conversely, a Plaid posted tx may submit ONLY `categoryId` and/or `allocations` and proceed. See §4.1.1 for the partition rationale.
+2. **Per-field source check** — uses KEY PRESENCE, not truthy-OR: `manualOnlyFieldProvided = "amount" in body || "merchantRaw" in body || "occurredAt" in body || "note" in body`. The key-presence test is critical because `note: null` is a legal manual edit (clearing the note); a naive truthy-OR would let a Plaid posted tx receive `note: null` PATCH without `not_editable`. If `manualOnlyFieldProvided && tx.source !== "manual"` → 400 `not_editable`. Conversely, a Plaid posted tx may submit ONLY `categoryId` and/or `allocations` and proceed. See §4.1.1 for the partition rationale.
 3. `removedAt === null` → else 400 `already_removed`.
 
 ### 4.1.1 Plaid tx editability nuance
