@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "./normalize.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
 
 export class ManualCategorizeError extends Error {
   constructor(public code: "tx_not_found" | "category_not_found") {
@@ -37,14 +38,9 @@ export async function applyManualCategorize(
     select: { currency: true },
   });
 
-  const tx = await prisma.transaction.findFirst({
-    where: { id: input.txId, workspaceId: input.workspaceId },
-    select: { id: true, merchantRaw: true, merchantNormalized: true },
-  });
-  if (!tx) throw new ManualCategorizeError("tx_not_found");
-
-  const merchantNorm = tx.merchantNormalized ?? normalizeMerchant(tx.merchantRaw);
-
+  // Category lookup stays OUTSIDE the lock: read-only, pre-existing archive
+  // races are not introduced by this plan, and keeping it outside means the
+  // lock scope is no larger than the read+writes that actually mutate state.
   const category = await prisma.category.findFirst({
     where: {
       workspaceId: input.workspaceId,
@@ -55,9 +51,20 @@ export async function applyManualCategorize(
   });
   if (!category) throw new ManualCategorizeError("category_not_found");
 
-  const result = await prisma.$transaction(async (db) => {
-    await db.transaction.update({
-      where: { id: tx.id },
+  const result = await withWorkspaceLock(input.workspaceId, async (tx) => {
+    // Re-read INSIDE the lock so a concurrent PATCH that writes merchantRaw +
+    // merchantNormalized is visible here — we must normalize from the
+    // post-PATCH merchantRaw, not a stale snapshot.
+    const txRow = await tx.transaction.findFirst({
+      where: { id: input.txId, workspaceId: input.workspaceId },
+      select: { id: true, merchantRaw: true, merchantNormalized: true },
+    });
+    if (!txRow) throw new ManualCategorizeError("tx_not_found");
+
+    const merchantNorm = txRow.merchantNormalized ?? normalizeMerchant(txRow.merchantRaw);
+
+    await tx.transaction.update({
+      where: { id: txRow.id },
       data: {
         merchantNormalized: merchantNorm,
         categoryId: category.id,
@@ -65,7 +72,7 @@ export async function applyManualCategorize(
       },
     });
 
-    await db.merchantMapping.upsert({
+    await tx.merchantMapping.upsert({
       where: {
         workspaceId_merchantNormalized: {
           workspaceId: input.workspaceId,
@@ -82,7 +89,7 @@ export async function applyManualCategorize(
       update: { categoryId: category.id, source: "manual", confidence: 1.0 },
     });
 
-    const nullSiblings = await db.transaction.findMany({
+    const nullSiblings = await tx.transaction.findMany({
       where: {
         workspaceId: input.workspaceId,
         merchantNormalized: null,
@@ -96,15 +103,15 @@ export async function applyManualCategorize(
     for (const ns of nullSiblings) {
       const norm = normalizeMerchant(ns.merchantRaw);
       if (norm === merchantNorm) {
-        await db.transaction.update({ where: { id: ns.id }, data: { merchantNormalized: norm } });
+        await tx.transaction.update({ where: { id: ns.id }, data: { merchantNormalized: norm } });
       }
     }
 
-    const backfilled = await db.transaction.updateMany({
+    const backfilled = await tx.transaction.updateMany({
       where: {
         workspaceId: input.workspaceId,
         merchantNormalized: merchantNorm,
-        id: { not: tx.id },
+        id: { not: txRow.id },
         OR: [
           { categorizationSource: null },
           { categorizationSource: { not: "manual" } },
@@ -117,7 +124,7 @@ export async function applyManualCategorize(
   });
 
   const updated = await prisma.transaction.findUniqueOrThrow({
-    where: { id: tx.id },
+    where: { id: input.txId },
     select: {
       id: true, amount: true, merchantRaw: true, merchantNormalized: true,
       categoryId: true, categorizationSource: true, occurredAt: true,
