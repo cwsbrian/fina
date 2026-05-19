@@ -101,20 +101,25 @@ No schema changes. Reuses existing fields:
 {
   transaction: {
     id: string;
-    amount: string;            // Prisma.Decimal.toString() — matches POST /manual and GET shape
-    currency: string;          // workspace.currency
+    accountId: string;
+    plaidTransactionId: null;           // always null for source=manual
+    amount: string;                     // Prisma.Decimal.toString() — matches GET shape
+    currency: string;                   // workspace.currency
     merchantRaw: string;
     merchantNormalized: string;
     categoryId: string | null;
-    occurredAt: string;        // ISO
-    note: string | null;
+    occurredAt: string;                 // ISO
+    pending: false;                     // always false for source=manual
     source: "manual";
-    accountId: string;
-    createdAt: string;         // ISO
-    updatedAt: string;         // ISO (always — even for empty-body no-op, return DB row's current updatedAt)
+    note: string | null;
+    removedAt: null;                    // PATCH refuses already_removed, so null in 200 path
+    createdAt: string;                  // ISO
+    updatedAt: string;                  // ISO (always — even for empty-body no-op, return DB row's current updatedAt)
   }
 }
 ```
+
+The PATCH response shape is a superset of the existing `CreateManualTxResult` shape: it adds `updatedAt`, `removedAt`, `pending`, and `plaidTransactionId` so that the client can use a single `Transaction` type model after PATCH or list responses. To keep create-manual symmetric, **this plan also adds `updatedAt`, `removedAt`, `pending`, and `plaidTransactionId` to `CreateManualTxResult`** (a non-breaking additive change — existing tests assert specific fields, not the absence of these).
 
 **Errors:**
 
@@ -164,10 +169,10 @@ No schema changes. Reuses existing fields:
 | File | Action | Responsibility |
 |---|---|---|
 | `apps/api/src/transactions/validators.ts` | NEW | `validateAmount`, `validateMerchantRaw`, `validateNote`, `parseOccurredAt` — extracted from `create-manual.ts`. Shared between create + edit. |
-| `apps/api/src/transactions/create-manual.ts` | MODIFY | Replace inline validators with imports from `validators.ts`. Behavior unchanged. |
+| `apps/api/src/transactions/create-manual.ts` | MODIFY | (a) Replace inline validators with imports from `validators.ts` (TZ-aware "today" fallback stays inline). (b) Extend `CreateManualTxResult.transaction` with `updatedAt`, `removedAt: null`, `pending: false`, `plaidTransactionId: null` so the response shape is identical to PATCH's. Behavior otherwise unchanged. |
 | `apps/api/src/transactions/edit.ts` | NEW | `editTransactionService(ctx, txId, input)` + `EditTxError`. |
 | `apps/api/src/transactions/remove.ts` | NEW | `removeTransactionService(ctx, txId)` + `RemoveTxError`. |
-| `apps/api/src/categorize/manual-categorize.ts` | MODIFY | Wrap the existing `$transaction` body in `withWorkspaceLock(workspaceId, ...)` and re-read the tx **inside** the lock so a concurrent PATCH (or anything writing `merchantRaw`/`merchantNormalized`) cannot leave `merchantNormalized` stale relative to `merchantRaw`. The category lookup may stay outside the lock (it's read-only and cheap; archiving races are pre-existing and out of scope). See §6 for the race scenario. |
+| `apps/api/src/categorize/manual-categorize.ts` | MODIFY | **Replace** the existing standalone `prisma.$transaction(async (db) => …)` callback (current `manual-categorize.ts:58`) with a `withWorkspaceLock(workspaceId, async (tx) => …)` callback. Do NOT keep the inner `prisma.$transaction` — `withWorkspaceLock` itself opens an interactive transaction, and a nested `prisma.$transaction` inside that callback would run on a SEPARATE connection without the advisory lock, defeating the entire fix. All writes inside this callback must use the `tx` client provided by the lock. See §5.1.1 below for the precise read/write placement. |
 | `apps/api/src/routes/transactions.ts` | MODIFY | Add `PATCH` and `DELETE` handlers wiring to the services. |
 | `apps/api/tests/transactions.validators.test.ts` | NEW | Unit tests for the shared validators. |
 | `apps/api/tests/transactions.edit.service.test.ts` | NEW | Unit tests for `editTransactionService`. |
@@ -175,6 +180,60 @@ No schema changes. Reuses existing fields:
 | `apps/api/tests/transactions.edit.route.test.ts` | NEW | Route integration: status codes, body parsing (including `.strict()` reject of unknown keys), role gate. |
 | `apps/api/tests/transactions.remove.route.test.ts` | NEW | Route integration: status codes, idempotent path, `cannot_delete_pending` for Plaid pending. |
 | `apps/api/tests/transactions.edit.race.test.ts` | NEW | Lock serialization test: two concurrent PATCHes resolve linearly. Also covers PATCH-vs-categorize race (concurrent PATCH `merchantRaw` + categorize → final `merchantNormalized` matches final `merchantRaw`). |
+
+### 5.1.1 Precise `applyManualCategorize` rewrite shape
+
+Current structure (`manual-categorize.ts:34-117`):
+
+```ts
+const trimmedName = input.categoryName.trim();
+const workspace = await prisma.workspace.findUniqueOrThrow({ ... });   // BEFORE tx
+const tx = await prisma.transaction.findFirst({ ... });                 // BEFORE tx
+if (!tx) throw new ManualCategorizeError("tx_not_found");
+const merchantNorm = tx.merchantNormalized ?? normalizeMerchant(tx.merchantRaw);
+const category = await prisma.category.findFirst({ ... });             // BEFORE tx
+if (!category) throw new ManualCategorizeError("category_not_found");
+const result = await prisma.$transaction(async (db) => { ... });        // <-- replace this
+```
+
+Replacement structure:
+
+```ts
+const trimmedName = input.categoryName.trim();
+const workspace = await prisma.workspace.findUniqueOrThrow({ ... });   // unchanged — outside lock
+const category = await prisma.category.findFirst({ ... });             // unchanged — outside lock (read-only; archive races pre-existing)
+if (!category) throw new ManualCategorizeError("category_not_found");
+
+const result = await withWorkspaceLock(input.workspaceId, async (tx) => {
+  // Re-read the tx INSIDE the lock so concurrent PATCH writes are visible.
+  const txRow = await tx.transaction.findFirst({
+    where: { id: input.txId, workspaceId: input.workspaceId },
+    select: { id: true, merchantRaw: true, merchantNormalized: true },
+  });
+  if (!txRow) throw new ManualCategorizeError("tx_not_found");
+  const merchantNorm = txRow.merchantNormalized ?? normalizeMerchant(txRow.merchantRaw);
+
+  await tx.transaction.update({ where: { id: txRow.id }, data: { merchantNormalized: merchantNorm, categoryId: category.id, categorizationSource: "manual" } });
+  await tx.merchantMapping.upsert({ ... });
+  // sibling normalization + back-fill — all using `tx`, not `prisma` or `db`
+  const nullSiblings = await tx.transaction.findMany({ ... });
+  for (const ns of nullSiblings) { ... await tx.transaction.update({ ... }); }
+  const backfilled = await tx.transaction.updateMany({ ... });
+  return { backfilledCount: backfilled.count };
+});
+
+// Post-lock read for the response payload (unchanged)
+const updated = await prisma.transaction.findUniqueOrThrow({ ... });
+return { ... };
+```
+
+**Critical:** every Prisma call inside the lock callback uses the `tx` parameter (the `Prisma.TransactionClient` supplied by `withWorkspaceLock`). Using bare `prisma.*` or starting a new `prisma.$transaction` inside the callback would bypass the lock entirely.
+
+The `tx_not_found` check moves from before the lock to inside the lock — this preserves the existing error path without leaking a race: a tx that exists at outer-read time but is removed before the lock acquires would correctly throw `tx_not_found`.
+
+### 5.1.2 Caller contract for `applyManualCategorize`
+
+`applyManualCategorize` now manages its own workspace lock. Callers MUST NOT wrap it in their own `withWorkspaceLock(workspaceId, ...)` for the **same** workspace — a nested same-workspace acquisition would deadlock at the inner `pg_advisory_xact_lock` (Postgres advisory locks are NOT re-entrant across separate transactions; `withWorkspaceLock` opens a fresh `$transaction` each time). Today's callers (route handler at `routes/transactions.ts:144`, chat tool `chat/tools/categorize-transaction.ts`, chat tool dispatcher) do not hold a workspace lock when calling, so no caller-site change is required by this plan. Future writers that combine multiple operations must call `applyManualCategorize` from OUTSIDE their own lock or factor the work into a single lock callback that does both jobs directly.
 
 ### 5.2 Service signatures
 
@@ -189,8 +248,26 @@ export type EditTxInput = {
 };
 
 export type EditTxResult = {
-  transaction: { /* same shape as CreateManualTxResult.transaction, plus updatedAt */ };
+  transaction: {
+    id: string;
+    accountId: string;
+    plaidTransactionId: null;     // always null — PATCH only operates on source=manual
+    amount: string;
+    currency: string;
+    merchantRaw: string;
+    merchantNormalized: string;
+    categoryId: string | null;
+    occurredAt: string;
+    pending: false;               // always false — manual tx invariant
+    source: "manual";
+    note: string | null;
+    removedAt: null;              // always null — PATCH refuses already-removed
+    createdAt: string;
+    updatedAt: string;
+  };
 };
+
+// Matches the (now-extended) `CreateManualTxResult.transaction` shape exactly.
 
 export type EditTxErrorCode =
   | "not_found"
@@ -263,6 +340,8 @@ catch (e) {
 
 The shared codes (`invalid_amount` / `invalid_date` / `invalid_merchant` / `invalid_note`) are present in both `CreateManualTxErrorCode` and `EditTxErrorCode`, so the 1:1 mapping is type-safe.
 
+**What stays in `create-manual.ts`:** the TZ-aware "today" fallback for omitted `occurredAt` (current lines 99-106) stays inline in `create-manual.ts` — it's create-specific (PATCH never auto-fills `occurredAt`). The validators module exposes `parseOccurredAt` for string→Date conversion; create-manual continues to call it after producing the today-string. Likewise, `category_not_found` and `account_not_found` resolution (which depend on DB state, not pure input validation) stay inline in each service.
+
 ### 5.4 Locking
 
 ```ts
@@ -318,8 +397,10 @@ Three sync code paths touch `removedAt`:
 | Path | Behavior | Interaction with user soft-delete |
 |---|---|---|
 | `upsertModified` (Plaid `modified` event) | Updates amount/merchant/etc; does NOT touch `removedAt`. | ✓ User delete persists. |
-| `markRemoved` (Plaid `removed` event) | `updateMany where removedAt: null` → no-op if already removed. | ✓ User delete persists. |
+| `markRemoved` (Plaid `removed` event) | `updateMany where removedAt: null` → no-op if already removed. | ✓ User delete persists (cross-page case). |
 | Pending→posted promotion | Forces `removedAt: null` (intentional — re-link pending to posted) at `apps/api/src/plaid/sync.ts:235`. | ✗ Would resurrect a user-deleted pending Plaid tx. |
+
+**Within-page ordering note (`sync.ts:127-133`):** a single Plaid page processes `added` (which includes promotions, via `upsertAdded` clearing `removedAt`) BEFORE `markRemoved`. So if Plaid sends a `removed` event for a tx on the same page that promotes it, the page ends with `removedAt != null` (markRemoved wins within the page). The pending→posted resurrection risk is specifically the **cross-page** case: page N's `markRemoved` commits, then page N+1's promotion clears `removedAt`. Pre-check 2 (rejecting pending-DELETE before idempotency) closes that window.
 
 **Mitigation: reject DELETE for `pending = true && plaidTransactionId != null`** (§4.2 pre-check 2). This avoids the resurrection without a schema change. Users wait for posted, then DELETE.
 
@@ -335,7 +416,7 @@ T2 (PATCH):     write merchantRaw="Walmart", merchantNormalized="walmart"
 T1 (categorize): write merchantNormalized="costco"   ❌ inconsistent
 ```
 
-**Fix in this plan:** `applyManualCategorize` adopts `withWorkspaceLock`. The lock acquires before the existing `prisma.$transaction` body, and the tx read moves inside the lock so it sees post-PATCH state. The category lookup may stay outside (read-only; pre-existing archive races are not introduced by this plan).
+**Fix in this plan:** `applyManualCategorize` is rewritten per §5.1.1 — the existing standalone `prisma.$transaction` callback is **replaced** by a `withWorkspaceLock(workspaceId, async (tx) => …)` callback (NOT wrapped — wrapping would leave the inner `$transaction` running on a separate connection without the lock). All writes inside use the `tx` client. The tx read moves inside the lock so it sees post-PATCH state. The workspace + category lookups stay outside the lock (read-only; pre-existing archive races are not introduced by this plan).
 
 ### 6.3 PATCH vs. PATCH race
 
@@ -479,7 +560,7 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 
 The "final state OK" pattern alone does NOT prove either service acquires the advisory lock (row-level Prisma updates and the categorize re-read can mask a missing PATCH lock). The race file must therefore include direct **block-while-lock-held** assertions for each service, plus an end-state consistency test:
 
-**Helper — `holdLock(workspaceId)`** uses a dedicated `PrismaClient` (not the shared singleton, since `$transaction` is bound to one connection). It returns `{ release, done }`:
+**Helper — `holdLock(workspaceId)`** uses a dedicated `PrismaClient` (not the shared singleton, since `$transaction` is bound to one connection). The closest existing analog is the raw `BEGIN` / `pg_advisory_xact_lock` / `COMMIT` holder used in `apps/api/tests/currency-lock.test.ts:128-149`; this plan introduces a small handshake-enabled variant. It returns `{ release, done }`:
 
 ```ts
 async function holdLock(workspaceId: string): Promise<{ release: () => void; done: Promise<void> }> {
@@ -552,7 +633,10 @@ Rollout: ship behind no flag. PATCH/DELETE are net-new verbs at this URL — no 
 - [ ] `merchantNormalized` recomputed on `merchantRaw` change
 - [ ] Empty PATCH body returns current row (no update call)
 - [ ] All reads + writes happen inside `withWorkspaceLock` (PATCH, DELETE, AND the modified `applyManualCategorize`)
+- [ ] `applyManualCategorize` is rewritten per §5.1.1: the existing standalone `prisma.$transaction` is REPLACED by a `withWorkspaceLock` callback (NOT nested) and every Prisma call inside uses the `tx` parameter (no `prisma.*` or new `prisma.$transaction` inside the callback)
 - [ ] `applyManualCategorize` re-reads tx INSIDE the lock to avoid stale `merchantRaw` race
+- [ ] `applyManualCategorize` callers (route, chat tools, dispatcher) verified to NOT already hold a workspace lock — adding the inner lock does not deadlock today (§5.1.2)
+- [ ] PATCH response shape adds `updatedAt`/`removedAt`/`pending`/`plaidTransactionId`; `CreateManualTxResult` also gets these four fields for symmetry (additive, non-breaking)
 - [ ] Plaid sync paths (§6.1) reviewed — pending-DELETE rejection is the gate against pending→posted resurrection
 - [ ] Audit log explicitly out of scope (defer to `1C-audit-http`)
 - [ ] Amount in response uses `Prisma.Decimal.toString()` (matches POST/GET) — NOT `toFixed(2)`
