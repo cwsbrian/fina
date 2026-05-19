@@ -288,19 +288,39 @@ model Transaction {
   createdAt                 DateTime          @default(now())
   updatedAt                 DateTime          @updatedAt
   categorizationSource      CategorizationSource?
+  needsReclassification     Boolean           @default(false)
 
-  workspace Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // FK column kept as `accountId` (not `bankAccountId`) so URL/query filters
   // and prior plan-2 code that exposes accountId in API responses don't churn.
   // The Prisma model is BankAccount but the field name is unchanged.
-  account   BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  plaidItem PlaidItem?  @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
-  category  Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  account     BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  plaidItem   PlaidItem?  @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
+  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  allocations TransactionAllocation[]
 
   @@index([workspaceId, occurredAt(sort: Desc)])
   @@index([workspaceId, accountId, occurredAt(sort: Desc)])
   @@index([workspaceId, categoryId])
   @@map("transactions")
+}
+
+model TransactionAllocation {
+  id            String                @id @default(cuid())
+  transactionId String
+  categoryId    String?
+  amount        Decimal               @db.Decimal(14, 2)
+  source        CategorizationSource?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+
+  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  @@index([transactionId])
+  @@index([categoryId])
+  @@index([categoryId, transactionId])
+  @@map("transaction_allocations")
 }
 
 enum TransactionSource {
@@ -323,6 +343,7 @@ model Category {
   parent             Category?         @relation("CategoryTree", fields: [parentId], references: [id])
   children           Category[]        @relation("CategoryTree")
   transactions       Transaction[]
+  allocations        TransactionAllocation[]
   merchantMappings   MerchantMapping[]
   budgets            Budget[]
   recurringExpenses  RecurringExpense[]
