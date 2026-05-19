@@ -477,23 +477,26 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 
 `apps/api/tests/transactions.edit.race.test.ts`
 
-- **PATCH vs. PATCH:** Two concurrent PATCH calls on same tx with different `amount` → final value is one of the two (not interleaved). Verifies advisory lock serializes.
-- **PATCH vs. categorize (deterministic):** This test must prove the fix; the order matters.
+The "final state OK" pattern alone does NOT prove either service acquires the advisory lock (row-level Prisma updates and the categorize re-read can mask a missing PATCH lock). The race file must therefore include direct **block-while-lock-held** assertions for each service, plus an end-state consistency test:
 
-  Setup: seed manual tx with `merchantRaw = "Costco"`, no category.
+**Helper — `holdLock(workspaceId, barrier)`** uses a dedicated `PrismaClient` (not the shared singleton, since `$transaction` is bound to one connection) to:
+1. Start `client.$transaction(async (tx) => { await tx.$executeRaw\`SELECT pg_advisory_xact_lock(hashtext(${workspaceId}))\`; await barrier; })`.
+2. Return immediately (the holding tx is in-flight in the background).
+3. Callers `resolve(barrier)` to release.
 
-  Pattern (deterministic, no `setTimeout` race):
-  1. **Holder transaction** (connection H, raw `prisma.$transaction` with manual commit barrier via a deferred promise inside the callback):
-     - Acquire `pg_advisory_xact_lock(hashtext(workspaceId))`.
-     - `UPDATE transactions SET merchantRaw = 'Walmart', merchantNormalized = 'walmart' WHERE id = txId`.
-     - Wait on a `barrier` promise (do NOT commit yet).
-  2. **Categorize call** (connection C): start `applyManualCategorize({ workspaceId, txId, categoryName: "Groceries" })` in the background. It will block at the advisory-lock acquisition step inside its new `withWorkspaceLock` wrapper.
-  3. Sleep briefly to confirm categorize is blocked (assert it has NOT resolved yet).
-  4. Resolve the `barrier` → H commits → releases advisory lock.
-  5. Await categorize. Inside its lock, it re-reads tx → sees `merchantRaw = "Walmart"` → writes `merchantNormalized = "walmart"` (re-normalized).
-  6. **Assert final DB row:** `merchantRaw = "Walmart"` AND `merchantNormalized = "walmart"` AND `categoryId != null`.
+**Test A — PATCH blocks on the advisory lock.** Seed manual tx. `holdLock` for workspaceId. Call `editTransactionService(ctx, txId, { amount: 9.99 })` in the background. Sleep 200 ms; assert the promise is still pending (use a sentinel race: `Promise.race([patch, sleep(200).then(() => "still-blocked")])` resolves to `"still-blocked"`). Resolve the barrier; await PATCH; assert it succeeded and the row reflects the update. **Reverting `withWorkspaceLock` in `editTransactionService` makes this test deadlock-then-resolve-too-early.**
 
-  Why this proves the fix: with the OLD (pre-fix) categorize code, step 2 would not block — categorize would read `merchantRaw = "Costco"` immediately, compute `merchantNormalized = "costco"`, then race with H's UPDATE. Whichever wrote last to `merchantNormalized` would win. With the NEW code (lock + re-read inside lock), categorize MUST wait for H to release the lock and MUST re-read post-commit state, so its `merchantNormalized` write is consistent with `merchantRaw`. Reverting the categorize fix should make this test fail.
+**Test B — DELETE blocks on the advisory lock.** Same pattern with `removeTransactionService`. Reverting the lock in `remove.ts` fails this test.
+
+**Test C — Categorize blocks on the advisory lock.** Same pattern with `applyManualCategorize`. Reverting the lock added in §5.1 fails this test.
+
+**Test D — End-state consistency (PATCH + categorize).** Seed tx with `merchantRaw = "Costco"`, no category. `holdLock` for workspaceId. Start (in parallel, in the background):
+- `editTransactionService(ctx, txId, { merchantRaw: "Walmart" })`
+- `applyManualCategorize({ workspaceId, txId, categoryName: "Groceries" })`
+
+Sleep 200 ms; assert both promises are still pending (sentinel race). Resolve the barrier; await both. The two services serialize through the workspace lock in some order. Whichever runs second re-reads inside its lock and sees the first's writes. Assert final DB row: `merchantRaw === "Walmart"`, `merchantNormalized === "walmart"`, `categoryId !== null`. (Note: this end-state alone does NOT distinguish "PATCH took lock" from "PATCH skipped lock" — Tests A/B/C carry that load.)
+
+**Test E — PATCH vs. PATCH (last-writer wins under lock).** Seed manual tx with `amount: 10`. Two concurrent `editTransactionService` calls with different amounts (`20` and `30`). Both must complete; final amount is one of the two. This is mostly a smoke check — row-level locking would pass this even without the workspace lock; the proof of locking is Test A.
 
 ### 8.6 Smoke
 
