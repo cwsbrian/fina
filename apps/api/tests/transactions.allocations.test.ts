@@ -129,6 +129,23 @@ describe("applyAllocations", () => {
     ).rejects.toMatchObject({ code: "category_not_found" });
   });
 
+  it("rejects categoryId from a DIFFERENT workspace → category_not_found", async () => {
+    const { wsId } = await setup("aa-xws@t.co");
+    const txId = await seedTx(wsId, "10");
+    // Create a category in a SEPARATE workspace
+    const otherWs = await prisma.workspace.create({ data: { name: "other-ws-aa-xws" } });
+    const otherCat = await prisma.category.create({
+      data: { workspaceId: otherWs.id, name: "OtherCat-aa-xws" },
+    });
+    await expect(
+      withWorkspaceLock(wsId, async (tx) =>
+        applyAllocations(tx, wsId, txId, new Prisma.Decimal("10"), "manual", [
+          { categoryId: otherCat.id, amount: 10 },
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: "category_not_found" });
+  });
+
   it("happy: 1 null-cat allocation (uncategorized)", async () => {
     const { wsId } = await setup("aa7@t.co");
     const txId = await seedTx(wsId, "10");

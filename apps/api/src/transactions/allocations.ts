@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, CategorizationSource } from "@prisma/client";
 
 export type AllocationInput = { categoryId: string | null; amount: number };
 
@@ -31,7 +31,7 @@ function validateOneAmount(amount: number): void {
   }
 }
 
-export type AllocationSource = "manual" | "mapping" | "ai" | null;
+export type AllocationSource = CategorizationSource | null;
 
 /**
  * Replace all allocations for a transaction atomically. MUST be called inside
