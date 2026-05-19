@@ -2,6 +2,13 @@ import { Prisma } from "@prisma/client";
 import { normalizeMerchant } from "../categorize/normalize.js";
 import { dateKeyInTz, resolveUserTz } from "../chat/tools/periods.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
+import {
+  TxValidationError,
+  validateAmount as validateAmountShared,
+  validateMerchantRaw as validateMerchantRawShared,
+  validateNote as validateNoteShared,
+  parseOccurredAt as parseOccurredAtShared,
+} from "./validators.js";
 
 export type CreateManualTxInput = {
   merchantRaw: string;
@@ -44,48 +51,26 @@ export class CreateManualTxError extends Error {
   }
 }
 
-const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
-const MAX_AMOUNT = 999_999_999.99;
+// Map TxValidationError → CreateManualTxError. The error codes overlap 1:1.
+function rethrow<T>(fn: () => T): T {
+  try { return fn(); }
+  catch (e) {
+    if (e instanceof TxValidationError) throw new CreateManualTxError(e.code);
+    throw e;
+  }
+}
 
 function validateMerchantRaw(raw: string): string {
-  const trimmed = raw.trim();
-  if (trimmed.length < 1 || trimmed.length > 200) {
-    throw new CreateManualTxError("invalid_merchant");
-  }
-  return trimmed;
+  return rethrow(() => validateMerchantRawShared(raw));
 }
-
-// Transaction.amount is Decimal(14, 2). Reject any input that wouldn't
-// round-trip cleanly at two decimal places.
-//
-// Cents-tolerance checks (e.g. cents - Math.round(cents) < 1e-6) accept
-// pathological inputs like 0.000000001 or 0.009999999999. Use the JS
-// string serialization instead: the value must match
-//   /^\d+(\.\d{1,2})?$/   (no scientific notation, ≤ 2 decimals)
-const AMOUNT_RE = /^\d+(\.\d{1,2})?$/;
-
 function validateAmount(amount: number): void {
-  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) {
-    throw new CreateManualTxError("invalid_amount");
-  }
-  if (!AMOUNT_RE.test(String(amount))) {
-    throw new CreateManualTxError("invalid_amount");
-  }
+  rethrow(() => validateAmountShared(amount));
 }
-
 function validateNote(note: string | undefined): string | null {
-  if (note === undefined) return null;
-  if (note.length > 1000) throw new CreateManualTxError("invalid_note");
-  return note;
+  return rethrow(() => validateNoteShared(note));
 }
-
 function parseOccurredAt(s: string): Date {
-  if (!DATE_RE.test(s)) throw new CreateManualTxError("invalid_date");
-  const d = new Date(s + "T12:00:00Z");
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
-    throw new CreateManualTxError("invalid_date");
-  }
-  return d;
+  return rethrow(() => parseOccurredAtShared(s));
 }
 
 export async function createManualTransactionService(
