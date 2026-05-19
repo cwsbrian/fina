@@ -35,7 +35,7 @@ We are pre-launch. Migration cost is zero. The dual model branches all category-
 | Storage | New table `transaction_allocations`. Drop `Transaction.categoryId` and `Transaction.categorizationSource`. |
 | Allocation FK to category | `categoryId String?` (nullable). Uncategorized tx = one allocation with `categoryId = null`. |
 | Per-allocation source | `source CategorizationSource?` (reuse existing enum: `manual | mapping | ai`). |
-| Invariants | Every tx has ≥1 allocation. `sum(allocations.amount) = tx.amount` (strict, Decimal-exact). |
+| Invariants | Every tx has ≥1 allocation. `sum(allocations.amount) = tx.amount` (strict, Decimal-exact). Null `categoryId` is allowed in any allocation regardless of N (split tx mid-edit may have some uncategorized rows). |
 | Sum tolerance | None. Inputs must satisfy `sum(amount) === tx.amount` exactly at Decimal(14,2). |
 | Split scope | Manual + posted Plaid both eligible. Pending Plaid → `cannot_split_pending`. |
 | Surface | Extend existing `PATCH /workspaces/:id/transactions/:txId` with an `allocations` field. No separate `/split` endpoint. |
@@ -70,6 +70,7 @@ model TransactionAllocation {
 
   @@index([transactionId])
   @@index([categoryId])
+  @@index([categoryId, transactionId])  // composite: supports budget/category aggregation queries
   @@map("transaction_allocations")
 }
 ```
@@ -135,6 +136,8 @@ CREATE TABLE "transaction_allocations" (
 );
 CREATE INDEX "transaction_allocations_transactionId_idx" ON "transaction_allocations"("transactionId");
 CREATE INDEX "transaction_allocations_categoryId_idx"    ON "transaction_allocations"("categoryId");
+CREATE INDEX "transaction_allocations_categoryId_transactionId_idx"
+  ON "transaction_allocations"("categoryId", "transactionId");
 
 -- 2. Add the new flag
 ALTER TABLE "transactions" ADD COLUMN "needsReclassification" BOOLEAN NOT NULL DEFAULT FALSE;
@@ -181,7 +184,7 @@ ALTER TABLE "transactions" DROP COLUMN "categorizationSource";
 
 The DO-block safety guard fails the migration loudly if any tx ends up with a sum mismatch — catches data corruption before the columns are dropped (still recoverable).
 
-`gen_random_uuid` requires `pgcrypto`. If not enabled, swap to `md5(random()::text || clock_timestamp()::text)` or pre-generate cuids in the migration script.
+`gen_random_uuid()` is built into Postgres 16 core (no extension needed). Verified by the existing precedent at `apps/api/prisma/migrations/20260512170759_add_categorize/migration.sql:46-50`.
 
 ---
 
@@ -220,11 +223,11 @@ The DO-block safety guard fails the migration loudly if any tx ends up with a su
 
 **categorizationSource on PATCH**: any allocation written via PATCH gets `source = "manual"`. (The route is user-driven by definition.)
 
-**`needsReclassification` clears** to false whenever PATCH writes allocations.
+**`needsReclassification` clearing rule** — clears to `false` ONLY when PATCH includes `allocations` or `categoryId` in the body (the user-driven categorization paths). A PATCH that only edits `amount` / `merchantRaw` / `occurredAt` / `note` does NOT clear the flag, even if the single-allocation amount gets passively updated to track a new `tx.amount`. The flag is a signal "user has not yet re-classified after Plaid invalidation"; only an explicit categorization clears it.
 
 **Pre-checks (in lock):**
 1. Tx exists in workspace → else 404 `not_found`.
-2. `source === "manual"` → else 400 `not_editable` (Plaid txs still cannot use the editor for amount/merchant/date — but allocations are allowed; see §4.1.1).
+2. **Per-field source check** — let `manualOnlyFieldProvided = (amount || merchantRaw || occurredAt || note) is in body`. If `manualOnlyFieldProvided && tx.source !== "manual"` → 400 `not_editable`. Conversely, a Plaid posted tx may submit ONLY `categoryId` and/or `allocations` and proceed. See §4.1.1 for the partition rationale.
 3. `removedAt === null` → else 400 `already_removed`.
 
 ### 4.1.1 Plaid tx editability nuance
@@ -288,6 +291,8 @@ This route remains as a UX/chat-tool shortcut. The PATCH route with `categoryId`
 
 **Response shape update**: `ManualCategorizeResult.tx` drops `categoryId` and `categorizationSource` and gains `allocations: [...]` (same shape as the GET/PATCH response). Chat tool `categorizeTransaction` consumers update accordingly.
 
+**LLM tool-result contract:** the chat tool's `ToolDef<Args, Result>` declares `Result` as the structured payload returned to the LLM. Changing `tx.categoryId` → `tx.allocations[0].categoryId` in the response means any prompt-side documentation of the tool's return shape must be regenerated. Audit: `apps/api/src/chat/tools/categorize-transaction.ts` declares the result type but the LLM-facing tool schema (`args` Zod) is the only thing serialized into the prompt today — verify before/after the change. If response-shape examples appear in the LLM system prompt, regenerate them.
+
 ### 4.4 `GET /workspaces/:id/transactions`
 
 Response: each tx includes `allocations: [...]` and `needsReclassification: bool` (and drops `categoryId` / `categorizationSource`).
@@ -331,8 +336,8 @@ Filter `?uncategorizedOnly=true`: matches tx where ≥1 allocation has `category
 
 All need to be reworked to use allocations:
 
-- `find-transactions.ts` (filter by category)
-- `find-uncategorized-transactions.ts` (allocation.categoryId IS NULL filter)
+- `find-transactions.ts` (filter by category — match tx where ≥1 allocation has categoryId = X)
+- `find-uncategorized-transactions.ts` (see §5.1.2 below — two modes)
 - `get-category-breakdown.ts` (group by allocation.categoryId, sum allocation.amount)
 - `get-spending-summary.ts` (similar)
 - `get-cashflow-summary.ts` (only sums signed amount — no allocation join needed; unchanged)
@@ -341,6 +346,15 @@ All need to be reworked to use allocations:
 - `get-transaction-details.ts` (return allocations array)
 - `categorize-transaction.ts` (writes single allocation via service)
 - `add-transaction-note.ts` (no category, unchanged)
+
+### 5.1.2 `find-uncategorized-transactions` unified semantics
+
+The tool today filters via `categoryId IS NULL OR categorizationSource != "manual"`. Two modes mapped to unified:
+
+- **Mode `uncategorized` (default)** — tx has ≥1 allocation with `categoryId IS NULL`. Matches the spirit of "this tx has unclassified portion".
+- **Mode `not_manual`** — tx has any allocation where `source != "manual"` OR `categoryId IS NULL`. The intent is "tx that hasn't been user-confirmed", so even AI/mapping-sourced single allocations qualify. For a split tx (N≥2), if ANY allocation is not manual-sourced, the tx qualifies. This is consistent with the old per-tx `categorizationSource != "manual"` rule.
+
+A split tx where all N allocations have `source = "manual"` is considered fully user-confirmed and is excluded from `not_manual`.
 
 ### 5.2 Shared `applyAllocations` helper
 
@@ -400,22 +414,43 @@ All allocation writes go through `applyAllocations` which expects to be called i
 - `applyManualCategorize` — existing `withWorkspaceLock` (added in 1C-edit-delete-transaction). Replaces tx-level write with `applyAllocations` call.
 - `createManualTransactionService` — existing `withWorkspaceLock`. After `tx.transaction.create(...)`, call `applyAllocations` with single entry (or single null-category entry if no input.categoryId).
 - `upsertModified` (Plaid sync) — wrapped in `withWorkspaceLock` per page already (`apps/api/src/plaid/sync.ts`). Add the invalidation logic inside.
-- `categorize/service.ts` (auto-categorize) — currently does NOT use `withWorkspaceLock`. Must add it (per-batch lock) or call `applyAllocations` per-tx with its own lock.
-- `categorize/map-merchant.ts` — same as above. Add `withWorkspaceLock`.
 
-The 1C-edit-delete-transaction plan already retrofitted `applyManualCategorize` to use `withWorkspaceLock`. This plan extends that pattern to **auto-categorize and map-merchant**, which currently write tx.categoryId outside any advisory lock.
+**Auto-categorize and map-merchant — DO NOT add `withWorkspaceLock`.** Both run as batch ingest in a hot path; adding a workspace-wide lock would serialize all ingestion. Instead, use per-row atomic update with a `where`-clause guard that makes the update idempotent and safe against concurrent user PATCH:
+
+```ts
+// Auto-categorize (Gemini result) — service.ts Step 3
+await tx.transactionAllocation.updateMany({
+  where: {
+    transactionId: targetTxId,
+    source: null,           // only update an unclassified allocation
+    categoryId: null,       // and only if still uncategorized
+  },
+  data: { categoryId: aiResult.categoryId, source: "ai" },
+});
+```
+
+This is safe because:
+1. The `where` clause matches only allocations that are still in the "uncategorized, no source" state. If a concurrent user PATCH already set the category (source="manual"), the `updateMany` matches 0 rows and is a no-op — user wins.
+2. `updateMany` is a single SQL statement, atomic at the row level.
+3. We also gate the BATCH-level lookup: `service.ts` queries `newTxIds` where the tx has exactly 1 allocation AND that allocation has `categoryId IS NULL` (see §6.2). A tx that's already been split (N≥2) is excluded from the batch entirely.
+
+The same pattern applies to map-merchant (`source: "mapping"`).
+
+The 1C-edit-delete-transaction plan already retrofitted `applyManualCategorize` to use `withWorkspaceLock` because it does multi-row sibling back-fill. Auto-categorize/map-merchant are simpler (per-tx atomic) and don't need the lock.
 
 ### 5.4 Plaid sync interaction (full spec)
 
-`apps/api/src/plaid/sync.ts:upsertModified` and the pending→posted promotion both write tx fields. With allocations as the source of truth, both must keep the invariant `sum(allocations.amount) = tx.amount`. Logic:
+`apps/api/src/plaid/sync.ts:upsertModified`, `upsertAdded` (incl. its pending→posted promotion branch), and `markRemoved` all write tx fields. With allocations as the source of truth, all paths must keep the invariant `sum(allocations.amount) = tx.amount`.
+
+**`upsertModified` (modified event):** today uses `updateMany({ where: { workspaceId, plaidTransactionId } })` with no `removedAt` filter — soft-removed rows still get their fields updated to stay consistent with Plaid's view. We preserve that behavior with `findFirst` (also no `removedAt` filter) so a soft-removed split tx still gets its allocations kept consistent:
 
 ```ts
 async function upsertModified(tx, plaidTx, workspaceId) {
   const existing = await tx.transaction.findFirst({
-    where: { workspaceId, plaidTransactionId: plaidTx.transaction_id },
+    where: { workspaceId, plaidTransactionId: plaidTx.transaction_id }, // NOTE: no removedAt filter — match today's updateMany scope
     include: { allocations: { select: { id: true, amount: true } } },
   });
-  if (!existing) return; // shouldn't happen for `modified` event
+  if (!existing) return; // shouldn't happen for `modified` event; matches today's no-op when row missing
   const oldAmount = existing.amount;
   const newAmount = new Prisma.Decimal(plaidTx.amount);
   const amountChanged = !oldAmount.equals(newAmount);
@@ -423,32 +458,28 @@ async function upsertModified(tx, plaidTx, workspaceId) {
   const merchantChanged = existing.merchantRaw !== newMerchantRaw;
   const N = existing.allocations.length;
 
+  const txDataBase = {
+    amount: newAmount, merchantRaw: newMerchantRaw,
+    occurredAt: plaidOccurredAt(plaidTx),
+    postedAt: plaidPostedAt(plaidTx),
+    pending: plaidTx.pending,
+    rawData: plaidTx as Prisma.InputJsonValue,
+  };
+
   if (N >= 2 && (amountChanged || merchantChanged)) {
-    // Invalidate split: replace allocations with 1 null-category row, set flag
+    // Invalidate split: replace allocations with 1 null-cat row, set flag
     await tx.transactionAllocation.deleteMany({ where: { transactionId: existing.id } });
     await tx.transactionAllocation.create({
-      data: {
-        transactionId: existing.id,
-        categoryId: null,
-        amount: newAmount,
-        source: null,
-      },
+      data: { transactionId: existing.id, categoryId: null, amount: newAmount, source: null },
     });
     await tx.transaction.update({
       where: { id: existing.id },
-      data: {
-        amount: newAmount, merchantRaw: newMerchantRaw,
-        occurredAt: plaidOccurredAt(plaidTx),
-        postedAt: plaidPostedAt(plaidTx),
-        pending: plaidTx.pending,
-        rawData: plaidTx as Prisma.InputJsonValue,
-        needsReclassification: true,
-      },
+      data: { ...txDataBase, needsReclassification: true },
     });
   } else {
-    // N = 1 case OR (N≥2 with only metadata changes): preserve allocations.
-    // If amount changed (N=1 only by exclusion above), update the single allocation.
+    // N=1 (any change) OR N≥2 with only metadata changes: preserve allocations
     if (amountChanged && N === 1) {
+      // Keep invariant: single allocation.amount tracks tx.amount
       await tx.transactionAllocation.update({
         where: { id: existing.allocations[0]!.id },
         data: { amount: newAmount },
@@ -456,21 +487,53 @@ async function upsertModified(tx, plaidTx, workspaceId) {
     }
     await tx.transaction.update({
       where: { id: existing.id },
-      data: {
-        amount: newAmount, merchantRaw: newMerchantRaw,
-        occurredAt: plaidOccurredAt(plaidTx),
-        postedAt: plaidPostedAt(plaidTx),
-        pending: plaidTx.pending,
-        rawData: plaidTx as Prisma.InputJsonValue,
-      },
+      data: txDataBase,
     });
   }
 }
 ```
 
-`upsertAdded` (new Plaid tx): create tx, then create one allocation `{ categoryId: null, amount: tx.amount, source: null }`. Auto-categorize will fill in categoryId later via the categorize batch step.
+**`upsertAdded` fresh-insert path:** create the tx, then create one allocation `{ transactionId, categoryId: null, amount: tx.amount, source: null }`. Auto-categorize fills in `categoryId` + `source` later via the categorize batch step (§6.1).
 
-Pending → posted promotion: today this clears `removedAt: null` (the resurrection issue from 1C-edit-delete §6.1). It also updates amount/merchant. In unified, the same N≥2 invalidation rule applies — if a user splits a pending Plaid tx (which is already gated as `cannot_split_pending`), this case can't happen. For N=1 promotions, allocation.amount updates to match.
+**`upsertAdded` pending→posted promotion branch (sync.ts:215-238):** today this finds the existing pending tx by `(workspaceId, plaidPendingTransactionId)` and updates fields including `removedAt: null` (intentional resurrection of any pending-side soft-removal). In unified, this branch must ALSO update the single allocation's amount when Plaid's posted amount differs from the pending row's amount:
+
+```ts
+const promotion = await tx.transaction.findFirst({
+  where: { workspaceId, plaidPendingTransactionId: plaidTx.pending_transaction_id, pending: true },
+  include: { allocations: { select: { id: true } } },
+});
+if (promotion) {
+  const newAmount = new Prisma.Decimal(plaidTx.amount);
+  // Invariant: pending tx had N=1 allocation (cannot_split_pending blocks user splits).
+  // If allocations.length !== 1 here, that's a bug — log + skip the allocation update.
+  if (promotion.allocations.length === 1) {
+    await tx.transactionAllocation.update({
+      where: { id: promotion.allocations[0]!.id },
+      data: { amount: newAmount },
+    });
+  }
+  await tx.transaction.update({
+    where: { id: promotion.id },
+    data: {
+      plaidTransactionId: plaidTx.transaction_id,
+      plaidPendingTransactionId: plaidTx.pending_transaction_id,
+      pending: false,
+      occurredAt: plaidOccurredAt(plaidTx),
+      postedAt: plaidPostedAt(plaidTx),
+      amount: newAmount,
+      merchantRaw: plaidTx.merchant_name ?? plaidTx.name ?? "Unknown",
+      rawData: plaidTx as Prisma.InputJsonValue,
+      removedAt: null, // existing behavior; resurrection issue is gated by cannot_delete_pending
+    },
+  });
+  return { kind: "updated", localId: promotion.id };
+}
+// ...else fresh insert (handled by upsertAdded outer code)
+```
+
+The `promotion.allocations.length === 1` check is a paranoid defensive — `cannot_split_pending` (§4.2 of 1C-edit-delete + this plan §4.1) prevents user split of pending tx, so N must be 1. If we ever find N≠1 in production, log + skip allocation update; the tx row still gets the field update.
+
+**`markRemoved`:** unchanged. Sets `removedAt`. Allocations remain (referenced by FK; only hard delete cascades them). Soft-removed split tx still has its allocations on disk, just hidden from default queries.
 
 Pending DELETE remains gated by `cannot_delete_pending`. Split (PATCH with allocations) on pending Plaid is gated by `cannot_split_pending`.
 
@@ -553,45 +616,45 @@ Current flow (Step 3, post-mapping):
 2. Calls Gemini, parses results.
 3. Per result: `tx.transaction.update({ where: { id }, data: { categoryId: catId, categorizationSource: "ai" } })`.
 
-New flow:
-1. Reads `newTxIds` where the tx has exactly one allocation AND that allocation has `categoryId IS NULL`.
+New flow (no workspace lock per §5.3):
+1. Reads `newTxIds` where the tx has exactly one allocation AND that allocation has `categoryId IS NULL`. Tx that are already split (N≥2) or already categorized (allocation has source) are excluded from the batch.
 2. Calls Gemini (unchanged).
-3. Per result: `tx.transactionAllocation.update({ where: { id: <the single allocation's id> }, data: { categoryId: catId, source: "ai" } })`.
+3. Per result: `tx.transactionAllocation.updateMany({ where: { transactionId: id, categoryId: null, source: null }, data: { categoryId: aiCatId, source: "ai" } })`. The `where` guard makes this idempotent and concurrency-safe: if a user PATCH categorizes between batch-read and this write, the `updateMany` matches 0 rows.
 
-Locking: today this runs without `withWorkspaceLock`. We must add the lock. Pattern: per-workspace lock around the per-tx update loop, OR per-tx atomic update without lock (since each is a single-row update by id, atomicity at DB level is sufficient). I lean **no lock for auto-categorize** because each update is a single row; the workspace-wide lock is overkill and the operation is idempotent (re-running just overwrites with same result).
-
-⚠ The exception: in unified, a concurrent user PATCH could clobber the auto-categorize write. With a per-row update, last-writer-wins. For the auto-categorize case, the LLM's choice is the loser if the user explicitly categorized first. That's the right outcome (user wins).
+The where-clause guard is the entire concurrency mechanism. No lock needed (per §5.3). Last-writer-wins is fine because the where-clause guarantees auto-categorize only fires when state is still untouched.
 
 ### 6.2 Step 2 mapping (`map-merchant.ts` and the mapping-application step in service.ts)
 
 Mapping application (per workspace) updates batches of tx that have `merchantNormalized = X` and `categoryId = null` (today). In unified: tx with N=1 allocation that's null-category, matching merchantNormalized.
 
-Pattern:
+Pattern (no workspace lock per §5.3):
 ```ts
 // Step 2 in categorize/service.ts after Gemini batch (mapping):
 const mappings = await tx.merchantMapping.findMany({ where: { workspaceId } });
 for (const [norm, catId] of mappings) {
-  // Find target tx: have exactly 1 allocation, that allocation categoryId IS NULL
+  // Find target tx: have exactly 1 allocation, that allocation categoryId IS NULL.
+  // In unified, every tx has ≥1 allocation, so `some: {}` is defensive (excludes the
+  // theoretical N=0 case Prisma's `every` would match vacuously).
   const targets = await tx.transaction.findMany({
     where: {
       workspaceId,
       merchantNormalized: norm,
-      allocations: { every: { categoryId: null } },
-      // (above + count check) — actually need a different filter, see below
+      allocations: { some: {}, every: { categoryId: null, source: null } },
     },
     include: { allocations: { select: { id: true } } },
   });
   const singleNullTargets = targets.filter((t) => t.allocations.length === 1);
   for (const t of singleNullTargets) {
-    await tx.transactionAllocation.update({
-      where: { id: t.allocations[0]!.id },
+    // Per-row atomic update with where-clause guard — idempotent, concurrency-safe
+    await tx.transactionAllocation.updateMany({
+      where: { id: t.allocations[0]!.id, categoryId: null, source: null },
       data: { categoryId: catId, source: "mapping" },
     });
   }
 }
 ```
 
-Filter "have exactly 1 allocation, that allocation is null-cat" — Prisma doesn't easily express "every + count" in one query. We fetch with `every: { categoryId: null }` (matches tx with all-null allocs; includes N=0 vacuously) then filter to N=1 in JS. This is fine — auto-categorize runs in batches at ingest time.
+The `every` filter alone matches a vacuous N=0 case, which by invariant cannot happen — but `some: {}` makes intent explicit and resistant to invariant violations. Filtering to `N === 1` in JS handles "exactly one" (Prisma has no native single-element filter). This whole block runs at ingest time, batch size limited.
 
 ### 6.3 `applyManualCategorize` (manual categorize endpoint)
 
@@ -603,6 +666,7 @@ The sibling back-fill rule in unified:
 - Target sibling tx: same workspaceId + same merchantNormalized + NOT the target tx itself + has exactly 1 allocation.
 - For each: if that allocation's `categoryId IS NULL` OR `source != "manual"`, replace with `{ categoryId: target.categoryId, source: "mapping" }`. (Don't overwrite a user-set "manual" source — same semantics as today.)
 - Skip siblings with N≥2 allocations (don't clobber user's split).
+- **Archived-source sibling allocations:** if a sibling's existing allocation points to an archived category, the back-fill overwrites it (consistent with today's behavior — archive does not protect existing rows from re-categorization). Only the NEW write target (the user-picked category in `applyManualCategorize`) is checked for `archivedAt IS NULL`.
 
 This stays inside `withWorkspaceLock` (already retrofitted in 1C-edit-delete).
 
@@ -770,19 +834,23 @@ No feature flag — the API change is breaking (response shape changes; clients 
 
 - [ ] `Transaction.categoryId` and `Transaction.categorizationSource` dropped; no code path reads them after migration
 - [ ] `TransactionAllocation` invariant: every tx has ≥1 allocation, sum == tx.amount
+- [ ] Null `categoryId` allowed in allocations regardless of N (no enforcement that splits must be fully categorized)
 - [ ] DO-block safety guard in migration verifies sum invariant before dropping columns
-- [ ] `applyAllocations` helper is the single write path for allocations (no scattered `tx.transactionAllocation.create` calls outside it, except Plaid sync invalidation which is intentionally inline)
-- [ ] Every helper call is inside `withWorkspaceLock`
-- [ ] `auto-categorize` and `map-merchant` gain workspace locks where they're missing today (or document why they don't need them)
+- [ ] Composite index `(categoryId, transactionId)` on transaction_allocations supports budget aggregation queries
+- [ ] `applyAllocations` helper is the single write path for user-driven allocation replacement; Plaid sync invalidation + auto-categorize/map-merchant per-row updates are the only intentional exceptions
+- [ ] Every `applyAllocations` call is inside `withWorkspaceLock`
+- [ ] Auto-categorize and map-merchant use per-row atomic `updateMany` with where-clause guards (categoryId=null, source=null) — no workspace lock, idempotent against concurrent user PATCH (§5.3, §6.1, §6.2)
 - [ ] PATCH body: `categoryId` and `allocations` are mutually exclusive → `conflicting_body` 400
-- [ ] PATCH on Plaid posted tx with `amount`/`merchantRaw`/`occurredAt`/`note` → `not_editable` (per-field rule)
-- [ ] PATCH on Plaid posted tx with `allocations` or `categoryId` only → succeeds
+- [ ] PATCH pre-check 2 is PER-FIELD: only `amount`/`merchantRaw`/`occurredAt`/`note` provided on non-manual tx → `not_editable`. PATCH with only `allocations` or `categoryId` on Plaid posted → succeeds.
 - [ ] PATCH on Plaid pending with allocations → `cannot_split_pending`
-- [ ] Plaid sync `upsertModified`: N≥2 with amount/merchant change → invalidate (replace with 1 null-cat alloc, set needsReclassification); N=1 with amount change → just update allocation amount
-- [ ] Sibling back-fill in categorize/map-merchant skips N≥2 allocation tx
-- [ ] Budget + spending queries group by `allocation.categoryId` joined to tx
+- [ ] Plaid sync `upsertModified`: N≥2 with amount/merchant change → invalidate (replace with 1 null-cat alloc, set needsReclassification); N=1 with amount change → just update allocation amount; `findFirst` does NOT filter by `removedAt` (matches today's `updateMany` scope)
+- [ ] Plaid sync `upsertAdded` pending→posted promotion branch ALSO updates the single allocation's amount (paranoid check: allocations.length === 1, else log + skip)
+- [ ] Sibling back-fill in categorize/map-merchant skips N≥2 allocation tx; archived-cat siblings ARE overwritten
+- [ ] Budget + spending queries group by `allocation.categoryId` joined to tx (workspace + period + removedAt filters live on the tx side)
 - [ ] GET list response: allocations array, no tx-level categoryId; `?categoryId=X` filter matches via allocation
+- [ ] `find-uncategorized-transactions` modes mapped: `uncategorized` = ≥1 null-cat allocation; `not_manual` = any allocation with `source != "manual"` or `categoryId IS NULL`
 - [ ] Categorize endpoint works on split tx (replaces with single allocation), NOT errors with already_split
-- [ ] `needsReclassification` flag is cleared on every PATCH allocations write
+- [ ] `needsReclassification` clears ONLY when PATCH provides `allocations` or `categoryId` field; passive single-allocation amount update from `amount` PATCH does NOT clear
+- [ ] LLM tool-result shapes regenerated for any prompt that references `tx.categoryId` (categorize-transaction, find-transactions, etc.)
 - [ ] No new HTTP audit log (deferred to 1C-audit-http)
-- [ ] Strict Decimal equality on sum (no tolerance)
+- [ ] Strict Decimal equality on sum (no tolerance); validators run on string form before Number conversion
