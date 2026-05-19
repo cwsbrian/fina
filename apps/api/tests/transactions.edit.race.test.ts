@@ -175,4 +175,52 @@ describe("transactions race tests — lock acquisition proofs", () => {
     const result = await candidate;
     expect(result).toEqual({ removed: true });
   });
+
+  it("Test D: end-state consistency — concurrent PATCH(merchantRaw) + categorize → final merchantNormalized matches final merchantRaw", async () => {
+    // Uses the static-imported createManualTransactionService, editTransactionService,
+    // applyManualCategorize from the top of the file.
+    const { wsId, userId } = await setupEditor("race-d@t.co");
+    const { transaction } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
+    );
+    await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries-race-d" } });
+
+    const holder = await holdLock(wsId);
+    const patchP = editTransactionService({ workspaceId: wsId }, transaction.id, { merchantRaw: "Walmart" });
+    const catP = applyManualCategorize({ workspaceId: wsId, txId: transaction.id, categoryName: "Groceries-race-d" });
+
+    // Both should be blocked at the lock.
+    const winner = await Promise.race([
+      Promise.all([patchP, catP]).then(() => "both"),
+      new Promise<string>((r) => setTimeout(() => r("timeout"), 800)),
+    ]);
+    expect(winner).toBe("timeout");
+
+    holder.release();
+    await holder.done;
+    await Promise.all([patchP, catP]);
+
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: transaction.id } });
+    expect(row.merchantRaw).toBe("Walmart");
+    expect(row.merchantNormalized).toBe("walmart");
+    expect(row.categoryId).not.toBeNull();
+  });
+
+  it("Test E: PATCH-vs-PATCH last-writer-wins under lock", async () => {
+    const { wsId, userId } = await setupEditor("race-e@t.co");
+    const { transaction } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Costco", amount: 10, occurredAt: "2026-05-19" },
+    );
+
+    const a = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 20 });
+    const b = editTransactionService({ workspaceId: wsId }, transaction.id, { amount: 30 });
+    const [ra, rb] = await Promise.all([a, b]);
+    expect(["20", "30"]).toContain(ra.transaction.amount);
+    expect(["20", "30"]).toContain(rb.transaction.amount);
+
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: transaction.id } });
+    expect(["20", "30"]).toContain(row.amount.toString());
+  });
 });
