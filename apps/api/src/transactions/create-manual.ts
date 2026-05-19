@@ -22,16 +22,20 @@ export type CreateManualTxInput = {
 export type CreateManualTxResult = {
   transaction: {
     id: string;
+    accountId: string;
+    plaidTransactionId: null;
     amount: string;
     currency: string;
     merchantRaw: string;
     merchantNormalized: string;
     categoryId: string | null;
     occurredAt: string;
-    note: string | null;
+    pending: false;
     source: "manual";
-    accountId: string;
+    note: string | null;
+    removedAt: null;
     createdAt: string;
+    updatedAt: string;
   };
 };
 
@@ -166,16 +170,20 @@ export async function createManualTransactionService(
     return {
       transaction: {
         id: row.id,
+        accountId: row.accountId,
+        plaidTransactionId: null,           // invariant: manual tx
         amount: row.amount.toString(),
         currency: workspace.currency,
         merchantRaw: row.merchantRaw,
         merchantNormalized: row.merchantNormalized ?? merchantNormalized,
         categoryId: row.categoryId,
         occurredAt: row.occurredAt.toISOString(),
-        note: row.note,
+        pending: false,                     // invariant: manual tx
         source: "manual",
-        accountId: row.accountId,
+        note: row.note,
+        removedAt: null,                    // invariant: freshly created
         createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
       },
     };
   });
