@@ -22,6 +22,7 @@ describe("validateAmount", () => {
     expect(() => validateAmount(1e-7)).toThrow(TxValidationError);
   });
   it("error code is invalid_amount", () => {
+    expect.assertions(1);
     try { validateAmount(0); }
     catch (e) { expect((e as TxValidationError).code).toBe("invalid_amount"); }
   });
@@ -41,6 +42,7 @@ describe("parseOccurredAt", () => {
   it("rejects empty", () => expect(() => parseOccurredAt("")).toThrow(TxValidationError));
   it("rejects ISO datetime", () => expect(() => parseOccurredAt("2026-05-19T00:00:00Z")).toThrow(TxValidationError));
   it("error code is invalid_date", () => {
+    expect.assertions(1);
     try { parseOccurredAt("bad"); }
     catch (e) { expect((e as TxValidationError).code).toBe("invalid_date"); }
   });
@@ -52,6 +54,7 @@ describe("validateMerchantRaw", () => {
   it("rejects 201 chars", () => expect(() => validateMerchantRaw("x".repeat(201))).toThrow(TxValidationError));
   it("accepts 200 chars", () => expect(() => validateMerchantRaw("x".repeat(200))).not.toThrow());
   it("error code is invalid_merchant", () => {
+    expect.assertions(1);
     try { validateMerchantRaw(""); }
     catch (e) { expect((e as TxValidationError).code).toBe("invalid_merchant"); }
   });
@@ -64,6 +67,7 @@ describe("validateNote", () => {
   it("rejects 1001 chars", () => expect(() => validateNote("x".repeat(1001))).toThrow(TxValidationError));
   it("accepts empty string", () => expect(validateNote("")).toBe(""));
   it("error code is invalid_note", () => {
+    expect.assertions(1);
     try { validateNote("x".repeat(1001)); }
     catch (e) { expect((e as TxValidationError).code).toBe("invalid_note"); }
   });
