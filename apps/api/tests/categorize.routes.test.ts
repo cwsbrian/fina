@@ -269,6 +269,9 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
         amount: 5, merchantRaw: "Starbucks", occurredAt: new Date("2026-05-10"), rawData: {},
       },
     });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx1.id, categoryId: null, amount: "5", source: null },
+    });
     // A sibling Starbucks tx (uncategorized) to verify back-fill
     const tx2 = await prisma.transaction.create({
       data: {
@@ -276,6 +279,9 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
         plaidTransactionId: `pt2_${Date.now()}`,
         amount: 6, merchantRaw: "Starbucks", occurredAt: new Date("2026-05-09"), rawData: {},
       },
+    });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx2.id, categoryId: null, amount: "6", source: null },
     });
     await app.close();
     return { wsId, cookie: u.cookie, txId: tx1.id, loblawsTxId: tx2.id };
@@ -361,11 +367,15 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
 
   it("back-fill skips manual-source siblings", async () => {
     const { wsId, cookie, txId, loblawsTxId: siblingId } = await setupTx("mc-skip-manual@x.com");
-    // Pre-set sibling as manual
+    // Pre-set sibling as manual (both tx row and allocation).
     const groceriesCat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
     await prisma.transaction.update({
       where: { id: siblingId },
       data: { categoryId: groceriesCat.id, categorizationSource: "manual", merchantNormalized: "starbucks" },
+    });
+    await prisma.transactionAllocation.updateMany({
+      where: { transactionId: siblingId },
+      data: { categoryId: groceriesCat.id, source: "manual" },
     });
 
     const app = await buildApp(env);
@@ -395,6 +405,9 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
         amount: 7, merchantRaw: "Starbucks", occurredAt: new Date("2026-05-08"), rawData: {},
         // merchantNormalized intentionally left NULL
       },
+    });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: legacy.id, categoryId: null, amount: "7", source: null },
     });
     expect(legacy.merchantNormalized).toBeNull();
 

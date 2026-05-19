@@ -9,6 +9,7 @@ import {
   validateNote as validateNoteShared,
   parseOccurredAt as parseOccurredAtShared,
 } from "./validators.js";
+import { applyAllocations } from "./allocations.js";
 
 export type CreateManualTxInput = {
   merchantRaw: string;
@@ -28,14 +29,21 @@ export type CreateManualTxResult = {
     currency: string;
     merchantRaw: string;
     merchantNormalized: string;
-    categoryId: string | null;
+    categoryId: string | null;             // mirror-write; dropped in Task 8
     occurredAt: string;
     pending: false;
     source: "manual";
     note: string | null;
     removedAt: null;
+    needsReclassification: false;
     createdAt: string;
     updatedAt: string;
+    allocations: Array<{
+      id: string;
+      categoryId: string | null;
+      amount: string;
+      source: "manual" | "mapping" | "ai" | null;
+    }>;
   };
 };
 
@@ -167,6 +175,22 @@ export async function createManualTransactionService(
       },
     });
 
+    const allocSource: "manual" | null = input.categoryId !== undefined ? "manual" : null;
+    await applyAllocations(
+      tx,
+      ctx.workspaceId,
+      row.id,
+      row.amount,
+      allocSource,
+      [{ categoryId: input.categoryId ?? null, amount: input.amount }],
+    );
+
+    const allocs = await tx.transactionAllocation.findMany({
+      where: { transactionId: row.id },
+      select: { id: true, categoryId: true, amount: true, source: true },
+      orderBy: { createdAt: "asc" },
+    });
+
     return {
       transaction: {
         id: row.id,
@@ -182,8 +206,15 @@ export async function createManualTransactionService(
         source: "manual",
         note: row.note,
         removedAt: null,                    // invariant: freshly created
+        needsReclassification: false,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
+        allocations: allocs.map((a) => ({
+          id: a.id,
+          categoryId: a.categoryId,
+          amount: a.amount.toString(),
+          source: a.source,
+        })),
       },
     };
   });

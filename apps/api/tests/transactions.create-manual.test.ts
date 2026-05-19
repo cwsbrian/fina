@@ -255,6 +255,31 @@ describe("createManualTransactionService", () => {
     expect(r.pending).toBe(false);
     expect(r.plaidTransactionId).toBeNull();
   });
+
+  it("response includes allocations array reflecting the single category", async () => {
+    const { wsId, userId } = await setupEditor("alloc-shape@t.co");
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Food-shape" } });
+    const { transaction: r } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Costco", amount: 9.99, occurredAt: "2026-05-19", categoryId: cat.id },
+    );
+    expect(r.allocations).toHaveLength(1);
+    expect(r.allocations[0]!.categoryId).toBe(cat.id);
+    expect(r.allocations[0]!.amount).toBe("9.99");
+    expect(r.allocations[0]!.source).toBe("manual");
+    expect(r.needsReclassification).toBe(false);
+  });
+
+  it("response uncategorized: 1 allocation with categoryId=null, source=null", async () => {
+    const { wsId, userId } = await setupEditor("alloc-uncat@t.co");
+    const { transaction: r } = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Cash purchase", amount: 5, occurredAt: "2026-05-19" },
+    );
+    expect(r.allocations).toHaveLength(1);
+    expect(r.allocations[0]!.categoryId).toBeNull();
+    expect(r.allocations[0]!.source).toBeNull();
+  });
 });
 
 async function makeFree(userId: string): Promise<void> {
