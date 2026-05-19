@@ -70,6 +70,9 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
     } else {
       where.allocations = {
         some: {
+          // Postgres semantics: NULL != 'manual' evaluates to NULL (not TRUE), so
+          // `source: { not: "manual" }` silently excludes NULL source rows. Include
+          // `source: null` explicitly to cover uncategorized-but-not-yet-AI/manual rows.
           OR: [
             { source: { not: "manual" } },
             { source: null },

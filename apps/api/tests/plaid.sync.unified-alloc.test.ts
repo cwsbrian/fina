@@ -195,8 +195,5 @@ describe("Plaid sync — unified allocations edge cases", () => {
     expect(after[1]!.categoryId).toBe(c2.id);
   });
 
-  it("upsertAdded fresh insert creates 1 null-cat allocation", async () => {
-    // Skip — covered by existing sync tests once they're updated to assert
-    // allocation presence. See Step 5 below.
-  });
+  it.todo("upsertAdded fresh insert creates 1 null-cat allocation (covered by existing sync tests once they assert allocation presence)");
 });
