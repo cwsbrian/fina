@@ -29,15 +29,32 @@ Each task ends with a green test suite and a single commit.
 
 ## Pre-flight (every task)
 
-Tests run via `pnpm --filter @fina/api test <file>` from repo root, or `pnpm --filter @fina/api test` for the whole API suite. Migrations: this plan adds NO new migrations.
+**Test commands** — `apps/api` has no `pnpm test` script. Use these patterns instead:
+
+- **Whole API suite:**
+  ```bash
+  DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts
+  ```
+- **Specific file(s)** — paths are RELATIVE TO `apps/api/` because pnpm runs vitest with `cwd=apps/api`:
+  ```bash
+  DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.validators.test.ts
+  ```
+- **Nx target (alternate):**
+  ```bash
+  DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test nx run api:test
+  ```
+
+⚠ `pnpm --filter @fina/api test` (no `exec vitest`) **does nothing** — there is no `test` script in `apps/api/package.json`, and pnpm exits 0 with no output. Do NOT use it; every test gate in this plan would falsely pass.
+
+Migrations: this plan adds NO new migrations.
 
 If working in an isolated worktree (recommended via `EnterWorktree`), confirm a clean baseline first:
 
 ```bash
-pnpm --filter @fina/api test
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts
 ```
 
-Expected: all existing tests pass (current main passes a 716-test suite).
+Expected: all existing tests pass (current main passes a 716+ test suite).
 
 ---
 
@@ -130,7 +147,7 @@ describe("validateNote", () => {
 - [ ] **Step 2: Run validator tests, verify they fail with "module not found"**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.validators.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.validators.test.ts
 ```
 
 Expected: import error (`Cannot find module '../src/transactions/validators.js'`).
@@ -201,7 +218,7 @@ export function validateNote(note: string | null | undefined): string | null {
 - [ ] **Step 4: Run validator tests, verify they pass**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.validators.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.validators.test.ts
 ```
 
 Expected: all PASS.
@@ -244,13 +261,13 @@ function parseOccurredAt(s: string): Date {
 
 The rest of `create-manual.ts` (which calls these private wrappers) is unchanged. Existing call sites work because the wrappers preserve the original signatures + error type.
 
-- [ ] **Step 6: Run create-manual + categorize-routes test suites to verify no regressions**
+- [ ] **Step 6: Run create-manual test suite to verify no regressions**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.create-manual.test.ts apps/api/tests/transactions.create-manual.route.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.create-manual.test.ts
 ```
 
-Expected: PASS (no behavior change).
+Expected: PASS (no behavior change — `transactions.create-manual.test.ts` covers both the service and route paths today).
 
 - [ ] **Step 7: Commit**
 
@@ -304,7 +321,7 @@ If a similar shape-check test does not exist, also add a `setupEditor` import or
 - [ ] **Step 2: Run, verify failure**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.create-manual.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.create-manual.test.ts
 ```
 
 Expected: FAIL — the new fields don't exist on the result type.
@@ -364,7 +381,7 @@ In `apps/api/src/transactions/create-manual.ts:161-196`, the `tx.transaction.cre
 - [ ] **Step 5: Run create-manual tests, verify pass**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.create-manual.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.create-manual.test.ts
 ```
 
 Expected: PASS.
@@ -372,7 +389,7 @@ Expected: PASS.
 - [ ] **Step 6: Run full API suite to catch any other consumer that asserts the old shape**
 
 ```bash
-pnpm --filter @fina/api test
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts
 ```
 
 Expected: all PASS. If any test fails because it asserts the absence of new keys, update that test to either ignore the keys or assert them.
@@ -526,7 +543,7 @@ describe("transactions race tests — lock acquisition proofs", () => {
 - [ ] **Step 2: Run Test C — expect timeout assertion to FAIL**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.race.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.race.test.ts
 ```
 
 Expected: FAIL — current `applyManualCategorize` does not take the advisory lock, so `candidate` resolves first ("candidate", not "timeout"). This is the proof that the test is meaningful.
@@ -693,7 +710,7 @@ Key invariants enforced by this rewrite:
 - [ ] **Step 4: Run Test C — expect PASS**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.race.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.race.test.ts
 ```
 
 Expected: PASS — `applyManualCategorize` now blocks at `withWorkspaceLock`, `winner` is `"timeout"`, and after `holder.release()` the call completes.
@@ -701,7 +718,7 @@ Expected: PASS — `applyManualCategorize` now blocks at `withWorkspaceLock`, `w
 - [ ] **Step 5: Run the existing `applyManualCategorize` regression suite**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/categorize.manual-service.test.ts apps/api/tests/categorize.routes.test.ts apps/api/tests/chat.tools.categorize-transaction.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/categorize.manual-service.test.ts tests/categorize.routes.test.ts tests/chat.tools.categorize-transaction.test.ts
 ```
 
 Expected: PASS — all existing categorize behavior preserved.
@@ -709,7 +726,7 @@ Expected: PASS — all existing categorize behavior preserved.
 - [ ] **Step 6: Run full API suite**
 
 ```bash
-pnpm --filter @fina/api test
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts
 ```
 
 Expected: PASS.
@@ -962,7 +979,7 @@ describe("editTransactionService", () => {
 - [ ] **Step 2: Run, verify failure (module missing)**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.service.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.service.test.ts
 ```
 
 Expected: FAIL — `edit.js` module does not exist.
@@ -1144,7 +1161,7 @@ export async function editTransactionService(
 - [ ] **Step 4: Run unit tests, verify PASS**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.service.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.service.test.ts
 ```
 
 Expected: all 13 tests PASS.
@@ -1196,7 +1213,7 @@ Then add this test inside the existing `describe("transactions race tests — lo
 - [ ] **Step 6: Run race file, verify Test A passes**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.race.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.race.test.ts
 ```
 
 Expected: PASS (Test C + Test A).
@@ -1374,7 +1391,7 @@ describe("removeTransactionService", () => {
 - [ ] **Step 2: Run, verify failure (module missing)**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.remove.service.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.remove.service.test.ts
 ```
 
 Expected: FAIL — `remove.js` module does not exist.
@@ -1439,7 +1456,7 @@ export async function removeTransactionService(
 - [ ] **Step 4: Run unit tests, verify PASS**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.remove.service.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.remove.service.test.ts
 ```
 
 Expected: 8 tests PASS.
@@ -1491,7 +1508,7 @@ Then add this test inside the existing `describe("transactions race tests — lo
 - [ ] **Step 6: Run race file, verify Tests A+B+C pass**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.race.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.race.test.ts
 ```
 
 Expected: 3 PASS.
@@ -1951,7 +1968,7 @@ describe("DELETE /workspaces/:id/transactions/:txId", () => {
 - [ ] **Step 3: Run, verify failure (no handlers)**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.route.test.ts apps/api/tests/transactions.remove.route.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.route.test.ts tests/transactions.remove.route.test.ts
 ```
 
 Expected: FAIL — both routes return 404 (no handler).
@@ -2053,7 +2070,7 @@ Append these two handlers inside `transactionsRoutes` (after the existing POST `
 - [ ] **Step 5: Run route tests, verify PASS**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.route.test.ts apps/api/tests/transactions.remove.route.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.route.test.ts tests/transactions.remove.route.test.ts
 ```
 
 Expected: all PASS.
@@ -2061,7 +2078,7 @@ Expected: all PASS.
 - [ ] **Step 6: Run full API suite**
 
 ```bash
-pnpm --filter @fina/api test
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts
 ```
 
 Expected: all PASS (716+ tests).
@@ -2155,7 +2172,7 @@ Add inside the `describe("transactions race tests — lock acquisition proofs")`
 - [ ] **Step 2: Run race file, verify all 5 tests pass**
 
 ```bash
-pnpm --filter @fina/api test apps/api/tests/transactions.edit.race.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/transactions.edit.race.test.ts
 ```
 
 Expected: A, B, C, D, E all PASS.
@@ -2163,7 +2180,7 @@ Expected: A, B, C, D, E all PASS.
 - [ ] **Step 3: Run full suite for safety**
 
 ```bash
-pnpm --filter @fina/api test
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts
 ```
 
 Expected: all PASS.
