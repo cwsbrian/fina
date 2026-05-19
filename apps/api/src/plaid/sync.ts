@@ -218,9 +218,23 @@ export async function upsertAdded(
         workspaceId,
         plaidTransactionId: t.pending_transaction_id, // OLD pending row's transaction_id
       },
-      select: { id: true },
+      include: { allocations: { select: { id: true } } },
     });
     if (promotion) {
+      const newAmount = new Prisma.Decimal(t.amount);
+      // Paranoid check: pending tx must have N=1 allocation (cannot_split_pending
+      // blocks user splits). If N != 1, log + skip the allocation update.
+      if (promotion.allocations.length === 1) {
+        await tx.transactionAllocation.update({
+          where: { id: promotion.allocations[0]!.id },
+          data: { amount: newAmount },
+        });
+      } else {
+        console.warn("plaid sync promotion: unexpected allocation count", {
+          txId: promotion.id,
+          count: promotion.allocations.length,
+        });
+      }
       await tx.transaction.update({
         where: { id: promotion.id },
         data: {
@@ -229,7 +243,7 @@ export async function upsertAdded(
           pending: false,
           occurredAt: plaidOccurredAt(t),
           postedAt: plaidPostedAt(t),
-          amount: t.amount,
+          amount: newAmount,
           merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
           rawData: t as unknown as Prisma.InputJsonValue,
           removedAt: null, // promote restores any earlier soft-removal
@@ -297,17 +311,58 @@ export async function upsertModified(
   t: PlaidTxLike,
   workspaceId: string,
 ): Promise<void> {
-  await tx.transaction.updateMany({
+  // Note: no removedAt filter — matches today's updateMany scope; soft-removed
+  // rows still get field updates for state consistency.
+  const existing = await tx.transaction.findFirst({
     where: { workspaceId, plaidTransactionId: t.transaction_id },
-    data: {
-      amount: t.amount,
-      merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
-      occurredAt: plaidOccurredAt(t),
-      postedAt: plaidPostedAt(t),
-      pending: t.pending,
-      rawData: t as unknown as Prisma.InputJsonValue,
-    },
+    include: { allocations: { select: { id: true, amount: true } } },
   });
+  if (!existing) return; // matches today's no-op for missing row
+
+  const oldAmount = existing.amount;
+  const newAmount = new Prisma.Decimal(t.amount);
+  const amountChanged = !oldAmount.equals(newAmount);
+  const newMerchantRaw = t.merchant_name ?? t.name ?? "Unknown";
+  const merchantChanged = existing.merchantRaw !== newMerchantRaw;
+  const N = existing.allocations.length;
+
+  const txDataBase = {
+    amount: newAmount,
+    merchantRaw: newMerchantRaw,
+    occurredAt: plaidOccurredAt(t),
+    postedAt: plaidPostedAt(t),
+    pending: t.pending,
+    rawData: t as unknown as Prisma.InputJsonValue,
+  };
+
+  if (N >= 2 && (amountChanged || merchantChanged)) {
+    // Invalidate split: replace allocations with 1 null-cat row + set flag.
+    await tx.transactionAllocation.deleteMany({ where: { transactionId: existing.id } });
+    await tx.transactionAllocation.create({
+      data: {
+        transactionId: existing.id,
+        categoryId: null,
+        amount: newAmount,
+        source: null,
+      },
+    });
+    await tx.transaction.update({
+      where: { id: existing.id },
+      data: { ...txDataBase, needsReclassification: true, categoryId: null, categorizationSource: null },
+    });
+  } else {
+    // N=1 (any change) OR N≥2 with only metadata changes: preserve allocations.
+    if (amountChanged && N === 1) {
+      await tx.transactionAllocation.update({
+        where: { id: existing.allocations[0]!.id },
+        data: { amount: newAmount },
+      });
+    }
+    await tx.transaction.update({
+      where: { id: existing.id },
+      data: txDataBase,
+    });
+  }
 }
 
 export async function markRemoved(
