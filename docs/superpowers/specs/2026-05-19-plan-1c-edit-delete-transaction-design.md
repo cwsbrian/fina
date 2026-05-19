@@ -137,15 +137,15 @@ No schema changes. Reuses existing fields:
 
 **Request:** no body.
 
-**Pre-checks (in lock):**
+**Pre-check order (in lock) is significant:**
 
 1. Tx exists in `:id` workspace → else 404 `not_found`.
-2. If `pending === true` AND `plaidTransactionId !== null` → 400 `cannot_delete_pending`. See §6 for the durability reason. Manual tx (`plaidTransactionId === null`) is never "pending" in the Plaid sense — its `pending` column is always `false` (per `create-manual.ts`), so the gate only ever rejects Plaid pending tx.
+2. If `pending === true` AND `plaidTransactionId !== null` → 400 `cannot_delete_pending`. **This check runs BEFORE the idempotency check** — otherwise a tx already soft-removed by Plaid's `markRemoved` could be falsely "accepted" by an idempotent 200, then resurrected by a later page's pending→posted promotion (sync commits per page; `markRemoved` and the matching promotion can land on different pages, so the gate must hold regardless of current `removedAt`). Manual tx (`plaidTransactionId === null`) is never "pending" — its `pending` column is always `false` per `create-manual.ts` — so the gate only rejects Plaid pending tx.
+3. Idempotency: if `removedAt !== null` → return `{ removed: false, alreadyRemoved: true }` without writing.
 
-**Logic:**
+**Logic (after pre-checks pass):**
 
-- If `removedAt === null`: set `removedAt = now()`. Return `{ removed: true }`.
-- If `removedAt != null`: idempotent no-op. Return `{ removed: false, alreadyRemoved: true }`.
+- Set `removedAt = now()`. Return `{ removed: true }`.
 
 **Response (200):**
 
@@ -221,7 +221,7 @@ export type RemoveTxResult = {
   alreadyRemoved?: true;
 };
 
-export type RemoveTxErrorCode = "not_found";
+export type RemoveTxErrorCode = "not_found" | "cannot_delete_pending";
 
 export class RemoveTxError extends Error {
   readonly code: RemoveTxErrorCode;
@@ -441,9 +441,9 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 |---|---|---|
 | happy manual | manual tx | `removed: true`, DB `removedAt != null` |
 | happy plaid (posted) | plaid tx, `pending: false` | `removed: true`, DB `removedAt != null` |
-| reject plaid pending | plaid tx, `pending: true` | Throws `RemoveTxError("cannot_delete_pending")`, DB `removedAt` unchanged |
-| idempotent | tx already removed | `removed: false, alreadyRemoved: true`, DB `removedAt` unchanged (same value) |
-| idempotent pending plaid | plaid tx, `pending: true`, already `removedAt != null` | Returns idempotent `{ removed: false, alreadyRemoved: true }` — the pending check applies only to fresh-delete attempts, not to already-removed rows (otherwise an idempotent retry would start failing if Plaid flipped `pending` later) |
+| reject plaid pending (fresh) | plaid tx, `pending: true`, `removedAt: null` | Throws `RemoveTxError("cannot_delete_pending")`, DB `removedAt` unchanged |
+| reject plaid pending (already removed) | plaid tx, `pending: true`, `removedAt != null` | Throws `RemoveTxError("cannot_delete_pending")` — pending gate runs BEFORE idempotency to guard against pending→posted resurrection on later sync pages |
+| idempotent (posted/manual) | manual or plaid-posted tx already removed | `removed: false, alreadyRemoved: true`, DB `removedAt` unchanged (same value) |
 | wrong workspace | tx in workspace B | Throws `RemoveTxError("not_found")` |
 | nonexistent | bad txId | Throws `RemoveTxError("not_found")` |
 
@@ -478,7 +478,22 @@ For non-nullable fields (`amount`, `merchantRaw`, `occurredAt`): we deliberately
 `apps/api/tests/transactions.edit.race.test.ts`
 
 - **PATCH vs. PATCH:** Two concurrent PATCH calls on same tx with different `amount` → final value is one of the two (not interleaved). Verifies advisory lock serializes.
-- **PATCH vs. categorize:** Concurrent PATCH (sets `merchantRaw = "Walmart"`) and `applyManualCategorize` (started before PATCH commit, originally reading `merchantRaw = "Costco"`) → final row has `merchantRaw = "Walmart"` AND `merchantNormalized = normalizeMerchant("Walmart")`. The categorize must see the post-PATCH `merchantRaw` thanks to the lock + re-read added in §5.1 to `manual-categorize.ts`. (Test pattern: use `pg_advisory_lock` from a separate connection to hold the workspace lock, fire categorize in background, release, then PATCH, then assert final state.)
+- **PATCH vs. categorize (deterministic):** This test must prove the fix; the order matters.
+
+  Setup: seed manual tx with `merchantRaw = "Costco"`, no category.
+
+  Pattern (deterministic, no `setTimeout` race):
+  1. **Holder transaction** (connection H, raw `prisma.$transaction` with manual commit barrier via a deferred promise inside the callback):
+     - Acquire `pg_advisory_xact_lock(hashtext(workspaceId))`.
+     - `UPDATE transactions SET merchantRaw = 'Walmart', merchantNormalized = 'walmart' WHERE id = txId`.
+     - Wait on a `barrier` promise (do NOT commit yet).
+  2. **Categorize call** (connection C): start `applyManualCategorize({ workspaceId, txId, categoryName: "Groceries" })` in the background. It will block at the advisory-lock acquisition step inside its new `withWorkspaceLock` wrapper.
+  3. Sleep briefly to confirm categorize is blocked (assert it has NOT resolved yet).
+  4. Resolve the `barrier` → H commits → releases advisory lock.
+  5. Await categorize. Inside its lock, it re-reads tx → sees `merchantRaw = "Walmart"` → writes `merchantNormalized = "walmart"` (re-normalized).
+  6. **Assert final DB row:** `merchantRaw = "Walmart"` AND `merchantNormalized = "walmart"` AND `categoryId != null`.
+
+  Why this proves the fix: with the OLD (pre-fix) categorize code, step 2 would not block — categorize would read `merchantRaw = "Costco"` immediately, compute `merchantNormalized = "costco"`, then race with H's UPDATE. Whichever wrote last to `merchantNormalized` would win. With the NEW code (lock + re-read inside lock), categorize MUST wait for H to release the lock and MUST re-read post-commit state, so its `merchantNormalized` write is consistent with `merchantRaw`. Reverting the categorize fix should make this test fail.
 
 ### 8.6 Smoke
 
@@ -509,8 +524,8 @@ Rollout: ship behind no flag. PATCH/DELETE are net-new verbs at this URL — no 
 - [ ] PATCH only allows source = "manual" (Plaid edits routed elsewhere)
 - [ ] PATCH refuses already-removed tx (must use DELETE-restore flow, deferred)
 - [ ] PATCH body uses `.strict()` — unknown keys → 400 `invalid_body`
-- [ ] DELETE rejects `pending && plaidTransactionId != null` fresh deletes with `cannot_delete_pending`
-- [ ] DELETE is idempotent for already-removed tx (no error on second call), and the pending-check does NOT block idempotent returns
+- [ ] DELETE rejects `pending && plaidTransactionId != null` with `cannot_delete_pending` — for BOTH fresh deletes AND already-removed pending Plaid tx (the gate runs before idempotency)
+- [ ] DELETE is idempotent for already-removed manual / posted-Plaid tx
 - [ ] Validators are shared with `create-manual` (no duplication); each service maps `TxValidationError.code` 1:1 to its own error
 - [ ] `categorizationSource` updates on category change (null → null, set → "manual")
 - [ ] `merchantNormalized` recomputed on `merchantRaw` change
