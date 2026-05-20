@@ -251,7 +251,8 @@ const styles = StyleSheet.create({
   },
   footer: {
     paddingHorizontal: 28,
-    paddingBottom: 24,
+    paddingBottom: 0,
+    paddingTop: 24,
   },
   cta: {
     height: 52,

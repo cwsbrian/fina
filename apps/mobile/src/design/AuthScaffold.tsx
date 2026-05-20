@@ -17,19 +17,28 @@ type Props = {
   onBack?: () => void;
   centered?: boolean;
   foot?: ReactNode;
+  hideBack?: boolean;
 };
 
-export function AuthScaffold({ children, onBack, centered, foot }: Props) {
+export function AuthScaffold({
+  children,
+  onBack,
+  centered,
+  foot,
+  hideBack,
+}: Props) {
   return (
     <SafeAreaView style={styles.root}>
-      <Pressable
-        onPress={onBack ?? (() => router.back())}
-        style={styles.back}
-        hitSlop={12}
-        accessibilityLabel="Back"
-      >
-        <Icon name="chevLeft" size={22} color={colors.ink} strokeWidth={1.8} />
-      </Pressable>
+      {!hideBack && (
+        <Pressable
+          onPress={onBack ?? (() => router.back())}
+          style={styles.back}
+          hitSlop={12}
+          accessibilityLabel="Back"
+        >
+          <Icon name="chevLeft" size={22} color={colors.ink} strokeWidth={1.8} />
+        </Pressable>
+      )}
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}

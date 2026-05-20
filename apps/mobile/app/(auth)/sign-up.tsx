@@ -48,22 +48,11 @@ export default function SignUpScreen() {
   return (
     <AuthScaffold
       centered
-      foot={
-        <Text style={styles.footText}>
-          Already have an account?{" "}
-          <Text
-            style={styles.footLink}
-            onPress={() => router.replace("/(auth)/sign-in")}
-          >
-            Sign in
-          </Text>
-        </Text>
-      }
     >
       <View style={styles.head}>
         <Text style={styles.title}>Create your account.</Text>
         <Text style={styles.sub}>
-          A trusted home for your money — set up in 30 seconds.
+          A trusted home for your money. Set up in 30 seconds.
         </Text>
       </View>
 
@@ -119,12 +108,21 @@ export default function SignUpScreen() {
         <Text style={styles.legalLink}>Terms</Text> and{" "}
         <Text style={styles.legalLink}>Privacy Policy</Text>.
       </Text>
+      <Text style={styles.footText}>
+          Already have an account?{" "}
+          <Text
+            style={styles.footLink}
+            onPress={() => router.replace("/(auth)/sign-in")}
+          >
+            Sign in
+          </Text>
+        </Text>
     </AuthScaffold>
   );
 }
 
 const styles = StyleSheet.create({
-  head: { marginTop: 36 },
+  head: { marginTop: 0, marginBottom: 0 },
   title: { ...type.authTitle, color: colors.ink },
   sub: { ...type.bodyMd, color: colors.body, marginTop: 8 },
   form: { gap: 10, marginTop: 28 },
@@ -154,6 +152,6 @@ const styles = StyleSheet.create({
     color: colors.down,
     textAlign: "center",
   },
-  footText: { ...type.bodySm, color: colors.muted },
+  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
   footLink: { color: colors.primary, fontWeight: "600" },
 });

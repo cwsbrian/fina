@@ -33,20 +33,7 @@ export default function SignInScreen() {
   }
 
   return (
-    <AuthScaffold
-      centered
-      foot={
-        <Text style={styles.footText}>
-          New to Fina?{" "}
-          <Text
-            style={styles.footLink}
-            onPress={() => router.replace("/(auth)/sign-up")}
-          >
-            Create an account
-          </Text>
-        </Text>
-      }
-    >
+    <AuthScaffold centered hideBack>
       <View style={styles.head}>
         <Text style={styles.title}>Welcome back.</Text>
         <Text style={styles.sub}>Pick up right where you left off.</Text>
@@ -98,6 +85,15 @@ export default function SignInScreen() {
       <SocialButton provider="apple" label="Continue with Apple" />
       <View style={{ height: 10 }} />
       <SocialButton provider="magic" label="Email me a magic link" />
+      <Text style={styles.footText}>
+          New to Fina?{" "}
+          <Text
+            style={styles.footLink}
+            onPress={() => router.replace("/(auth)/sign-up")}
+          >
+            Create an account
+          </Text>
+        </Text>
     </AuthScaffold>
   );
 }
@@ -110,7 +106,7 @@ const styles = StyleSheet.create({
   helperRow: {
     flexDirection: "row",
     justifyContent: "flex-end",
-    marginTop: -2,
+    marginTop: 10,
   },
   helperLink: {
     ...type.bodySm,
@@ -137,6 +133,6 @@ const styles = StyleSheet.create({
     color: colors.down,
     textAlign: "center",
   },
-  footText: { ...type.bodySm, color: colors.muted },
+  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
   footLink: { color: colors.primary, fontWeight: "600" },
 });
