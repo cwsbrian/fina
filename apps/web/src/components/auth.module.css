@@ -404,3 +404,140 @@
 .otpBoxFilled:focus {
   border-color: var(--color-ink);
 }
+
+.cardWide {
+  max-width: 480px;
+}
+
+.inviteCard {
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 22px;
+  padding: 32px;
+  text-align: center;
+}
+
+.inviteIcon {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: rgba(59, 123, 255, 0.1);
+  color: var(--color-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 18px;
+}
+
+.inviteIconDanger {
+  background: rgba(207, 32, 47, 0.1);
+  color: var(--color-down);
+}
+
+.inviteIconWarn {
+  background: rgba(244, 176, 0, 0.14);
+  color: #7a5500;
+}
+
+.inviteFrom {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--color-muted);
+  margin-bottom: 6px;
+}
+
+.inviteFrom strong {
+  color: var(--color-ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.inviteWsName {
+  font-size: 32px;
+  line-height: 1.1;
+  font-weight: 500;
+  letter-spacing: -0.8px;
+  color: var(--color-ink);
+  margin: 6px 0 14px;
+}
+
+.inviteRole {
+  font-size: 16px;
+  color: var(--color-body);
+  margin-bottom: 28px;
+}
+
+.inviteFoot {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px solid var(--color-hairline-soft, var(--color-hairline));
+  font-size: 13px;
+  color: var(--color-muted);
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  margin-left: 6px;
+  vertical-align: 2px;
+}
+
+.pillEditor {
+  background: var(--color-surface-strong);
+  color: var(--color-body);
+}
+
+.pillViewer {
+  background: var(--color-surface-soft);
+  color: var(--color-muted);
+}
+
+.pillDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.bannerDanger {
+  background: rgba(207, 32, 47, 0.06);
+  border-color: rgba(207, 32, 47, 0.2);
+}
+
+.bannerDanger .bannerIcon {
+  background: rgba(207, 32, 47, 0.12);
+  color: var(--color-down);
+}
+
+.btnLg {
+  height: 52px;
+  font-size: 16px;
+  width: 100%;
+}
+
+.btnOutlineFull {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  border: 1px solid var(--color-hairline);
+  width: 100%;
+  height: 52px;
+  border-radius: 999px;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btnOutlineFull:hover:not(:disabled) {
+  background: var(--color-surface-soft);
+}

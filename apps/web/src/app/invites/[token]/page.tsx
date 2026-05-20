@@ -4,7 +4,10 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useSession, signOut } from "../../../auth/client";
 import { apiFetch } from "../../../lib/api";
+import { AuthTopBar } from "../../../components/AuthTopBar";
+import { WebIcon } from "../../../components/WebIcon";
 import { AcceptButton } from "./_accept-button";
+import styles from "../../../components/auth.module.css";
 
 type Preview = {
   status: "pending" | "accepted" | "revoked" | "expired";
@@ -12,7 +15,6 @@ type Preview = {
   inviterEmail: string;
   invitedEmail: string;
   invitedRole: "editor" | "viewer";
-  // null when the GET was anonymous; boolean when authenticated.
   emailMatch: boolean | null;
 };
 
@@ -22,101 +24,182 @@ export default function InvitePage({ params }: { params: { token: string } }) {
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
   useEffect(() => {
-    // Always fetch the preview — the API allows anonymous reads so that the
-    // signed-out branch can show the invite details + a sign-up link with
-    // the invited email pre-filled.
     setLoadErr(null);
     apiFetch<Preview>(`/invites/by-token/${encodeURIComponent(params.token)}`)
       .then(setPreview)
       .catch((e) => setLoadErr((e as { code?: string }).code ?? "load_error"));
   }, [params.token]);
 
-  // The sign-in target carries `from` (so the user lands back here after auth)
-  // and `inviteToken` (so the form fetches the invite preview itself, pre-fills
-  // the email from the SERVER's invitedEmail, locks the input, and POSTs sign-up
-  // to the invite-aware endpoint that re-validates email server-side). We
-  // intentionally do NOT pass the email in the URL — it would be both leaked
-  // in browser history and trivially user-modifiable.
   const inviteRel = `/invites/${params.token}`;
   const signInHref = `/sign-in?from=${encodeURIComponent(inviteRel)}&inviteToken=${encodeURIComponent(params.token)}`;
 
   return (
-    <main style={{ maxWidth: 480, margin: "64px auto", padding: 24, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 16 }}>You&apos;ve been invited to Fina</h1>
-
-      {(sessionLoading || (!loadErr && !preview)) && <p>Loading…</p>}
-
-      {loadErr === "not_found" && (
-        <p style={{ color: "#c00" }}>This invite link is invalid or has been deleted.</p>
-      )}
-
-      {loadErr && loadErr !== "not_found" && (
-        <p style={{ color: "#c00" }}>Could not load invite ({loadErr}).</p>
-      )}
-
-      {!sessionLoading && preview && (
-        <div style={{ border: "1px solid #eee", borderRadius: 12, padding: 16 }}>
-          <div style={{ fontSize: 14, opacity: 0.6, marginBottom: 8 }}>From</div>
-          <div style={{ fontSize: 16, marginBottom: 12 }}>{preview.inviterEmail}</div>
-          <div style={{ fontSize: 14, opacity: 0.6, marginBottom: 8 }}>Workspace</div>
-          <div style={{ fontSize: 20, fontWeight: 600, marginBottom: 12 }}>
-            {preview.workspaceName}
-          </div>
-          <div style={{ fontSize: 14, opacity: 0.6, marginBottom: 8 }}>You&apos;d join as</div>
-          <div style={{ fontSize: 16, marginBottom: 16 }}>{preview.invitedRole}</div>
-
-          {preview.status !== "pending" && (
-            <p style={{ color: "#c00" }}>This invite is {preview.status}.</p>
+    <div className={styles.page}>
+      <AuthTopBar homePath="/" />
+      <div className={styles.body}>
+        <div className={`${styles.card} ${styles.cardWide}`}>
+          {(sessionLoading || (!loadErr && !preview)) && (
+            <p
+              className={styles.sub}
+              style={{ textAlign: "center", marginBottom: 0 }}
+            >
+              Loading…
+            </p>
           )}
 
-          {preview.status === "pending" && !session?.user && (
-            <div>
-              <p style={{ marginBottom: 12 }}>
-                Invited as <strong>{preview.invitedEmail}</strong>. Sign in or create an account
-                with that email to accept.
-              </p>
-              <Link
-                href={signInHref}
-                style={{
-                  display: "inline-block",
-                  padding: "12px 24px",
-                  background: "#111",
-                  color: "#fff",
-                  borderRadius: 8,
-                  textDecoration: "none",
-                }}
+          {loadErr === "not_found" && (
+            <div className={styles.inviteCard}>
+              <div
+                className={`${styles.inviteIcon} ${styles.inviteIconDanger}`}
               >
-                Sign in / Sign up as {preview.invitedEmail}
-              </Link>
+                <WebIcon name="alert" size={28} />
+              </div>
+              <h1 className={styles.title} style={{ marginBottom: 10 }}>
+                Invite not found
+              </h1>
+              <p className={styles.sub} style={{ marginBottom: 0 }}>
+                This invite link is invalid or has been deleted. Ask whoever
+                invited you to send a new one.
+              </p>
             </div>
           )}
 
-          {preview.status === "pending" && session?.user && preview.emailMatch === false && (
-            <div>
-              <p style={{ marginBottom: 12 }}>
-                This invite is for <strong>{preview.invitedEmail}</strong>. You&apos;re signed in as{" "}
-                <strong>{session.user.email}</strong>.
-              </p>
-              <button
-                onClick={() => signOut()}
-                style={{
-                  padding: "12px 24px",
-                  background: "#fff",
-                  border: "1px solid #ddd",
-                  borderRadius: 8,
-                  cursor: "pointer",
-                }}
+          {loadErr && loadErr !== "not_found" && (
+            <div className={styles.inviteCard}>
+              <div
+                className={`${styles.inviteIcon} ${styles.inviteIconDanger}`}
               >
-                Sign out and try again
-              </button>
+                <WebIcon name="alert" size={28} />
+              </div>
+              <h1 className={styles.title} style={{ marginBottom: 10 }}>
+                Could not load invite
+              </h1>
+              <p className={styles.sub} style={{ marginBottom: 0 }}>
+                Error: {loadErr}. Try refreshing the page.
+              </p>
             </div>
           )}
 
-          {preview.status === "pending" && session?.user && preview.emailMatch === true && (
-            <AcceptButton token={params.token} />
+          {!sessionLoading && preview && preview.status === "expired" && (
+            <div className={styles.inviteCard}>
+              <div className={`${styles.inviteIcon} ${styles.inviteIconWarn}`}>
+                <WebIcon name="clock" size={28} />
+              </div>
+              <h1 className={styles.title} style={{ marginBottom: 10 }}>
+                This invite has expired
+              </h1>
+              <p className={styles.sub} style={{ marginBottom: 0 }}>
+                Ask{" "}
+                <strong style={{ color: "var(--color-ink)" }}>
+                  {preview.inviterEmail}
+                </strong>{" "}
+                to send a fresh one.
+              </p>
+            </div>
+          )}
+
+          {!sessionLoading && preview && preview.status === "accepted" && (
+            <div className={styles.inviteCard}>
+              <div className={styles.inviteIcon}>
+                <WebIcon name="check" size={28} strokeWidth={2.2} />
+              </div>
+              <h1 className={styles.title} style={{ marginBottom: 10 }}>
+                Already accepted
+              </h1>
+              <p className={styles.sub} style={{ marginBottom: 0 }}>
+                This invite was already accepted. Sign in to see the workspace.
+              </p>
+            </div>
+          )}
+
+          {!sessionLoading && preview && preview.status === "revoked" && (
+            <div className={styles.inviteCard}>
+              <div
+                className={`${styles.inviteIcon} ${styles.inviteIconDanger}`}
+              >
+                <WebIcon name="alert" size={28} />
+              </div>
+              <h1 className={styles.title} style={{ marginBottom: 10 }}>
+                Invite revoked
+              </h1>
+              <p className={styles.sub} style={{ marginBottom: 0 }}>
+                The owner revoked this invite. Ask them for a new one if you
+                still want to join.
+              </p>
+            </div>
+          )}
+
+          {!sessionLoading && preview && preview.status === "pending" && (
+            <div className={styles.inviteCard}>
+              <div className={styles.inviteIcon}>
+                <WebIcon name="users" size={28} />
+              </div>
+              <div className={styles.inviteFrom}>
+                Invite from <strong>{preview.inviterEmail}</strong>
+              </div>
+              <h2 className={styles.inviteWsName}>{preview.workspaceName}</h2>
+              <div className={styles.inviteRole}>
+                You&apos;d join as
+                <span
+                  className={`${styles.pill} ${
+                    preview.invitedRole === "editor"
+                      ? styles.pillEditor
+                      : styles.pillViewer
+                  }`}
+                >
+                  <span className={styles.pillDot} />
+                  {preview.invitedRole}
+                </span>
+              </div>
+
+              {!session?.user && (
+                <Link href={signInHref} className={styles.btn}>
+                  Sign in to accept · {preview.invitedEmail}
+                  <WebIcon name="arrowRight" size={16} strokeWidth={2} />
+                </Link>
+              )}
+
+              {session?.user && preview.emailMatch === false && (
+                <>
+                  <div
+                    className={`${styles.banner} ${styles.bannerDanger}`}
+                    style={{ marginBottom: 18, textAlign: "left" }}
+                  >
+                    <span className={styles.bannerIcon}>
+                      <WebIcon name="alert" size={18} />
+                    </span>
+                    <div className={styles.bannerBody}>
+                      <div className={styles.bannerTitle}>Email mismatch</div>
+                      <div className={styles.bannerSub}>
+                        This invite is for{" "}
+                        <strong>{preview.invitedEmail}</strong>. You&apos;re
+                        signed in as <strong>{session.user.email}</strong>.
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className={styles.btnOutlineFull}
+                    onClick={() => signOut()}
+                  >
+                    Sign out and try again
+                  </button>
+                </>
+              )}
+
+              {session?.user && preview.emailMatch === true && (
+                <AcceptButton token={params.token} />
+              )}
+
+              <div className={styles.inviteFoot}>
+                By accepting, you&apos;ll get {preview.invitedRole} access to{" "}
+                {preview.workspaceName}&apos;s transactions, categories, and
+                budgets.
+              </div>
+            </div>
           )}
         </div>
-      )}
-    </main>
+      </div>
+    </div>
   );
 }
