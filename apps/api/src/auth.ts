@@ -1,6 +1,6 @@
 import { betterAuth } from "better-auth";
 import { prismaAdapter } from "better-auth/adapters/prisma";
-import { magicLink } from "better-auth/plugins";
+import { magicLink, emailOTP } from "better-auth/plugins";
 import { prisma } from "./db.js";
 import type { Env } from "./env.js";
 import { sendEmail } from "./email/send.js";
@@ -37,7 +37,7 @@ export function createAuth(env: Env) {
     database: prismaAdapter(prisma, { provider: "postgresql" }),
     emailAndPassword: {
       enabled: true,
-      requireEmailVerification: false,
+      requireEmailVerification: true,
       sendResetPassword: async ({ user, url }) => {
         await sendEmail(env.RESEND_API_KEY, env.EMAIL_FROM, {
           to: user.email,
@@ -54,6 +54,18 @@ export function createAuth(env: Env) {
             to: email,
             subject: "Your Fina sign-in link",
             text: `Click to sign in: ${url}\n\nThis link expires in 10 minutes.`,
+          });
+        },
+      }),
+      emailOTP({
+        sendVerificationOnSignUp: true,
+        expiresIn: 600, // 10 minutes — matches the verify screen copy
+        sendVerificationOTP: async ({ email, otp, type }) => {
+          if (type !== "email-verification") return;
+          await sendEmail(env.RESEND_API_KEY, env.EMAIL_FROM, {
+            to: email,
+            subject: "Your Fina verification code",
+            text: `Your Fina verification code:\n\n${otp}\n\nIt expires in 10 minutes. If you didn't ask for this, you can safely ignore this email.`,
           });
         },
       }),

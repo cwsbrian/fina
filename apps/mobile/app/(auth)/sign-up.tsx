@@ -29,15 +29,22 @@ export default function SignUpScreen() {
     setBusy(true);
     setErr(null);
     try {
+      const trimmedEmail = email.trim();
       const result = await signUp.email({
-        email: email.trim(),
+        email: trimmedEmail,
         password,
         name: name.trim(),
       });
       if (result.error) {
         throw new Error(result.error.message ?? "Sign up failed");
       }
-      router.replace("/(tabs)");
+      // Backend has emailOTP({ sendVerificationOnSignUp: true }) — a 6-digit
+      // code was already sent. Hand off to verify with the email so it can
+      // be displayed and used for resend.
+      router.replace({
+        pathname: "/(auth)/verify",
+        params: { email: trimmedEmail },
+      });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Sign up failed");
     } finally {

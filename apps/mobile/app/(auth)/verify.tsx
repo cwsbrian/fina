@@ -11,10 +11,11 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { Icon } from "../../src/design/Icon";
+import { authClient } from "../../src/auth/client";
 import { colors, type } from "../../src/design/tokens";
 
 const OTP_LENGTH = 6;
-const RESEND_SECONDS = 30;
+const RESEND_SECONDS = 60;
 
 export default function VerifyScreen() {
   const params = useLocalSearchParams<{ email?: string }>();
@@ -23,6 +24,8 @@ export default function VerifyScreen() {
   const [digits, setDigits] = useState<string[]>(Array(OTP_LENGTH).fill(""));
   const [activeIndex, setActiveIndex] = useState(0);
   const [cooldown, setCooldown] = useState(RESEND_SECONDS);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
   const inputs = useRef<Array<TextInput | null>>([]);
 
   useEffect(() => {
@@ -40,11 +43,43 @@ export default function VerifyScreen() {
     setDigits((prev) => {
       const next = [...prev];
       next[idx] = v;
+      // Auto-submit the moment the 6th digit lands.
+      if (v && idx === OTP_LENGTH - 1 && next.every((d) => d.length === 1)) {
+        void verify(next.join(""));
+      }
       return next;
     });
     if (v && idx < OTP_LENGTH - 1) {
       inputs.current[idx + 1]?.focus();
       setActiveIndex(idx + 1);
+    }
+  }
+
+  async function verify(code: string) {
+    if (busy) return;
+    if (!params.email) {
+      setErr("Missing email — go back and sign up again.");
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authClient.emailOtp.verifyEmail({
+        email: params.email,
+        otp: code,
+      });
+      if (res.error) {
+        throw new Error(res.error.message ?? "Code didn't match");
+      }
+      router.replace("/(tabs)");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not verify code");
+      // Clear digits so the user can re-enter without backspacing each.
+      setDigits(Array(OTP_LENGTH).fill(""));
+      setActiveIndex(0);
+      inputs.current[0]?.focus();
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -58,10 +93,24 @@ export default function VerifyScreen() {
     }
   }
 
-  function resend() {
-    if (cooldown > 0) return;
-    setCooldown(RESEND_SECONDS);
-    // TODO: hook up Better Auth resend
+  async function resend() {
+    if (cooldown > 0 || busy || !params.email) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await authClient.emailOtp.sendVerificationOtp({
+        email: params.email,
+        type: "email-verification",
+      });
+      if (res.error) {
+        throw new Error(res.error.message ?? "Could not resend code");
+      }
+      setCooldown(RESEND_SECONDS);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not resend code");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const mm = Math.floor(cooldown / 60);
@@ -108,6 +157,8 @@ export default function VerifyScreen() {
           </View>
         ))}
       </View>
+
+      {err && <Text style={styles.errorText}>{err}</Text>}
 
       <Text style={styles.resend}>
         {cooldown > 0 ? (
@@ -177,6 +228,12 @@ const styles = StyleSheet.create({
     textAlign: "center",
     width: "100%",
     height: "100%",
+  },
+  errorText: {
+    marginTop: 16,
+    ...type.bodySm,
+    color: colors.down,
+    textAlign: "center",
   },
   resend: {
     marginTop: 20,

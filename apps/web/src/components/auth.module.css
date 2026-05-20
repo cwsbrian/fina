@@ -365,3 +365,42 @@
   font-weight: 600;
   cursor: pointer;
 }
+
+.otpRow {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  margin-top: 28px;
+}
+
+.otpBox {
+  flex: 1;
+  min-width: 0;
+  height: 60px;
+  border-radius: 14px;
+  background: var(--color-surface-soft);
+  border: 1.5px solid transparent;
+  text-align: center;
+  font-size: 28px;
+  font-weight: 500;
+  letter-spacing: -0.6px;
+  color: var(--color-ink);
+  outline: 0;
+  font-variant-numeric: tabular-nums lining-nums;
+  font-family: inherit;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.otpBox:focus {
+  background: #ffffff;
+  border-color: var(--color-ink);
+}
+
+.otpBoxFilled {
+  background: #ffffff;
+  border-color: var(--color-hairline);
+}
+
+.otpBoxFilled:focus {
+  border-color: var(--color-ink);
+}
