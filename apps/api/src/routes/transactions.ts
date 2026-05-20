@@ -160,7 +160,6 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           currency: workspace.currency,
           merchantRaw: t.merchantRaw,
           merchantNormalized: t.merchantNormalized,
-          categoryId: t.categoryId,                       // mirror; dropped Task 8
           occurredAt: t.occurredAt.toISOString(),
           postedAt: t.postedAt?.toISOString() ?? null,
           pending: t.pending,

@@ -88,11 +88,6 @@ export async function mapMerchantToCategoryService(
       data: { categoryId: input.categoryId, source: "mapping" },
     });
     if (upd.count > 0) {
-      // Mirror-write Transaction.categoryId for compat (Task 8 removes).
-      await prisma.transaction.update({
-        where: { id: c.id },
-        data: { categoryId: input.categoryId, categorizationSource: "mapping" },
-      });
       backfilledCount += 1;
     }
   }

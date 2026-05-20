@@ -29,8 +29,6 @@ describe("findUncategorizedTransactions tool", () => {
       merchantRaw: string;
       occurredAt: Date;
       rawData: object;
-      categoryId?: string;
-      categorizationSource?: "ai" | "manual" | "mapping";
       removedAt?: Date;
       allocCategoryId?: string | null;
       allocSource?: "ai" | "manual" | "mapping" | null;
@@ -39,9 +37,9 @@ describe("findUncategorizedTransactions tool", () => {
       // uncategorized — allocation has null categoryId and null source
       { plaidTransactionId: "u1", amount: "5.00", merchantRaw: "A", occurredAt: thisMonth, rawData: {}, allocCategoryId: null, allocSource: null },
       // ai-categorized — allocation has source=ai
-      { plaidTransactionId: "a1", amount: "6.00", merchantRaw: "B", occurredAt: thisMonth, rawData: {}, categoryId: catId, categorizationSource: "ai", allocCategoryId: catId, allocSource: "ai" },
+      { plaidTransactionId: "a1", amount: "6.00", merchantRaw: "B", occurredAt: thisMonth, rawData: {}, allocCategoryId: catId, allocSource: "ai" },
       // manual — allocation has source=manual
-      { plaidTransactionId: "m1", amount: "7.00", merchantRaw: "C", occurredAt: thisMonth, rawData: {}, categoryId: catId, categorizationSource: "manual", allocCategoryId: catId, allocSource: "manual" },
+      { plaidTransactionId: "m1", amount: "7.00", merchantRaw: "C", occurredAt: thisMonth, rawData: {}, allocCategoryId: catId, allocSource: "manual" },
       // soft-deleted uncategorized — excluded by removedAt filter
       { plaidTransactionId: "d1", amount: "8.00", merchantRaw: "D", occurredAt: thisMonth, rawData: {}, removedAt: new Date(), allocCategoryId: null, allocSource: null },
     ];
@@ -55,8 +53,6 @@ describe("findUncategorizedTransactions tool", () => {
           merchantRaw: s.merchantRaw,
           occurredAt: s.occurredAt,
           rawData: s.rawData,
-          ...(s.categoryId ? { categoryId: s.categoryId } : {}),
-          ...(s.categorizationSource ? { categorizationSource: s.categorizationSource } : {}),
           ...(s.removedAt ? { removedAt: s.removedAt } : {}),
         },
       });

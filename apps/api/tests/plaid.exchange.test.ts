@@ -317,14 +317,14 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     });
     geminiResolveExch({ results: [{ tx_id: localTx.id, category: "Groceries" }] });
     for (let i = 0; i < 50; i++) {
-      const t = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
-      if (t.categoryId !== null) break;
+      const alloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: localTx.id } });
+      if (alloc?.categoryId !== null) break;
       await new Promise((r) => setTimeout(r, 50));
     }
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTx.id } });
+    const finalAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: localTx.id } });
     const groceriesCat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
-    expect(after.categoryId).toBe(groceriesCat.id);
-    expect(after.categorizationSource).toBe("ai");
+    expect(finalAlloc?.categoryId).toBe(groceriesCat.id);
+    expect(finalAlloc?.source).toBe("ai");
     await app.close();
   });
 

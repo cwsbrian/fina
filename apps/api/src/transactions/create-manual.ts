@@ -29,7 +29,6 @@ export type CreateManualTxResult = {
     currency: string;
     merchantRaw: string;
     merchantNormalized: string;
-    categoryId: string | null;             // mirror-write; dropped in Task 8
     occurredAt: string;
     pending: false;
     source: "manual";
@@ -164,14 +163,12 @@ export async function createManualTransactionService(
         amount: new Prisma.Decimal(input.amount),
         merchantRaw,
         merchantNormalized,
-        categoryId: input.categoryId ?? null,
         occurredAt,
         postedAt: null,
         pending: false,
         source: "manual",
         rawData: {} as Prisma.InputJsonValue,
         note,
-        categorizationSource: input.categoryId !== undefined ? "manual" : null,
       },
     });
 
@@ -200,7 +197,6 @@ export async function createManualTransactionService(
         currency: workspace.currency,
         merchantRaw: row.merchantRaw,
         merchantNormalized: row.merchantNormalized ?? merchantNormalized,
-        categoryId: row.categoryId,
         occurredAt: row.occurredAt.toISOString(),
         pending: false,                     // invariant: manual tx
         source: "manual",

@@ -24,19 +24,20 @@ describe("getCategoryBreakdown tool", () => {
 
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
-    const txData = [
-      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "10.00", merchantRaw: "Sb", categoryId: coffee.id, occurredAt: thisMonth, rawData: {} },
-      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "20.00", merchantRaw: "Sub", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
+    const txData: Array<{ workspaceId: string; accountId: string; plaidTransactionId: string; amount: string; merchantRaw: string; occurredAt: Date; rawData: object; allocCategoryId?: string }> = [
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "10.00", merchantRaw: "Sb", allocCategoryId: coffee.id, occurredAt: thisMonth, rawData: {} },
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "20.00", merchantRaw: "Sub", allocCategoryId: food.id, occurredAt: thisMonth, rawData: {} },
       // uncategorized
       { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "5.00", merchantRaw: "X", occurredAt: thisMonth, rawData: {} },
       // negative (refund) — must be excluded from spending aggregate
-      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "4", amount: "-50.00", merchantRaw: "Refund", categoryId: food.id, occurredAt: thisMonth, rawData: {} },
-    ] as const;
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "4", amount: "-50.00", merchantRaw: "Refund", allocCategoryId: food.id, occurredAt: thisMonth, rawData: {} },
+    ];
     for (const d of txData) {
-      const tx = await prisma.transaction.create({ data: { ...d } });
+      const { allocCategoryId, ...txCreateData } = d;
+      const tx = await prisma.transaction.create({ data: txCreateData });
       await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
       await prisma.transactionAllocation.create({
-        data: { transactionId: tx.id, categoryId: d.categoryId ?? null, amount: d.amount, source: null },
+        data: { transactionId: tx.id, categoryId: allocCategoryId ?? null, amount: d.amount, source: null },
       });
     }
   });

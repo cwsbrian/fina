@@ -348,7 +348,7 @@ export async function upsertModified(
     });
     await tx.transaction.update({
       where: { id: existing.id },
-      data: { ...txDataBase, needsReclassification: true, categoryId: null, categorizationSource: null },
+      data: { ...txDataBase, needsReclassification: true },
     });
   } else {
     // N=1 (any change) OR N≥2 with only metadata changes: preserve allocations.

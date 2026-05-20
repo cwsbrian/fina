@@ -109,7 +109,7 @@ describe("transactions race tests — lock acquisition proofs", () => {
     holder.release();
     await holder.done;
     const result = await candidate;
-    expect(result.tx.categorizationSource).toBe("manual");
+    expect(result.tx.allocations[0]!.source).toBe("manual");
   });
 
   it("Test A: editTransactionService blocks while holder owns the workspace advisory lock", async () => {

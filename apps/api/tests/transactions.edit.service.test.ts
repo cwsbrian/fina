@@ -51,7 +51,7 @@ function flagsFrom(input: Record<string, unknown>) {
 }
 
 describe("editTransactionService", () => {
-  it("happy: updates all 5 fields, recomputes merchantNormalized, sets categorizationSource", async () => {
+  it("happy: updates all 5 fields, recomputes merchantNormalized, sets allocation categoryId", async () => {
     const { wsId, userId } = await setupEditor("e1@t.co");
     const txId = await seedManual(wsId, userId);
     const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries-edit" } });
@@ -74,30 +74,32 @@ describe("editTransactionService", () => {
     expect(r.transaction.merchantRaw).toBe("Walmart");
     expect(r.transaction.merchantNormalized).toBe("walmart");
     expect(r.transaction.occurredAt.slice(0, 10)).toBe("2026-05-18");
-    expect(r.transaction.categoryId).toBe(cat.id);
+    expect(r.transaction.allocations[0]!.categoryId).toBe(cat.id);
     expect(r.transaction.note).toBe("weekly haul");
 
-    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(row.categorizationSource).toBe("manual");
+    const alloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(alloc?.source).toBe("manual");
   });
 
   it("partial update: only amount changes; other fields untouched", async () => {
     const { wsId, userId } = await setupEditor("e2@t.co");
     const txId = await seedManual(wsId, userId);
     const before = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
+    const beforeAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
 
     const input = { amount: 99.99 };
     await editTransactionService({ workspaceId: wsId }, txId, input, flagsFrom(input));
 
     const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
     expect(after.amount.toString()).toBe("99.99");
     expect(after.merchantRaw).toBe(before.merchantRaw);
     expect(after.occurredAt.toISOString()).toBe(before.occurredAt.toISOString());
     expect(after.note).toBe(before.note);
-    expect(after.categoryId).toBe(before.categoryId);
+    expect(afterAlloc?.categoryId).toBe(beforeAlloc?.categoryId);
   });
 
-  it("clear categoryId to null sets categorizationSource to null", async () => {
+  it("clear categoryId to null clears allocation categoryId and source", async () => {
     const { wsId, userId } = await setupEditor("e3@t.co");
     const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Food-e3" } });
     const txId = await seedManual(wsId, userId);
@@ -106,9 +108,9 @@ describe("editTransactionService", () => {
 
     const clearInput = { categoryId: null };
     await editTransactionService({ workspaceId: wsId }, txId, clearInput, flagsFrom(clearInput));
-    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(row.categoryId).toBeNull();
-    expect(row.categorizationSource).toBeNull();
+    const alloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(alloc?.categoryId).toBeNull();
+    expect(alloc?.source).toBeNull();
   });
 
   it("clear note to null", async () => {

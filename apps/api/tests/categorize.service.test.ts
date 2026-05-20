@@ -91,8 +91,6 @@ describe("categorizeNewTransactions", () => {
     await categorizeNewTransactions(env, wsId, [txId]);
 
     const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categoryId).toBe(diningId);
-    expect(after.categorizationSource).toBe("mapping");
     expect(after.merchantNormalized).toBe("starbucks");
 
     // Allocation state assertion.
@@ -112,10 +110,6 @@ describe("categorizeNewTransactions", () => {
     });
 
     await categorizeNewTransactions(env, wsId, [txId]);
-
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categoryId).toBe(await categoryId(wsId, "Groceries"));
-    expect(after.categorizationSource).toBe("ai");
 
     // Allocation state assertion.
     const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
@@ -144,9 +138,9 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsId, [mappedId, llmA, llmB]);
 
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: mappedId } })).categorizationSource).toBe("mapping");
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: llmA } })).categorizationSource).toBe("ai");
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: llmB } })).categorizationSource).toBe("ai");
+    expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: mappedId } }))?.source).toBe("mapping");
+    expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: llmA } }))?.source).toBe("ai");
+    expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: llmB } }))?.source).toBe("ai");
   });
 
   it("LLM returns category not in seed → that tx stays uncategorized", async () => {
@@ -160,9 +154,9 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsId, [txId]);
 
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categoryId).toBeNull();
-    expect(after.categorizationSource).toBeNull();
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(afterAlloc?.categoryId).toBeNull();
+    expect(afterAlloc?.source).toBeNull();
   });
 
   it("LLM returns unknown tx_id → skip silently, valid ones still applied", async () => {
@@ -179,7 +173,7 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsId, [txId]);
 
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: txId } })).categorizationSource).toBe("ai");
+    expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } }))?.source).toBe("ai");
   });
 
   it("LLM throws → unmapped tx stay uncategorized; mapped ones still applied", async () => {
@@ -196,8 +190,8 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsId, [mappedId, llmId]);
 
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: mappedId } })).categorizationSource).toBe("mapping");
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: llmId } })).categoryId).toBeNull();
+    expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: mappedId } }))?.source).toBe("mapping");
+    expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: llmId } }))?.categoryId).toBeNull();
   });
 
   it("batch > CATEGORIZE_BATCH_MAX → multiple LLM calls", async () => {
@@ -223,7 +217,7 @@ describe("categorizeNewTransactions", () => {
 
     expect(geminiMock.generateContent.length).toBe(0);
     for (const id of ids) {
-      expect((await prisma.transaction.findUniqueOrThrow({ where: { id } })).categorizationSource).toBe("ai");
+      expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: id } }))?.source).toBe("ai");
     }
   });
 
@@ -239,14 +233,14 @@ describe("categorizeNewTransactions", () => {
   });
 
   it("manual-vs-LLM race: concurrent manual categorize is NOT overwritten by LLM update guard", async () => {
-    // This test verifies the `WHERE categorizationSource IS NULL` guard on the
+    // This test verifies the allocation-level WHERE source IS NULL guard on the
     // LLM update path prevents overwriting a manual categorization that lands
     // AFTER the service's SELECT but BEFORE the service's UPDATE.
     //
     // Approach: pause the service at the Gemini call using a pending promise.
-    // While it's paused, apply a manual categorization to the tx. Then resolve
-    // Gemini. The service's `updateMany(WHERE categorizationSource IS NULL)`
-    // must skip the tx (categorizationSource is now 'manual').
+    // While it's paused, apply a manual categorization to the allocation. Then resolve
+    // Gemini. The service's `updateMany(WHERE source IS NULL AND categoryId IS NULL)`
+    // must skip the tx (allocation source is now 'manual').
     const { wsId, accountId } = await setupWorkspaceWithAccount();
     const groceriesId = await categoryId(wsId, "Groceries");
     const diningId = await categoryId(wsId, "Dining");
@@ -271,10 +265,10 @@ describe("categorizeNewTransactions", () => {
     }
 
     // Now simulate the concurrent manual categorize firing while service is blocked.
-    // Update both the tx row AND the allocation (as manual-categorize service does).
+    // Update the transaction's merchantNormalized and the allocation.
     await prisma.transaction.update({
       where: { id: txId },
-      data: { categoryId: diningId, categorizationSource: "manual", merchantNormalized: "loblaws" },
+      data: { merchantNormalized: "loblaws" },
     });
     await prisma.transactionAllocation.updateMany({
       where: { transactionId: txId },
@@ -285,12 +279,12 @@ describe("categorizeNewTransactions", () => {
     geminiResolve({ results: [{ tx_id: txId, category: "Groceries" }] });
     await servicePromise;
 
-    // The service's updateMany WHERE categorizationSource IS NULL must have
-    // skipped this tx (it's now 'manual'). Manual categorization is preserved.
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categoryId).toBe(diningId);              // manual survived
-    expect(after.categorizationSource).toBe("manual");    // NOT overwritten to 'ai'
-    expect(after.categoryId).not.toBe(groceriesId);
+    // The service's updateMany WHERE categoryId IS NULL AND source IS NULL must have
+    // skipped this tx (allocation is now 'manual'). Manual categorization is preserved.
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(afterAlloc?.categoryId).toBe(diningId);              // manual survived
+    expect(afterAlloc?.source).toBe("manual");                  // NOT overwritten to 'ai'
+    expect(afterAlloc?.categoryId).not.toBe(groceriesId);
   });
 
   it("workspace-scoped category resolution: two workspaces with same category name", async () => {
@@ -302,9 +296,9 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsA, [txId]);
 
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
     const wsAGroceries = await categoryId(wsA, "Groceries");
-    expect(after.categoryId).toBe(wsAGroceries); // workspace A's Groceries, NOT workspace B's
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(afterAlloc?.categoryId).toBe(wsAGroceries); // workspace A's Groceries, NOT workspace B's
   });
 
   it("archived category ignored by LLM (not in passed list)", async () => {
@@ -322,8 +316,8 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsId, [txId]);
 
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categoryId).toBeNull(); // stays uncategorized
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(afterAlloc?.categoryId).toBeNull(); // stays uncategorized
   });
 
   it("mapping points to archived category → skipped (tx stays uncategorized OR goes to LLM)", async () => {
@@ -342,9 +336,9 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsId, [txId]);
 
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categorizationSource).toBe("ai"); // mapping skipped, LLM ran
-    expect(after.categoryId).toBe(await categoryId(wsId, "Other"));
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(afterAlloc?.source).toBe("ai"); // mapping skipped, LLM ran
+    expect(afterAlloc?.categoryId).toBe(await categoryId(wsId, "Other"));
   });
 
   it("LLM case-insensitive category match: 'groceries' lower matches 'Groceries' stored", async () => {
@@ -355,7 +349,7 @@ describe("categorizeNewTransactions", () => {
 
     await categorizeNewTransactions(env, wsId, [txId]);
 
-    expect((await prisma.transaction.findUniqueOrThrow({ where: { id: txId } })).categoryId).toBe(
+    expect((await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } }))?.categoryId).toBe(
       await categoryId(wsId, "Groceries"),
     );
   });
@@ -375,8 +369,8 @@ describe("categorizeNewTransactions", () => {
     geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "Groceries" }] });
     await categorizeNewTransactions(env, wsId, [txId]);
 
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
-    expect(after.categorizationSource).toBe("ai");
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(afterAlloc?.source).toBe("ai");
 
     // No mapping must have been created.
     const mappings = await prisma.merchantMapping.count({ where: { workspaceId: wsId } });

@@ -237,12 +237,11 @@ describe("compareSpendingVsBudgetService", () => {
         plaidTransactionId: `tx-${Math.random()}`,
         amount,
         merchantRaw: "M",
-        categoryId: catId,
         occurredAt,
         rawData: {},
       },
     });
-    // Seed allocation to satisfy the new allocation-based read path.
+    // Seed allocation (single source of truth after Task 8).
     await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
     await prisma.transactionAllocation.create({
       data: { transactionId: tx.id, categoryId: catId, amount, source: "manual" },
@@ -291,7 +290,7 @@ describe("compareSpendingVsBudgetService", () => {
       data: {
         workspaceId, accountId: acctId, plaidTransactionId: "x",
         amount: "50.00", merchantRaw: "M",
-        categoryId: otherCat.id, occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
+        occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
       },
     });
     await prisma.transactionAllocation.deleteMany({ where: { transactionId: otherTx.id } });

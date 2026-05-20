@@ -277,7 +277,6 @@ model Transaction {
   amount                    Decimal           @db.Decimal(14, 2)
   merchantRaw               String
   merchantNormalized        String?
-  categoryId                String?
   occurredAt                DateTime
   postedAt                  DateTime?
   pending                   Boolean           @default(false)
@@ -287,7 +286,6 @@ model Transaction {
   removedAt                 DateTime?
   createdAt                 DateTime          @default(now())
   updatedAt                 DateTime          @updatedAt
-  categorizationSource      CategorizationSource?
   needsReclassification     Boolean           @default(false)
 
   workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -296,12 +294,10 @@ model Transaction {
   // The Prisma model is BankAccount but the field name is unchanged.
   account     BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   plaidItem   PlaidItem?  @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
-  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: SetNull)
   allocations TransactionAllocation[]
 
   @@index([workspaceId, occurredAt(sort: Desc)])
   @@index([workspaceId, accountId, occurredAt(sort: Desc)])
-  @@index([workspaceId, categoryId])
   @@map("transactions")
 }
 
@@ -342,7 +338,6 @@ model Category {
   workspace          Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   parent             Category?         @relation("CategoryTree", fields: [parentId], references: [id])
   children           Category[]        @relation("CategoryTree")
-  transactions       Transaction[]
   allocations        TransactionAllocation[]
   merchantMappings   MerchantMapping[]
   budgets            Budget[]

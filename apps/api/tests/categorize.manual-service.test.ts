@@ -45,8 +45,8 @@ describe("applyManualCategorize", () => {
     const res = await applyManualCategorize({ workspaceId: wsId, txId: a, categoryName: "Coffee" });
 
     expect(res.tx.id).toBe(a);
-    expect(res.tx.categoryId).toBe(categoryId);
-    expect(res.tx.categorizationSource).toBe("manual");
+    expect(res.tx.allocations[0]!.categoryId).toBe(categoryId);
+    expect(res.tx.allocations[0]!.source).toBe("manual");
     expect(res.backfilledCount).toBe(2);
 
     const mapping = await prisma.merchantMapping.findUniqueOrThrow({
@@ -55,22 +55,18 @@ describe("applyManualCategorize", () => {
     expect(mapping.source).toBe("manual");
     expect(mapping.confidence.toString()).toBe("1");
 
-    const bRow = await prisma.transaction.findUniqueOrThrow({ where: { id: b } });
-    expect(bRow.categoryId).toBe(categoryId);
-    expect(bRow.categorizationSource).toBe("mapping");
-    const cRow = await prisma.transaction.findUniqueOrThrow({ where: { id: c } });
-    expect(cRow.categorizationSource).toBe("mapping");
+    const bAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: b } });
+    expect(bAlloc?.categoryId).toBe(categoryId);
+    expect(bAlloc?.source).toBe("mapping");
+    const cAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: c } });
+    expect(cAlloc?.source).toBe("mapping");
   });
 
   it("preserves prior manual decisions on back-fill", async () => {
     const a = await seedTx("STARBUCKS #1", "starbucks");
     const b = await seedTx("STARBUCKS #2", "starbucks");
     const other = await prisma.category.create({ data: { workspaceId: wsId, name: "Other" } });
-    // Simulate a previous manual categorization on both the tx row and its allocation.
-    await prisma.transaction.update({
-      where: { id: b },
-      data: { categoryId: other.id, categorizationSource: "manual" },
-    });
+    // Simulate a previous manual categorization on the allocation.
     await prisma.transactionAllocation.updateMany({
       where: { transactionId: b },
       data: { categoryId: other.id, source: "manual" },
@@ -78,9 +74,9 @@ describe("applyManualCategorize", () => {
 
     await applyManualCategorize({ workspaceId: wsId, txId: a, categoryName: "Coffee" });
 
-    const bRow = await prisma.transaction.findUniqueOrThrow({ where: { id: b } });
-    expect(bRow.categoryId).toBe(other.id);
-    expect(bRow.categorizationSource).toBe("manual");
+    const bAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: b } });
+    expect(bAlloc?.categoryId).toBe(other.id);
+    expect(bAlloc?.source).toBe("manual");
   });
 
   it("rejects cross-workspace txId", async () => {
@@ -111,7 +107,7 @@ describe("applyManualCategorize", () => {
   it("case-insensitive category match", async () => {
     const a = await seedTx("STARBUCKS", "starbucks");
     const res = await applyManualCategorize({ workspaceId: wsId, txId: a, categoryName: "coffee" });
-    expect(res.tx.categoryId).toBe(categoryId);
+    expect(res.tx.allocations[0]!.categoryId).toBe(categoryId);
   });
 
   it("writes a single allocation matching the chosen category", async () => {

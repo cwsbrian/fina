@@ -21,15 +21,16 @@ describe("getSpendingSummary tool", () => {
     const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "x", type: "depository" } });
     const thisMonth = new Date("2026-05-05T12:00:00Z"); // noon UTC May 5 = 8am ET May 5
     const txData = [
-      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "5.00", merchantRaw: "Starbucks", merchantNormalized: "starbucks", categoryId: catCoffeeId, occurredAt: thisMonth, rawData: {} },
-      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "4.00", merchantRaw: "Starbucks", merchantNormalized: "starbucks", categoryId: catCoffeeId, occurredAt: thisMonth, rawData: {} },
-      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "12.00", merchantRaw: "Subway", merchantNormalized: "subway", categoryId: catFoodId, occurredAt: thisMonth, rawData: {} },
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "5.00", merchantRaw: "Starbucks", merchantNormalized: "starbucks", allocCategoryId: catCoffeeId, occurredAt: thisMonth, rawData: {} },
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "4.00", merchantRaw: "Starbucks", merchantNormalized: "starbucks", allocCategoryId: catCoffeeId, occurredAt: thisMonth, rawData: {} },
+      { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "3", amount: "12.00", merchantRaw: "Subway", merchantNormalized: "subway", allocCategoryId: catFoodId, occurredAt: thisMonth, rawData: {} },
     ];
     for (const d of txData) {
-      const tx = await prisma.transaction.create({ data: { ...d } });
+      const { allocCategoryId, ...txCreateData } = d;
+      const tx = await prisma.transaction.create({ data: txCreateData });
       await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
       await prisma.transactionAllocation.create({
-        data: { transactionId: tx.id, categoryId: d.categoryId, amount: d.amount, source: null },
+        data: { transactionId: tx.id, categoryId: allocCategoryId, amount: d.amount, source: null },
       });
     }
   });

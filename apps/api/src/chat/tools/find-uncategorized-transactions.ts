@@ -12,7 +12,7 @@ const Args = z.object({
   review_mode: z
     .enum(["missing_category", "not_manual"])
     .describe(
-      "missing_category returns categoryId=null. not_manual returns transactions whose categorizationSource is not manual, including uncategorized.",
+      "missing_category returns transactions with a null-category allocation. not_manual returns transactions whose allocation source is not manual, including uncategorized.",
     )
     .optional(),
   limit: z
@@ -37,8 +37,6 @@ type Result = {
     merchantNormalized: string | null;
     occurredAt: string;
     accountName: string;
-    categoryId: string | null;
-    categorizationSource: "mapping" | "ai" | "manual" | null;
   }>;
 };
 
@@ -100,8 +98,6 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
         merchantNormalized: r.merchantNormalized,
         occurredAt: r.occurredAt.toISOString(),
         accountName: r.account.name,
-        categoryId: r.categoryId,
-        categorizationSource: (r.categorizationSource ?? null) as Result["transactions"][number]["categorizationSource"],
       })),
     };
   },

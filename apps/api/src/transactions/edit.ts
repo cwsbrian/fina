@@ -39,7 +39,6 @@ export type EditTxResult = {
     currency: string;
     merchantRaw: string;
     merchantNormalized: string;
-    categoryId: string | null;             // mirror-write; dropped Task 8
     occurredAt: string;
     pending: boolean;
     source: "manual" | "plaid" | "csv";    // widen from "manual" — Plaid posted can PATCH allocations
@@ -92,7 +91,7 @@ function rethrowValidation<T>(fn: () => T): T {
 const TX_SELECT = {
   id: true, accountId: true, plaidTransactionId: true,
   amount: true, merchantRaw: true, merchantNormalized: true,
-  categoryId: true, occurredAt: true, pending: true,
+  occurredAt: true, pending: true,
   source: true, note: true, removedAt: true,
   needsReclassification: true,
   createdAt: true, updatedAt: true,
@@ -114,7 +113,6 @@ function shape(
     currency,
     merchantRaw: row.merchantRaw,
     merchantNormalized: row.merchantNormalized ?? normalizeMerchant(row.merchantRaw),
-    categoryId: row.categoryId,
     occurredAt: row.occurredAt.toISOString(),
     pending: row.pending,
     source: row.source as "manual" | "plaid" | "csv",
@@ -223,22 +221,18 @@ export async function editTransactionService(
         }
         throw e;
       }
-      // Mirror-write: clear tx.categoryId since the source of truth is allocations now.
-      data.categoryId = null;
-      data.categorizationSource = null;
     } else if (flags.categoryIdProvided) {
+      // When clearing to null, use null source (no categorization); otherwise "manual".
+      const catSource = input.categoryId === null ? null : "manual";
       try {
         await applyAllocations(
-          tx, ctx.workspaceId, txId, effectiveAmount, "manual",
+          tx, ctx.workspaceId, txId, effectiveAmount, catSource,
           [{ categoryId: input.categoryId ?? null, amount: Number(effectiveAmount.toString()) }],
         );
       } catch (e) {
         if (e instanceof AllocationError) throw new EditTxError(e.code as EditTxErrorCode);
         throw e;
       }
-      // Mirror-write tx.categoryId for compat.
-      data.categoryId = input.categoryId ?? null;
-      data.categorizationSource = input.categoryId === null ? null : "manual";
     }
 
     if (Object.keys(data).length > 0) {

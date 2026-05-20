@@ -59,7 +59,6 @@ describe("mapMerchantToCategory chat tool", () => {
         amount: "10.00",
         merchantRaw: "Starbucks",
         merchantNormalized: "starbucks",
-        categoryId: null,
         occurredAt: new Date("2026-05-10T12:00:00Z"),
         rawData: {},
       },

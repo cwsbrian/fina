@@ -51,8 +51,8 @@ function isValidPair(c: CurrentPeriod, p: ComparisonPeriod): boolean {
 
 type Row = {
   amount: Prisma.Decimal;
-  categoryId: string | null;
-  category: { id: string; name: string } | null;
+  categoryId?: string | null;
+  category?: { id: string; name: string } | null;
   merchantRaw: string;
   merchantNormalized: string | null;
   occurredAt: Date;
@@ -71,7 +71,7 @@ function bucketize(rows: Row[], groupBy: "category" | "merchant"): {
     let label: string;
     if (groupBy === "category") {
       key = r.categoryId ?? "uncategorized";
-      label = r.category?.name ?? "Uncategorized";
+      label = r.category?.name ?? (r.categoryId ? "Unknown" : "Uncategorized");
     } else {
       const norm = r.merchantNormalized ?? normalizeMerchant(r.merchantRaw);
       key = norm;
@@ -165,10 +165,9 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
         bucketizeByAllocation(ctx.workspaceId, ranges.comparison.gte, ranges.comparison.lt),
       ]);
     } else {
+      // group_by=merchant path: category fields not needed (dropped from Transaction in Task 8)
       const selectSpec = {
         amount: true,
-        categoryId: true,
-        category: { select: { id: true, name: true } },
         merchantRaw: true,
         merchantNormalized: true,
         occurredAt: true,

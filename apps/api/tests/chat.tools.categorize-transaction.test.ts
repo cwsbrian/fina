@@ -30,8 +30,8 @@ describe("categorizeTransaction tool", () => {
   it("sets categoryId and returns backfill count", async () => {
     const id = await seedTx();
     const res = await categorizeTransaction.run(ctx, { tx_id: id, category: "Coffee" });
-    expect(res.tx.categoryId).toBe(catId);
-    expect(res.tx.categorizationSource).toBe("manual");
+    expect(res.tx.allocations[0]!.categoryId).toBe(catId);
+    expect(res.tx.allocations[0]!.source).toBe("manual");
     expect(typeof res.backfilledCount).toBe("number");
     // Allocations shape
     expect(res.tx.allocations).toHaveLength(1);

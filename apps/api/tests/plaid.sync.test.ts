@@ -423,7 +423,8 @@ describe("syncTransactions", () => {
     const r = await syncTransactions(env, wsId, plaidItemId);
     expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
     const t = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
-    expect(t.categoryId).toBeNull();
+    const tAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: t.id } });
+    expect(tAlloc?.categoryId).toBeNull();
     await app.close();
   });
 

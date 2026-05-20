@@ -298,12 +298,12 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.transaction.categorizationSource).toBe("manual");
+    expect(body.transaction.allocations[0].source).toBe("manual");
     expect(body.backfilledCount).toBe(1);
 
-    // Sibling should now be source='mapping'
-    const sibling = await prisma.transaction.findUniqueOrThrow({ where: { id: siblingId } });
-    expect(sibling.categorizationSource).toBe("mapping");
+    // Sibling should now have allocation source='mapping'
+    const siblingAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: siblingId } });
+    expect(siblingAlloc?.source).toBe("mapping");
     // Mapping row exists
     const m = await prisma.merchantMapping.findFirstOrThrow({
       where: { workspaceId: wsId, merchantNormalized: "starbucks" },
@@ -367,11 +367,11 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
 
   it("back-fill skips manual-source siblings", async () => {
     const { wsId, cookie, txId, loblawsTxId: siblingId } = await setupTx("mc-skip-manual@x.com");
-    // Pre-set sibling as manual (both tx row and allocation).
+    // Pre-set sibling as manual (allocation only — tx columns dropped in Task 8).
     const groceriesCat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
     await prisma.transaction.update({
       where: { id: siblingId },
-      data: { categoryId: groceriesCat.id, categorizationSource: "manual", merchantNormalized: "starbucks" },
+      data: { merchantNormalized: "starbucks" },
     });
     await prisma.transactionAllocation.updateMany({
       where: { transactionId: siblingId },
@@ -388,9 +388,9 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
     expect(res.statusCode).toBe(200);
 
     // Sibling should KEEP its manual Groceries
-    const sibling = await prisma.transaction.findUniqueOrThrow({ where: { id: siblingId } });
-    expect(sibling.categoryId).toBe(groceriesCat.id);
-    expect(sibling.categorizationSource).toBe("manual");
+    const siblingAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: siblingId } });
+    expect(siblingAlloc?.categoryId).toBe(groceriesCat.id);
+    expect(siblingAlloc?.source).toBe("manual");
     await app.close();
   });
 
@@ -422,7 +422,8 @@ describe("POST /workspaces/:id/transactions/:txId/categorize", () => {
 
     const after = await prisma.transaction.findUniqueOrThrow({ where: { id: legacy.id } });
     expect(after.merchantNormalized).toBe("starbucks");   // normalized
-    expect(after.categorizationSource).toBe("mapping");   // back-filled
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: legacy.id } });
+    expect(afterAlloc?.source).toBe("mapping");   // back-filled
     await app.close();
   });
 

@@ -60,7 +60,7 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(body.transaction.amount).toBe("12.5");
     expect(body.transaction.merchantRaw).toBe("Walmart");
     expect(body.transaction.merchantNormalized).toBe("walmart");
-    expect(body.transaction.categoryId).toBe(cat.id);
+    expect(body.transaction.allocations[0].categoryId).toBe(cat.id);
   });
 
   it("200 empty body returns current tx unchanged", async () => {

@@ -15,8 +15,8 @@ import { callGeminiCategorize, type LLMTransaction } from "./llm.js";
  *  4. Failures (LLM error, unknown category, unknown tx_id) leave the tx
  *     uncategorized. No retry in the same call.
  *
- * All writes guard by `categorizationSource IS NULL` to avoid overwriting a
- * manual decision that races with our LLM call.
+ * All writes guard by allocation-level `WHERE categoryId IS NULL AND source IS NULL`
+ * to avoid overwriting a manual decision that races with our LLM call.
  *
  * Best-effort: this function does NOT throw on Gemini failures. Callers can
  * treat it as fire-and-forget (exchange route) or await it (manual sync).
@@ -114,11 +114,7 @@ export async function categorizeNewTransactions(
           data: { categoryId: catId, source: "mapping" },
         });
         if (upd.count > 0) {
-          // Mirror-write Transaction.categoryId for compat (Task 8 removes).
-          await prisma.transaction.update({
-            where: { id: c.id },
-            data: { categoryId: catId, categorizationSource: "mapping" },
-          });
+          // allocation updated — no mirror-write needed (Task 8 dropped the columns)
         }
       }
     } else {
@@ -182,11 +178,7 @@ export async function categorizeNewTransactions(
         data: { categoryId: aiCatId, source: "ai" },
       });
       if (upd.count > 0) {
-        // Mirror-write Transaction.categoryId for compat (Task 8 removes).
-        await prisma.transaction.update({
-          where: { id: tx.id },
-          data: { categoryId: aiCatId, categorizationSource: "ai" },
-        });
+        // allocation updated — no mirror-write needed (Task 8 dropped the columns)
       }
     }
   }

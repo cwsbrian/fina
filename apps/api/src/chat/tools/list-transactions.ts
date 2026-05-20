@@ -10,7 +10,7 @@ const Args = z.object({
 
 type Args = z.infer<typeof Args>;
 
-export const listTransactions: ToolDef<Args, { transactions: Array<{ id: string; amount: string; merchantRaw: string; merchantNormalized: string | null; categoryId: string | null; occurredAt: string; needsReclassification: boolean; allocations: Array<{ id: string; categoryId: string | null; amount: string; source: string | null }> }> }> = {
+export const listTransactions: ToolDef<Args, { transactions: Array<{ id: string; amount: string; merchantRaw: string; merchantNormalized: string | null; occurredAt: string; needsReclassification: boolean; allocations: Array<{ id: string; categoryId: string | null; amount: string; source: string | null }> }> }> = {
   name: "listTransactions",
   description: "List the user's recent transactions, optionally filtered by time period.",
   args: Args,
@@ -26,7 +26,6 @@ export const listTransactions: ToolDef<Args, { transactions: Array<{ id: string;
         amount: true,
         merchantRaw: true,
         merchantNormalized: true,
-        categoryId: true,
         occurredAt: true,
         needsReclassification: true,
         allocations: {
@@ -41,7 +40,6 @@ export const listTransactions: ToolDef<Args, { transactions: Array<{ id: string;
         amount: r.amount.toString(),
         merchantRaw: r.merchantRaw,
         merchantNormalized: r.merchantNormalized,
-        categoryId: r.categoryId,                       // mirror; dropped Task 8
         occurredAt: r.occurredAt.toISOString(),
         needsReclassification: r.needsReclassification,
         allocations: r.allocations.map((a) => ({

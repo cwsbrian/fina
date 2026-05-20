@@ -23,8 +23,6 @@ export type ManualCategorizeResult = {
     currency: string;
     merchantRaw: string;
     merchantNormalized: string | null;
-    categoryId: string | null;             // mirror-write; dropped Task 8
-    categorizationSource: "manual" | "mapping" | "ai" | null;  // dropped Task 8
     needsReclassification: boolean;
     occurredAt: Date;
     allocations: Array<{
@@ -84,15 +82,10 @@ export async function applyManualCategorize(
       [{ categoryId: category.id, amount: Number(txRow.amount.toString()) }],
     );
 
-    // Mirror-write Transaction.categoryId / categorizationSource for reads
-    // not yet refactored. Dropped in Task 8.
+    // Update merchantNormalized on the transaction.
     await tx.transaction.update({
       where: { id: txRow.id },
-      data: {
-        merchantNormalized: merchantNorm,
-        categoryId: category.id,
-        categorizationSource: "manual",
-      },
+      data: { merchantNormalized: merchantNorm },
     });
 
     // Merchant mapping upsert (unchanged).
@@ -157,11 +150,6 @@ export async function applyManualCategorize(
       });
       if (upd.count > 0) {
         backfilledCount += 1;
-        // Mirror-write Transaction.categoryId for compat (Task 8 removes).
-        await tx.transaction.update({
-          where: { id: sib.id },
-          data: { categoryId: category.id, categorizationSource: "mapping" },
-        });
       }
     }
 
@@ -172,8 +160,7 @@ export async function applyManualCategorize(
     where: { id: input.txId },
     select: {
       id: true, amount: true, merchantRaw: true, merchantNormalized: true,
-      categoryId: true, categorizationSource: true, occurredAt: true,
-      needsReclassification: true,
+      occurredAt: true, needsReclassification: true,
       allocations: {
         select: { id: true, categoryId: true, amount: true, source: true },
         orderBy: { createdAt: "asc" },
@@ -188,8 +175,6 @@ export async function applyManualCategorize(
       currency: workspace.currency,
       merchantRaw: updated.merchantRaw,
       merchantNormalized: updated.merchantNormalized,
-      categoryId: updated.categoryId,
-      categorizationSource: updated.categorizationSource,
       needsReclassification: updated.needsReclassification,
       occurredAt: updated.occurredAt,
       allocations: updated.allocations.map((a) => ({

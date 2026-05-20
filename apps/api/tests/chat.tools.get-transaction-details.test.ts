@@ -27,10 +27,8 @@ describe("getTransactionDetails tool", () => {
         amount: "5.00",
         merchantRaw: "Starbucks 1234",
         merchantNormalized: "starbucks",
-        categoryId: child.id,
         occurredAt: new Date("2026-05-01T12:00:00Z"),
         rawData: {},
-        categorizationSource: "manual",
       },
     });
     txId = tx.id;
