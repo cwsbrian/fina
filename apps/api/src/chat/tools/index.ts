@@ -21,6 +21,11 @@ import { addRecurring } from "./add-recurring.js";
 import { listRecurring } from "./list-recurring.js";
 import { removeRecurring } from "./remove-recurring.js";
 import { presentConfirmCard } from "./present-confirm-card.js";
+import { addScheduledSpend } from "./add-scheduled-spend.js";
+import { listScheduledSpends } from "./list-scheduled-spends.js";
+import { listUnresolvedSchedules } from "./list-unresolved-schedules.js";
+import { dismissScheduledSpend } from "./dismiss-scheduled-spend.js";
+import { removeScheduledSpend } from "./remove-scheduled-spend.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -45,4 +50,9 @@ export const REGISTRY: ToolDef[] = [
   listRecurring as ToolDef,
   removeRecurring as ToolDef,
   presentConfirmCard as ToolDef,
+  addScheduledSpend as ToolDef,
+  listScheduledSpends as ToolDef,
+  listUnresolvedSchedules as ToolDef,
+  dismissScheduledSpend as ToolDef,
+  removeScheduledSpend as ToolDef,
 ];

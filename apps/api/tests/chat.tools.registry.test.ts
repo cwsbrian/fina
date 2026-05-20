@@ -167,7 +167,7 @@ describe("REGISTRY (plan 1c-budget)", () => {
   });
 
   it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(22);
+    expect(REGISTRY).toHaveLength(27);
   });
 
   it("setBudget and getBudget and compareSpendingVsBudget are all registered", () => {
@@ -199,7 +199,7 @@ describe("REGISTRY (plan 1c-merchant-map)", () => {
   });
 
   it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(22);
+    expect(REGISTRY).toHaveLength(27);
   });
 
   it("mapMerchantToCategory is registered", () => {
@@ -237,7 +237,7 @@ describe("REGISTRY (plan 1c-recurring-persist)", () => {
   });
 
   it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(22);
+    expect(REGISTRY).toHaveLength(27);
   });
 
   it("addRecurring, listRecurring, removeRecurring are all registered", () => {
@@ -269,7 +269,7 @@ describe("REGISTRY (plan 1c-confirmation)", () => {
   });
 
   it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(22);
+    expect(REGISTRY).toHaveLength(27);
   });
 
   it("presentConfirmCard is registered", () => {
