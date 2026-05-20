@@ -89,6 +89,20 @@ model ChatThread {
 }
 ```
 
+The inverse relation must also be added on `User`:
+
+```prisma
+model User {
+  // … existing fields …
+  chatThreads ChatThread[]   // NEW
+}
+```
+
+The existing `Workspace.chatThreads ChatThread[]` relation (declared
+on `Workspace` today) stays unchanged in shape — Prisma keeps the
+collection side as a plain array even when the `workspaceId` scalar
+becomes nullable.
+
 Index migration (raw SQL inside the Prisma migration). The existing
 index from `20260516000000_multi_thread_chat` is `(workspaceId,
 archivedAt, lastMessageAt DESC NULLS LAST)`; replace with the
@@ -195,14 +209,19 @@ POST /chat/threads/:tid/messages
   1. Find thread by id; assert thread.userId === session.userId (403 if not).
   2. Verify session.user is a member of body.workspaceId
      (404 not_member if not).
-  3. If thread.workspaceId IS NULL:
-       UPDATE chat_threads SET workspaceId = body.workspaceId
-         WHERE id = :tid AND workspaceId IS NULL;
-       (Conditional update is the race guard — see §6.1.)
-  4. Else if body.workspaceId !== thread.workspaceId:
-       400 workspace_mismatch.
+  3. If thread.workspaceId IS NOT NULL:
+       Validate body.workspaceId === thread.workspaceId, else 400
+       workspace_mismatch. boundWsId = thread.workspaceId.
+  4. Else (thread.workspaceId IS NULL):
+       Atomic conditional bind —
+         UPDATE chat_threads SET workspaceId = body.workspaceId
+           WHERE id = :tid AND workspaceId IS NULL;
+       On count == 1 → boundWsId = body.workspaceId.
+       On count == 0 → re-read the current workspaceId; it must equal
+       body.workspaceId, else 400 workspace_mismatch. boundWsId =
+       refetched value. (See §6.1 for the full race analysis.)
   5. Dispatch the message to the LLM with
-       ctx = { workspaceId: thread.workspaceId, userId, role }
+       ctx = { workspaceId: boundWsId, userId, role }
      — same as today.
 ```
 
@@ -232,12 +251,18 @@ When the brief cron runs for a user (Plan 2B), it will:
      WHERE userId = :user
        AND workspaceId IS NULL
        AND archivedAt IS NULL
-     ORDER BY lastMessageAt DESC NULLS FIRST, createdAt DESC
+     ORDER BY lastMessageAt DESC NULLS LAST, createdAt DESC
      LIMIT 1;
 2. If a row exists → append brief message to it.
 3. Else → INSERT a new ChatThread(userId, workspaceId=NULL),
    then append brief message.
 ```
+
+`NULLS LAST` is intentional: when a user has both an existing
+brief-thread (with `lastMessageAt` set to yesterday's brief) and a
+freshly-created empty thread (with `lastMessageAt = NULL`), the cron
+should reuse the existing one for continuity rather than picking the
+empty fresh one. Aligns with the new index direction in §2.1.
 
 The reuse-or-create rule produces:
 - One brief-thread per user that keeps growing while the user ignores
@@ -260,7 +285,13 @@ the schema and routes shape-compatible with the rule above.
 | `PATCH /workspaces/:wsId/chat/threads/:tid` | `PATCH /chat/threads/:tid` | Rename only. Same body shape `{ title }`. |
 | `DELETE /workspaces/:wsId/chat/threads/:tid` | `DELETE /chat/threads/:tid` | Soft archive (existing). |
 | `POST /workspaces/:wsId/chat/threads/:tid/messages` | `POST /chat/threads/:tid/messages` | Body now requires `workspaceId`. See §4.2. |
-| `POST /workspaces/:wsId/chat/threads/:tid/intents/:iid/consume` | `POST /chat/threads/:tid/intents/:iid/consume` | Verifies `intent.workspaceId === thread.workspaceId`. If thread is unbound, intent consumption is 400 (briefs don't issue intents). |
+
+**Intent consume route stays at `POST /workspaces/:id/intents/:intentId/consume`** — it is not nested under chat in the current code (verified
+`apps/api/src/routes/intents.ts`), and there is no reason to move it.
+The intent record already carries its own `workspaceId` and `userId`,
+and the existing route checks both. After this plan, the mobile/web
+client knows the workspace from the thread it's looking at and calls
+the consume route with that workspaceId in the URL — same as today.
 
 ### 5.1 Auth model
 
@@ -277,11 +308,13 @@ Better Auth — no rewrites.
 
 For `POST /chat/threads/:tid/messages`, the handler must still verify
 `session.user` is a member of `body.workspaceId` — otherwise the user
-could bind a stranger's workspace to their own thread. The check is:
+could bind a stranger's workspace to their own thread. The check uses
+the existing `@@unique([userId, workspaceId])` index on `Membership`
+(schema.prisma:127):
 
 ```ts
-const membership = await prisma.membership.findFirst({
-  where: { userId: session.userId, workspaceId: body.workspaceId },
+const membership = await prisma.membership.findUnique({
+  where: { userId_workspaceId: { userId: session.userId, workspaceId: body.workspaceId } },
   select: { role: true },
 });
 if (!membership) throw new HttpError(403, "not_member");
@@ -299,32 +332,40 @@ today.
 Handler logic (pseudocode):
 
 ```ts
-async function handleFirstMessage(tid, body, session) {
+async function handleMessage(tid, body, session) {
   const thread = await prisma.chatThread.findFirst({
     where: { id: tid, userId: session.userId },
     select: { workspaceId: true },
   });
   if (!thread) throw 404;
 
+  let boundWsId: string;
   if (thread.workspaceId !== null) {
+    // Already bound — validate the body matches.
     if (thread.workspaceId !== body.workspaceId) throw 400 "workspace_mismatch";
-    // Already bound; nothing to do here.
+    boundWsId = thread.workspaceId;
   } else {
-    // Atomic bind — conditional UPDATE.
+    // Unbound — attempt atomic conditional bind.
     const updated = await prisma.chatThread.updateMany({
       where: { id: tid, workspaceId: null },
       data: { workspaceId: body.workspaceId },
     });
-    if (updated.count === 0) {
-      // Lost the race; another first-message bound it. Re-check.
+    if (updated.count === 1) {
+      boundWsId = body.workspaceId;
+    } else {
+      // Lost the race; another first-message bound it. Re-check by reading
+      // the current workspaceId — it MUST match the body's value, else 400.
       const refetched = await prisma.chatThread.findFirstOrThrow({
         where: { id: tid }, select: { workspaceId: true },
       });
-      if (refetched.workspaceId !== body.workspaceId)
+      if (refetched.workspaceId === null || refetched.workspaceId !== body.workspaceId)
         throw 400 "workspace_mismatch";
+      boundWsId = refetched.workspaceId;
     }
   }
-  // … continue with message dispatch using thread.workspaceId.
+  // Dispatch the LLM turn using `boundWsId` (NOT the original `thread.workspaceId`,
+  // which is stale after the bind).
+  return runChatTurn({ ctx: { workspaceId: boundWsId, userId: session.userId, role }, … });
 }
 ```
 
@@ -365,10 +406,11 @@ plan:
 
 `ActionIntent.workspaceId` (from 1C-confirmation) stays NOT NULL.
 Intents are always created during an LLM turn that was bound to a
-workspace. Consuming an intent requires `thread.workspaceId ===
-intent.workspaceId`. Brief threads (`workspaceId IS NULL`) can't
-issue intents — the LLM during a brief isn't a turn but a one-shot
-text generation (Plan 2B detail).
+workspace. The consume route stays at
+`POST /workspaces/:id/intents/:intentId/consume` — unchanged. Brief
+threads (`workspaceId IS NULL`) can't issue intents because briefs
+are spec'd as one-shot text generation (Plan 2B detail), not full
+LLM turns with tool calling.
 
 ---
 
@@ -409,14 +451,27 @@ behavior and a hard reject in `POST /workspaces`.
   `body.workspaceId` returns 400 `workspace_mismatch`.
 - Message with `body.workspaceId` the user is not a member of returns
   403 `not_member`.
-- Race: two concurrent first-messages — exactly one binds, the other
-  either succeeds (matches) or 400s (mismatches). (Integration test
-  via `Promise.all` + assert exactly one win.)
+- Race: two concurrent first-messages targeting **different**
+  workspaceIds → exactly one binds, the other 400s
+  `workspace_mismatch`. (Integration test via `Promise.all`.)
+- Race: two concurrent first-messages targeting the **same**
+  workspaceId → both succeed; the thread is bound to that workspace
+  exactly once.
 - `PATCH /chat/threads/:tid` and `DELETE /chat/threads/:tid` authorize
   by `userId`, not by membership.
-- Intent consumption against a null-workspace thread returns 400.
-- Intent consumption against a bound thread with mismatching intent
-  workspaceId returns 400.
+- `GET /chat/threads/:tid` returns 403 for another user's thread —
+  cover both `archivedAt IS NULL` and `archivedAt IS NOT NULL`
+  variants of the target thread.
+- `GET /chat/threads` returns the user's threads when the user has
+  zero workspace memberships (edge case after invite revocation):
+  their null-workspace threads remain visible.
+
+### 8.1.1 Migration smoke
+
+A migration test that seeds a non-empty chat history (a thread + a
+few messages + one action_intent) and then runs the migration —
+asserts the chat tables come up empty, `action_intents` is empty,
+and `audit_events` rows are preserved (verify total count unchanged).
 
 ### 8.2 Removed tests
 
@@ -467,10 +522,10 @@ returning. Tests cover this.
 
 ### 9.5 Recency listing performance
 
-Today: `chat_threads_workspaceId_archivedAt_lastMessageAt_idx`. After:
-replaced with `chat_threads_userId_archivedAt_lastMessageAt_idx`. The
-new query shape is strictly per-user (with `archivedAt IS NULL`
-filter), so the index is correct for the listing in §5.
+The replacement index `chat_threads_userId_archivedAt_lastMessageAt_idx`
+(see §2.1) supports both the listing query in §5 and the brief-cron
+selection query in §4.4 — both order by `lastMessageAt DESC NULLS LAST`
+under a `userId` + `archivedAt IS NULL` filter.
 
 ### 9.6 v2 friction not addressed
 
