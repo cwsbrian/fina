@@ -599,6 +599,13 @@ type ScheduleRow = Prisma.ScheduledSpendGetPayload<{
   include: { matchedTx: { select: { removedAt: true } } };
 }>;
 
+// Note: `parseOccurredAt` (from validators.ts) returns a Date at noon UTC
+// (`+T12:00:00Z`). Postgres `@db.Date` truncates to the date component on
+// storage; reads return midnight UTC. So we never see the noon-UTC instant
+// after a round trip — but if reading `scheduledDate` straight from input
+// before storage, treat the noon-UTC quirk as benign (date components match
+// the user's intent in every supported tz).
+
 function deriveStatus(row: ScheduleRow, today: Date): ScheduledSpendStatus {
   // matched and tx still active → resolved-matched
   if (row.matchedTxId && row.matchedTx && row.matchedTx.removedAt === null) {
@@ -1183,25 +1190,21 @@ export async function matchScheduledSpends(
   });
 }
 
-/**
- * Given a wall-clock (year, monthOneBased, day) in `tz`, return the UTC instant
- * that corresponds to local midnight in that tz on that date.
- */
-function utcMidnightInTz(year: number, monthOneBased: number, day: number, tz: string): Date {
-  // Iterative offset solver — matches periods.ts pattern.
-  // Start at UTC midnight; partsInTz tells us what the local clock reads;
-  // adjust by the delta until the local clock reads (year, month, day, 00:00:00).
-  let guess = new Date(Date.UTC(year, monthOneBased - 1, day));
-  for (let i = 0; i < 3; i++) {
-    const p = partsInTz(guess, tz);
-    const wantedMs = Date.UTC(year, monthOneBased - 1, day, 0, 0, 0);
-    const haveMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
-    const delta = wantedMs - haveMs;
-    if (delta === 0) break;
-    guess = new Date(guess.getTime() + delta);
-  }
-  return guess;
-}
+// Reuse the existing helper from periods.ts. It is currently unexported —
+// before importing it here, export it from apps/api/src/chat/tools/periods.ts
+// (one-line edit: add `export` to the `function localMidnightToUtc(...)` definition
+// at periods.ts:70). Then import it at the top of this file:
+//   import { resolveUserTz, partsInTz, localMidnightToUtc } from "../chat/tools/periods.js";
+// and use it directly in place of the inline duplication.
+```
+
+**As part of this task, also export `localMidnightToUtc`** from `apps/api/src/chat/tools/periods.ts` — change `function localMidnightToUtc(...)` to `export function localMidnightToUtc(...)`. The function already exists (around line 70) and handles the DST/tz iteration correctly; duplicating it in `match.ts` invites drift.
+
+Then in `match.ts`, replace the day-range computation with:
+
+```ts
+const dayStart = localMidnightToUtc(yyyy, mm + 1, dd, ownerTz);
+const nextDayStart = localMidnightToUtc(yyyy, mm + 1, dd + 1, ownerTz);
 ```
 
 ### Step 4: Run match tests, verify PASS
@@ -2534,17 +2537,19 @@ export function extractTargetId(action: string, result: unknown): string | null 
 
 ### Step 3: Update present-confirm-card description
 
-Edit `apps/api/src/chat/tools/present-confirm-card.ts`. Find the description text (around line 20-30) that lists confirmable tool names. Extend:
+Edit `apps/api/src/chat/tools/present-confirm-card.ts`. The file contains a literal description string (around line 21) of the form:
 
-```ts
-// Before:
-"createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring"
-
-// After:
-"createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring, addScheduledSpend, dismissScheduledSpend, removeScheduledSpend"
+```
+"... accept_action.tool must be one of: createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring. Server validates ..."
 ```
 
-(The exact string format may vary — match what's there.)
+Splice the three new tool names into the comma list (after `removeRecurring`, before the period):
+
+```
+"... accept_action.tool must be one of: createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring, addScheduledSpend, dismissScheduledSpend, removeScheduledSpend. Server validates ..."
+```
+
+Preserve the surrounding text exactly — only the comma-list inside the sentence is extended.
 
 ### Step 4: Run intent + audit tests
 
@@ -2785,20 +2790,28 @@ export type CompareSpendingOutput = {
 
 Find `compareSpendingVsBudgetService`. After the existing `sums` groupBy (around line 162-175), add the planned aggregation. Note: the existing function already computes `periodStart`, `gte`, `lt`, and resolves user tz indirectly. Use those.
 
+Add to the existing imports at the top of `apps/api/src/budgets/service.ts`:
 ```ts
-import { resolveUserTz, dateKeyInTz } from "../chat/tools/periods.js";
+import { resolveUserTz, dateKeyInTz, partsInTz } from "../chat/tools/periods.js";
+```
 
-// ... after the existing `sums` groupBy that computes spent ...
+After the existing `sums` groupBy that computes spent, append the planned aggregation:
+
+```ts
 
 // 1. Compute schedule date bounds (calendar DATE, not tx instant range).
 const tz = await resolveUserTz(ctx.userId);
-const todayParts = (await import("../chat/tools/periods.js")).partsInTz(new Date(), tz);
+const todayParts = partsInTz(new Date(), tz);
 const todayDateOnly = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day));
 // periodStart and the spent range gte/lt are already computed earlier in this function.
 // For next_month, periodStart is set such that `lt = periodStart` makes the tx range
 // zero-length. Schedule bounds need their own calendar DATEs:
 const scheduleLowerBound = todayDateOnly >= periodStart ? todayDateOnly : periodStart;
-const scheduleUpperBound = computeMonthEnd(periodStart, offsetFor(input.period));
+// scheduleUpperBound = first-of-month of (periodStart + 1 month), as a UTC DATE.
+// daysInMonth already exists; compute via Date.UTC arithmetic.
+const psYear = periodStart.getUTCFullYear();
+const psMonth = periodStart.getUTCMonth();  // 0-11
+const scheduleUpperBound = new Date(Date.UTC(psYear, psMonth + 1, 1));
 
 let plannedByCat = new Map<string, Prisma.Decimal>();
 if (scheduleLowerBound < scheduleUpperBound) {
