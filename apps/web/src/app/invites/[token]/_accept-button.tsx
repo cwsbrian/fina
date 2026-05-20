@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiFetch } from "../../../lib/api";
 import { setActiveWorkspaceId } from "../../../lib/active-workspace";
+import { WebIcon } from "../../../components/WebIcon";
+import styles from "../../../components/auth.module.css";
 
 export function AcceptButton({ token }: { token: string }) {
   const router = useRouter();
@@ -29,22 +31,24 @@ export function AcceptButton({ token }: { token: string }) {
   }
 
   return (
-    <div>
+    <>
       <button
+        type="button"
         onClick={accept}
         disabled={busy}
-        style={{
-          padding: "12px 24px",
-          background: "#111",
-          color: "#fff",
-          borderRadius: 8,
-          border: "none",
-          cursor: busy ? "default" : "pointer",
-        }}
+        className={styles.btn}
       >
-        {busy ? "Joining..." : "Accept invite"}
+        {busy ? "Joining…" : "Accept invite"}
+        {!busy && <WebIcon name="check" size={16} strokeWidth={2.2} />}
       </button>
-      {err && <p style={{ color: "#c00", marginTop: 12 }}>{err}</p>}
-    </div>
+      {err && (
+        <div
+          className={`${styles.fieldHelper} ${styles.fieldHelperError}`}
+          style={{ marginTop: 14, textAlign: "center" }}
+        >
+          {err}
+        </div>
+      )}
+    </>
   );
 }

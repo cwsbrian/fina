@@ -5,7 +5,10 @@ type IconName =
   | "check"
   | "lock"
   | "users"
-  | "chevLeft";
+  | "chevLeft"
+  | "alert"
+  | "clock"
+  | "arrowRight";
 
 type Props = {
   name: IconName;
@@ -80,5 +83,27 @@ function paths(name: IconName) {
       );
     case "chevLeft":
       return <polyline points="15 18 9 12 15 6" />;
+    case "alert":
+      return (
+        <>
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+          <line x1="12" y1="9" x2="12" y2="13" />
+          <line x1="12" y1="17" x2="12.01" y2="17" />
+        </>
+      );
+    case "clock":
+      return (
+        <>
+          <circle cx="12" cy="12" r="10" />
+          <polyline points="12 6 12 12 16 14" />
+        </>
+      );
+    case "arrowRight":
+      return (
+        <>
+          <line x1="5" y1="12" x2="19" y2="12" />
+          <polyline points="12 5 19 12 12 19" />
+        </>
+      );
   }
 }
