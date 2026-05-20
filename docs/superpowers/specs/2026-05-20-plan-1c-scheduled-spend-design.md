@@ -504,18 +504,38 @@ for (const a of allocs) {
   txIdsByBucket.get(key)!.add(a.transaction.id);
 }
 
+// 3b. CRITICAL: subtract tx ids already consumed by matched schedules from the
+//     per-bucket tx pool. Without this, a tx already claimed by Schedule A
+//     would be counted again as "available" for covering Schedule B in the
+//     same bucket, falsely zeroing out planned.
+const matchedSchedules = await prisma.scheduledSpend.findMany({
+  where: {
+    workspaceId,
+    matchedTxId: { not: null },
+    categoryId: { in: budgetCategoryIds },
+    scheduledDate: { gte: scheduleLowerBound, lt: scheduleUpperBound },
+  },
+  select: { matchedTxId: true, scheduledDate: true, categoryId: true },
+});
+for (const m of matchedSchedules) {
+  const key = scheduleBucketKey(m.scheduledDate, m.categoryId);
+  txIdsByBucket.get(key)?.delete(m.matchedTxId!);
+}
+
 // 4. Per-bucket consumption — sort schedules by (createdAt asc, id asc), mark first
-//    min(T, S) as covered. Already-sorted from the orderBy on candidates query.
+//    min(T_remaining, S) as covered. Candidates are already sorted from the orderBy.
 const schedulesByBucket = groupBy(candidates, (s) => scheduleBucketKey(s.scheduledDate, s.categoryId));
 const planned = new Map<string, Prisma.Decimal>();  // categoryId → sum
 for (const [bucket, schedules] of schedulesByBucket) {
-  const T = txIdsByBucket.get(bucket)?.size ?? 0;
-  const uncovered = schedules.slice(T);  // skip first T as covered; rest contribute to planned
+  const T = txIdsByBucket.get(bucket)?.size ?? 0;  // tx NOT already consumed by matched schedules
+  const uncovered = schedules.slice(T);  // skip first T as covered by remaining tx
   for (const s of uncovered) {
     planned.set(s.categoryId, (planned.get(s.categoryId) ?? new Prisma.Decimal(0)).plus(s.amount));
   }
 }
 ```
+
+**Why step 3b matters**: scenario — 2 schedules same day+category, 1 tx, cron matched Schedule A. Without 3b: budget loads only Schedule B (unmatched), counts 1 covering tx in the bucket, applies `slice(1)` to skip it, planned = $0. WRONG — the tx is already consumed by Schedule A. With 3b: the tx is removed from the bucket pool, T = 0, Schedule B is uncovered, planned = $100.
 
 Two distinct date-key functions, two distinct purposes:
 - Schedule's `scheduledDate` is a Postgres `DATE` (wall-clock May 15 with no time/tz) → key with `toISOString().slice(0, 10)`.
