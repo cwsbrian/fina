@@ -4,6 +4,7 @@ import { router } from "expo-router";
 import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA } from "../../src/design/AuthButtons";
+import { authClient } from "../../src/auth/client";
 import { colors, type } from "../../src/design/tokens";
 
 export default function ForgotPasswordScreen() {
@@ -18,9 +19,13 @@ export default function ForgotPasswordScreen() {
     setBusy(true);
     setErr(null);
     try {
-      // TODO: Better Auth forgetPassword integration
-      // await authClient.forgetPassword({ email, redirectTo: "fina://reset-password" });
-      await new Promise((r) => setTimeout(r, 300));
+      const result = await authClient.requestPasswordReset({
+        email: email.trim(),
+        redirectTo: "fina://reset-password",
+      });
+      if (result.error) {
+        throw new Error(result.error.message ?? "Could not send reset link");
+      }
       router.push({
         pathname: "/(auth)/reset-sent",
         params: { email: email.trim() },

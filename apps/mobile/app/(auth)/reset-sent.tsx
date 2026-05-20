@@ -106,11 +106,10 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(59,123,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
-    alignSelf: "center",
     marginBottom: 24,
   },
-  title: { ...type.authTitle, color: colors.ink, textAlign: "center" },
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
+  title: { ...type.authTitle, color: colors.ink},
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8 },
   subStrong: { color: colors.ink, fontWeight: "600" },
   checklist: {
     marginTop: 24,

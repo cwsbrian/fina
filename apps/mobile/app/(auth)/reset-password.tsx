@@ -5,6 +5,7 @@ import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA } from "../../src/design/AuthButtons";
 import { Icon } from "../../src/design/Icon";
+import { authClient } from "../../src/auth/client";
 import { colors, type } from "../../src/design/tokens";
 
 function strengthOf(pw: string): string | undefined {
@@ -52,12 +53,20 @@ export default function ResetPasswordScreen() {
 
   async function submit() {
     if (!canSubmit) return;
+    if (!params.token) {
+      setErr("Missing reset token. Open the link from your email again.");
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
-      // TODO: Better Auth resetPassword with token
-      // await authClient.resetPassword({ newPassword: pw, token: params.token });
-      await new Promise((r) => setTimeout(r, 300));
+      const result = await authClient.resetPassword({
+        newPassword: pw,
+        token: params.token,
+      });
+      if (result.error) {
+        throw new Error(result.error.message ?? "Could not update password");
+      }
       router.replace("/(auth)/reset-done");
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Could not update password");
@@ -71,7 +80,7 @@ export default function ResetPasswordScreen() {
       <View style={styles.head}>
         <Text style={styles.title}>Pick a new password.</Text>
         <Text style={styles.sub}>
-          Make it something you&apos;ll remember — at least 8 characters.
+          Make it something you&apos;ll remember, at least 8 characters.
         </Text>
       </View>
 
