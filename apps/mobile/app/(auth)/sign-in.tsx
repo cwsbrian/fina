@@ -93,7 +93,7 @@ export default function SignInScreen() {
           New to Fina?{" "}
           <Text
             style={styles.footLink}
-            onPress={() => router.replace("/(auth)/sign-up")}
+            onPress={() => router.push("/(auth)/sign-up")}
           >
             Create an account
           </Text>

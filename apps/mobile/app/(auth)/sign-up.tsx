@@ -48,7 +48,10 @@ export default function SignUpScreen() {
   return (
     <AuthScaffold
       centered
-      onBack={() => router.replace("/(auth)/sign-in")}
+      onBack={() => {
+        if (router.canGoBack()) router.back();
+        else router.replace("/(auth)/sign-in");
+      }}
     >
       <View style={styles.head}>
         <Text style={styles.title}>Create your account.</Text>
@@ -113,7 +116,10 @@ export default function SignUpScreen() {
           Already have an account?{" "}
           <Text
             style={styles.footLink}
-            onPress={() => router.replace("/(auth)/sign-in")}
+            onPress={() => {
+              if (router.canGoBack()) router.back();
+              else router.push("/(auth)/sign-in");
+            }}
           >
             Sign in
           </Text>
