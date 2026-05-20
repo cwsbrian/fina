@@ -5,6 +5,7 @@ import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA } from "../../src/design/AuthButtons";
 import { authClient } from "../../src/auth/client";
+import { env } from "../../src/env";
 import { colors, type } from "../../src/design/tokens";
 
 export default function ForgotPasswordScreen() {
@@ -21,7 +22,7 @@ export default function ForgotPasswordScreen() {
     try {
       const result = await authClient.requestPasswordReset({
         email: email.trim(),
-        redirectTo: "fina://reset-password",
+        redirectTo: `${env.EXPO_PUBLIC_WEB_URL}/reset-password`,
       });
       if (result.error) {
         throw new Error(result.error.message ?? "Could not send reset link");
