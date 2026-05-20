@@ -1,33 +1,26 @@
-const { withNxMetro } = require("@nx/expo");
-const { getDefaultConfig } = require("@expo/metro-config");
-const { mergeConfig } = require("metro-config");
+const path = require("path");
+const { getDefaultConfig } = require("expo/metro-config");
 
-const defaultConfig = getDefaultConfig(__dirname);
-const { assetExts, sourceExts } = defaultConfig.resolver;
+const projectRoot = __dirname;
+const workspaceRoot = path.resolve(projectRoot, "../..");
 
-/**
- * Metro configuration
- * https://reactnative.dev/docs/metro
- *
- * @type {import('metro-config').MetroConfig}
- */
-const customConfig = {
-  cacheVersion: "mobile",
-  transformer: {
-    babelTransformerPath: require.resolve("react-native-svg-transformer"),
-  },
-  resolver: {
-    assetExts: assetExts.filter((ext) => ext !== "svg"),
-    sourceExts: [...sourceExts, "cjs", "mjs", "svg"],
-  },
+const config = getDefaultConfig(projectRoot);
+
+// pnpm monorepo: watch the workspace root so changes outside apps/mobile
+// are picked up, and let Metro fall through to the hoisted node_modules.
+config.watchFolders = [workspaceRoot];
+config.resolver.nodeModulesPaths = [
+  path.resolve(projectRoot, "node_modules"),
+  path.resolve(workspaceRoot, "node_modules"),
+];
+
+// SVG support via react-native-svg-transformer
+const { assetExts, sourceExts } = config.resolver;
+config.transformer = {
+  ...config.transformer,
+  babelTransformerPath: require.resolve("react-native-svg-transformer"),
 };
+config.resolver.assetExts = assetExts.filter((ext) => ext !== "svg");
+config.resolver.sourceExts = [...sourceExts, "svg"];
 
-module.exports = withNxMetro(mergeConfig(defaultConfig, customConfig), {
-  // Change this to true to see debugging info.
-  // Useful if you have issues resolving modules
-  debug: false,
-  // all the file extensions used for imports other than 'ts', 'tsx', 'js', 'jsx', 'json'
-  extensions: [],
-  // Specify folders to watch, in addition to Nx defaults (workspace libraries and node_modules)
-  watchFolders: [],
-});
+module.exports = config;
