@@ -35,7 +35,17 @@ export function createAuth(env: Env) {
         ? []
         : ["http://localhost:3000", "http://localhost:3100", "fina://", ...devOrigins],
     database: prismaAdapter(prisma, { provider: "postgresql" }),
-    emailAndPassword: { enabled: true, requireEmailVerification: false },
+    emailAndPassword: {
+      enabled: true,
+      requireEmailVerification: false,
+      sendResetPassword: async ({ user, url }) => {
+        await sendEmail(env.RESEND_API_KEY, env.EMAIL_FROM, {
+          to: user.email,
+          subject: "Reset your Fina password",
+          text: `Hi,\n\nWe got a request to reset your Fina password. Tap the link below to pick a new one:\n\n${url}\n\nThis link expires in 1 hour. If you didn't ask for this, you can safely ignore this email.`,
+        });
+      },
+    },
     socialProviders,
     plugins: [
       magicLink({

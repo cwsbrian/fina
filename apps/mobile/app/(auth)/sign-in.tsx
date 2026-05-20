@@ -1,95 +1,143 @@
 import { useState } from "react";
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
-import { useRouter } from "expo-router";
-import { signIn, signUp } from "../../src/auth/client";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { router } from "expo-router";
+import { signIn } from "../../src/auth/client";
+import { AuthScaffold } from "../../src/design/AuthScaffold";
+import { AuthField } from "../../src/design/AuthField";
+import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
+import { Wordmark } from "../../src/design/Wordmark";
+import { colors, type } from "../../src/design/tokens";
 
 export default function SignInScreen() {
-  const router = useRouter();
   const [email, setEmail] = useState("");
-  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"signIn" | "signUp">("signUp");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  const canSubmit = email.includes("@") && password.length >= 8;
+
   async function submit() {
+    if (!canSubmit) return;
     setBusy(true);
     setErr(null);
     try {
-      if (mode === "signUp") {
-        const result = await signUp.email({ email, password, name: name || email.split("@")[0]! });
-        if (result.error) throw new Error(result.error.message ?? "Sign up failed");
-      } else {
-        const result = await signIn.email({ email, password });
-        if (result.error) throw new Error(result.error.message ?? "Sign in failed");
+      const result = await signIn.email({ email: email.trim(), password });
+      if (result.error) {
+        throw new Error(result.error.message ?? "Sign in failed");
       }
       router.replace("/(tabs)");
     } catch (e) {
-      setErr(e instanceof Error ? e.message : "Auth failed");
+      setErr(e instanceof Error ? e.message : "Sign in failed");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <View style={styles.root}>
-      <Text style={styles.title}>Fina</Text>
-      <Text style={styles.subtitle}>Your AI financial advisor</Text>
+    <AuthScaffold centered hideBack>
+      <View style={styles.brand}>
+        <Wordmark size={56} />
+      </View>
+      <View style={styles.head}>
+        <Text style={styles.title}>Welcome back.</Text>
+        <Text style={styles.sub}>Pick up right where you left off.</Text>
+      </View>
 
-      <Pressable onPress={() => setMode(mode === "signUp" ? "signIn" : "signUp")}>
-        <Text style={styles.toggle}>
-          {mode === "signUp" ? "Already have an account? Sign in" : "New here? Sign up"}
-        </Text>
-      </Pressable>
+      <View style={styles.form}>
+        <AuthField
+          label="Email"
+          value={email}
+          onChangeText={setEmail}
+          autoCapitalize="none"
+          autoComplete="email"
+          keyboardType="email-address"
+          textContentType="emailAddress"
+        />
+        <AuthField
+          label="Password"
+          value={password}
+          onChangeText={setPassword}
+          secret
+          textContentType="password"
+        />
+      </View>
 
-      {mode === "signUp" && (
-        <TextInput style={styles.input} placeholder="Your name" value={name} onChangeText={setName} />
-      )}
-      <TextInput
-        style={styles.input}
-        placeholder="email@example.com"
-        autoCapitalize="none"
-        keyboardType="email-address"
-        value={email}
-        onChangeText={setEmail}
-      />
-      <TextInput
-        style={styles.input}
-        placeholder="Password (8+ characters)"
-        secureTextEntry
-        value={password}
-        onChangeText={setPassword}
-      />
-      <Pressable
-        style={styles.button}
-        disabled={busy || !email || password.length < 8}
-        onPress={submit}
-      >
-        {busy ? (
-          <ActivityIndicator color="#fff" />
-        ) : (
-          <Text style={styles.buttonText}>{mode === "signUp" ? "Create account" : "Sign in"}</Text>
-        )}
-      </Pressable>
+      <View style={styles.helperRow}>
+        <Pressable hitSlop={8} onPress={() => router.push("/(auth)/forgot")}>
+          <Text style={styles.helperLink}>Forgot password?</Text>
+        </Pressable>
+      </View>
+
       {err && <Text style={styles.error}>{err}</Text>}
-    </View>
+
+      <AuthCTA
+        label="Sign in"
+        onPress={submit}
+        busy={busy}
+        disabled={!canSubmit}
+        style={{ marginTop: 12 }}
+      />
+
+      <View style={styles.divider}>
+        <View style={styles.dividerLine} />
+        <Text style={styles.dividerText}>OR</Text>
+        <View style={styles.dividerLine} />
+      </View>
+
+      <SocialButton provider="google" label="Continue with Google" />
+      <View style={{ height: 10 }} />
+      <SocialButton provider="apple" label="Continue with Apple" />
+      <View style={{ height: 10 }} />
+      <SocialButton provider="magic" label="Email me a magic link" />
+      <Text style={styles.footText}>
+          New to Fina?{" "}
+          <Text
+            style={styles.footLink}
+            onPress={() => router.push("/(auth)/sign-up")}
+          >
+            Create an account
+          </Text>
+        </Text>
+    </AuthScaffold>
   );
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: "#fff" },
-  title: { fontSize: 36, fontWeight: "700", marginBottom: 4 },
-  subtitle: { fontSize: 14, opacity: 0.6, marginBottom: 24 },
-  toggle: { fontSize: 14, color: "#06f", marginBottom: 16 },
-  input: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 8,
-    padding: 14,
-    fontSize: 16,
-    marginBottom: 12,
+  brand: { alignItems: "center", marginBottom: 12 },
+  head: { marginTop: 12 },
+  title: { ...type.authTitle, color: colors.ink, textAlign: "center"},
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
+  form: { gap: 10, marginTop: 28 },
+  helperRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginTop: 10,
   },
-  button: { backgroundColor: "#111", borderRadius: 8, padding: 14, alignItems: "center" },
-  buttonText: { color: "#fff", fontWeight: "600", fontSize: 16 },
-  error: { color: "#c00", marginTop: 12 },
+  helperLink: {
+    ...type.bodySm,
+    color: colors.ink,
+    fontWeight: "600",
+    padding: 4,
+  },
+  divider: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginVertical: 18,
+  },
+  dividerLine: { flex: 1, height: 1, backgroundColor: colors.hairline },
+  dividerText: {
+    ...type.caption,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  error: {
+    marginTop: 12,
+    ...type.bodySm,
+    color: colors.down,
+    textAlign: "center",
+  },
+  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
+  footLink: { color: colors.primary, fontWeight: "600" },
 });

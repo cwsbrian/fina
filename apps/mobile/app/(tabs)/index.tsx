@@ -1,7 +1,11 @@
 import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
+import { router } from "expo-router";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useSession, signOut } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
+import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
+import { clearActiveWorkspaceId } from "../../src/workspace/active";
 
 type Me = {
   user: { id: string; email: string; tz: string; locale: string };
@@ -65,6 +69,22 @@ export default function Home() {
       <Pressable style={styles.btn} onPress={() => signOut()}>
         <Text style={styles.btnText}>Sign out</Text>
       </Pressable>
+
+      {__DEV__ && (
+        <Pressable
+          style={[styles.btn, styles.devBtn]}
+          onPress={async () => {
+            await signOut();
+            await AsyncStorage.removeItem(ONBOARDING_SEEN_KEY);
+            await clearActiveWorkspaceId();
+            router.replace("/");
+          }}
+        >
+          <Text style={[styles.btnText, styles.devBtnText]}>
+            DEV · Reset (sign out + clear onboarding)
+          </Text>
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -85,4 +105,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   btnText: { fontSize: 16 },
+  devBtn: { marginTop: 12, borderColor: "#f59e0b", borderStyle: "dashed" },
+  devBtnText: { fontSize: 12, color: "#b45309" },
 });
