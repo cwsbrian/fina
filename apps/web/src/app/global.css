@@ -1,11 +1,19 @@
 :root {
   --color-canvas: #f6f4ef;
+  --color-surface-soft: #efeae0;
+  --color-surface-strong: #e6e1d6;
   --color-ink: #0a0b0d;
   --color-body: #5b616e;
   --color-muted: #7c828a;
   --color-muted-soft: #a8acb3;
   --color-hairline: #dee1e6;
   --color-accent: #d97743;
+  --color-primary: #3b7bff;
+  --color-primary-active: #2a64db;
+  --color-primary-disabled: #bccae0;
+  --color-on-primary: #ffffff;
+  --color-up: #05b169;
+  --color-down: #cf202f;
 }
 
 *,
