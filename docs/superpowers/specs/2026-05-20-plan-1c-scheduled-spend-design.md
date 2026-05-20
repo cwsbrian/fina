@@ -303,8 +303,13 @@ For each active workspace:
    });
    const usedTxIds = new Set<string>(alreadyMatchedRows.map((r) => r.matchedTxId!));
    ```
-5. Iterate candidates with the usedTxIds set, adding to it as each schedule consumes a tx:
+5. Iterate candidates with the usedTxIds set keyed by `(txId, categoryId)` so a split tx can match ONE schedule per its allocation categories — matching the budget anti-join's per-bucket consumption model (§6.1):
    ```ts
+   // Pre-load: existing matches keyed by (matchedTxId, categoryId of the schedule)
+   const usedTxAllocations = new Set<string>(
+     alreadyMatchedRows.map((r) => `${r.matchedTxId}|${r.categoryId}`),
+   );
+
    for (const candidate of candidates) {
      const dayStart = ... // start of candidate.scheduledDate in workspace tz
      const nextDayStart = ... // dayStart + 1 day
@@ -312,23 +317,33 @@ For each active workspace:
        where: {
          workspaceId,
          removedAt: null,
+         amount: { gt: 0 },  // exclude refund/credit tx — only positive spend matches
          occurredAt: { gte: dayStart, lt: nextDayStart },
-         allocations: { some: { categoryId: candidate.categoryId } },
-         id: { notIn: Array.from(usedTxIds) },  // excludes both this-run AND prior-run matches
+         allocations: {
+           some: { categoryId: candidate.categoryId, amount: { gt: 0 } },  // positive allocation
+         },
        },
        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
        select: { id: true },
      });
-     if (match) {
+     // Walk forward through matching tx (small N per day) skipping already-claimed (tx, category) pairs:
+     // For typical workloads candidate count is small; the where-clause excludes most tx already.
+     // If the first match is already consumed for this category, try the next one.
+     // (Implementation detail: load matches as findMany with take=N and iterate.)
+     if (match && !usedTxAllocations.has(`${match.id}|${candidate.categoryId}`)) {
        await tx.scheduledSpend.update({
          where: { id: candidate.id },
          data: { matchedTxId: match.id },
        });
-       usedTxIds.add(match.id);
+       usedTxAllocations.add(`${match.id}|${candidate.categoryId}`);
      }
    }
    ```
 6. Schedules with no match remain `matchedTxId: null` — picked up by daily-brief later.
+
+**Consumption model alignment**: keying `usedTxAllocations` by `(txId, categoryId)` matches the budget anti-join's per-bucket consumption (§6.1). A split tx with `[Health $60, Grocery $40]` can match BOTH a Health schedule AND a Grocery schedule (one each). Without this alignment, cron and budget would disagree: a split tx might match 1 Health schedule via cron, then anti-join in budget could also "cover" a Grocery schedule even though cron didn't match anything in Grocery.
+
+**Refund guard rationale**: `amount: { gt: 0 }` on both tx and allocation filters out refund/credit tx — those should NOT silently resolve a planned expense. Refunds are a separate UX concern (the user expected to spend $300, the refund means they spent less or paid for the wrong thing). Surfacing the schedule as unresolved lets the brief ask.
 
 The pre-load step is what makes the one-to-one rule durable across cron runs: a tx already matched by Schedule A in run 1 will NOT be matched by Schedule B in run 2 (or later). Without this pre-load, run 2 starts with an empty `usedTxIds` and could double-match.
 
@@ -409,14 +424,28 @@ For each `(scheduledDate, categoryId)` bucket among candidate schedules:
 **Why cardinality matters**: with 2 schedules on the same day+category and 1 covering tx, exactly 1 schedule is covered (matched implicitly) and the other contributes to `planned`. A naive `Set<date|categoryId>` would incorrectly exclude both.
 
 **Prisma sketch**:
+
+⚠ Important: schedule date range is the **calendar month** bounds, NOT the tx instant range. The existing `compareSpendingVsBudgetService` deliberately sets `lt = periodStart` for `next_month` (a zero-length tx range so spent=0) — this would make planned schedules empty too. Schedule period needs its own calendar-based DATE bounds:
+
 ```ts
-// 1. Load candidate schedules
-const periodStartDate = new Date(Math.max(today.getTime(), period.gte.getTime()));
+// Compute schedule period bounds based on the budget period (calendar-aligned).
+// For "this_month": [periodStartDate, firstOfNextMonth)
+// For "last_month": [firstOfLastMonth, periodStartDate)
+// For "next_month": [periodStartDate, firstOfNextMonthAfter)
+const scheduleLowerBound = (() => {
+  if (input.period === "this_month") return new Date(Math.max(today.getTime(), periodStart.getTime()));
+  if (input.period === "last_month") return periodStart;
+  if (input.period === "next_month") return periodStart;  // future schedules in next month
+  throw new Error("unreachable");
+})();
+const scheduleUpperBound = computeMonthEnd(periodStart, offsetFor(input.period));
+
+// 1. Load candidate schedules — DATE bounds, NOT tx-instant bounds.
 const candidates = await prisma.scheduledSpend.findMany({
   where: {
     workspaceId,
     categoryId: { in: budgetCategoryIds },
-    scheduledDate: { gte: periodStartDate, lt: period.lt },  // proper period bounds
+    scheduledDate: { gte: scheduleLowerBound, lt: scheduleUpperBound },
     matchedTxId: null,
     dismissedAt: null,
   },
