@@ -2600,161 +2600,142 @@ EOF
 
 ### Step 1: Write failing budget tests
 
-Append to `apps/api/tests/budgets.service.test.ts`:
+The existing `describe("compareSpendingVsBudgetService", ...)` block in `apps/api/tests/budgets.service.test.ts` already has a per-`it` setup creating `userId`, `workspaceId`, `categoryId`, `acctId` via prisma directly + a `seedTx(occurredAt, amount, overrideCategoryId?)` helper that creates tx + matching allocation. **Add the new tests INSIDE that existing describe block** so they inherit the setup. Use the existing `seedTx` helper to seed covering tx (it correctly creates the `transactionAllocation` row that the anti-join needs).
+
+Append to `apps/api/tests/budgets.service.test.ts` inside the `compareSpendingVsBudgetService` describe block:
 
 ```ts
-describe("compareSpendingVsBudget — planned aggregation", () => {
-  it("includes upcoming schedule in planned", async () => {
-    const { wsId, userId } = await setupEditor("bp-up@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "BPcat" } });
-    await setBudgetService({ workspaceId: wsId, userId }, { categoryId: cat.id, amount: 200, period: "this_month" });
-    // Compute today + 1 day to keep it in current month
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await prisma.scheduledSpend.create({
-      data: {
-        workspaceId: wsId, categoryId: cat.id,
-        amount: "60", scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
-      },
-    });
-    const r = await compareSpendingVsBudgetService({ workspaceId: wsId, userId }, { period: "this_month" });
-    const item = r.items.find((i) => i.categoryId === cat.id)!;
-    expect(item.planned).toBe("60.00");
-    expect(item.plannedPct).toBeGreaterThan(0);
+// All tests use the existing beforeEach-bound userId/workspaceId/categoryId and the seedTx helper.
+
+it("planned: includes upcoming schedule", async () => {
+  await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  await prisma.scheduledSpend.create({
+    data: {
+      workspaceId, categoryId,
+      amount: "60",
+      scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
+    },
+  });
+  const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+  const item = r.items.find((i) => i.categoryId === categoryId)!;
+  expect(item.planned).toBe("60.00");
+  expect(item.plannedPct).toBeGreaterThan(0);
+});
+
+it("planned: excludes past-unresolved", async () => {
+  await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  await prisma.scheduledSpend.create({
+    data: {
+      workspaceId, categoryId,
+      amount: "70",
+      scheduledDate: new Date(Date.UTC(yesterday.getUTCFullYear(), yesterday.getUTCMonth(), yesterday.getUTCDate())),
+    },
+  });
+  const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+  const item = r.items.find((i) => i.categoryId === categoryId)!;
+  expect(item.planned).toBe("0.00");
+});
+
+it("planned: excludes dismissed", async () => {
+  await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  await prisma.scheduledSpend.create({
+    data: {
+      workspaceId, categoryId,
+      amount: "40",
+      scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
+      dismissedAt: new Date(),
+    },
+  });
+  const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+  const item = r.items.find((i) => i.categoryId === categoryId)!;
+  expect(item.planned).toBe("0.00");
+});
+
+it("planned: excludes matched (active tx)", async () => {
+  await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+  const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  // seedTx creates tx + allocation in `categoryId`
+  await seedTx(
+    new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate(), 12, 0, 0)),
+    "55",
+  );
+  const tx = await prisma.transaction.findFirstOrThrow({
+    where: { workspaceId },
+    orderBy: { createdAt: "desc" },
+  });
+  await prisma.scheduledSpend.create({
+    data: {
+      workspaceId, categoryId,
+      amount: "55",
+      scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
+      matchedTxId: tx.id,
+    },
+  });
+  const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+  const item = r.items.find((i) => i.categoryId === categoryId)!;
+  expect(item.planned).toBe("0.00");
+});
+
+it("planned anti-join: today schedule WITHOUT covering tx → planned=amount", async () => {
+  await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+  const today = new Date();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  await prisma.scheduledSpend.create({
+    data: { workspaceId, categoryId, amount: "80", scheduledDate: todayUTC },
+  });
+  const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+  const item = r.items.find((i) => i.categoryId === categoryId)!;
+  expect(item.planned).toBe("80.00");
+});
+
+it("planned anti-join: today schedule WITH covering tx → planned=0", async () => {
+  await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+  const today = new Date();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+  await prisma.scheduledSpend.create({
+    data: { workspaceId, categoryId, amount: "80", scheduledDate: todayUTC },
+  });
+  // seedTx creates tx + allocation in categoryId — required for the anti-join to find it
+  await seedTx(
+    new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 12, 0, 0)),
+    "80",
+  );
+  const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+  const item = r.items.find((i) => i.categoryId === categoryId)!;
+  expect(item.planned).toBe("0.00");
+});
+
+it("planned: two same-day same-cat schedules + one covering tx → second still planned", async () => {
+  await setBudgetService({ workspaceId, userId }, { categoryId, amount: 500, period: "this_month" });
+  const today = new Date();
+  const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+
+  // seedTx creates a tx + allocation with the right category
+  await seedTx(
+    new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 12, 0, 0)),
+    "30",
+  );
+  const tx = await prisma.transaction.findFirstOrThrow({
+    where: { workspaceId },
+    orderBy: { createdAt: "desc" },
   });
 
-  it("excludes past-unresolved from planned", async () => {
-    const { wsId, userId } = await setupEditor("bp-past@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "BPpast" } });
-    await setBudgetService({ workspaceId: wsId, userId }, { categoryId: cat.id, amount: 200, period: "this_month" });
-    // Past unresolved schedule (1 day ago)
-    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    await prisma.scheduledSpend.create({
-      data: {
-        workspaceId: wsId, categoryId: cat.id,
-        amount: "70", scheduledDate: new Date(Date.UTC(yesterday.getUTCFullYear(), yesterday.getUTCMonth(), yesterday.getUTCDate())),
-      },
-    });
-    const r = await compareSpendingVsBudgetService({ workspaceId: wsId, userId }, { period: "this_month" });
-    const item = r.items.find((i) => i.categoryId === cat.id)!;
-    expect(item.planned).toBe("0.00");
+  // First schedule matched (cron-equivalent)
+  await prisma.scheduledSpend.create({
+    data: { workspaceId, categoryId, amount: "100", scheduledDate: todayUTC, matchedTxId: tx.id },
+  });
+  // Second schedule unmatched
+  await prisma.scheduledSpend.create({
+    data: { workspaceId, categoryId, amount: "60", scheduledDate: todayUTC },
   });
 
-  it("excludes dismissed from planned", async () => {
-    const { wsId, userId } = await setupEditor("bp-dis@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "BPdis" } });
-    await setBudgetService({ workspaceId: wsId, userId }, { categoryId: cat.id, amount: 200, period: "this_month" });
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    await prisma.scheduledSpend.create({
-      data: {
-        workspaceId: wsId, categoryId: cat.id,
-        amount: "40", scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
-        dismissedAt: new Date(),
-      },
-    });
-    const r = await compareSpendingVsBudgetService({ workspaceId: wsId, userId }, { period: "this_month" });
-    const item = r.items.find((i) => i.categoryId === cat.id)!;
-    expect(item.planned).toBe("0.00");
-  });
-
-  it("excludes matched (active tx) from planned", async () => {
-    const { wsId, userId } = await setupEditor("bp-matched@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "BPmatched" } });
-    await setBudgetService({ workspaceId: wsId, userId }, { categoryId: cat.id, amount: 200, period: "this_month" });
-    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
-    const acct = await prisma.bankAccount.create({
-      data: { workspaceId: wsId, name: "Cash", type: "depository", status: "active" },
-    });
-    const tx = await prisma.transaction.create({
-      data: {
-        workspaceId: wsId, accountId: acct.id, plaidTransactionId: null,
-        amount: "55", merchantRaw: "T", merchantNormalized: "t",
-        occurredAt: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate(), 12, 0, 0)),
-        pending: false, source: "manual", rawData: {},
-      },
-    });
-    await prisma.scheduledSpend.create({
-      data: {
-        workspaceId: wsId, categoryId: cat.id,
-        amount: "55", scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
-        matchedTxId: tx.id,
-      },
-    });
-    const r = await compareSpendingVsBudgetService({ workspaceId: wsId, userId }, { period: "this_month" });
-    const item = r.items.find((i) => i.categoryId === cat.id)!;
-    expect(item.planned).toBe("0.00");
-  });
-
-  it("anti-join: today schedule with covering tx → planned=0; with NO covering tx → planned=amount", async () => {
-    const { wsId, userId } = await setupEditor("bp-antij@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "BPantij" } });
-    await setBudgetService({ workspaceId: wsId, userId }, { categoryId: cat.id, amount: 200, period: "this_month" });
-    const today = new Date();
-    const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-
-    // Case 1: schedule for today, NO covering tx → planned = 80
-    await prisma.scheduledSpend.create({
-      data: { workspaceId: wsId, categoryId: cat.id, amount: "80", scheduledDate: todayUTC },
-    });
-    const r1 = await compareSpendingVsBudgetService({ workspaceId: wsId, userId }, { period: "this_month" });
-    const item1 = r1.items.find((i) => i.categoryId === cat.id)!;
-    expect(item1.planned).toBe("80.00");
-
-    // Case 2: add a covering tx → planned = 0 (anti-join filters it out)
-    const acct = await prisma.bankAccount.create({
-      data: { workspaceId: wsId, name: "Cash", type: "depository", status: "active" },
-    });
-    await prisma.transaction.create({
-      data: {
-        workspaceId: wsId, accountId: acct.id, plaidTransactionId: null,
-        amount: "80", merchantRaw: "T", merchantNormalized: "t",
-        occurredAt: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 12, 0, 0)),
-        pending: false, source: "manual", rawData: {},
-      },
-    });
-    const r2 = await compareSpendingVsBudgetService({ workspaceId: wsId, userId }, { period: "this_month" });
-    const item2 = r2.items.find((i) => i.categoryId === cat.id)!;
-    expect(item2.planned).toBe("0.00");
-  });
-
-  it("two same-day same-cat schedules + one covering tx → second still planned", async () => {
-    const { wsId, userId } = await setupEditor("bp-2to1@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "BP2to1" } });
-    await setBudgetService({ workspaceId: wsId, userId }, { categoryId: cat.id, amount: 500, period: "this_month" });
-    const today = new Date();
-    const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
-
-    const acct = await prisma.bankAccount.create({
-      data: { workspaceId: wsId, name: "Cash", type: "depository", status: "active" },
-    });
-    const tx = await prisma.transaction.create({
-      data: {
-        workspaceId: wsId, accountId: acct.id, plaidTransactionId: null,
-        amount: "30", merchantRaw: "T", merchantNormalized: "t",
-        occurredAt: new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 12, 0, 0)),
-        pending: false, source: "manual", rawData: {},
-      },
-    });
-
-    // First schedule matched (cron-equivalent)
-    await prisma.scheduledSpend.create({
-      data: {
-        workspaceId: wsId, categoryId: cat.id, amount: "100",
-        scheduledDate: todayUTC, matchedTxId: tx.id,
-      },
-    });
-    // Second schedule unmatched
-    await prisma.scheduledSpend.create({
-      data: {
-        workspaceId: wsId, categoryId: cat.id, amount: "60",
-        scheduledDate: todayUTC,
-      },
-    });
-
-    const r = await compareSpendingVsBudgetService({ workspaceId: wsId, userId }, { period: "this_month" });
-    const item = r.items.find((i) => i.categoryId === cat.id)!;
-    // The matched tx is consumed by the first schedule; second schedule's $60 still contributes.
-    expect(item.planned).toBe("60.00");
-  });
+  const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+  const item = r.items.find((i) => i.categoryId === categoryId)!;
+  // The matched tx is consumed by the first schedule; second's $60 still contributes.
+  expect(item.planned).toBe("60.00");
 });
 ```
 
@@ -3052,9 +3033,10 @@ Expected: 201.
 
 ## 4. Trigger cron manually
 
-Open the API process, OR temporarily call the match function via a one-shot script:
+Open the API process, OR temporarily call the match function via a one-shot script. **Important**: pass a `today` Date that's clearly AFTER the schedule's date in the workspace owner's tz — using midnight UTC like `new Date('2099-12-25')` can leave the schedule on Dec 24 in Toronto, causing the candidate filter `scheduledDate <= today` to skip it. Use noon UTC of the day after:
+
 ```bash
-DATABASE_URL=... pnpm --filter @fina/api exec tsx -e "import('./apps/api/src/schedules/match.js').then(({matchScheduledSpends}) => matchScheduledSpends('$WS', new Date('2099-12-25')))"
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina pnpm --filter @fina/api exec tsx -e "import('./apps/api/src/schedules/match.js').then(({matchScheduledSpends}) => matchScheduledSpends('$WS', new Date('2099-12-26T12:00:00Z')))"
 ```
 (Or restart the dev server with cron enabled and wait until 09:05 UTC.)
 
@@ -3117,11 +3099,20 @@ curl -sS -X POST "http://localhost:3001/workspaces/$WS/schedules" \
   -H "Cookie: $COOKIE" -H "X-Workspace-Id: $WS" -H "content-type: application/json" \
   -d "{\"categoryId\":\"$CAT_ID\",\"amount\":150,\"scheduledDate\":\"<tomorrow YYYY-MM-DD>\"}"
 
-# Compare
-curl -sS "http://localhost:3001/workspaces/$WS/chat/tools/compare-spending-vs-budget?period=this_month" \
-  -H "Cookie: $COOKIE" -H "X-Workspace-Id: $WS"
+# Call compareSpendingVsBudget directly via tsx (no dedicated HTTP chat-tool endpoint;
+# the chat tool is invoked from the chat thread or via this one-shot)
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina \
+  pnpm --filter @fina/api exec tsx -e "
+import('./apps/api/src/budgets/service.js').then(async ({ compareSpendingVsBudgetService }) => {
+  const r = await compareSpendingVsBudgetService(
+    { workspaceId: '$WS', userId: '<your-user-id>' },
+    { period: 'this_month' },
+  );
+  console.log(JSON.stringify(r, null, 2));
+});
+"
 ```
-Expected: the Dental item has `planned: "150.00"` and `plannedPct: 30`.
+Expected: the Dental item has `planned: "150.00"` and `plannedPct: 30`. Alternatively, send a chat message in the dev web UI ("how's my budget this month?") — the LLM will invoke the `compareSpendingVsBudget` tool internally and return the result inline.
 
 ## Result
 
