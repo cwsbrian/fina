@@ -123,4 +123,27 @@ describe("removeTransactionService", () => {
       removeTransactionService({ workspaceId: wsId }, "no-such"),
     ).rejects.toMatchObject({ code: "not_found" });
   });
+
+  it("soft-delete on split tx preserves all allocations (no cascade)", async () => {
+    const { wsId, userId } = await setupEditor("rd-split@t.co");
+    const txId = await seedManual(wsId, userId); // creates tx + 1 alloc
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-rd" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-rd" } });
+    // Replace the auto-backfilled allocation with a 2-way split
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: txId } });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: txId, categoryId: c1.id, amount: "6", source: "manual" },
+        { transactionId: txId, categoryId: c2.id, amount: "4", source: "manual" },
+      ],
+    });
+
+    const r = await removeTransactionService({ workspaceId: wsId }, txId);
+    expect(r).toEqual({ removed: true });
+
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(2); // allocations PRESERVED — soft-delete does NOT cascade
+    const tx = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
+    expect(tx.removedAt).not.toBeNull();
+  });
 });

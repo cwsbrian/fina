@@ -25,6 +25,7 @@ export const getSpendingSummary: ToolDef<Args, { period: Args["period"]; groupBy
       const allocRows = await prisma.transactionAllocation.groupBy({
         by: ["categoryId"],
         where: {
+          amount: { gt: 0 },
           transaction: {
             workspaceId: ctx.workspaceId,
             removedAt: null,

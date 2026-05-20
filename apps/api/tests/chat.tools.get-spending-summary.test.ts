@@ -91,4 +91,33 @@ describe("getSpendingSummary tool", () => {
       vi.useRealTimers();
     }
   });
+
+  it("category mode excludes negative-amount allocations (refunds)", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    try {
+      const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "refund-acct", type: "depository" } });
+      // Add a refund allocation with negative amount under catCoffeeId
+      const refundTx = await prisma.transaction.create({
+        data: {
+          workspaceId: wsId, accountId: acct.id,
+          plaidTransactionId: "refund-1",
+          amount: "-3.00", merchantRaw: "Starbucks Refund", merchantNormalized: "starbucks",
+          occurredAt: new Date("2026-05-06T12:00:00Z"),
+          pending: false, source: "plaid", rawData: {},
+        },
+      });
+      await prisma.transactionAllocation.deleteMany({ where: { transactionId: refundTx.id } });
+      await prisma.transactionAllocation.create({
+        data: { transactionId: refundTx.id, categoryId: catCoffeeId, amount: "-3.00", source: null },
+      });
+
+      const res = await getSpendingSummary.run(ctx, { period: "this_month", group_by: "category" });
+      // Coffee total should still be 9.00 (5+4), not 6.00 (9-3)
+      const coffee = res.groups.find((g) => g.key === catCoffeeId);
+      expect(coffee?.total).toBe("9.00");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

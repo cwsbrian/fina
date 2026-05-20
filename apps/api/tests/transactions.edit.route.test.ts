@@ -325,4 +325,16 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("cannot_split_pending");
   });
+
+  it("PATCH with no body returns 200 (empty input)", async () => {
+    const { cookie, wsId } = await setupEditor("ep-nobody@t.co");
+    const txId = await seedManual(cookie, wsId);
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${txId}`,
+      headers: { cookie, "x-workspace-id": wsId },
+      // intentionally no payload and no content-type
+    });
+    expect(res.statusCode).toBe(200);
+  });
 });

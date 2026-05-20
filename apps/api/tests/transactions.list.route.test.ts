@@ -132,4 +132,25 @@ describe("GET /workspaces/:id/transactions", () => {
     expect(body.transactions).toHaveLength(1);
     expect(body.transactions[0].allocations[0].categoryId).toBeNull();
   });
+
+  it("filter ?uncategorizedOnly=true & ?categoryId=X combines via OR (both filters applied)", async () => {
+    const { cookie, wsId } = await setup("tl5@t.co");
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-tl5" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-tl5" } });
+    // Tx matching c1
+    await seedTxWithAllocations(wsId, "10", [{ categoryId: c1.id, amount: "10", source: "manual" }]);
+    // Tx with one uncategorized alloc
+    await seedTxWithAllocations(wsId, "20", [{ categoryId: null, amount: "20", source: null }]);
+    // Tx matching c2 (should NOT match)
+    await seedTxWithAllocations(wsId, "30", [{ categoryId: c2.id, amount: "30", source: "manual" }]);
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?uncategorizedOnly=true&categoryId=${c1.id}`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.transactions).toHaveLength(2); // c1 tx + uncategorized tx
+  });
 });

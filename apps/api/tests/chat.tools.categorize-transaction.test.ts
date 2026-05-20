@@ -68,4 +68,36 @@ describe("categorizeTransaction tool", () => {
     expect(firstAlloc.categoryId).toBe(catId);
     expect(firstAlloc.source).toBe("manual");
   });
+
+  it("categorizes a previously-split tx and collapses to single allocation", async () => {
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Split-Test", type: "depository" },
+    });
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-ct" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-ct" } });
+    const target = await prisma.category.create({ data: { workspaceId: wsId, name: "Target-ct" } });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidTransactionId: null,
+        amount: "10", merchantRaw: "Test", merchantNormalized: "test",
+        occurredAt: new Date("2026-05-19T12:00:00Z"),
+        pending: false, source: "manual", rawData: {},
+      },
+    });
+    // Wipe auto-backfilled alloc, install 2-way split
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: tx.id, categoryId: c1.id, amount: "4", source: "manual" },
+        { transactionId: tx.id, categoryId: c2.id, amount: "6", source: "manual" },
+      ],
+    });
+    // Call the chat tool
+    await categorizeTransaction.run(ctx, { tx_id: tx.id, category: "Target-ct" });
+    const after = await prisma.transactionAllocation.findMany({ where: { transactionId: tx.id } });
+    expect(after).toHaveLength(1); // collapsed
+    expect(after[0]!.categoryId).toBe(target.id);
+    expect(after[0]!.source).toBe("manual");
+    expect(after[0]!.amount.toString()).toBe("10");
+  });
 });

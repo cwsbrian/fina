@@ -118,8 +118,14 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return {};
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
-        ...(q.uncategorizedOnly ? { allocations: { some: { categoryId: null } } } : {}),
-        ...(q.categoryId ? { allocations: { some: { categoryId: q.categoryId } } } : {}),
+        ...(() => {
+          if (q.uncategorizedOnly && q.categoryId) {
+            return { allocations: { some: { OR: [{ categoryId: null }, { categoryId: q.categoryId }] } } };
+          }
+          if (q.uncategorizedOnly) return { allocations: { some: { categoryId: null } } };
+          if (q.categoryId)        return { allocations: { some: { categoryId: q.categoryId } } };
+          return {};
+        })(),
         ...(cursor
           ? {
               OR: [
@@ -260,9 +266,9 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
-        const parsed = PatchTxBody.safeParse(req.body);
+        const body = (req.body as Record<string, unknown>) ?? {};
+        const parsed = PatchTxBody.safeParse(body);
         if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
-        const body = req.body as Record<string, unknown>;
         const flags: EditTxInputFlags = {
           manualOnlyFieldProvided:
             "amount" in body || "merchantRaw" in body || "occurredAt" in body || "note" in body,
