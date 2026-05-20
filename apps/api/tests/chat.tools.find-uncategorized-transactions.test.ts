@@ -22,18 +22,50 @@ describe("findUncategorizedTransactions tool", () => {
 
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
-    await prisma.transaction.createMany({
-      data: [
-        // uncategorized
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "u1", amount: "5.00", merchantRaw: "A", occurredAt: thisMonth, rawData: {} },
-        // ai-categorized
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "a1", amount: "6.00", merchantRaw: "B", occurredAt: thisMonth, rawData: {}, categoryId: catId, categorizationSource: "ai" },
-        // manual
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "m1", amount: "7.00", merchantRaw: "C", occurredAt: thisMonth, rawData: {}, categoryId: catId, categorizationSource: "manual" },
-        // soft-deleted uncategorized
-        { workspaceId: wsId, accountId: acctId, plaidTransactionId: "d1", amount: "8.00", merchantRaw: "D", occurredAt: thisMonth, rawData: {}, removedAt: new Date() },
-      ],
-    });
+
+    type TxSeed = {
+      plaidTransactionId: string;
+      amount: string;
+      merchantRaw: string;
+      occurredAt: Date;
+      rawData: object;
+      removedAt?: Date;
+      allocCategoryId?: string | null;
+      allocSource?: "ai" | "manual" | "mapping" | null;
+    };
+    const txSeeds: TxSeed[] = [
+      // uncategorized — allocation has null categoryId and null source
+      { plaidTransactionId: "u1", amount: "5.00", merchantRaw: "A", occurredAt: thisMonth, rawData: {}, allocCategoryId: null, allocSource: null },
+      // ai-categorized — allocation has source=ai
+      { plaidTransactionId: "a1", amount: "6.00", merchantRaw: "B", occurredAt: thisMonth, rawData: {}, allocCategoryId: catId, allocSource: "ai" },
+      // manual — allocation has source=manual
+      { plaidTransactionId: "m1", amount: "7.00", merchantRaw: "C", occurredAt: thisMonth, rawData: {}, allocCategoryId: catId, allocSource: "manual" },
+      // soft-deleted uncategorized — excluded by removedAt filter
+      { plaidTransactionId: "d1", amount: "8.00", merchantRaw: "D", occurredAt: thisMonth, rawData: {}, removedAt: new Date(), allocCategoryId: null, allocSource: null },
+    ];
+    for (const s of txSeeds) {
+      const tx = await prisma.transaction.create({
+        data: {
+          workspaceId: wsId,
+          accountId: acctId,
+          plaidTransactionId: s.plaidTransactionId,
+          amount: s.amount,
+          merchantRaw: s.merchantRaw,
+          occurredAt: s.occurredAt,
+          rawData: s.rawData,
+          ...(s.removedAt ? { removedAt: s.removedAt } : {}),
+        },
+      });
+      await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+      await prisma.transactionAllocation.create({
+        data: {
+          transactionId: tx.id,
+          categoryId: s.allocCategoryId ?? null,
+          amount: s.amount,
+          source: s.allocSource ?? null,
+        },
+      });
+    }
   });
 
   afterEach(async () => {

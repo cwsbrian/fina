@@ -27,13 +27,16 @@ describe("getTransactionDetails tool", () => {
         amount: "5.00",
         merchantRaw: "Starbucks 1234",
         merchantNormalized: "starbucks",
-        categoryId: child.id,
         occurredAt: new Date("2026-05-01T12:00:00Z"),
         rawData: {},
-        categorizationSource: "manual",
       },
     });
     txId = tx.id;
+    // Seed an allocation for txId (mirrors what Migration A backfills for existing data
+    // and what the service layer does for new data created via service calls)
+    await prisma.transactionAllocation.create({
+      data: { transactionId: txId, categoryId: child.id, amount: "5.00", source: "manual" },
+    });
 
     const tx2 = await prisma.transaction.create({
       data: {
@@ -61,6 +64,9 @@ describe("getTransactionDetails tool", () => {
     expect(res.transaction.account.name).toBe("Chequing");
     expect(res.transaction.category?.name).toBe("Coffee");
     expect(res.transaction.category?.parentName).toBe("Food");
+    // Allocations array must be present
+    expect(Array.isArray(res.transaction.allocations)).toBe(true);
+    expect(res.transaction.needsReclassification).toBe(false);
   });
 
   it("throws transaction_not_found for unknown id", async () => {
@@ -89,5 +95,39 @@ describe("getTransactionDetails tool", () => {
     const res = await getTransactionDetails.run(ctx, { tx_id: softDeletedTxId });
     expect(res.transaction.removedAt).not.toBeNull();
     expect(res.transaction.merchantRaw).toBe("Gone");
+  });
+
+  it("allocations array matches categorized tx (N=1)", async () => {
+    // txId was seeded with categoryId=child.id and source="manual"
+    // The backfill from Migration A creates one allocation matching that
+    const res = await getTransactionDetails.run(ctx, { tx_id: txId });
+    expect(res.transaction.allocations).toHaveLength(1);
+    expect(res.transaction.allocations[0]!.amount).toBe("5");
+  });
+
+  it("split tx (N=2) returns both allocations in result", async () => {
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-gtd-split" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-gtd-split" } });
+    const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "Split-acct", type: "depository" } });
+    const splitTx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id,
+        plaidTransactionId: `split-${Date.now()}`,
+        amount: "100.00", merchantRaw: "Big Store",
+        occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: splitTx.id } });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: splitTx.id, categoryId: c1.id, amount: "60.00", source: "manual" },
+        { transactionId: splitTx.id, categoryId: c2.id, amount: "40.00", source: "manual" },
+      ],
+    });
+    const res = await getTransactionDetails.run(ctx, { tx_id: splitTx.id });
+    expect(res.transaction.allocations).toHaveLength(2);
+    const catIds = res.transaction.allocations.map((a) => a.categoryId);
+    expect(catIds).toContain(c1.id);
+    expect(catIds).toContain(c2.id);
   });
 });

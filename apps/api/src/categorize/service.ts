@@ -15,8 +15,8 @@ import { callGeminiCategorize, type LLMTransaction } from "./llm.js";
  *  4. Failures (LLM error, unknown category, unknown tx_id) leave the tx
  *     uncategorized. No retry in the same call.
  *
- * All writes guard by `categorizationSource IS NULL` to avoid overwriting a
- * manual decision that races with our LLM call.
+ * All writes guard by allocation-level `WHERE categoryId IS NULL AND source IS NULL`
+ * to avoid overwriting a manual decision that races with our LLM call.
  *
  * Best-effort: this function does NOT throw on Gemini failures. Callers can
  * treat it as fire-and-forget (exchange route) or await it (manual sync).
@@ -29,14 +29,20 @@ export async function categorizeNewTransactions(
   if (newTxIds.length === 0) return;
 
   // Step 1: Load tx + populate merchantNormalized on each row.
+  // Use allocation-based predicate so this filter survives Task 8's column drop.
   const txs = await prisma.transaction.findMany({
-    where: { id: { in: newTxIds }, workspaceId, categoryId: null },
+    where: {
+      id: { in: newTxIds },
+      workspaceId,
+      allocations: { some: {}, every: { categoryId: null, source: null } },
+    },
     select: {
       id: true,
       merchantRaw: true,
       merchantNormalized: true,
       amount: true,
       occurredAt: true,
+      allocations: { select: { id: true } },
     },
   });
 
@@ -45,9 +51,13 @@ export async function categorizeNewTransactions(
   const txOrder = new Map(newTxIds.map((id, i) => [id, i]));
   const sortedTxs = [...txs].sort((a, b) => (txOrder.get(a.id) ?? 0) - (txOrder.get(b.id) ?? 0));
 
+  // Filter to exactly 1 allocation — Prisma can't express "exactly one" in a where clause.
+  // Split tx (N≥2) are excluded per spec §6.2.
+  const singleAllocTxs = sortedTxs.filter((t) => t.allocations.length === 1);
+
   type Loaded = { id: string; merchantRaw: string; merchantNormalized: string; amount: number; occurredAt: Date };
   const loaded: Loaded[] = [];
-  for (const t of sortedTxs) {
+  for (const t of singleAllocTxs) {
     const normalized = t.merchantNormalized ?? normalizeMerchant(t.merchantRaw);
     if (t.merchantNormalized !== normalized) {
       await prisma.transaction.update({
@@ -84,10 +94,29 @@ export async function categorizeNewTransactions(
   for (const t of loaded) {
     const catId = mappingByNorm.get(t.merchantNormalized);
     if (catId) {
-      await prisma.transaction.updateMany({
-        where: { id: t.id, workspaceId, categorizationSource: null },
-        data: { categoryId: catId, categorizationSource: "mapping" },
+      // Find tx with N=1 null-cat allocation matching merchantNormalized, update
+      // via per-row atomic guard. Idempotent against concurrent user PATCH.
+      const candidates = await prisma.transaction.findMany({
+        where: {
+          workspaceId,
+          merchantNormalized: t.merchantNormalized,
+          removedAt: null,
+          allocations: { some: {}, every: { categoryId: null, source: null } },
+        },
+        include: { allocations: { select: { id: true } } },
       });
+      for (const c of candidates) {
+        if (c.allocations.length !== 1) continue;
+        const a = c.allocations[0]!;
+        // Idempotent atomic write — only fires if the allocation is still null/null.
+        const upd = await prisma.transactionAllocation.updateMany({
+          where: { id: a.id, categoryId: null, source: null },
+          data: { categoryId: catId, source: "mapping" },
+        });
+        if (upd.count > 0) {
+          // allocation updated — no mirror-write needed (Task 8 dropped the columns)
+        }
+      }
     } else {
       unmapped.push(t);
     }
@@ -131,12 +160,26 @@ export async function categorizeNewTransactions(
       // Guard against malformed rows where category is null/undefined — calling
       // .toLowerCase() on those would throw and violate the best-effort contract.
       if (typeof r.category !== "string") continue;
-      const catId = categoryByLower.get(r.category.toLowerCase());
-      if (!catId) continue;
-      await prisma.transaction.updateMany({
-        where: { id: r.tx_id, workspaceId, categorizationSource: null },
-        data: { categoryId: catId, categorizationSource: "ai" },
+      const aiCatId = categoryByLower.get(r.category.toLowerCase());
+      if (!aiCatId) continue;
+
+      // Step 3: Gemini results — write to the single null-cat allocation per tx
+      // via per-row guard. Skip tx that are already split or already categorized.
+      const tx = await prisma.transaction.findFirst({
+        where: { id: r.tx_id, workspaceId },
+        include: { allocations: { select: { id: true, categoryId: true, source: true } } },
       });
+      if (!tx || tx.allocations.length !== 1) continue;
+      const a = tx.allocations[0]!;
+      if (a.categoryId !== null || a.source !== null) continue;
+
+      const upd = await prisma.transactionAllocation.updateMany({
+        where: { id: a.id, categoryId: null, source: null },
+        data: { categoryId: aiCatId, source: "ai" },
+      });
+      if (upd.count > 0) {
+        // allocation updated — no mirror-write needed (Task 8 dropped the columns)
+      }
     }
   }
 }

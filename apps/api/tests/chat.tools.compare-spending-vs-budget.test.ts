@@ -31,12 +31,16 @@ describe("compareSpendingVsBudget chat tool", () => {
   it("returns service output unchanged for this_month", async () => {
     await setBudget.run(ctx, { category_id: coffeeCatId, amount: 100 });
     const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "x", type: "depository" } });
-    await prisma.transaction.create({
+    const tx = await prisma.transaction.create({
       data: {
         workspaceId: wsId, accountId: acct.id, plaidTransactionId: "t1",
-        amount: "30.00", merchantRaw: "M", categoryId: coffeeCatId,
+        amount: "30.00", merchantRaw: "M",
         occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
       },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: coffeeCatId, amount: "30.00", source: "manual" },
     });
     const r = await compareSpendingVsBudget.run(ctx, { period: "this_month" });
     expect(r.items).toHaveLength(1);

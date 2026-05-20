@@ -51,8 +51,8 @@ function isValidPair(c: CurrentPeriod, p: ComparisonPeriod): boolean {
 
 type Row = {
   amount: Prisma.Decimal;
-  categoryId: string | null;
-  category: { id: string; name: string } | null;
+  categoryId?: string | null;
+  category?: { id: string; name: string } | null;
   merchantRaw: string;
   merchantNormalized: string | null;
   occurredAt: Date;
@@ -71,7 +71,7 @@ function bucketize(rows: Row[], groupBy: "category" | "merchant"): {
     let label: string;
     if (groupBy === "category") {
       key = r.categoryId ?? "uncategorized";
-      label = r.category?.name ?? "Uncategorized";
+      label = r.category?.name ?? (r.categoryId ? "Unknown" : "Uncategorized");
     } else {
       const norm = r.merchantNormalized ?? normalizeMerchant(r.merchantRaw);
       key = norm;
@@ -96,6 +96,48 @@ function bucketize(rows: Row[], groupBy: "category" | "merchant"): {
   return { map, total };
 }
 
+async function bucketizeByAllocation(
+  workspaceId: string,
+  gte: Date,
+  lt: Date,
+): Promise<{ map: Map<string, Bucket>; total: Prisma.Decimal }> {
+  const allocRows = await prisma.transactionAllocation.groupBy({
+    by: ["categoryId"],
+    where: {
+      amount: { gt: 0 },
+      transaction: {
+        workspaceId,
+        removedAt: null,
+        amount: { gt: 0 },
+        occurredAt: { gte, lt },
+      },
+    },
+    _sum: { amount: true },
+    _count: { _all: true },
+  });
+
+  const catIds = allocRows.map((r) => r.categoryId).filter((id): id is string => id !== null);
+  const catMap = new Map<string, string>();
+  if (catIds.length > 0) {
+    const cats = await prisma.category.findMany({
+      where: { id: { in: catIds } },
+      select: { id: true, name: true },
+    });
+    for (const c of cats) catMap.set(c.id, c.name);
+  }
+
+  const map = new Map<string, Bucket>();
+  let total = new Prisma.Decimal(0);
+  for (const r of allocRows) {
+    const key = r.categoryId ?? "uncategorized";
+    const label = r.categoryId ? (catMap.get(r.categoryId) ?? "Unknown") : "Uncategorized";
+    const rowTotal = r._sum.amount ?? new Prisma.Decimal(0);
+    map.set(key, { key, label, total: new Prisma.Decimal(rowTotal), count: r._count._all });
+    total = total.plus(rowTotal);
+  }
+  return { map, total };
+}
+
 export const compareSpendingPeriods: ToolDef<Args, Result> = {
   name: "compareSpendingPeriods",
   description:
@@ -114,38 +156,45 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
       }),
     ]);
 
-    const selectSpec = {
-      amount: true,
-      categoryId: true,
-      category: { select: { id: true, name: true } },
-      merchantRaw: true,
-      merchantNormalized: true,
-      occurredAt: true,
-    };
+    let current: { map: Map<string, Bucket>; total: Prisma.Decimal };
+    let comparison: { map: Map<string, Bucket>; total: Prisma.Decimal };
 
-    const [currentRows, comparisonRows] = await Promise.all([
-      prisma.transaction.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          removedAt: null,
-          amount: { gt: 0 },
-          occurredAt: { gte: ranges.current.gte, lt: ranges.current.lt },
-        },
-        select: selectSpec,
-      }),
-      prisma.transaction.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          removedAt: null,
-          amount: { gt: 0 },
-          occurredAt: { gte: ranges.comparison.gte, lt: ranges.comparison.lt },
-        },
-        select: selectSpec,
-      }),
-    ]);
-
-    const current = bucketize(currentRows as Row[], args.group_by);
-    const comparison = bucketize(comparisonRows as Row[], args.group_by);
+    if (args.group_by === "category") {
+      [current, comparison] = await Promise.all([
+        bucketizeByAllocation(ctx.workspaceId, ranges.current.gte, ranges.current.lt),
+        bucketizeByAllocation(ctx.workspaceId, ranges.comparison.gte, ranges.comparison.lt),
+      ]);
+    } else {
+      // group_by=merchant path: category fields not needed (dropped from Transaction in Task 8)
+      const selectSpec = {
+        amount: true,
+        merchantRaw: true,
+        merchantNormalized: true,
+        occurredAt: true,
+      };
+      const [currentRows, comparisonRows] = await Promise.all([
+        prisma.transaction.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            removedAt: null,
+            amount: { gt: 0 },
+            occurredAt: { gte: ranges.current.gte, lt: ranges.current.lt },
+          },
+          select: selectSpec,
+        }),
+        prisma.transaction.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            removedAt: null,
+            amount: { gt: 0 },
+            occurredAt: { gte: ranges.comparison.gte, lt: ranges.comparison.lt },
+          },
+          select: selectSpec,
+        }),
+      ]);
+      current = bucketize(currentRows as Row[], args.group_by);
+      comparison = bucketize(comparisonRows as Row[], args.group_by);
+    }
 
     const allKeys = new Set<string>([...current.map.keys(), ...comparison.map.keys()]);
     const changes: Change[] = [];

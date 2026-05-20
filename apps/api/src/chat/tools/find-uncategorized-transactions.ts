@@ -12,7 +12,7 @@ const Args = z.object({
   review_mode: z
     .enum(["missing_category", "not_manual"])
     .describe(
-      "missing_category returns categoryId=null. not_manual returns transactions whose categorizationSource is not manual, including uncategorized.",
+      "missing_category returns transactions with a null-category allocation. not_manual returns transactions whose allocation source is not manual, including uncategorized.",
     )
     .optional(),
   limit: z
@@ -37,8 +37,6 @@ type Result = {
     merchantNormalized: string | null;
     occurredAt: string;
     accountName: string;
-    categoryId: string | null;
-    categorizationSource: "mapping" | "ai" | "manual" | null;
   }>;
 };
 
@@ -66,9 +64,20 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
       where.occurredAt = { gte: range.gte, lt: range.lt };
     }
     if (reviewMode === "missing_category") {
-      where.categoryId = null;
+      where.allocations = { some: { categoryId: null } };
     } else {
-      where.OR = [{ categorizationSource: null }, { categorizationSource: { not: "manual" } }];
+      where.allocations = {
+        some: {
+          // Postgres semantics: NULL != 'manual' evaluates to NULL (not TRUE), so
+          // `source: { not: "manual" }` silently excludes NULL source rows. Include
+          // `source: null` explicitly to cover uncategorized-but-not-yet-AI/manual rows.
+          OR: [
+            { source: { not: "manual" } },
+            { source: null },
+            { categoryId: null },
+          ],
+        },
+      };
     }
 
     const rows = await prisma.transaction.findMany({
@@ -89,8 +98,6 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
         merchantNormalized: r.merchantNormalized,
         occurredAt: r.occurredAt.toISOString(),
         accountName: r.account.name,
-        categoryId: r.categoryId,
-        categorizationSource: (r.categorizationSource ?? null) as Result["transactions"][number]["categorizationSource"],
       })),
     };
   },

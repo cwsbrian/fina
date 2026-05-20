@@ -39,10 +39,17 @@ describe("mapMerchantToCategoryService", () => {
         amount: "10.00",
         merchantRaw: opts.merchantRaw,
         merchantNormalized: opts.merchantNormalized,
-        categoryId: opts.categoryId,
-        categorizationSource: opts.categorizationSource ?? null,
         occurredAt: new Date("2026-05-10T12:00:00Z"),
         rawData: {},
+      },
+    });
+    // Seed a single allocation to simulate Migration A backfill.
+    await prisma.transactionAllocation.create({
+      data: {
+        transactionId: tx.id,
+        categoryId: opts.categoryId,
+        amount: "10.00",
+        source: opts.categorizationSource ?? null,
       },
     });
     return tx.id;
@@ -87,9 +94,11 @@ describe("mapMerchantToCategoryService", () => {
       { categoryId, merchant: "Starbucks" },
     );
     expect(r.backfilledCount).toBe(1);
-    const tx = await prisma.transaction.findUnique({ where: { id: txId } });
-    expect(tx?.categoryId).toBe(categoryId);
-    expect(tx?.categorizationSource).toBe("mapping");
+    // Allocation state assertion.
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.categoryId).toBe(categoryId);
+    expect(allocs[0]!.source).toBe("mapping");
   });
 
   it("backfills siblings whose merchantNormalized IS NULL when merchantRaw normalizes to target", async () => {
@@ -105,8 +114,11 @@ describe("mapMerchantToCategoryService", () => {
     expect(r.backfilledCount).toBe(1);
     const tx = await prisma.transaction.findUnique({ where: { id: txId } });
     expect(tx?.merchantNormalized).toBe("starbucks");
-    expect(tx?.categoryId).toBe(categoryId);
-    expect(tx?.categorizationSource).toBe("mapping");
+    // Allocation state assertion.
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.categoryId).toBe(categoryId);
+    expect(allocs[0]!.source).toBe("mapping");
   });
 
   it("does NOT touch already-categorized siblings", async () => {
@@ -121,9 +133,9 @@ describe("mapMerchantToCategoryService", () => {
       { categoryId, merchant: "Starbucks" },
     );
     expect(r.backfilledCount).toBe(0);
-    const tx = await prisma.transaction.findUnique({ where: { id: txId } });
-    expect(tx?.categoryId).toBe(otherCategoryId);
-    expect(tx?.categorizationSource).toBe("manual");
+    const alloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(alloc?.categoryId).toBe(otherCategoryId);
+    expect(alloc?.source).toBe("manual");
   });
 
   it("cross-workspace isolation — mapping in WS A does not backfill WS B", async () => {
@@ -139,17 +151,20 @@ describe("mapMerchantToCategoryService", () => {
         amount: "10.00",
         merchantRaw: "Starbucks",
         merchantNormalized: "starbucks",
-        categoryId: null,
         occurredAt: new Date("2026-05-10T12:00:00Z"),
         rawData: {},
       },
+    });
+    // Seed allocation for the other-workspace tx.
+    await prisma.transactionAllocation.create({
+      data: { transactionId: otherTx.id, categoryId: null, amount: "10.00", source: null },
     });
     await mapMerchantToCategoryService(
       { workspaceId },
       { categoryId, merchant: "Starbucks" },
     );
-    const tx = await prisma.transaction.findUnique({ where: { id: otherTx.id } });
-    expect(tx?.categoryId).toBeNull();
+    const otherAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: otherTx.id } });
+    expect(otherAlloc?.categoryId).toBeNull();
     await prisma.workspace.delete({ where: { id: otherWs.id } });
   });
 

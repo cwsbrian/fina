@@ -228,18 +228,23 @@ describe("compareSpendingVsBudgetService", () => {
     await prisma.user.deleteMany({ where: { id: userId } });
   });
 
-  async function seedTx(occurredAt: Date, amount: string): Promise<void> {
-    await prisma.transaction.create({
+  async function seedTx(occurredAt: Date, amount: string, overrideCategoryId?: string): Promise<void> {
+    const catId = overrideCategoryId ?? categoryId;
+    const tx = await prisma.transaction.create({
       data: {
         workspaceId,
         accountId: acctId,
         plaidTransactionId: `tx-${Math.random()}`,
         amount,
         merchantRaw: "M",
-        categoryId,
         occurredAt,
         rawData: {},
       },
+    });
+    // Seed allocation (single source of truth after Task 8).
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: catId, amount, source: "manual" },
     });
   }
 
@@ -281,17 +286,60 @@ describe("compareSpendingVsBudgetService", () => {
     const otherCat = await prisma.category.create({ data: { workspaceId, name: "Food" } });
     // Budget set only for Coffee; spending exists on Food too — Food should not appear.
     await setBudgetService({ workspaceId, userId }, { categoryId, amount: 100, period: "this_month" });
-    await prisma.transaction.create({
+    const otherTx = await prisma.transaction.create({
       data: {
         workspaceId, accountId: acctId, plaidTransactionId: "x",
         amount: "50.00", merchantRaw: "M",
-        categoryId: otherCat.id, occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
+        occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
       },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: otherTx.id } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: otherTx.id, categoryId: otherCat.id, amount: "50.00", source: "manual" },
     });
 
     const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
     expect(r.items).toHaveLength(1);
     expect(r.items[0]!.categoryId).toBe(categoryId);
+  });
+
+  it("split tx allocates across multiple budget categories", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    const groceriesCat = await prisma.category.create({ data: { workspaceId, name: "Groceries" } });
+    const householdCat = await prisma.category.create({ data: { workspaceId, name: "Household" } });
+    await setBudgetService({ workspaceId, userId }, { categoryId: groceriesCat.id, amount: 200, period: "this_month" });
+    await setBudgetService({ workspaceId, userId }, { categoryId: householdCat.id, amount: 150, period: "this_month" });
+
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId,
+        accountId: acctId,
+        plaidTransactionId: `split-${Date.now()}`,
+        amount: "200",
+        merchantRaw: "Costco",
+        merchantNormalized: "costco",
+        occurredAt: new Date("2026-05-15T12:00:00Z"),
+        pending: false,
+        source: "manual",
+        rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: tx.id, categoryId: groceriesCat.id, amount: "120", source: "manual" },
+        { transactionId: tx.id, categoryId: householdCat.id, amount: "80", source: "manual" },
+      ],
+    });
+
+    const result = await compareSpendingVsBudgetService(
+      { workspaceId, userId },
+      { period: "this_month" },
+    );
+    const g = result.items.find((i) => i.categoryId === groceriesCat.id)!;
+    const h = result.items.find((i) => i.categoryId === householdCat.id)!;
+    expect(g.spent).toBe("120.00");
+    expect(h.spent).toBe("80.00");
   });
 
   it("filters out negative-amount (refund) transactions", async () => {

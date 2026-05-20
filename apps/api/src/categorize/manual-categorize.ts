@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "./normalize.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
+import { applyAllocations } from "../transactions/allocations.js";
 
 export class ManualCategorizeError extends Error {
   constructor(public code: "tx_not_found" | "category_not_found") {
@@ -22,9 +23,14 @@ export type ManualCategorizeResult = {
     currency: string;
     merchantRaw: string;
     merchantNormalized: string | null;
-    categoryId: string | null;
-    categorizationSource: "manual" | "mapping" | "ai" | null;
+    needsReclassification: boolean;
     occurredAt: Date;
+    allocations: Array<{
+      id: string;
+      categoryId: string | null;
+      amount: string;
+      source: "manual" | "mapping" | "ai" | null;
+    }>;
   };
   backfilledCount: number;
 };
@@ -53,25 +59,36 @@ export async function applyManualCategorize(
 
   const result = await withWorkspaceLock(input.workspaceId, async (tx) => {
     // Re-read INSIDE the lock so a concurrent PATCH that writes merchantRaw +
-    // merchantNormalized is visible here — we must normalize from the
-    // post-PATCH merchantRaw, not a stale snapshot.
+    // merchantNormalized is visible here — we must normalize from the post-PATCH
+    // merchantRaw, not a stale snapshot.
     const txRow = await tx.transaction.findFirst({
       where: { id: input.txId, workspaceId: input.workspaceId },
-      select: { id: true, merchantRaw: true, merchantNormalized: true },
+      select: { id: true, amount: true, merchantRaw: true, merchantNormalized: true },
     });
     if (!txRow) throw new ManualCategorizeError("tx_not_found");
 
     const merchantNorm = txRow.merchantNormalized ?? normalizeMerchant(txRow.merchantRaw);
 
+    // Primary: write allocations via the helper (single entry).
+    // Amount is Decimal(14, 2); Number(d.toString()) round-trips cleanly for
+    // any value in that range. applyAllocations will re-stringify the number
+    // for its AMOUNT_RE regex validator.
+    await applyAllocations(
+      tx,
+      input.workspaceId,
+      txRow.id,
+      txRow.amount,
+      "manual",
+      [{ categoryId: category.id, amount: Number(txRow.amount.toString()) }],
+    );
+
+    // Update merchantNormalized on the transaction.
     await tx.transaction.update({
       where: { id: txRow.id },
-      data: {
-        merchantNormalized: merchantNorm,
-        categoryId: category.id,
-        categorizationSource: "manual",
-      },
+      data: { merchantNormalized: merchantNorm },
     });
 
+    // Merchant mapping upsert (unchanged).
     await tx.merchantMapping.upsert({
       where: {
         workspaceId_merchantNormalized: {
@@ -89,6 +106,7 @@ export async function applyManualCategorize(
       update: { categoryId: category.id, source: "manual", confidence: 1.0 },
     });
 
+    // Sibling normalization (unchanged) — back-fills merchantNormalized for legacy NULL rows.
     const nullSiblings = await tx.transaction.findMany({
       where: {
         workspaceId: input.workspaceId,
@@ -107,27 +125,46 @@ export async function applyManualCategorize(
       }
     }
 
-    const backfilled = await tx.transaction.updateMany({
+    // Sibling category back-fill — unified rule per spec §6.3:
+    //   target sibling has exactly 1 allocation; that allocation is null-cat
+    //   OR source != "manual"; skip N≥2 siblings entirely.
+    const siblings = await tx.transaction.findMany({
       where: {
         workspaceId: input.workspaceId,
         merchantNormalized: merchantNorm,
         id: { not: txRow.id },
-        OR: [
-          { categorizationSource: null },
-          { categorizationSource: { not: "manual" } },
-        ],
+        allocations: { some: {} },
       },
-      data: { categoryId: category.id, categorizationSource: "mapping" },
+      include: { allocations: { select: { id: true, source: true } } },
     });
+    let backfilledCount = 0;
+    for (const sib of siblings) {
+      if (sib.allocations.length !== 1) continue; // skip splits
+      const a = sib.allocations[0]!;
+      if (a.source === "manual") continue; // don't overwrite user-confirmed
+      // Atomic per-row update with guard: only update if still not manual.
+      // Use OR to handle NULL source correctly (NULL != 'manual' is NULL in SQL).
+      const upd = await tx.transactionAllocation.updateMany({
+        where: { id: a.id, OR: [{ source: null }, { source: { not: "manual" } }] },
+        data: { categoryId: category.id, source: "mapping" },
+      });
+      if (upd.count > 0) {
+        backfilledCount += 1;
+      }
+    }
 
-    return { backfilledCount: backfilled.count };
+    return { backfilledCount };
   });
 
   const updated = await prisma.transaction.findUniqueOrThrow({
     where: { id: input.txId },
     select: {
       id: true, amount: true, merchantRaw: true, merchantNormalized: true,
-      categoryId: true, categorizationSource: true, occurredAt: true,
+      occurredAt: true, needsReclassification: true,
+      allocations: {
+        select: { id: true, categoryId: true, amount: true, source: true },
+        orderBy: { createdAt: "asc" },
+      },
     },
   });
 
@@ -138,9 +175,14 @@ export async function applyManualCategorize(
       currency: workspace.currency,
       merchantRaw: updated.merchantRaw,
       merchantNormalized: updated.merchantNormalized,
-      categoryId: updated.categoryId,
-      categorizationSource: updated.categorizationSource,
+      needsReclassification: updated.needsReclassification,
       occurredAt: updated.occurredAt,
+      allocations: updated.allocations.map((a) => ({
+        id: a.id,
+        categoryId: a.categoryId,
+        amount: a.amount.toString(),
+        source: a.source,
+      })),
     },
     backfilledCount: result.backfilledCount,
   };

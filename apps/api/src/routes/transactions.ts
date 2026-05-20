@@ -8,7 +8,7 @@ import {
   CreateManualTxError,
   type CreateManualTxInput,
 } from "../transactions/create-manual.js";
-import { editTransactionService, EditTxError, type EditTxInput } from "../transactions/edit.js";
+import { editTransactionService, EditTxError, type EditTxInput, type EditTxInputFlags } from "../transactions/edit.js";
 import { removeTransactionService, RemoveTxError } from "../transactions/remove.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
@@ -32,8 +32,14 @@ const PatchTxBody = z
     amount: z.number().optional(),
     merchantRaw: z.string().optional(),
     occurredAt: z.string().optional(),
-    categoryId: z.string().nullable().optional(),
     note: z.string().nullable().optional(),
+    categoryId: z.string().nullable().optional(),
+    allocations: z
+      .array(z.object({
+        categoryId: z.string().nullable(),
+        amount: z.number(),
+      }))
+      .optional(),
   })
   .strict();
 
@@ -54,6 +60,7 @@ const QuerySchema = z.object({
   to: IsoDate.optional(),
   includeRemoved: BoolFlag,
   uncategorizedOnly: BoolFlag,
+  categoryId: z.string().optional(),
 });
 
 type Cursor = { occurredAtMs: number; id: string };
@@ -72,9 +79,9 @@ function encodeCursor(c: Cursor): string {
 }
 
 function editTxErrorStatus(code: EditTxError["code"]): number {
-  if (code === "not_found") return 404;
-  if (code === "category_not_found") return 404;
-  return 400; // not_editable, already_removed, invalid_*
+  if (code === "not_found" || code === "category_not_found") return 404;
+  return 400; // not_editable | already_removed | cannot_split_pending |
+              // conflicting_body | sum_mismatch | empty_allocations | invalid_*
 }
 
 function removeTxErrorStatus(code: RemoveTxError["code"]): number {
@@ -111,7 +118,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return {};
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
-        ...(q.uncategorizedOnly ? { categoryId: null } : {}),
+        ...(q.uncategorizedOnly ? { allocations: { some: { categoryId: null } } } : {}),
+        ...(q.categoryId ? { allocations: { some: { categoryId: q.categoryId } } } : {}),
         ...(cursor
           ? {
               OR: [
@@ -130,6 +138,12 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         where,
         orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
         take: q.limit + 1,
+        include: {
+          allocations: {
+            select: { id: true, categoryId: true, amount: true, source: true },
+            orderBy: { createdAt: "asc" },
+          },
+        },
       });
       const hasMore = rows.length > q.limit;
       const page = hasMore ? rows.slice(0, q.limit) : rows;
@@ -146,13 +160,19 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           currency: workspace.currency,
           merchantRaw: t.merchantRaw,
           merchantNormalized: t.merchantNormalized,
-          categoryId: t.categoryId,
           occurredAt: t.occurredAt.toISOString(),
           postedAt: t.postedAt?.toISOString() ?? null,
           pending: t.pending,
           source: t.source,
           note: t.note,
           removedAt: t.removedAt?.toISOString() ?? null,
+          needsReclassification: t.needsReclassification,
+          allocations: t.allocations.map((a) => ({
+            id: a.id,
+            categoryId: a.categoryId,
+            amount: a.amount.toString(),
+            source: a.source,
+          })),
         })),
         nextCursor,
       };
@@ -242,17 +262,26 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         }
         const parsed = PatchTxBody.safeParse(req.body);
         if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+        const body = req.body as Record<string, unknown>;
+        const flags: EditTxInputFlags = {
+          manualOnlyFieldProvided:
+            "amount" in body || "merchantRaw" in body || "occurredAt" in body || "note" in body,
+          categoryIdProvided: "categoryId" in body,
+          allocationsProvided: "allocations" in body,
+        };
         const d = parsed.data;
         const input: EditTxInput = {};
         if (d.amount       !== undefined) input.amount       = d.amount;
         if (d.merchantRaw  !== undefined) input.merchantRaw  = d.merchantRaw;
         if (d.occurredAt   !== undefined) input.occurredAt   = d.occurredAt;
-        if (d.categoryId   !== undefined) input.categoryId   = d.categoryId;
         if (d.note         !== undefined) input.note         = d.note;
+        if (flags.categoryIdProvided)     input.categoryId   = d.categoryId ?? null;
+        if (flags.allocationsProvided)    input.allocations  = d.allocations ?? [];
         const result = await editTransactionService(
           { workspaceId: ctx.membership.workspaceId },
           req.params.txId,
           input,
+          flags,
         );
         return reply.code(200).send(result);
       } catch (err) {

@@ -58,44 +58,55 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
       }),
     ]);
 
-    const txWhere: Prisma.TransactionWhereInput = {
-      workspaceId: ctx.workspaceId,
-      removedAt: null,
+    const allocWhere: Prisma.TransactionAllocationWhereInput = {
       amount: { gt: 0 },
-      occurredAt: { gte, lt },
-    };
-    if (!includeUncat) txWhere.categoryId = { not: null };
-
-    const rows = await prisma.transaction.findMany({
-      where: txWhere,
-      select: {
-        amount: true,
-        categoryId: true,
-        category: {
-          select: {
-            id: true,
-            name: true,
-            color: true,
-            icon: true,
-            parentId: true,
-            parent: { select: { id: true, name: true } },
-          },
-        },
+      transaction: {
+        workspaceId: ctx.workspaceId,
+        removedAt: null,
+        amount: { gt: 0 },
+        occurredAt: { gte, lt },
       },
+    };
+    if (!includeUncat) allocWhere.categoryId = { not: null };
+
+    const allocRows = await prisma.transactionAllocation.groupBy({
+      by: ["categoryId"],
+      where: allocWhere,
+      _sum: { amount: true },
+      _count: { _all: true },
     });
+
+    // Fetch category metadata for all non-null categoryIds
+    const catIds = allocRows.map((r) => r.categoryId).filter((id): id is string => id !== null);
+    const catMap = new Map<string, { id: string; name: string; color: string | null; icon: string | null; parentId: string | null; parent: { id: string; name: string } | null }>();
+    if (catIds.length > 0) {
+      const cats = await prisma.category.findMany({
+        where: { id: { in: catIds } },
+        select: {
+          id: true,
+          name: true,
+          color: true,
+          icon: true,
+          parentId: true,
+          parent: { select: { id: true, name: true } },
+        },
+      });
+      for (const c of cats) catMap.set(c.id, c);
+    }
 
     const buckets = new Map<string, { meta: Omit<Bucket, "total" | "count" | "share">; total: Prisma.Decimal; count: number }>();
     let total = new Prisma.Decimal(0);
-    for (const r of rows) {
+    for (const r of allocRows) {
       const key = r.categoryId ?? "__uncat__";
-      const meta: Omit<Bucket, "total" | "count" | "share"> = r.category
+      const cat = r.categoryId ? catMap.get(r.categoryId) : undefined;
+      const meta: Omit<Bucket, "total" | "count" | "share"> = cat
         ? {
-            categoryId: r.category.id,
-            categoryName: r.category.name,
-            parentCategoryId: r.category.parent?.id ?? null,
-            parentCategoryName: r.category.parent?.name ?? null,
-            color: r.category.color,
-            icon: r.category.icon,
+            categoryId: cat.id,
+            categoryName: cat.name,
+            parentCategoryId: cat.parent?.id ?? null,
+            parentCategoryName: cat.parent?.name ?? null,
+            color: cat.color,
+            icon: cat.icon,
           }
         : {
             categoryId: null,
@@ -105,14 +116,10 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
             color: null,
             icon: null,
           };
-      const cur = buckets.get(key);
-      if (cur) {
-        cur.total = cur.total.plus(r.amount);
-        cur.count += 1;
-      } else {
-        buckets.set(key, { meta, total: new Prisma.Decimal(r.amount), count: 1 });
-      }
-      total = total.plus(r.amount);
+      const rowTotal = r._sum.amount ?? new Prisma.Decimal(0);
+      const rowCount = r._count._all;
+      buckets.set(key, { meta, total: new Prisma.Decimal(rowTotal), count: rowCount });
+      total = total.plus(rowTotal);
     }
 
     const entries = [...buckets.values()];

@@ -9,6 +9,7 @@ import {
   validateNote as validateNoteShared,
   parseOccurredAt as parseOccurredAtShared,
 } from "./validators.js";
+import { applyAllocations } from "./allocations.js";
 
 export type CreateManualTxInput = {
   merchantRaw: string;
@@ -28,14 +29,20 @@ export type CreateManualTxResult = {
     currency: string;
     merchantRaw: string;
     merchantNormalized: string;
-    categoryId: string | null;
     occurredAt: string;
     pending: false;
     source: "manual";
     note: string | null;
     removedAt: null;
+    needsReclassification: false;
     createdAt: string;
     updatedAt: string;
+    allocations: Array<{
+      id: string;
+      categoryId: string | null;
+      amount: string;
+      source: "manual" | "mapping" | "ai" | null;
+    }>;
   };
 };
 
@@ -156,15 +163,29 @@ export async function createManualTransactionService(
         amount: new Prisma.Decimal(input.amount),
         merchantRaw,
         merchantNormalized,
-        categoryId: input.categoryId ?? null,
         occurredAt,
         postedAt: null,
         pending: false,
         source: "manual",
         rawData: {} as Prisma.InputJsonValue,
         note,
-        categorizationSource: input.categoryId !== undefined ? "manual" : null,
       },
+    });
+
+    const allocSource: "manual" | null = input.categoryId !== undefined ? "manual" : null;
+    await applyAllocations(
+      tx,
+      ctx.workspaceId,
+      row.id,
+      row.amount,
+      allocSource,
+      [{ categoryId: input.categoryId ?? null, amount: input.amount }],
+    );
+
+    const allocs = await tx.transactionAllocation.findMany({
+      where: { transactionId: row.id },
+      select: { id: true, categoryId: true, amount: true, source: true },
+      orderBy: { createdAt: "asc" },
     });
 
     return {
@@ -176,14 +197,20 @@ export async function createManualTransactionService(
         currency: workspace.currency,
         merchantRaw: row.merchantRaw,
         merchantNormalized: row.merchantNormalized ?? merchantNormalized,
-        categoryId: row.categoryId,
         occurredAt: row.occurredAt.toISOString(),
         pending: false,                     // invariant: manual tx
         source: "manual",
         note: row.note,
         removedAt: null,                    // invariant: freshly created
+        needsReclassification: false,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
+        allocations: allocs.map((a) => ({
+          id: a.id,
+          categoryId: a.categoryId,
+          amount: a.amount.toString(),
+          source: a.source,
+        })),
       },
     };
   });

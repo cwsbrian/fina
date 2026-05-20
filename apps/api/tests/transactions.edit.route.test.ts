@@ -60,7 +60,7 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(body.transaction.amount).toBe("12.5");
     expect(body.transaction.merchantRaw).toBe("Walmart");
     expect(body.transaction.merchantNormalized).toBe("walmart");
-    expect(body.transaction.categoryId).toBe(cat.id);
+    expect(body.transaction.allocations[0].categoryId).toBe(cat.id);
   });
 
   it("200 empty body returns current tx unchanged", async () => {
@@ -233,5 +233,96 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe("insufficient_role");
+  });
+
+  // ── NEW TESTS (Task 5) ──────────────────────────────────────────────────────
+
+  it("PATCH with allocations array → 200, response.allocations matches", async () => {
+    const { cookie, wsId } = await setupEditor("ep-alloc@t.co");
+    const txId = await seedManual(cookie, wsId);
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-ep-alloc" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-ep-alloc" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${txId}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({
+        allocations: [
+          { categoryId: c1.id, amount: 4 },
+          { categoryId: c2.id, amount: 6 },
+        ],
+      }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().transaction.allocations).toHaveLength(2);
+  });
+
+  it("PATCH categoryId shortcut → response has 1 allocation", async () => {
+    const { cookie, wsId } = await setupEditor("ep-shortcut@t.co");
+    const txId = await seedManual(cookie, wsId);
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "C-ep-shortcut" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${txId}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ categoryId: cat.id }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().transaction.allocations).toHaveLength(1);
+    expect(res.json().transaction.allocations[0].categoryId).toBe(cat.id);
+  });
+
+  it("PATCH both categoryId and allocations → 400 conflicting_body", async () => {
+    const { cookie, wsId } = await setupEditor("ep-conflict@t.co");
+    const txId = await seedManual(cookie, wsId);
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "C-ep-conf" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${txId}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({
+        categoryId: cat.id,
+        allocations: [{ categoryId: cat.id, amount: 10 }],
+      }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("conflicting_body");
+  });
+
+  it("PATCH allocations sum mismatch → 400 sum_mismatch", async () => {
+    const { cookie, wsId } = await setupEditor("ep-sum@t.co");
+    const txId = await seedManual(cookie, wsId);
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "C-ep-sum" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${txId}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ allocations: [{ categoryId: cat.id, amount: 5 }] }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("sum_mismatch");
+  });
+
+  it("PATCH allocations on pending Plaid → 400 cannot_split_pending", async () => {
+    const { cookie, wsId } = await setupEditor("ep-pending@t.co");
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Plaid", type: "depository" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidTransactionId: "p_ep_pending",
+        amount: "10", merchantRaw: "X", merchantNormalized: "x",
+        occurredAt: new Date(), pending: true, source: "plaid", rawData: {},
+      },
+    });
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "C-ep-pending" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${tx.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ allocations: [{ categoryId: cat.id, amount: 10 }] }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("cannot_split_pending");
   });
 });

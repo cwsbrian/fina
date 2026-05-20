@@ -69,7 +69,6 @@ type Result = {
     accountId: string;
     categoryId: string | null;
     categoryName: string | null;
-    categorizationSource: "mapping" | "ai" | "manual" | null;
   }>;
   totalCount: number;
   hasMore: boolean;
@@ -173,7 +172,7 @@ export const findTransactions: ToolDef<Args, Result> = {
       workspaceId: ctx.workspaceId,
       removedAt: null,
     };
-    if (categoryIds) where.categoryId = { in: categoryIds };
+    if (categoryIds) where.allocations = { some: { categoryId: { in: categoryIds } } };
     if (accountIds) where.accountId = { in: accountIds };
     if (occurredAt.gte || occurredAt.lte) where.occurredAt = occurredAt;
 
@@ -210,26 +209,32 @@ export const findTransactions: ToolDef<Args, Result> = {
         take: limit,
         include: {
           account: { select: { id: true, name: true } },
-          category: { select: { id: true, name: true } },
+          allocations: {
+            select: { categoryId: true, category: { select: { id: true, name: true } } },
+            orderBy: { createdAt: "asc" },
+          },
         },
       }),
       prisma.transaction.count({ where }),
     ]);
 
     return {
-      transactions: rows.map((r) => ({
-        id: r.id,
-        amount: r.amount.toString(),
-        currency: workspace.currency,
-        merchantRaw: r.merchantRaw,
-        merchantNormalized: r.merchantNormalized,
-        occurredAt: r.occurredAt.toISOString(),
-        accountName: r.account.name,
-        accountId: r.account.id,
-        categoryId: r.category?.id ?? null,
-        categoryName: r.category?.name ?? null,
-        categorizationSource: (r.categorizationSource ?? null) as Result["transactions"][number]["categorizationSource"],
-      })),
+      transactions: rows.map((r) => {
+        // Derive category from the first allocation that has one.
+        const primaryAlloc = r.allocations.find((a) => a.categoryId !== null);
+        return {
+          id: r.id,
+          amount: r.amount.toString(),
+          currency: workspace.currency,
+          merchantRaw: r.merchantRaw,
+          merchantNormalized: r.merchantNormalized,
+          occurredAt: r.occurredAt.toISOString(),
+          accountName: r.account.name,
+          accountId: r.account.id,
+          categoryId: primaryAlloc?.category?.id ?? null,
+          categoryName: primaryAlloc?.category?.name ?? null,
+        };
+      }),
       totalCount,
       hasMore: totalCount > rows.length,
       filtersApplied: resolveFilters(args, limit),

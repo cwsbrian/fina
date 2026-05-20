@@ -30,9 +30,14 @@ describe("categorizeTransaction tool", () => {
   it("sets categoryId and returns backfill count", async () => {
     const id = await seedTx();
     const res = await categorizeTransaction.run(ctx, { tx_id: id, category: "Coffee" });
-    expect(res.tx.categoryId).toBe(catId);
-    expect(res.tx.categorizationSource).toBe("manual");
+    expect(res.tx.allocations[0]!.categoryId).toBe(catId);
+    expect(res.tx.allocations[0]!.source).toBe("manual");
     expect(typeof res.backfilledCount).toBe("number");
+    // Allocations shape
+    expect(res.tx.allocations).toHaveLength(1);
+    expect(res.tx.allocations[0]!.categoryId).toBe(catId);
+    expect(res.tx.allocations[0]!.source).toBe("manual");
+    expect(res.tx.needsReclassification).toBe(false);
   });
 
   it("rejects cross-workspace tx_id (throws)", async () => {
@@ -52,5 +57,15 @@ describe("categorizeTransaction tool", () => {
     expect(categorizeTransaction.args.safeParse({ tx_id: "" }).success).toBe(false);
     expect(categorizeTransaction.args.safeParse({ category: "" }).success).toBe(false);
     expect(categorizeTransaction.args.safeParse({ tx_id: "x", category: "y" }).success).toBe(true);
+  });
+
+  it("result includes allocations for N=1 non-split tx after categorize", async () => {
+    const id = await seedTx();
+    const res = await categorizeTransaction.run(ctx, { tx_id: id, category: "Coffee" });
+    expect(Array.isArray(res.tx.allocations)).toBe(true);
+    expect(res.tx.allocations.length).toBeGreaterThanOrEqual(1);
+    const firstAlloc = res.tx.allocations[0]!;
+    expect(firstAlloc.categoryId).toBe(catId);
+    expect(firstAlloc.source).toBe("manual");
   });
 });

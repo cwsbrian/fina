@@ -23,8 +23,14 @@ type Result = {
     pending: boolean;
     source: "plaid" | "manual" | "csv";
     note: string | null;
-    categorizationSource: "mapping" | "ai" | "manual" | null;
     removedAt: string | null;
+    needsReclassification: boolean;
+    allocations: Array<{
+      id: string;
+      categoryId: string | null;
+      amount: string;
+      source: string | null;
+    }>;
     account: {
       id: string;
       name: string;
@@ -51,13 +57,14 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
         where: { id: args.tx_id, workspaceId: ctx.workspaceId },
         include: {
           account: { select: { id: true, name: true, type: true, subtype: true, currency: true } },
-          category: {
+          allocations: {
             select: {
-              id: true,
-              name: true,
-              parentId: true,
-              parent: { select: { name: true } },
+              id: true, categoryId: true, amount: true, source: true,
+              category: {
+                select: { id: true, name: true, parentId: true, parent: { select: { name: true } } },
+              },
             },
+            orderBy: { createdAt: "asc" },
           },
         },
       }),
@@ -67,6 +74,10 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
       }),
     ]);
     if (!tx) throw new Error("transaction_not_found");
+
+    // Derive top-level category from the first allocation that has one.
+    const primaryAlloc = tx.allocations.find((a) => a.categoryId !== null);
+    const cat = primaryAlloc?.category ?? null;
 
     return {
       transaction: {
@@ -80,8 +91,14 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
         pending: tx.pending,
         source: tx.source as Result["transaction"]["source"],
         note: tx.note,
-        categorizationSource: (tx.categorizationSource ?? null) as Result["transaction"]["categorizationSource"],
         removedAt: tx.removedAt?.toISOString() ?? null,
+        needsReclassification: tx.needsReclassification,
+        allocations: tx.allocations.map((a) => ({
+          id: a.id,
+          categoryId: a.categoryId,
+          amount: a.amount.toString(),
+          source: a.source,
+        })),
         account: {
           id: tx.account.id,
           name: tx.account.name,
@@ -89,12 +106,12 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
           subtype: tx.account.subtype,
           currency: tx.account.currency,
         },
-        category: tx.category
+        category: cat
           ? {
-              id: tx.category.id,
-              name: tx.category.name,
-              parentId: tx.category.parentId,
-              parentName: tx.category.parent?.name ?? null,
+              id: cat.id,
+              name: cat.name,
+              parentId: cat.parentId,
+              parentName: cat.parent?.name ?? null,
             }
           : null,
       },

@@ -291,10 +291,10 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
     expect(res.statusCode).toBe(200);
     expect(geminiMock.generateContent.length).toBe(0);
 
-    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: localTxId } });
+    const afterAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: localTxId } });
     const groceriesCat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
-    expect(after.categoryId).toBe(groceriesCat.id);
-    expect(after.categorizationSource).toBe("ai");
+    expect(afterAlloc?.categoryId).toBe(groceriesCat.id);
+    expect(afterAlloc?.source).toBe("ai");
     await app.close();
   });
 });
@@ -712,9 +712,10 @@ describe("GET /workspaces/:id/transactions", () => {
     const { owner, wsId } = await setupItemAndTxs(app, 3);
     const cat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Other" } });
     const tx = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
-    await prisma.transaction.update({
-      where: { id: tx.id },
-      data: { categoryId: cat.id, categorizationSource: "manual" },
+    // Update the allocation (source of truth for ?uncategorizedOnly filter after Task 8)
+    await prisma.transactionAllocation.updateMany({
+      where: { transactionId: tx.id },
+      data: { categoryId: cat.id, source: "manual" },
     });
     const all = await app.inject({
       method: "GET",
@@ -728,7 +729,9 @@ describe("GET /workspaces/:id/transactions", () => {
       headers: { cookie: owner.cookie, "x-workspace-id": wsId },
     });
     expect(uncat.json().transactions.length).toBe(2);
-    expect(uncat.json().transactions.every((t: { categoryId: string | null }) => t.categoryId === null)).toBe(true);
+    expect(uncat.json().transactions.every((t: { allocations: Array<{ categoryId: string | null }> }) =>
+      t.allocations.every((a) => a.categoryId === null),
+    )).toBe(true);
     await app.close();
   });
 });
