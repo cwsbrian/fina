@@ -21,8 +21,19 @@ export default function SignInScreen() {
     setBusy(true);
     setErr(null);
     try {
-      const result = await signIn.email({ email: email.trim(), password });
+      const trimmedEmail = email.trim();
+      const result = await signIn.email({ email: trimmedEmail, password });
       if (result.error) {
+        if (
+          result.error.code === "EMAIL_NOT_VERIFIED" ||
+          /verif/i.test(result.error.message ?? "")
+        ) {
+          router.replace({
+            pathname: "/(auth)/verify",
+            params: { email: trimmedEmail },
+          });
+          return;
+        }
         throw new Error(result.error.message ?? "Sign in failed");
       }
       router.replace("/(tabs)");
