@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "installCommand": "cd ../.. && pnpm install --frozen-lockfile=false --filter @fina/web... --filter @fina/shared",
+  "buildCommand": "cd ../.. && pnpm nx build web",
+  "outputDirectory": ".next",
+  "ignoreCommand": "npx nx-ignore web"
+}
