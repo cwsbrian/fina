@@ -58,8 +58,9 @@ shape diverges enough to justify a separate entity:
 | Optional fields | `note String?` |
 | State tracking | Two nullable timestamp columns: `matchedTxId String?` (cron sets when auto-match succeeds), `dismissedAt DateTime?` (user explicit dismiss). State is derived from these — no enum column. |
 | Auto-match rule | `Transaction.occurredAt::date = scheduledDate AND ≥1 allocation has categoryId = scheduleCategoryId AND tx.removedAt IS NULL`. Amount ignored. |
-| Auto-match scope | First matching tx wins. Order: `occurredAt asc, id asc`. |
-| Cron frequency | Daily, runs after the existing Plaid sync job so newly-synced tx are visible. |
+| Auto-match scope | **One-to-one**: each schedule consumes at most ONE tx. Within a workspace+date+category, schedule order is `scheduledDate asc, createdAt asc, id asc`; tx order is `occurredAt asc, id asc`. Already-consumed tx ids are excluded from later schedules' candidate pool. |
+| Cron schedule | Concrete cron string `"5 9 * * *"` (09:05 UTC) — runs 5 minutes after the existing daily Plaid refresh at `"0 9 * * *"` (`apps/api/src/cron/scheduler.ts`). Scheduler entries are independent `new Cron("expr")` registrations, NOT chained — the 5-minute offset is a best-effort ordering, not a guarantee. Budget aggregation uses anti-join semantics (§6.1) so today's flicker is impossible regardless of cron lag. |
+| Timezone | Schedules store dates as Postgres `@db.Date` (wall-clock). "Today" comparisons are computed in the **workspace owner's user timezone** — resolved via the first owner-membership's `User.tz`. For budget aggregation, `today` uses the calling user's tz (matches the existing `compareSpendingVsBudgetService` pattern). |
 | Allow past `scheduledDate` on create | Yes — user may backfill a forgotten expectation. |
 | API surface | Chat tools primary; HTTP routes for completeness (no PATCH). |
 | Role gate | `editor+` for write paths; chat tool runs under editor session. |
@@ -121,12 +122,24 @@ model Category {
 
 | Condition | State | Behavior |
 |---|---|---|
-| `matchedTxId IS NOT NULL` | resolved (auto-matched) | counted in `spent` via the matched tx; NOT in `planned` |
-| `dismissedAt IS NOT NULL` | dismissed | excluded from `planned` and from unresolved-list |
-| Else, `scheduledDate >= today` | upcoming | counted in `planned` |
-| Else (`scheduledDate < today` and both null) | unresolved | counted in `planned`? **No** — past unresolved is the cue to ask, NOT to count |
+| `matchedTxId IS NOT NULL AND matchedTx.removedAt IS NULL` | resolved-matched | counted in `spent` via the matched tx; NOT in `planned` |
+| `matchedTxId IS NOT NULL AND matchedTx.removedAt IS NOT NULL` | unresolved (matched-tx-removed) | the soft-removed match invalidates the resolution. See §5.4 for the cleanup hook. Treated as unresolved until re-matched. |
+| `dismissedAt IS NOT NULL` (and not matched) | resolved-dismissed | excluded from `planned` and from unresolved-list |
+| Else, `scheduledDate > today` (strict future) | upcoming | counted in `planned` |
+| Else, `scheduledDate = today` AND no tx exists on that date+category | upcoming-today | counted in `planned` (anti-join — see §6.1) |
+| Else, `scheduledDate = today` AND tx exists on that date+category | provisional-matched | excluded from `planned` (tx already counted in `spent`); cron will set `matchedTxId` on next run |
+| Else (`scheduledDate < today` and both null) | unresolved | NOT counted in `planned` — surface as prompt |
 
 Past-unresolved rationale: counting an unresolved past schedule would inflate the current period's `planned` indefinitely. Better to surface it as a prompt and let the user act.
+
+Today's anti-join rationale: prevents same-day double-counting between `spent` (real tx) and `planned` (schedule). Once the matching tx exists, the schedule is implicitly "covered" regardless of whether cron has run.
+
+**Status filter values for `listScheduledSpends`**:
+- `"upcoming"` — `upcoming OR upcoming-today` (excludes `provisional-matched`)
+- `"unresolved"` — past unresolved + matched-tx-removed
+- `"resolved-matched"` — matched + matchedTx still active
+- `"resolved-dismissed"` — dismissed (and not matched)
+- `"all"` — every schedule
 
 ### 3.3 Migration
 
@@ -215,6 +228,8 @@ Result: { schedule: { id, dismissedAt } } | { dismissed: false, alreadyDismissed
 
 Sets `dismissedAt = now()`. Idempotent — second call on the same id returns `alreadyDismissed: true`.
 
+**Reject dismiss on already-matched schedules**: if `matchedTxId IS NOT NULL` (and matchedTx is not soft-removed), return 400 `already_matched`. Rationale: setting `dismissedAt` on a matched schedule creates hidden state — derivation correctly prefers matched, but if the matched tx is later soft-removed (clearing matchedTxId via the §5.4 hook), the lingering `dismissedAt` causes the schedule to be incorrectly classified as `resolved-dismissed` instead of `unresolved`. Cleaner to reject dismiss outright.
+
 #### `removeScheduledSpend`
 
 ```ts
@@ -229,7 +244,7 @@ Hard delete. Used when user wants the schedule gone entirely (vs. just marking i
 - **`POST /workspaces/:id/schedules`** — body matches `addScheduledSpend` args. Returns `{ schedule: {...} }`.
 - **`GET /workspaces/:id/schedules`** — query: `?from=&to=&status=`. Returns `{ schedules: [...] }`.
 - **`POST /workspaces/:id/schedules/:scheduleId/dismiss`** — no body. Returns dismiss result.
-- **`DELETE /workspaces/:id/schedules/:scheduleId`** — no body. Returns `{ removed: bool }`.
+- **`DELETE /workspaces/:id/schedules/:scheduleId`** — no body. Returns `{ removed: true }` on first call, `{ removed: false, alreadyRemoved: true }` if not found (idempotent — same pattern as `removeTransactionService`). No 404 on missing id.
 
 No PATCH endpoint (per YAGNI decision).
 
@@ -238,9 +253,10 @@ Error mapping:
 |---|---|---|
 | 400 | `invalid_body` | Zod parse failure |
 | 400 | `invalid_amount` / `invalid_date` / `invalid_note` | Validator failures |
+| 400 | `already_matched` | dismiss attempted on a schedule with active matchedTxId |
 | 400 | `workspace_mismatch` | path `:id` != session workspace |
 | 403 | `insufficient_role` | viewer trying to write |
-| 404 | `not_found` | schedule id not in workspace, OR category_not_found for non-existent/archived category |
+| 404 | `not_found` | schedule id not in workspace (POST dismiss only — DELETE is idempotent) OR `category_not_found` for non-existent/archived category on POST create |
 
 ### 4.3 Confirmation flow
 
@@ -261,46 +277,83 @@ Wire into the scheduler (`apps/api/src/cron/scheduler.ts`) as a **separate cron 
 ### 5.2 Algorithm
 
 For each active workspace:
-1. Open `withWorkspaceLock(workspaceId, async (tx) => {...})`.
-2. Inside the lock, query unresolved schedules:
+1. Resolve workspace owner's `User.tz` → compute `today` in that tz.
+2. Open `withWorkspaceLock(workspaceId, async (tx) => {...})`.
+3. Inside the lock, query unresolved schedules with deterministic ordering:
    ```ts
    const candidates = await tx.scheduledSpend.findMany({
      where: {
        workspaceId,
        matchedTxId: null,
        dismissedAt: null,
-       scheduledDate: { lte: today },  // only past-or-today; future schedules don't need matching yet
+       scheduledDate: { lte: today },  // past-or-today
      },
-     orderBy: { scheduledDate: "asc" },
+     orderBy: [
+       { scheduledDate: "asc" },
+       { createdAt: "asc" },
+       { id: "asc" },  // tiebreaker for createdAt ties
+     ],
    });
    ```
-3. For each candidate, look for a matching tx:
+4. Maintain a `usedTxIds: Set<string>` across the inner loop to enforce one-to-one (a tx can match at most one schedule per cron run):
    ```ts
-   const match = await tx.transaction.findFirst({
-     where: {
-       workspaceId,
-       removedAt: null,
-       occurredAt: { gte: dayStart, lt: nextDayStart },
-       allocations: { some: { categoryId: candidate.categoryId } },
-     },
-     orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
-     select: { id: true },
-   });
-   if (match) {
-     await tx.scheduledSpend.update({
-       where: { id: candidate.id },
-       data: { matchedTxId: match.id },
+   const usedTxIds = new Set<string>();
+   for (const candidate of candidates) {
+     const dayStart = ... // start of candidate.scheduledDate in workspace tz
+     const nextDayStart = ... // dayStart + 1 day
+     const match = await tx.transaction.findFirst({
+       where: {
+         workspaceId,
+         removedAt: null,
+         occurredAt: { gte: dayStart, lt: nextDayStart },
+         allocations: { some: { categoryId: candidate.categoryId } },
+         id: { notIn: Array.from(usedTxIds) },  // exclude already-consumed tx
+       },
+       orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+       select: { id: true },
      });
+     if (match) {
+       await tx.scheduledSpend.update({
+         where: { id: candidate.id },
+         data: { matchedTxId: match.id },
+       });
+       usedTxIds.add(match.id);
+     }
    }
    ```
-4. Schedules with no match remain `matchedTxId: null` (the unresolved state) — picked up by daily-brief later.
+5. Schedules with no match remain `matchedTxId: null` — picked up by daily-brief later.
+
+The `usedTxIds.notIn` clause ensures that on a day where the user has fewer matching tx than schedules, only the first N schedules (in order above) match; the rest stay unresolved. Each subsequent cron run can pick up new tx without revisiting already-matched schedules (those are filtered out by `matchedTxId: null`).
 
 ### 5.3 Edge cases
 
-- **Multiple schedules same date+category**: each is matched independently against the same tx pool. Each schedule that finds a candidate locks onto the first tx by `(occurredAt asc, id asc)`. Two schedules on the same day with one tx → only the first schedule matches; second stays unresolved. Acceptable — user can dismiss the second or it surfaces in the brief.
-- **Same tx matching multiple schedules**: yes — we don't deduplicate. The matched tx may show up under multiple schedules' `matchedTxId`. Budget aggregation treats this as a single tx contribution to spending (it always was one tx); the schedule "completed" state is just informational.
-- **Tx deleted after match**: `onDelete: SetNull` on the FK clears `matchedTxId` automatically. The schedule goes back to unresolved state and resurfaces in the next brief.
-- **Schedule scheduledDate in the future**: skipped (filter is `lte: today`).
+- **Multiple schedules same date+category, one tx**: per §5.2's `usedTxIds.notIn` clause, only the first schedule (by `scheduledDate asc, createdAt asc, id asc`) matches; the rest stay unresolved. User can dismiss extras or they surface in the brief.
+- **Multiple schedules same date+category, multiple tx**: schedules consume tx 1:1 in the deterministic order. Extras (on either side) remain unresolved.
+- **Tx HARD-deleted after match**: `onDelete: SetNull` on the FK clears `matchedTxId` automatically. The schedule goes back to unresolved state and resurfaces in the next brief.
+- **Tx SOFT-removed after match** (`removedAt = now()`): the FK doesn't fire. See §5.4 for the explicit cleanup hook.
+- **Schedule scheduledDate in the future**: skipped by the cron query (filter is `lte: today`). Counted in `planned` via §6.1.
+
+### 5.4 Cleanup hook on tx soft-removal
+
+When a transaction is soft-removed via `removeTransactionService` (`apps/api/src/transactions/remove.ts`) OR via Plaid's `markRemoved` (`apps/api/src/plaid/sync.ts:markRemoved`), the schedule's `matchedTxId` becomes stale — it points to a tx that is no longer counted in `spent`.
+
+**Fix**: both code paths, inside the existing workspace lock callback, clear `matchedTxId` on any schedule referencing the removed tx:
+
+```ts
+// In removeTransactionService and markRemoved, after setting tx.removedAt:
+await tx.scheduledSpend.updateMany({
+  where: { matchedTxId: txId },
+  data: { matchedTxId: null },
+});
+```
+
+Effect: the schedule reverts to unresolved state. On the next cron run, the match scan re-evaluates and finds a NEW tx (if any) or leaves it unresolved.
+
+**Alternative considered**: derive resolved state at read time as `matchedTxId != null AND matchedTx.removedAt IS NULL` (no cleanup hook needed). Rejected because:
+1. Every list/budget/brief query would need to join `matchedTx` and check `removedAt`, increasing query cost.
+2. The match cron would need to re-evaluate already-matched schedules to catch resurrections — currently it skips `matchedTxId: null` only.
+
+The cleanup-hook approach keeps reads simple (status derivation is two boolean column checks) and lets the cron skip resolved schedules.
 
 ---
 
@@ -314,10 +367,38 @@ For each active workspace:
 - Sum of `amount` from `scheduled_spends` where:
   - `workspaceId = ctx.workspaceId`
   - `categoryId = budget.categoryId`
-  - `scheduledDate >= today`  ← only future/today schedules count
-  - `scheduledDate >= period.gte AND scheduledDate < period.lt`  ← within the period
-  - `matchedTxId IS NULL`  ← not already realized
-  - `dismissedAt IS NULL`  ← not dismissed
+  - `scheduledDate >= today` (in calling user's tz) — only future/today schedules count
+  - `scheduledDate >= period.gte AND scheduledDate < period.lt` — within the period
+  - `matchedTxId IS NULL` — not already realized
+  - `dismissedAt IS NULL` — not dismissed
+  - **Anti-join**: NOT EXISTS a tx in the same workspace+category on `scheduledDate` (`Transaction.occurredAt::date = scheduledDate AND tx.workspaceId = X AND tx.removedAt IS NULL AND ≥1 allocation has matching categoryId AND ≥1 allocation has amount > 0`).
+
+The anti-join eliminates same-day double-counting: a schedule for today whose matching tx exists (auto-categorized by Plaid sync) is excluded from `planned` regardless of whether the match cron has run yet. The schedule's amount only contributes to `planned` when there's NO real tx covering it.
+
+**Prisma sketch**:
+```ts
+const schedulesPlanned = await prisma.scheduledSpend.findMany({
+  where: {
+    workspaceId,
+    categoryId: { in: budgetCategoryIds },
+    scheduledDate: { gte: today, gte: periodGte, lt: periodLt },
+    matchedTxId: null,
+    dismissedAt: null,
+    NOT: {
+      // anti-join: exclude schedules whose date+category already has a covering tx
+      // Prisma can't express NOT EXISTS directly, so we do an explicit anti-join:
+      // for each schedule, check there's no tx matching its day+category.
+    },
+  },
+  select: { categoryId: true, amount: true, scheduledDate: true },
+});
+// ...then in JS, do per-schedule anti-join check via a single tx.transactionAllocation.findMany
+// scoped to the days+categories of the candidate schedules, building a Set<`${date}|${categoryId}`>.
+// Schedules whose day+category appears in the set are filtered out.
+// Then group remaining schedules by categoryId and sum.
+```
+
+The anti-join is best implemented as a 2-query approach: (1) load candidate schedules, (2) load matching tx allocations for the same day+category set, (3) filter in JS. For the small N expected (active budget categories × period days), this is acceptable. Future optimization could push this into raw SQL `NOT EXISTS`.
 
 **Past unresolved** (`scheduledDate < today AND both null`) is intentionally NOT counted — counting it would inflate "planned" forever.
 
@@ -369,7 +450,9 @@ Today's `status = spentPct > todayPct * 1.05 ? "over-pace" : "on-pace"`. We keep
 | `apps/api/src/chat/tools/index.ts` | MODIFY | Register the 5 new tools |
 | `apps/api/src/budgets/service.ts` | MODIFY | Add `planned` aggregation to `compareSpendingVsBudgetService` |
 | `apps/api/src/chat/tools/compare-spending-vs-budget.ts` | MODIFY | Response schema gains `planned` + `plannedPct` |
-| `apps/api/src/intents/service.ts` | MODIFY | Register the 3 new write tools (`addScheduledSpend`, `dismissScheduledSpend`, `removeScheduledSpend`) in the dispatch map so confirmation/consume flow handles them like existing write tools (`addRecurring`, `setBudget`, etc.) |
+| `apps/api/src/intents/service.ts` | MODIFY | Add `addScheduledSpend`, `dismissScheduledSpend`, `removeScheduledSpend` to the `CONFIRMABLE_TOOLS` const tuple (~line 23). The consume dispatch in `consumeIntentService` (~line 98) already routes by tool name — no separate dispatch table to update. |
+| `apps/api/src/audit/service.ts` | MODIFY | Add the same 3 tools to `AUDIT_WRITE_TOOLS` set + `TARGET_TYPE_MAP` (`addScheduledSpend` → `"scheduled_spend"`, dismiss/remove same) + extend `extractTargetId` switch to return `result.schedule.id` for the new actions. |
+| `apps/api/src/chat/tools/present-confirm-card.ts` | MODIFY | If the file enumerates confirmable tools in the LLM-facing description text, add the new 3. Verify by reading the file's existing pattern. |
 | Tests for each src file | NEW/MODIFY | See §8 |
 
 ### 7.1 Service signatures
@@ -433,9 +516,9 @@ The match function is called from inside `withWorkspaceLock`'s callback — its 
 | `dismiss` happy | Sets `dismissedAt`, returns success |
 | `dismiss` already-dismissed | Idempotent — returns `alreadyDismissed: true` |
 | `dismiss` non-existent | `not_found` |
-| `dismiss` matched schedule | Allowed — sets `dismissedAt`. Status derivation always prefers `matchedTxId` over `dismissedAt` (per §3.2 table order), so the schedule keeps `resolved-matched` status. The `dismissedAt` value persists harmlessly. No error. |
-| `remove` happy | Hard delete |
-| `remove` non-existent | Returns `{ removed: false }` (idempotent), not error |
+| `dismiss` matched schedule | **400 `already_matched`** (per §4.1 update) |
+| `remove` happy | Hard delete, returns `{ removed: true }` |
+| `remove` non-existent | Idempotent — returns `{ removed: false, alreadyRemoved: true }`, NOT 404 |
 
 ### 8.2 Match function unit tests
 
@@ -454,6 +537,11 @@ The match function is called from inside `withWorkspaceLock`'s callback — its 
 | Idempotent — schedule already dismissed | Schedule with dismissedAt set | Match function ignores it |
 | Schedule date in future | Schedule 7 days from now | Skipped (date > today filter) |
 | Schedule split-tx category | Schedule Health today, tx today with allocations [Health $60, Other $40] | Matched (allocation predicate) |
+| **One-to-one: 2 schedules, 1 tx, same date+category** | Two schedules same day+category, single tx | First schedule (by createdAt asc) matches; second stays unresolved |
+| **One-to-one: 2 schedules, 2 tx, same date+category** | Two schedules + two tx in same day+category | Each schedule consumes distinct tx (by occurredAt asc, id asc) |
+| **Soft-removal cleanup: matchedTxId cleared on tx soft-remove** | Schedule resolved via match, then `removeTransactionService` soft-removes the matched tx | Schedule's `matchedTxId` reverts to null via §5.4 cleanup hook |
+| **Soft-removal cleanup: cron re-matches on next run** | After cleanup hook fires, next cron run finds new tx (or none) | matchedTxId set to new tx OR stays null |
+| **Plaid markRemoved cleanup** | Schedule matched to a Plaid tx; markRemoved soft-removes it | Same as above — cleanup hook in markRemoved clears matchedTxId |
 
 ### 8.3 Budget aggregation tests
 
@@ -466,10 +554,12 @@ Extend `apps/api/tests/budgets.service.test.ts`:
 | `planned` excludes matched | Schedule with matchedTxId set | `planned === "0.00"` |
 | `planned` excludes dismissed | Schedule with dismissedAt set | `planned === "0.00"` |
 | `planned` sums multiple upcoming schedules | Two upcoming schedules in same category | `planned === sum` |
+| **`planned` anti-join: today's schedule with covering tx** | Schedule for today $100 in cat X, real tx today in cat X for $80 (matchedTxId NOT yet set by cron) | `planned === "0.00"` (anti-join filters it out before cron runs) |
+| **`planned` anti-join: today's schedule with NO covering tx** | Schedule for today $100 in cat X, no tx today in cat X | `planned === "100.00"` |
 | `plannedPct` calculation | budget $200, planned $50 | `plannedPct === 25` |
 | `remaining` includes planned | budget $200, spent $80, planned $50 | `remaining === "70.00"` |
 | Period boundary | Schedule date = period.lt | Excluded (strict less-than) |
-| Period boundary 2 | Schedule date = period.gte (today) | Included |
+| Period boundary 2 | Schedule date = period.gte (today) | Included if no covering tx, excluded if covering tx exists |
 
 ### 8.4 Cron job tests
 
@@ -520,17 +610,25 @@ One test file per new tool. Standard pattern from existing chat tool tests — c
 - [ ] All write services use `withWorkspaceLock`
 - [ ] Category lookup re-checked inside lock (archivedAt invalidation) — same pattern as `manual-categorize` post-round-3
 - [ ] Auto-match cron filters `scheduledDate <= today AND matchedTxId IS NULL AND dismissedAt IS NULL`
+- [ ] Auto-match enforces ONE-to-ONE via `usedTxIds.notIn` clause across the inner loop (§5.2)
+- [ ] Auto-match schedule order: `scheduledDate asc, createdAt asc, id asc`
+- [ ] Auto-match tx order: `occurredAt asc, id asc`
+- [ ] Cron uses **workspace owner's tz** to compute "today"; concrete cron string `"5 9 * * *"` registered as a separate scheduler entry
 - [ ] Match query uses `allocations: { some: { categoryId } }` predicate (split tx aware)
 - [ ] Match query filters `removedAt IS NULL` on the tx
-- [ ] Multiple schedules same day same category: each matched independently, first-wins on shared tx
-- [ ] `compareSpendingVsBudget` adds `planned` field — sums upcoming schedules only (today's date and forward), within period
+- [ ] Soft-removal cleanup hook in `removeTransactionService` AND `plaid/sync.ts:markRemoved` clears `matchedTxId` on schedules referencing the removed tx (§5.4)
+- [ ] `compareSpendingVsBudget` adds `planned` field — sums schedules where (matchedTxId NULL AND dismissedAt NULL AND scheduledDate >= today AND within period AND **NOT EXISTS covering tx** via anti-join)
+- [ ] `planned` anti-join prevents same-day double-count between spent and planned
 - [ ] Past unresolved schedules NOT counted in `planned`
-- [ ] `compare-spending-vs-budget` chat tool response schema updated
+- [ ] Both `CompareSpendingOutput` (budget service) AND `compare-spending-vs-budget` chat tool Result type extended with `planned: string` + `plannedPct: number`
+- [ ] `dismissScheduledSpend` rejects on already-matched (active matchedTxId) with 400 `already_matched`
 - [ ] No PATCH endpoint (YAGNI)
-- [ ] No HTTP audit log (deferred to `1C-audit-http`)
+- [ ] No HTTP audit log per route — but the 3 new write tools ARE added to `AUDIT_WRITE_TOOLS` set + `TARGET_TYPE_MAP` + `extractTargetId` switch so chat-tool audit coverage matches existing patterns
 - [ ] Chat tools registered in `chat/tools/index.ts`
+- [ ] Confirmation: 3 new write tools added to `CONFIRMABLE_TOOLS` const tuple in `intents/service.ts`
 - [ ] HTTP routes registered in `server.ts`
 - [ ] Strict Decimal equality on amount validation
-- [ ] Date stored as Postgres `DATE` (no timezone), parsed strict YYYY-MM-DD
-- [ ] Idempotent dismiss + idempotent-ish remove (returns `removed: false` rather than 404 on non-existent)
+- [ ] Date stored as Postgres `DATE` (no timezone), parsed strict YYYY-MM-DD; "today" comparisons use workspace owner's tz (cron) or calling user's tz (budget aggregation)
+- [ ] Idempotent dismiss returns `alreadyDismissed: true`; idempotent remove returns `removed: false, alreadyRemoved: true` (NOT 404)
 - [ ] `listUnresolvedSchedules` chat tool exists as a clean entry for the Phase 2 daily-brief plan
+- [ ] `listScheduledSpends` `status` filter values: `"upcoming" | "unresolved" | "resolved-matched" | "resolved-dismissed" | "all"`
