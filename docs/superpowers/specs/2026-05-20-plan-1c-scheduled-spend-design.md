@@ -58,7 +58,7 @@ shape diverges enough to justify a separate entity:
 | Required fields | `workspaceId`, `categoryId`, `amount Decimal(14,2)`, `scheduledDate Date` |
 | Optional fields | `note String?` |
 | State tracking | Two nullable timestamp columns: `matchedTxId String?` (cron sets when auto-match succeeds), `dismissedAt DateTime?` (user explicit dismiss). State is derived from these — no enum column. |
-| Auto-match rule | `dateKeyInTz(Transaction.occurredAt, workspaceOwnerTz) = scheduledDate` AND `≥1 allocation has categoryId = scheduleCategoryId AND amount > 0` AND `Transaction.amount > 0` AND `tx.removedAt IS NULL`. Refund tx (negative amount) and refund-side allocations are excluded — they shouldn't silently resolve a planned expense. See §5.2 for the implementation. |
+| Auto-match rule | `dateKeyInTz(Transaction.occurredAt, workspaceOwnerTz) = scheduledDate` AND `≥1 allocation has categoryId = scheduleCategoryId` AND `tx.removedAt IS NULL`. **Amount is ignored** — any tx in the category on that day satisfies the match, including refunds/credits. User direction: "amount 는 상관 없어, 카테고리만 맞으면 됨." Rationale: schedule is a category+date intent, not an amount commitment; any activity in that category on that day is a reasonable signal that the user dealt with what they planned. |
 | Auto-match scope | **One-to-one**: each schedule consumes at most ONE tx. Within a workspace+date+category, schedule order is `scheduledDate asc, createdAt asc, id asc`; tx order is `occurredAt asc, id asc`. Already-consumed tx ids are excluded from later schedules' candidate pool. |
 | Cron schedule | Concrete cron string `"5 9 * * *"` (09:05 UTC) — runs 5 minutes after the existing daily Plaid refresh at `"0 9 * * *"` (`apps/api/src/cron/scheduler.ts`). Scheduler entries are independent `new Cron("expr")` registrations, NOT chained — the 5-minute offset is a best-effort ordering, not a guarantee. Budget aggregation uses anti-join semantics (§6.1) so today's flicker is impossible regardless of cron lag. |
 | Timezone | Schedules store dates as Postgres `@db.Date` (wall-clock). "Today" comparisons are computed in the **workspace owner's user timezone** — resolved via the first owner-membership's `User.tz`. For budget aggregation, `today` uses the calling user's tz (matches the existing `compareSpendingVsBudgetService` pattern). |
@@ -320,15 +320,17 @@ For each active workspace:
        where: {
          workspaceId,
          removedAt: null,
-         amount: { gt: 0 },  // exclude refund/credit tx
          occurredAt: { gte: dayStart, lt: nextDayStart },
          allocations: {
-           some: { categoryId: candidate.categoryId, amount: { gt: 0 } },
+           some: { categoryId: candidate.categoryId },
          },
        },
        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
        select: { id: true },
        // No `take` — candidate set per day is typically small.
+       // Amount is intentionally NOT filtered (per spec §2): any tx with an
+       // allocation in this category on this day satisfies the match,
+       // regardless of sign. Refunds resolve the schedule too.
      });
      const pickedMatch = matches.find(
        (m) => !usedTxAllocations.has(`${m.id}|${candidate.categoryId}`),
@@ -345,8 +347,6 @@ For each active workspace:
 6. Schedules with no match remain `matchedTxId: null` — picked up by daily-brief later.
 
 **Consumption model alignment**: keying `usedTxAllocations` by `(txId, categoryId)` matches the budget anti-join's per-bucket consumption (§6.1). A split tx with `[Health $60, Grocery $40]` can match BOTH a Health schedule AND a Grocery schedule (one each). Without this alignment, cron and budget would disagree: a split tx might match 1 Health schedule via cron, then anti-join in budget could also "cover" a Grocery schedule even though cron didn't match anything in Grocery.
-
-**Refund guard rationale**: `amount: { gt: 0 }` on both tx and allocation filters out refund/credit tx — those should NOT silently resolve a planned expense. Refunds are a separate UX concern (the user expected to spend $300, the refund means they spent less or paid for the wrong thing). Surfacing the schedule as unresolved lets the brief ask.
 
 The pre-load step is what makes the one-to-one rule durable across cron runs: a tx already matched by Schedule A in run 1 will NOT be matched by Schedule B in run 2 (or later). Without this pre-load, run 2 starts with an empty `usedTxIds` and could double-match.
 
@@ -432,7 +432,7 @@ The cleanup-hook approach keeps reads simple (status derivation is two boolean c
 **Cardinality-aware anti-join** — replaces a simple `Set<date|categoryId>` with per-bucket consumption:
 
 For each `(scheduledDate, categoryId)` bucket among candidate schedules:
-1. Load all `Transaction` rows where `dateKeyInTz(occurredAt, callingUserTz) = scheduledDate` AND `removedAt IS NULL` AND `≥1 allocation has matching categoryId AND allocation.amount > 0`, ordered by `occurredAt asc, id asc`. Use `dateKeyInTz` (existing helper from `apps/api/src/chat/tools/periods.ts`) so the comparison matches the user-tz boundaries the rest of the system uses.
+1. Load all `Transaction` rows where `dateKeyInTz(occurredAt, callingUserTz) = scheduledDate` AND `removedAt IS NULL` AND `≥1 allocation has matching categoryId`, ordered by `occurredAt asc, id asc`. Use `dateKeyInTz` (existing helper from `apps/api/src/chat/tools/periods.ts`) so the comparison matches the user-tz boundaries the rest of the system uses. Amount is intentionally NOT filtered (per §2).
 2. Count tx in that bucket = T. Count schedules in that bucket = S (ordered by `createdAt asc, id asc`).
 3. **First `min(T, S)` schedules in the bucket are "covered"** — excluded from `planned`. The remaining `S - min(T, S)` schedules (if S > T) ARE included.
 
@@ -492,11 +492,9 @@ const txUpperBound = padUpperDay(scheduleUpperBound, tz);
 const allocs = await prisma.transactionAllocation.findMany({
   where: {
     categoryId: { in: budgetCategoryIds },
-    amount: { gt: 0 },
     transaction: {
       workspaceId,
       removedAt: null,
-      amount: { gt: 0 },  // also exclude refund tx from coverage (matches cron §5.2)
       occurredAt: { gte: txLowerBound, lt: txUpperBound },
     },
   },
@@ -505,6 +503,11 @@ const allocs = await prisma.transactionAllocation.findMany({
     transaction: { select: { id: true, occurredAt: true } },
   },
 });
+// Note: no amount > 0 filter — per spec §2, any tx in the bucket counts as a
+// covering tx for the anti-join, matching the cron's matching rule. The budget
+// service's separate `spent` aggregation DOES filter amount > 0 (because spent
+// is about counting positive expenses), but the anti-join is about "did the
+// user have any activity in this category on this day."
 
 // 3. Group by bucket, deduping tx ids — a tx with TWO same-category allocations
 //    still counts as ONE covering tx (otherwise a split tx with duplicate same-cat
