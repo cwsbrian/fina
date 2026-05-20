@@ -31,12 +31,16 @@ predicate. No separate `type` field or message-count query.
 
 - The LLM dispatcher is still **workspace-scoped per turn**: it sees
   one workspace's data, writes target that workspace, audit rows are
-  scoped to it.
+  scoped to it. `processChatTurn(env, { id, workspaceId }, …)`
+  (turn.ts:114) keeps a non-null `workspaceId` argument — binding
+  happens **before** dispatch.
 - All write tools (`addTransaction`, `mapMerchantToCategory`,
   `addScheduledSpend`, etc.) still take `ctx.workspaceId` and run
   inside `withWorkspaceLock`. **No tool code changes** in this plan.
 - The intent/confirmation flow (`1C-confirmation`) and audit log
   (`1C-audit`) are unchanged. They both key off `ctx.workspaceId`.
+- The `Pro tier` gate (`effectiveTier(userId) !== "pro" → 402`)
+  remains on every write/turn endpoint. See §5.3.
 
 ### What DOES change
 
@@ -206,7 +210,8 @@ POST /chat/threads/:tid/messages
   Body: { content: string, workspaceId: string }
   Response: { message, llmResponse, ... }
 
-  1. Find thread by id; assert thread.userId === session.userId (403 if not).
+  1. Find thread by id where userId === session.userId AND archivedAt
+     IS NULL (404 if missing or archived — matches today's chat.ts:218).
   2. Verify session.user is a member of body.workspaceId
      (404 not_member if not).
   3. If thread.workspaceId IS NOT NULL:
@@ -215,11 +220,11 @@ POST /chat/threads/:tid/messages
   4. Else (thread.workspaceId IS NULL):
        Atomic conditional bind —
          UPDATE chat_threads SET workspaceId = body.workspaceId
-           WHERE id = :tid AND workspaceId IS NULL;
+           WHERE id = :tid AND workspaceId IS NULL AND archivedAt IS NULL;
        On count == 1 → boundWsId = body.workspaceId.
-       On count == 0 → re-read the current workspaceId; it must equal
-       body.workspaceId, else 400 workspace_mismatch. boundWsId =
-       refetched value. (See §6.1 for the full race analysis.)
+       On count == 0 → re-read; reject 404 if archivedAt is now set,
+       else require workspaceId equals body.workspaceId or 400
+       workspace_mismatch. boundWsId = refetched value. (See §6.1.)
   5. Dispatch the message to the LLM with
        ctx = { workspaceId: boundWsId, userId, role }
      — same as today.
@@ -264,6 +269,12 @@ freshly-created empty thread (with `lastMessageAt = NULL`), the cron
 should reuse the existing one for continuity rather than picking the
 empty fresh one. Aligns with the new index direction in §2.1.
 
+**Implementation contract for Plan 2B**: every brief INSERT MUST bump
+`chat_threads.lastMessageAt` to the message's `createdAt` — otherwise
+this reuse query orders the brief-thread incorrectly. Today's
+chat.ts:255 already does this on every message insert (it's the same
+pattern); Plan 2B's brief path must too.
+
 The reuse-or-create rule produces:
 - One brief-thread per user that keeps growing while the user ignores
   it (typical Lite user behavior).
@@ -279,11 +290,11 @@ the schema and routes shape-compatible with the rule above.
 
 | Old | New | Behavior change |
 |---|---|---|
-| `POST /workspaces/:wsId/chat/threads` | `POST /chat/threads` | Body: `{ title? }`. No `workspaceId` (thread starts null). |
-| `GET /workspaces/:wsId/chat/threads` | `GET /chat/threads` | Returns all of user's threads. `workspace` field per row (`null` for unbound). |
-| `GET /workspaces/:wsId/chat/threads/:tid` | `GET /chat/threads/:tid` | Auth check: `thread.userId === session.userId`. |
-| `PATCH /workspaces/:wsId/chat/threads/:tid` | `PATCH /chat/threads/:tid` | Rename only. Same body shape `{ title }`. |
-| `DELETE /workspaces/:wsId/chat/threads/:tid` | `DELETE /chat/threads/:tid` | Soft archive (existing). |
+| `POST /workspaces/:wsId/chat/threads` | `POST /chat/threads` | Body: `{ title? }`. Response includes `workspaceId: null`. See §5.4. |
+| `GET /workspaces/:wsId/chat/threads` | `GET /chat/threads` | Returns all of user's threads (bound + unbound). Each row carries `workspaceId: string \| null`. See §5.4. |
+| `GET /workspaces/:wsId/chat/threads/:tid` | `GET /chat/threads/:tid` | Auth: `thread.userId === session.userId`. Response carries `workspaceId: string \| null`. Works on bound and unbound threads. |
+| `PATCH /workspaces/:wsId/chat/threads/:tid` | `PATCH /chat/threads/:tid` | Rename only. Body `{ title }`. **Auth by `userId` only — works on bound AND unbound threads.** Service-layer change required (see §5.5). |
+| `DELETE /workspaces/:wsId/chat/threads/:tid` | `DELETE /chat/threads/:tid` | Soft archive. **Auth by `userId` only — works on bound AND unbound threads.** Service-layer change required. |
 | `POST /workspaces/:wsId/chat/threads/:tid/messages` | `POST /chat/threads/:tid/messages` | Body now requires `workspaceId`. See §4.2. |
 
 **Intent consume route stays at `POST /workspaces/:id/intents/:intentId/consume`** — it is not nested under chat in the current code (verified
@@ -295,14 +306,90 @@ the consume route with that workspaceId in the URL — same as today.
 
 ### 5.1 Auth model
 
-Today: `requireWorkspaceMembership(wsId)` middleware reads URL param.
+Today: `requireWorkspaceContext(req, app, …)` middleware reads the
+`X-Workspace-Id` HTTP header (`apps/api/src/auth/context.ts:47`) +
+session cookie, returns `{ session, membership }`.
 
 After: `requireSession()` only. The route handler then asserts
 `thread.userId === session.userId` (for `:tid` routes) or just takes
 the user from the session (for `/threads` collection routes).
 
+**Workspace transport policy for `/chat/*` routes**: the
+`X-Workspace-Id` header is **ignored** on every `/chat/*` route.
+Workspace context is carried in the request **body** (the
+`workspaceId` field on `POST /chat/threads/:tid/messages`) and is
+authoritative. Tests must drop the `X-Workspace-Id` header from
+`/chat/*` calls; the existing test helper that injects it should
+either be replaced or made route-aware.
+
+Other workspace-scoped routes (`/workspaces/:id/transactions`,
+`/workspaces/:id/intents/:iid/consume`, etc.) keep the existing
+header + URL path convention.
+
 Reused middleware: the existing session/cookie auth from
 Better Auth — no rewrites.
+
+### 5.3 Response shapes
+
+All `/chat/*` endpoints serialize threads with this exact shape:
+
+```ts
+type ChatThreadDTO = {
+  id: string;
+  userId: string;
+  workspaceId: string | null;   // NEW field
+  title: string | null;
+  lastMessageAt: string | null;   // ISO 8601
+  archivedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+```
+
+`workspaceId` is a flat string id (not an inline `{id, name}`
+object). Clients fetch workspace metadata separately if they need it
+— v1 has 1 ws/user so the client already knows the workspace name.
+
+`POST /chat/threads` response: `{ thread: ChatThreadDTO }` with
+`workspaceId: null`, `lastMessageAt: null`, `title: null`,
+`archivedAt: null`.
+
+`GET /chat/threads` response: `{ threads: ChatThreadDTO[] }`,
+ordered by `lastMessageAt DESC NULLS LAST, createdAt DESC`.
+
+`GET /chat/threads/:tid` response: `{ thread: ChatThreadDTO,
+messages: ChatMessageDTO[] }`. Messages shape unchanged from today.
+
+### 5.4 Service-layer signature changes
+
+`apps/api/src/chat/threads.ts` currently keys every method by
+`{threadId, workspaceId}`. After this plan:
+
+- `threadsService.create({ userId, title? })` — was `{ workspaceId, title? }`.
+- `threadsService.list({ userId, includeArchived, limit })` — was workspaceId.
+- `threadsService.findOwned({ threadId, userId })` — was workspaceId.
+- `threadsService.patch({ threadId, userId, title })` — was workspaceId.
+- `threadsService.archive({ threadId, userId })` — was workspaceId.
+
+The lazy-bind happens in the **route handler** (not the service)
+because it depends on `body.workspaceId` arriving in the message
+endpoint specifically.
+
+### 5.5 Pro-tier gate
+
+The current chat endpoints check `effectiveTier(session.userId)` and
+return `402 upgrade_required` for non-Pro users (chat.ts:50, 167, 190,
+215). This gate **stays on** every `/chat/*` endpoint that mutates or
+runs an LLM turn:
+
+- `POST /chat/threads` — Pro required
+- `PATCH /chat/threads/:tid` — Pro required (rename is a Pro feature)
+- `DELETE /chat/threads/:tid` — Pro required (archive)
+- `POST /chat/threads/:tid/messages` — Pro required (the LLM turn)
+- `GET /chat/threads`, `GET /chat/threads/:tid` — **no Pro gate**;
+  read access is open so Lite users can still read their daily-brief
+  threads (Plan 2B writes those without a tier gate either — Lite
+  briefs are the entire point of the Lite tier per master design §13.3).
 
 ### 5.2 Workspace membership check moves to the message body
 
@@ -333,36 +420,39 @@ Handler logic (pseudocode):
 
 ```ts
 async function handleMessage(tid, body, session) {
+  // Reject archived threads up front (matches today's chat.ts:218 — 404).
   const thread = await prisma.chatThread.findFirst({
-    where: { id: tid, userId: session.userId },
+    where: { id: tid, userId: session.userId, archivedAt: null },
     select: { workspaceId: true },
   });
   if (!thread) throw 404;
 
-  let boundWsId: string;
-  if (thread.workspaceId !== null) {
-    // Already bound — validate the body matches.
-    if (thread.workspaceId !== body.workspaceId) throw 400 "workspace_mismatch";
-    boundWsId = thread.workspaceId;
-  } else {
+  // Wrap the bind in a transaction so a concurrent archive can't slip
+  // between the UPDATE and the refetch. Read-committed isolation is
+  // sufficient — Prisma's default for $transaction.
+  const boundWsId = await prisma.$transaction(async (tx) => {
+    if (thread.workspaceId !== null) {
+      // Already bound — validate the body matches.
+      if (thread.workspaceId !== body.workspaceId) throw 400 "workspace_mismatch";
+      return thread.workspaceId;
+    }
     // Unbound — attempt atomic conditional bind.
-    const updated = await prisma.chatThread.updateMany({
-      where: { id: tid, workspaceId: null },
+    const updated = await tx.chatThread.updateMany({
+      where: { id: tid, workspaceId: null, archivedAt: null },
       data: { workspaceId: body.workspaceId },
     });
-    if (updated.count === 1) {
-      boundWsId = body.workspaceId;
-    } else {
-      // Lost the race; another first-message bound it. Re-check by reading
-      // the current workspaceId — it MUST match the body's value, else 400.
-      const refetched = await prisma.chatThread.findFirstOrThrow({
-        where: { id: tid }, select: { workspaceId: true },
-      });
-      if (refetched.workspaceId === null || refetched.workspaceId !== body.workspaceId)
-        throw 400 "workspace_mismatch";
-      boundWsId = refetched.workspaceId;
-    }
-  }
+    if (updated.count === 1) return body.workspaceId;
+
+    // Lost the race; another first-message bound it (or it got archived).
+    const refetched = await tx.chatThread.findFirstOrThrow({
+      where: { id: tid }, select: { workspaceId: true, archivedAt: true },
+    });
+    if (refetched.archivedAt !== null) throw 404;
+    if (refetched.workspaceId === null || refetched.workspaceId !== body.workspaceId)
+      throw 400 "workspace_mismatch";
+    return refetched.workspaceId;
+  });
+
   // Dispatch the LLM turn using `boundWsId` (NOT the original `thread.workspaceId`,
   // which is stale after the bind).
   return runChatTurn({ ctx: { workspaceId: boundWsId, userId: session.userId, role }, … });
@@ -465,6 +555,16 @@ behavior and a hard reject in `POST /workspaces`.
 - `GET /chat/threads` returns the user's threads when the user has
   zero workspace memberships (edge case after invite revocation):
   their null-workspace threads remain visible.
+- `PATCH /chat/threads/:tid` on a `workspaceId IS NULL` thread sets
+  the title and leaves `workspaceId` null (rename works pre-binding).
+- `DELETE /chat/threads/:tid` on a `workspaceId IS NULL` thread soft-
+  archives it (archive works pre-binding).
+- `POST /chat/threads/:tid/messages` on an archived thread returns
+  404 — binding does not happen.
+- Pro-gate: a Free-tier user calling `POST /chat/threads/:tid/messages`
+  on their own thread returns 402 `upgrade_required` (matches §5.5).
+- Pro-gate: GET endpoints succeed for non-Pro users (Lite reading
+  daily-brief threads is the intended UX).
 
 ### 8.1.1 Migration smoke
 
@@ -507,12 +607,25 @@ If the brief in Plan 2B ever issues an intent (it shouldn't — briefs
 are text-only), the consume route would 400 on null-workspace thread.
 That's a guard, not a bug. Briefs are spec'd as one-shot text.
 
-### 9.3 Title generation (1E-title) timing
+### 9.3 Title generation (1E-title) signature changes
 
-The current auto-title hook fires after the thread acquires a user
-message. With the new binding flow, that's the same trigger — the
-first user message both binds the workspace and provides the title
-seed. No behavior change.
+`generateAndPersistThreadTitle(env, workspaceId, threadId, text)` in
+`apps/api/src/chat/auto-title.ts` currently takes `workspaceId` and
+gates the update with `WHERE id = threadId AND workspaceId = X AND
+title IS NULL`. After this refactor:
+
+- The function signature drops `workspaceId`:
+  `generateAndPersistThreadTitle(env, threadId, text)`.
+- The `WHERE` clause becomes `WHERE id = threadId AND title IS NULL`
+  (auth is already done by the route, and `threadId` is a globally-
+  unique cuid).
+- The caller in the message route still fires it after the user's
+  first message — same trigger, just one fewer arg.
+- The `console.warn` payload drops `workspaceId` (replace with
+  `threadId` only).
+
+This is a real signature change. The implementation plan must
+include updating `auto-title.ts`, its call sites, and the test file.
 
 ### 9.4 Cross-user thread access via guessed thread id
 
@@ -527,7 +640,17 @@ The replacement index `chat_threads_userId_archivedAt_lastMessageAt_idx`
 selection query in §4.4 — both order by `lastMessageAt DESC NULLS LAST`
 under a `userId` + `archivedAt IS NULL` filter.
 
-### 9.6 v2 friction not addressed
+### 9.6 Workspace deletion cascade
+
+`ChatThread.workspace Workspace? @relation(onDelete: Cascade)` means
+deleting a workspace destroys every thread bound to it — including
+the user's chat history with that workspace's data. For v1 this is
+acceptable: 1 ws/user, and workspace deletion ≈ account close. v2
+multi-workspace will need to revisit (probably move bound threads to
+`workspaceId = NULL` instead of cascading, so the user keeps
+read-only history).
+
+### 9.7 v2 friction not addressed
 
 When v2 lifts the 1-workspace constraint, the lazy-binding model
 needs a small extension: a brief might need to mention multiple
