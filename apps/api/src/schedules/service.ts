@@ -110,14 +110,28 @@ function toDTO(row: ScheduleRow, todayDateOnly: Date): ScheduleDTO {
 }
 
 /**
- * Compute the calling user's wall-clock "today" as a UTC midnight Date,
- * so component-by-component comparisons against scheduledDate (Postgres
- * `@db.Date` round-trip → midnight UTC) line up.
+ * Compute "today" as a UTC midnight Date in the given tz, matching the
+ * `@db.Date` round-trip representation of scheduledDate so component-by-
+ * component comparisons line up.
  */
-async function todayDateOnlyForUser(userId: string): Promise<Date> {
-  const tz = await resolveUserTz(userId);
+function todayDateOnlyInTz(tz: string): Date {
   const parts = partsInTz(new Date(), tz);
   return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
+}
+
+/**
+ * Resolve the workspace owner's tz. Per spec §3 (and §10), all "today"
+ * comparisons for ScheduledSpend (list status derivation + cron matching)
+ * use the workspace OWNER's tz — not the caller's — so a shared workspace
+ * shows consistent today/upcoming labels to every member.
+ */
+async function workspaceOwnerTz(workspaceId: string): Promise<string> {
+  const owner = await prisma.membership.findFirst({
+    where: { workspaceId, role: "owner" },
+    orderBy: { createdAt: "asc" },
+    select: { userId: true },
+  });
+  return owner ? await resolveUserTz(owner.userId) : "America/Toronto";
 }
 
 export async function addScheduledSpendService(
@@ -145,18 +159,9 @@ export async function addScheduledSpendService(
       },
       include: { matchedTx: { select: { removedAt: true } } },
     });
-    // addScheduledSpendService doesn't accept userId; toDTO needs a "today"
-    // for status derivation, but a freshly created schedule with no matchedTxId
-    // and no dismissedAt always derives to "upcoming" (if scheduledDate >= today)
-    // or "unresolved" (if past). For the add result we pass the workspace owner's
-    // tz today via a fallback path — or accept that callers will re-list to get
-    // the canonical status. For simplicity here use UTC midnight; the list
-    // endpoint computes the correct tz-aware today.
-    const utcToday = (() => {
-      const n = new Date();
-      return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
-    })();
-    return { schedule: toDTO(row, utcToday) };
+    // Per spec §3: status derivation uses workspace owner's tz.
+    const ownerTz = await workspaceOwnerTz(input.workspaceId);
+    return { schedule: toDTO(row, todayDateOnlyInTz(ownerTz)) };
   });
 }
 
@@ -186,7 +191,8 @@ export async function listScheduledSpendsService(
     include: { matchedTx: { select: { removedAt: true } } },
   });
 
-  const todayDateOnly = await todayDateOnlyForUser(ctx.userId);
+  const ownerTz = await workspaceOwnerTz(ctx.workspaceId);
+  const todayDateOnly = todayDateOnlyInTz(ownerTz);
   let dtos = rows.map((r) => toDTO(r, todayDateOnly));
   if (filter.status && filter.status !== "all") {
     dtos = dtos.filter((d) => d.status === filter.status);

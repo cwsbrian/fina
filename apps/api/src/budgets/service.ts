@@ -265,6 +265,7 @@ export async function compareSpendingVsBudgetService(
           matchedTx: { occurredAt: { gte: txLowerBound, lt: txUpperBound } },
         },
         select: {
+          id: true,
           matchedTxId: true,
           categoryId: true,
           matchedTx: { select: { occurredAt: true } },
@@ -276,9 +277,19 @@ export async function compareSpendingVsBudgetService(
         txIdsByBucket.get(key)?.delete(m.matchedTxId!);
       }
 
+      // 3c. Defensive race guard: under READ COMMITTED, the candidates query
+      // (matchedTxId=NULL) and the matchedSchedules query (matchedTxId!=NULL)
+      // are separate snapshots. If the match-cron commits between them, a
+      // schedule can appear in BOTH result sets — leading to a double-count
+      // where the matched tx is subtracted from the bucket AND the schedule
+      // still contributes to planned. Drop any candidate that's also in
+      // matchedSchedules.
+      const matchedIdSet = new Set(matchedSchedules.map((m) => m.id));
+      const consistentCandidates = candidates.filter((c) => !matchedIdSet.has(c.id));
+
       // 4. Per-bucket consumption.
       const schedulesByBucket = new Map<string, typeof candidates>();
-      for (const s of candidates) {
+      for (const s of consistentCandidates) {
         const key = scheduleBucketKey(s.scheduledDate, s.categoryId);
         if (!schedulesByBucket.has(key)) schedulesByBucket.set(key, []);
         schedulesByBucket.get(key)!.push(s);
