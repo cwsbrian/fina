@@ -130,8 +130,8 @@ export default function SignUpScreen() {
 
 const styles = StyleSheet.create({
   head: { marginTop: 0, marginBottom: 0 },
-  title: { ...type.authTitle, color: colors.ink },
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8 },
+  title: { ...type.authTitle, color: colors.ink, textAlign: "center" },
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
   form: { gap: 10, marginTop: 28 },
   divider: {
     flexDirection: "row",

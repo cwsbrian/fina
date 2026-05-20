@@ -63,7 +63,7 @@ export default function SignInScreen() {
       </View>
 
       <View style={styles.helperRow}>
-        <Pressable hitSlop={8}>
+        <Pressable hitSlop={8} onPress={() => router.push("/(auth)/forgot")}>
           <Text style={styles.helperLink}>Forgot password?</Text>
         </Pressable>
       </View>
@@ -105,8 +105,8 @@ export default function SignInScreen() {
 const styles = StyleSheet.create({
   brand: { alignItems: "center", marginBottom: 12 },
   head: { marginTop: 12 },
-  title: { ...type.authTitle, color: colors.ink },
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8 },
+  title: { ...type.authTitle, color: colors.ink, textAlign: "center"},
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
   form: { gap: 10, marginTop: 28 },
   helperRow: {
     flexDirection: "row",
