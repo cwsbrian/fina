@@ -535,6 +535,40 @@ describe("compareSpendingVsBudgetService", () => {
     expect(item.planned).toBe("120.00");
   });
 
+  it("planned: matched-then-soft-removed → schedule re-becomes a planned candidate", async () => {
+    // §5.4 soft-removal cleanup hook contract: when the matched tx is removed,
+    // schedule.matchedTxId is nulled in the same DB tx, so the next
+    // compareSpendingVsBudget read sees the schedule's amount back in `planned`.
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+
+    // Seed today's tx + matched schedule.
+    const todayOccurredAt = new Date("2026-05-15T18:00:00Z");
+    await seedTx(todayOccurredAt, "60");
+    const txRow = await prisma.transaction.findFirstOrThrow({
+      where: { workspaceId }, orderBy: { createdAt: "desc" },
+    });
+    const todayUTC = new Date(Date.UTC(2026, 4, 15));
+    const sched = await prisma.scheduledSpend.create({
+      data: { workspaceId, categoryId, amount: "60", scheduledDate: todayUTC, matchedTxId: txRow.id },
+    });
+    // Sanity check: matched schedule contributes nothing to planned.
+    let r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    let item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("0.00");
+
+    // Soft-remove the matched tx; the cleanup hook nulls matchedTxId.
+    const { removeTransactionService } = await import("../src/transactions/remove.js");
+    await removeTransactionService({ workspaceId }, txRow.id);
+    const after = await prisma.scheduledSpend.findUniqueOrThrow({ where: { id: sched.id } });
+    expect(after.matchedTxId).toBeNull();
+
+    // The schedule is now an upcoming-today candidate; planned reflects it.
+    r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("60.00");
+  });
+
   it("planned: last_month period returns 0 (schedule window collapses)", async () => {
     // last_month periodEnd = May 1, but today (May 15) > May 1, so
     // scheduleLowerBound >= scheduleUpperBound and the anti-join short-circuits.

@@ -241,6 +241,30 @@ describe("matchScheduledSpends", () => {
     expect(rowG.matchedTxId).toBe(tx.id);
   });
 
+  it("re-match after soft-removal — schedule whose matched tx is removed re-matches to a different available tx", async () => {
+    const { wsId, categoryId } = await setup("mt-rematch@t.co");
+    const t1 = await seedTx(wsId, { categoryId, amount: "50", occurredAt: new Date("2026-05-25T12:00:00Z") });
+    const a = await addScheduledSpendService({
+      workspaceId: wsId, categoryId, amount: 100, scheduledDate: "2026-05-25",
+    });
+    // Run 1: match schedule A to tx T1.
+    await matchScheduledSpends(wsId, new Date("2026-05-25T18:00:00Z"));
+    let row = await prisma.scheduledSpend.findUniqueOrThrow({ where: { id: a.schedule.id } });
+    expect(row.matchedTxId).toBe(t1);
+
+    // Soft-remove T1 via the public service path so the cleanup hook fires.
+    const { removeTransactionService } = await import("../src/transactions/remove.js");
+    await removeTransactionService({ workspaceId: wsId }, t1);
+
+    // Seed a second covering tx T2 in the same day + category.
+    const t2 = await seedTx(wsId, { categoryId, amount: "50", occurredAt: new Date("2026-05-25T14:00:00Z") });
+
+    // Run 2: A's matchedTxId was nulled by clearScheduleMatch; cron should re-match to T2.
+    await matchScheduledSpends(wsId, new Date("2026-05-25T20:00:00Z"));
+    row = await prisma.scheduledSpend.findUniqueOrThrow({ where: { id: a.schedule.id } });
+    expect(row.matchedTxId).toBe(t2);
+  });
+
   it("cross-run dedupe — second run does not match tx already claimed by prior run", async () => {
     const { wsId, categoryId } = await setup("mt-crossrun@t.co");
     const txId = await seedTx(wsId, { categoryId, amount: "50", occurredAt: new Date("2026-05-25T12:00:00Z") });
