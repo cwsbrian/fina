@@ -508,6 +508,11 @@ for (const a of allocs) {
 //     per-bucket tx pool. Without this, a tx already claimed by Schedule A
 //     would be counted again as "available" for covering Schedule B in the
 //     same bucket, falsely zeroing out planned.
+//
+// Tz nuance: cron buckets by workspace owner's tz; budget buckets by calling
+// user's tz. They may differ for a multi-user workspace spanning tz boundaries.
+// Use the MATCHED TX's occurredAt + caller's tz to compute the bucket key —
+// matches how the same tx is bucketed elsewhere in this query.
 const matchedSchedules = await prisma.scheduledSpend.findMany({
   where: {
     workspaceId,
@@ -515,10 +520,15 @@ const matchedSchedules = await prisma.scheduledSpend.findMany({
     categoryId: { in: budgetCategoryIds },
     scheduledDate: { gte: scheduleLowerBound, lt: scheduleUpperBound },
   },
-  select: { matchedTxId: true, scheduledDate: true, categoryId: true },
+  select: {
+    matchedTxId: true,
+    categoryId: true,
+    matchedTx: { select: { occurredAt: true } },
+  },
 });
 for (const m of matchedSchedules) {
-  const key = scheduleBucketKey(m.scheduledDate, m.categoryId);
+  if (!m.matchedTx) continue;  // FK SET NULL race — matchedTx vanished
+  const key = txBucketKey(m.matchedTx.occurredAt, m.categoryId);
   txIdsByBucket.get(key)?.delete(m.matchedTxId!);
 }
 
