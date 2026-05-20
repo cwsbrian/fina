@@ -57,7 +57,7 @@ shape diverges enough to justify a separate entity:
 | Required fields | `workspaceId`, `categoryId`, `amount Decimal(14,2)`, `scheduledDate Date` |
 | Optional fields | `note String?` |
 | State tracking | Two nullable timestamp columns: `matchedTxId String?` (cron sets when auto-match succeeds), `dismissedAt DateTime?` (user explicit dismiss). State is derived from these — no enum column. |
-| Auto-match rule | `Transaction.occurredAt::date = scheduledDate AND ≥1 allocation has categoryId = scheduleCategoryId AND tx.removedAt IS NULL`. Amount ignored. |
+| Auto-match rule | `dateKeyInTz(Transaction.occurredAt, workspaceOwnerTz) = scheduledDate` AND `≥1 allocation has categoryId = scheduleCategoryId AND amount > 0` AND `Transaction.amount > 0` AND `tx.removedAt IS NULL`. Refund tx (negative amount) and refund-side allocations are excluded — they shouldn't silently resolve a planned expense. See §5.2 for the implementation. |
 | Auto-match scope | **One-to-one**: each schedule consumes at most ONE tx. Within a workspace+date+category, schedule order is `scheduledDate asc, createdAt asc, id asc`; tx order is `occurredAt asc, id asc`. Already-consumed tx ids are excluded from later schedules' candidate pool. |
 | Cron schedule | Concrete cron string `"5 9 * * *"` (09:05 UTC) — runs 5 minutes after the existing daily Plaid refresh at `"0 9 * * *"` (`apps/api/src/cron/scheduler.ts`). Scheduler entries are independent `new Cron("expr")` registrations, NOT chained — the 5-minute offset is a best-effort ordering, not a guarantee. Budget aggregation uses anti-join semantics (§6.1) so today's flicker is impossible regardless of cron lag. |
 | Timezone | Schedules store dates as Postgres `@db.Date` (wall-clock). "Today" comparisons are computed in the **workspace owner's user timezone** — resolved via the first owner-membership's `User.tz`. For budget aggregation, `today` uses the calling user's tz (matches the existing `compareSpendingVsBudgetService` pattern). |
@@ -295,13 +295,15 @@ For each active workspace:
      ],
    });
    ```
-4. **Pre-load already-matched tx ids** (cross-run dedupe) so a tx already referenced by ANY existing matched schedule is excluded — not just this run's matches:
+4. **Pre-load already-matched `(txId, categoryId)` pairs** (cross-run dedupe, per-category model matching §6.1): a tx already referenced by an existing matched schedule for category X is excluded from matching ANOTHER schedule in category X — but may still match a different category's schedule (for split tx). Select both fields:
    ```ts
    const alreadyMatchedRows = await tx.scheduledSpend.findMany({
      where: { workspaceId, matchedTxId: { not: null } },
-     select: { matchedTxId: true },
+     select: { matchedTxId: true, categoryId: true },
    });
-   const usedTxIds = new Set<string>(alreadyMatchedRows.map((r) => r.matchedTxId!));
+   const usedTxAllocations = new Set<string>(
+     alreadyMatchedRows.map((r) => `${r.matchedTxId}|${r.categoryId}`),
+   );
    ```
 5. Iterate candidates with the usedTxIds set keyed by `(txId, categoryId)` so a split tx can match ONE schedule per its allocation categories — matching the budget anti-join's per-bucket consumption model (§6.1):
    ```ts
@@ -429,16 +431,19 @@ For each `(scheduledDate, categoryId)` bucket among candidate schedules:
 
 ```ts
 // Compute schedule period bounds based on the budget period (calendar-aligned).
-// For "this_month": [periodStartDate, firstOfNextMonth)
-// For "last_month": [firstOfLastMonth, periodStartDate)
-// For "next_month": [periodStartDate, firstOfNextMonthAfter)
-const scheduleLowerBound = (() => {
-  if (input.period === "this_month") return new Date(Math.max(today.getTime(), periodStart.getTime()));
-  if (input.period === "last_month") return periodStart;
-  if (input.period === "next_month") return periodStart;  // future schedules in next month
-  throw new Error("unreachable");
-})();
+// The lower bound is max(periodStart, today) — eligibility requires scheduledDate >= today.
+// For "last_month": today is necessarily AFTER last month ends, so lowerBound = today,
+//   which is OUTSIDE the period.lt → query returns 0 rows. Planned for last_month = 0.
+// For "this_month": lowerBound = today (clamped above periodStart).
+// For "next_month": lowerBound = today, but today < periodStart, so effective lowerBound = periodStart.
+const scheduleLowerBound = new Date(Math.max(today.getTime(), periodStart.getTime()));
 const scheduleUpperBound = computeMonthEnd(periodStart, offsetFor(input.period));
+
+// Sanity: if lowerBound >= upperBound, planned is 0 by definition (range empty).
+// Last_month always lands here.
+if (scheduleLowerBound >= scheduleUpperBound) {
+  // skip the rest of the planned aggregation; emit planned = 0 per category
+}
 
 // 1. Load candidate schedules — DATE bounds, NOT tx-instant bounds.
 const candidates = await prisma.scheduledSpend.findMany({
@@ -625,7 +630,15 @@ export async function matchScheduledSpends(
 ): Promise<{ matched: number; unresolved: number }>;
 ```
 
-The match function is called from inside `withWorkspaceLock`'s callback — its signature accepts the `tx` client OR it manages its own lock (decide at implementation time; defaulting to "manages its own" so the cron entry point can call it once per workspace).
+**Lock ownership decision: the match function MANAGES ITS OWN LOCK** — `matchScheduledSpends(workspaceId, today)` internally opens `withWorkspaceLock`. The cron job loops over workspaces and calls the function once per workspace; the cron job itself does NOT open a lock. This means callers (cron, future API endpoint to trigger a manual rematch) cannot wrap the function in their own lock for the same workspace — doing so would deadlock at the inner `pg_advisory_xact_lock` (Postgres advisory locks are NOT reentrant across separate transactions).
+
+§5.2's pseudocode reads as if the cron opens the lock; that's the function body, not the caller. The cron entry point looks like:
+```ts
+// cron/jobs/scheduled-spend-match.ts
+for (const workspace of activeWorkspaces) {
+  await matchScheduledSpends(workspace.id, todayInWorkspaceTz(workspace));
+}
+```
 
 ---
 
