@@ -216,6 +216,33 @@ describe("applyAllocations", () => {
     expect(allocs).toHaveLength(2);
   });
 
+  it("rejects negative allocation even when sum matches tx amount → invalid_allocation_amount", async () => {
+    const { wsId } = await setup("aa-neg@t.co");
+    const txId = await seedTx(wsId, "10");
+    // sum: 15 + (-5) = 10 — sum matches tx amount, but negative amount is rejected
+    await expect(
+      withWorkspaceLock(wsId, async (tx) =>
+        applyAllocations(tx, wsId, txId, new Prisma.Decimal("10"), "manual", [
+          { categoryId: null, amount: 15 },
+          { categoryId: null, amount: -5 },
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: "invalid_allocation_amount" });
+  });
+
+  it("accepts exactly MAX_AMOUNT (999_999_999.99) as a single allocation", async () => {
+    const { wsId } = await setup("aa-max@t.co");
+    const txId = await seedTx(wsId, "999999999.99");
+    await withWorkspaceLock(wsId, async (tx) =>
+      applyAllocations(tx, wsId, txId, new Prisma.Decimal("999999999.99"), null, [
+        { categoryId: null, amount: 999999999.99 },
+      ]),
+    );
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.amount.toString()).toBe("999999999.99");
+  });
+
   it("clears needsReclassification flag", async () => {
     const { wsId } = await setup("aa11@t.co");
     const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "X-aa11" } });

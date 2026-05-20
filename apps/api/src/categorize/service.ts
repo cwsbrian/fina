@@ -34,6 +34,7 @@ export async function categorizeNewTransactions(
     where: {
       id: { in: newTxIds },
       workspaceId,
+      removedAt: null,  // don't categorize soft-removed tx
       allocations: { some: {}, every: { categoryId: null, source: null } },
     },
     select: {

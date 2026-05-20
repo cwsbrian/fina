@@ -69,6 +69,14 @@ export async function applyManualCategorize(
 
     const merchantNorm = txRow.merchantNormalized ?? normalizeMerchant(txRow.merchantRaw);
 
+    // Re-check category inside the lock: if it was archived between the
+    // pre-lock lookup and now, reject rather than write a stale archived id.
+    const categoryStillActive = await tx.category.findFirst({
+      where: { id: category.id, workspaceId: input.workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!categoryStillActive) throw new ManualCategorizeError("category_not_found");
+
     // Primary: write allocations via the helper (single entry).
     // Amount is Decimal(14, 2); Number(d.toString()) round-trips cleanly for
     // any value in that range. applyAllocations will re-stringify the number
@@ -133,6 +141,7 @@ export async function applyManualCategorize(
         workspaceId: input.workspaceId,
         merchantNormalized: merchantNorm,
         id: { not: txRow.id },
+        removedAt: null,  // align with map-merchant.ts; don't back-fill soft-removed siblings
         allocations: { some: {} },
       },
       include: { allocations: { select: { id: true, source: true } } },

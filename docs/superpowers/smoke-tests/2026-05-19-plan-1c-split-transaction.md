@@ -15,7 +15,7 @@ curl -sS -X POST "http://localhost:3001/workspaces/$WS/transactions/manual" \
   -d '{"merchantRaw":"Costco","amount":200,"occurredAt":"2026-05-19"}'
 ```
 
-Expected: 200, response includes `allocations: [{categoryId: null, amount: "200", source: null}]`, no top-level `categoryId`.
+Expected: 201, response includes `allocations: [{categoryId: null, amount: "200", source: null}]`, no top-level `categoryId`.
 Capture `transaction.id` → `$TX`.
 
 ## 1. Create three categories
