@@ -36,6 +36,12 @@ export default function SignUpScreen() {
         name: name.trim(),
       });
       if (result.error) {
+        if (
+          result.error.code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" ||
+          /already/i.test(result.error.message ?? "")
+        ) {
+          throw new Error("This email is already registered. Sign in instead?");
+        }
         throw new Error(result.error.message ?? "Sign up failed");
       }
       // Backend has emailOTP({ sendVerificationOnSignUp: true }) — a 6-digit
