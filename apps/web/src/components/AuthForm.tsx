@@ -2,19 +2,21 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signIn, signUp } from "../../auth/client";
-import { apiFetch } from "../../lib/api";
-import { env } from "../../env";
-import { AuthTopBar } from "../../components/AuthTopBar";
-import { WebIcon } from "../../components/WebIcon";
-import styles from "../../components/auth.module.css";
+import { signIn, signUp } from "../auth/client";
+import { apiFetch } from "../lib/api";
+import { env } from "../env";
+import { AuthTopBar } from "./AuthTopBar";
+import { WebIcon } from "./WebIcon";
+import styles from "./auth.module.css";
 
 type InvitePreview = {
   status: "pending" | "accepted" | "revoked" | "expired";
   invitedEmail: string;
 };
 
-export function SignInForm() {
+type Mode = "signIn" | "signUp";
+
+export function AuthForm({ mode }: { mode: Mode }) {
   const router = useRouter();
   const search = useSearchParams();
   const fromParam = search?.get("from") ?? "";
@@ -24,7 +26,15 @@ export function SignInForm() {
   const [lockedEmail, setLockedEmail] = useState<string | null>(null);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
 
-  const [mode, setMode] = useState<"signIn" | "signUp">("signUp");
+  // Preserve query params (from, inviteToken) across the mode toggle so the
+  // user keeps their context when bouncing /sign-in ↔ /sign-up.
+  const qs = (() => {
+    const sp = new URLSearchParams();
+    if (safeFrom) sp.set("from", safeFrom);
+    if (inviteToken) sp.set("inviteToken", inviteToken);
+    return sp.toString() ? `?${sp.toString()}` : "";
+  })();
+  const otherPath = mode === "signUp" ? `/sign-in${qs}` : `/sign-up${qs}`;
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -309,10 +319,7 @@ export function SignInForm() {
                 <button
                   type="button"
                   className={styles.link}
-                  onClick={() => {
-                    setMode("signIn");
-                    setErr(null);
-                  }}
+                  onClick={() => router.push(otherPath)}
                 >
                   Sign in
                 </button>
@@ -323,10 +330,7 @@ export function SignInForm() {
                 <button
                   type="button"
                   className={styles.link}
-                  onClick={() => {
-                    setMode("signUp");
-                    setErr(null);
-                  }}
+                  onClick={() => router.push(otherPath)}
                 >
                   Create an account
                 </button>
