@@ -17,8 +17,10 @@ export const compareSpendingVsBudget: ToolDef<
       categoryName: string;
       amount: string;
       spent: string;
+      planned: string;
       remaining: string;
       spentPct: number;
+      plannedPct: number;
       todayPct: number;
       status: "on-pace" | "over-pace";
     }>;

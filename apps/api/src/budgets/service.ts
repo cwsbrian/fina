@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import { firstOfMonthDateInTz, basicPeriodRange, resolveUserTz, partsInTz } from "../chat/tools/periods.js";
+import { firstOfMonthDateInTz, basicPeriodRange, resolveUserTz, partsInTz, dateKeyInTz } from "../chat/tools/periods.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 
 export type PeriodEnum = "this_month" | "last_month" | "next_month";
@@ -113,8 +113,10 @@ export type CompareSpendingOutput = {
     categoryName: string;
     amount: string;
     spent: string;
+    planned: string;
     remaining: string;
     spentPct: number;
+    plannedPct: number;
     todayPct: number;
     status: "on-pace" | "over-pace";
   }>;
@@ -177,24 +179,126 @@ export async function compareSpendingVsBudgetService(
     sums.map((s) => [s.categoryId!, s._sum.amount ?? new Prisma.Decimal(0)]),
   );
 
+  // Resolve user tz once — used for todayPct and the planned anti-join.
+  const tz = await resolveUserTz(ctx.userId);
+
   // todayPct — user-tz local day-of-month / days-in-month, not elapsed ms.
   const py = periodStart.getUTCFullYear();
   const pm = periodStart.getUTCMonth() + 1;
   const dim = daysInMonth(py, pm);
   let todayPct = 0;
   if (input.period === "this_month") {
-    const tz = await resolveUserTz(ctx.userId);
     const nowParts = partsInTz(new Date(), tz);
     todayPct = Math.round((nowParts.day / dim) * 10000) / 100;
   } else if (input.period === "last_month") {
     todayPct = 100;
   }
 
+  // 1. Compute schedule date bounds (calendar DATE, not tx instant range).
+  const todayParts = partsInTz(new Date(), tz);
+  const todayDateOnly = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day));
+  const scheduleLowerBound = todayDateOnly >= periodStart ? todayDateOnly : periodStart;
+  // scheduleUpperBound = first-of-month of (periodStart + 1 month), as a UTC DATE.
+  const psYear = periodStart.getUTCFullYear();
+  const psMonth = periodStart.getUTCMonth();  // 0-11
+  const scheduleUpperBound = new Date(Date.UTC(psYear, psMonth + 1, 1));
+
+  let plannedByCat = new Map<string, Prisma.Decimal>();
+  if (scheduleLowerBound < scheduleUpperBound) {
+    // 2. Load candidate schedules.
+    const candidates = await prisma.scheduledSpend.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        categoryId: { in: budgetCategoryIds },
+        scheduledDate: { gte: scheduleLowerBound, lt: scheduleUpperBound },
+        matchedTxId: null,
+        dismissedAt: null,
+      },
+      orderBy: [{ scheduledDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      select: { id: true, categoryId: true, scheduledDate: true, amount: true },
+    });
+
+    if (candidates.length > 0) {
+      const scheduleBucketKey = (d: Date, catId: string) =>
+        `${d.toISOString().slice(0, 10)}|${catId}`;
+      const txBucketKey = (occurredAt: Date, catId: string) =>
+        `${dateKeyInTz(occurredAt, tz)}|${catId}`;
+      const uniqueBuckets = new Set(candidates.map((s) => scheduleBucketKey(s.scheduledDate, s.categoryId)));
+
+      // 3. Load tx allocations covering the candidate days.
+      const txLowerBound = new Date(scheduleLowerBound.getTime() - 24 * 60 * 60 * 1000);
+      const txUpperBound = new Date(scheduleUpperBound.getTime() + 24 * 60 * 60 * 1000);
+      const allocs = await prisma.transactionAllocation.findMany({
+        where: {
+          categoryId: { in: budgetCategoryIds },
+          amount: { gt: 0 },
+          transaction: {
+            workspaceId: ctx.workspaceId,
+            removedAt: null,
+            amount: { gt: 0 },
+            occurredAt: { gte: txLowerBound, lt: txUpperBound },
+          },
+        },
+        select: {
+          categoryId: true,
+          transaction: { select: { id: true, occurredAt: true } },
+        },
+      });
+
+      const txIdsByBucket = new Map<string, Set<string>>();
+      for (const a of allocs) {
+        const key = txBucketKey(a.transaction.occurredAt, a.categoryId);
+        if (!uniqueBuckets.has(key)) continue;
+        if (!txIdsByBucket.has(key)) txIdsByBucket.set(key, new Set());
+        txIdsByBucket.get(key)!.add(a.transaction.id);
+      }
+
+      // 3b. Subtract tx ids already consumed by matched schedules in the same date range.
+      const matchedSchedules = await prisma.scheduledSpend.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          matchedTxId: { not: null },
+          categoryId: { in: budgetCategoryIds },
+          matchedTx: { occurredAt: { gte: txLowerBound, lt: txUpperBound } },
+        },
+        select: {
+          matchedTxId: true,
+          categoryId: true,
+          matchedTx: { select: { occurredAt: true } },
+        },
+      });
+      for (const m of matchedSchedules) {
+        if (!m.matchedTx) continue;
+        const key = txBucketKey(m.matchedTx.occurredAt, m.categoryId);
+        txIdsByBucket.get(key)?.delete(m.matchedTxId!);
+      }
+
+      // 4. Per-bucket consumption.
+      const schedulesByBucket = new Map<string, typeof candidates>();
+      for (const s of candidates) {
+        const key = scheduleBucketKey(s.scheduledDate, s.categoryId);
+        if (!schedulesByBucket.has(key)) schedulesByBucket.set(key, []);
+        schedulesByBucket.get(key)!.push(s);
+      }
+      for (const [bucket, schedules] of schedulesByBucket) {
+        const T = txIdsByBucket.get(bucket)?.size ?? 0;
+        for (const s of schedules.slice(T)) {
+          plannedByCat.set(s.categoryId, (plannedByCat.get(s.categoryId) ?? new Prisma.Decimal(0)).plus(s.amount));
+        }
+      }
+    }
+  }
+
+  // 5. Plug planned into the items mapping.
   const items = budgets.map((b) => {
     const spent = spentByCat.get(b.categoryId) ?? new Prisma.Decimal(0);
-    const remaining = b.amount.minus(spent);
+    const planned = plannedByCat.get(b.categoryId) ?? new Prisma.Decimal(0);
+    const remaining = b.amount.minus(spent).minus(planned);
     const spentPct = b.amount.greaterThan(0)
       ? Number(spent.div(b.amount).times(100).toFixed(2))
+      : 0;
+    const plannedPct = b.amount.greaterThan(0)
+      ? Number(planned.div(b.amount).times(100).toFixed(2))
       : 0;
     const status: "on-pace" | "over-pace" = spentPct <= todayPct * 1.05 ? "on-pace" : "over-pace";
     return {
@@ -202,8 +306,10 @@ export async function compareSpendingVsBudgetService(
       categoryName: b.category.name,
       amount: b.amount.toFixed(2),
       spent: spent.toFixed(2),
+      planned: planned.toFixed(2),
       remaining: remaining.toFixed(2),
       spentPct,
+      plannedPct,
       todayPct,
       status,
     };

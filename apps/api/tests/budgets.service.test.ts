@@ -361,4 +361,144 @@ describe("compareSpendingVsBudgetService", () => {
     expect(r.items[0]!.spent).toBe("0.00");
     expect(r.items[0]!.todayPct).toBe(0);
   });
+
+  // All tests below use the existing beforeEach-bound userId/workspaceId/categoryId and the seedTx helper.
+
+  it("planned: includes upcoming schedule", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId, categoryId,
+        amount: "60",
+        scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
+      },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("60.00");
+    expect(item.plannedPct).toBeGreaterThan(0);
+  });
+
+  it("planned: excludes past-unresolved", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId, categoryId,
+        amount: "70",
+        scheduledDate: new Date(Date.UTC(yesterday.getUTCFullYear(), yesterday.getUTCMonth(), yesterday.getUTCDate())),
+      },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("0.00");
+  });
+
+  it("planned: excludes dismissed", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId, categoryId,
+        amount: "40",
+        scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
+        dismissedAt: new Date(),
+      },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("0.00");
+  });
+
+  it("planned: excludes matched (active tx)", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    // seedTx creates tx + allocation in `categoryId`
+    await seedTx(
+      new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate(), 12, 0, 0)),
+      "55",
+    );
+    const tx = await prisma.transaction.findFirstOrThrow({
+      where: { workspaceId },
+      orderBy: { createdAt: "desc" },
+    });
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId, categoryId,
+        amount: "55",
+        scheduledDate: new Date(Date.UTC(tomorrow.getUTCFullYear(), tomorrow.getUTCMonth(), tomorrow.getUTCDate())),
+        matchedTxId: tx.id,
+      },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("0.00");
+  });
+
+  it("planned anti-join: today schedule WITHOUT covering tx → planned=amount", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+    const today = new Date();
+    const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    await prisma.scheduledSpend.create({
+      data: { workspaceId, categoryId, amount: "80", scheduledDate: todayUTC },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("80.00");
+  });
+
+  it("planned anti-join: today schedule WITH covering tx → planned=0", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+    const today = new Date();
+    const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+    await prisma.scheduledSpend.create({
+      data: { workspaceId, categoryId, amount: "80", scheduledDate: todayUTC },
+    });
+    // seedTx creates tx + allocation in categoryId — required for the anti-join to find it
+    await seedTx(
+      new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 12, 0, 0)),
+      "80",
+    );
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("0.00");
+  });
+
+  it("planned: two same-day same-cat schedules + one covering tx → second still planned", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 500, period: "this_month" });
+    const today = new Date();
+    const todayUTC = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()));
+
+    // seedTx creates a tx + allocation with the right category
+    await seedTx(
+      new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate(), 12, 0, 0)),
+      "30",
+    );
+    const tx = await prisma.transaction.findFirstOrThrow({
+      where: { workspaceId },
+      orderBy: { createdAt: "desc" },
+    });
+
+    // First schedule matched (cron-equivalent)
+    await prisma.scheduledSpend.create({
+      data: { workspaceId, categoryId, amount: "100", scheduledDate: todayUTC, matchedTxId: tx.id },
+    });
+    // Second schedule unmatched
+    await prisma.scheduledSpend.create({
+      data: { workspaceId, categoryId, amount: "60", scheduledDate: todayUTC },
+    });
+
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    // The matched tx is consumed by the first schedule; second's $60 still contributes.
+    expect(item.planned).toBe("60.00");
+  });
 });
