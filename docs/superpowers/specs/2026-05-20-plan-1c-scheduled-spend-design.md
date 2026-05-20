@@ -68,7 +68,7 @@ shape diverges enough to justify a separate entity:
 | Budget integration | `compareSpendingVsBudgetService` adds `planned` aggregate alongside `spent`. |
 | Concurrency | All writes inside `withWorkspaceLock` (same workspace-scoped advisory lock used by other 1C services). |
 | Multiple users in workspace | Allowed. Schedule is workspace-owned, not user-owned. |
-| Idempotent dismiss/remove | Yes — dismiss on an already-dismissed schedule is a no-op; remove on a missing id returns 404. |
+| Idempotent dismiss/remove | Yes — dismiss on an already-dismissed schedule is a no-op (returns `alreadyDismissed: true`); remove on a missing id is also idempotent (returns `{ removed: false, alreadyRemoved: true }`, NOT 404). Matches `removeTransactionService` pattern from 1C-edit-delete. |
 
 ---
 
@@ -120,26 +120,26 @@ model Category {
 
 ### 3.2 Derived state (no enum column)
 
-| Condition | State | Behavior |
-|---|---|---|
-| `matchedTxId IS NOT NULL AND matchedTx.removedAt IS NULL` | resolved-matched | counted in `spent` via the matched tx; NOT in `planned` |
-| `matchedTxId IS NOT NULL AND matchedTx.removedAt IS NOT NULL` | unresolved (matched-tx-removed) | the soft-removed match invalidates the resolution. See §5.4 for the cleanup hook. Treated as unresolved until re-matched. |
-| `dismissedAt IS NOT NULL` (and not matched) | resolved-dismissed | excluded from `planned` and from unresolved-list |
-| Else, `scheduledDate > today` (strict future) | upcoming | counted in `planned` |
-| Else, `scheduledDate = today` AND no tx exists on that date+category | upcoming-today | counted in `planned` (anti-join — see §6.1) |
-| Else, `scheduledDate = today` AND tx exists on that date+category | provisional-matched | excluded from `planned` (tx already counted in `spent`); cron will set `matchedTxId` on next run |
-| Else (`scheduledDate < today` and both null) | unresolved | NOT counted in `planned` — surface as prompt |
+Surfaced status taxonomy (what `listScheduledSpends` returns and the LLM sees):
+
+| Condition | Status |
+|---|---|
+| `matchedTxId IS NOT NULL AND matchedTx.removedAt IS NULL` | `resolved-matched` |
+| `dismissedAt IS NOT NULL` AND not `resolved-matched` | `resolved-dismissed` |
+| `scheduledDate >= today` AND both null AND (matchedTx soft-removed or no matchedTx) | `upcoming` |
+| `scheduledDate < today` AND both null AND (matchedTx soft-removed or no matchedTx) | `unresolved` |
+
+Status filter values for `listScheduledSpends`: `"upcoming" | "unresolved" | "resolved-matched" | "resolved-dismissed" | "all"`. No `provisional-matched` or `upcoming-today` surfaced — these are internal to budget aggregation, not a separate caller-visible state.
+
+**Reads that must check `matchedTx.removedAt`** to distinguish "truly resolved" vs "ghost-matched":
+- `listScheduledSpends` (derives status)
+- `compareSpendingVsBudget` (decides whether schedule counts in `planned`)
+
+Both use `include: { matchedTx: { select: { removedAt: true } } }` when deriving status. The §5.4 cleanup hook handles the common case (clear matchedTxId on soft-remove); the join is defense-in-depth for race windows.
 
 Past-unresolved rationale: counting an unresolved past schedule would inflate the current period's `planned` indefinitely. Better to surface it as a prompt and let the user act.
 
-Today's anti-join rationale: prevents same-day double-counting between `spent` (real tx) and `planned` (schedule). Once the matching tx exists, the schedule is implicitly "covered" regardless of whether cron has run.
-
-**Status filter values for `listScheduledSpends`**:
-- `"upcoming"` — `upcoming OR upcoming-today` (excludes `provisional-matched`)
-- `"unresolved"` — past unresolved + matched-tx-removed
-- `"resolved-matched"` — matched + matchedTx still active
-- `"resolved-dismissed"` — dismissed (and not matched)
-- `"all"` — every schedule
+Same-day flicker rationale (§6.1 anti-join): prevents double-counting between `spent` (real tx) and `planned` (schedule). When a covering tx exists, the schedule is excluded from `planned` regardless of whether cron has set `matchedTxId` yet.
 
 ### 3.3 Migration
 
@@ -295,9 +295,16 @@ For each active workspace:
      ],
    });
    ```
-4. Maintain a `usedTxIds: Set<string>` across the inner loop to enforce one-to-one (a tx can match at most one schedule per cron run):
+4. **Pre-load already-matched tx ids** (cross-run dedupe) so a tx already referenced by ANY existing matched schedule is excluded — not just this run's matches:
    ```ts
-   const usedTxIds = new Set<string>();
+   const alreadyMatchedRows = await tx.scheduledSpend.findMany({
+     where: { workspaceId, matchedTxId: { not: null } },
+     select: { matchedTxId: true },
+   });
+   const usedTxIds = new Set<string>(alreadyMatchedRows.map((r) => r.matchedTxId!));
+   ```
+5. Iterate candidates with the usedTxIds set, adding to it as each schedule consumes a tx:
+   ```ts
    for (const candidate of candidates) {
      const dayStart = ... // start of candidate.scheduledDate in workspace tz
      const nextDayStart = ... // dayStart + 1 day
@@ -307,7 +314,7 @@ For each active workspace:
          removedAt: null,
          occurredAt: { gte: dayStart, lt: nextDayStart },
          allocations: { some: { categoryId: candidate.categoryId } },
-         id: { notIn: Array.from(usedTxIds) },  // exclude already-consumed tx
+         id: { notIn: Array.from(usedTxIds) },  // excludes both this-run AND prior-run matches
        },
        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
        select: { id: true },
@@ -321,9 +328,11 @@ For each active workspace:
      }
    }
    ```
-5. Schedules with no match remain `matchedTxId: null` — picked up by daily-brief later.
+6. Schedules with no match remain `matchedTxId: null` — picked up by daily-brief later.
 
-The `usedTxIds.notIn` clause ensures that on a day where the user has fewer matching tx than schedules, only the first N schedules (in order above) match; the rest stay unresolved. Each subsequent cron run can pick up new tx without revisiting already-matched schedules (those are filtered out by `matchedTxId: null`).
+The pre-load step is what makes the one-to-one rule durable across cron runs: a tx already matched by Schedule A in run 1 will NOT be matched by Schedule B in run 2 (or later). Without this pre-load, run 2 starts with an empty `usedTxIds` and could double-match.
+
+**Alternative considered**: add a Postgres partial unique index `CREATE UNIQUE INDEX ON scheduled_spends(matchedTxId) WHERE matchedTxId IS NOT NULL`. Rejected for v1: the partial unique would surface as a `P2002` constraint violation at write time, requiring race-handling logic. The pre-load + `usedTxIds.notIn` approach handles the same invariant inside the workspace lock without DB-level constraint contortions. Can be added later as defense-in-depth.
 
 ### 5.3 Edge cases
 
@@ -337,15 +346,34 @@ The `usedTxIds.notIn` clause ensures that on a day where the user has fewer matc
 
 When a transaction is soft-removed via `removeTransactionService` (`apps/api/src/transactions/remove.ts`) OR via Plaid's `markRemoved` (`apps/api/src/plaid/sync.ts:markRemoved`), the schedule's `matchedTxId` becomes stale — it points to a tx that is no longer counted in `spent`.
 
-**Fix**: both code paths, inside the existing workspace lock callback, clear `matchedTxId` on any schedule referencing the removed tx:
+**Fix**: both code paths, inside the existing workspace lock callback, clear `matchedTxId` on any schedule referencing the removed tx.
 
+**`removeTransactionService`** (`apps/api/src/transactions/remove.ts`) — has the local `txId` directly:
 ```ts
-// In removeTransactionService and markRemoved, after setting tx.removedAt:
+// after setting tx.removedAt = now() (already inside withWorkspaceLock):
 await tx.scheduledSpend.updateMany({
   where: { matchedTxId: txId },
   data: { matchedTxId: null },
 });
 ```
+
+**`markRemoved`** (`apps/api/src/plaid/sync.ts:markRemoved`) — receives `plaidTransactionId`, not the local id. The function currently looks up the local tx via `(workspaceId, plaidTransactionId)`. Extend to capture the local id BEFORE the soft-remove, then clear schedules:
+```ts
+// inside markRemoved, BEFORE the updateMany that sets removedAt:
+const target = await tx.transaction.findFirst({
+  where: { workspaceId, plaidTransactionId, removedAt: null },
+  select: { id: true },
+});
+if (target) {
+  await tx.scheduledSpend.updateMany({
+    where: { matchedTxId: target.id },
+    data: { matchedTxId: null },
+  });
+}
+// then proceed with the existing tx.transaction.updateMany({ where: ..., data: { removedAt: now() } });
+```
+
+To keep coupling localized, this snippet can live in a small helper exported from `schedules/match.ts` or `schedules/service.ts`: `clearScheduleMatch(tx, txId)`. Both call sites then reduce to a single helper call.
 
 Effect: the schedule reverts to unresolved state. On the next cron run, the match scan re-evaluates and finds a NEW tx (if any) or leaves it unresolved.
 
@@ -361,44 +389,71 @@ The cleanup-hook approach keeps reads simple (status derivation is two boolean c
 
 ### 6.1 `compareSpendingVsBudgetService` extension
 
-`apps/api/src/budgets/service.ts:compareSpendingVsBudgetService` adds a parallel aggregation over `scheduled_spends` and emits a new `planned` field per category.
+`apps/api/src/budgets/service.ts:compareSpendingVsBudgetService` adds an aggregation over `scheduled_spends` and emits a new `planned` field per category.
 
-**Definition of `planned` for a budget category in a given period**:
-- Sum of `amount` from `scheduled_spends` where:
-  - `workspaceId = ctx.workspaceId`
-  - `categoryId = budget.categoryId`
-  - `scheduledDate >= today` (in calling user's tz) — only future/today schedules count
-  - `scheduledDate >= period.gte AND scheduledDate < period.lt` — within the period
-  - `matchedTxId IS NULL` — not already realized
-  - `dismissedAt IS NULL` — not dismissed
-  - **Anti-join**: NOT EXISTS a tx in the same workspace+category on `scheduledDate` (`Transaction.occurredAt::date = scheduledDate AND tx.workspaceId = X AND tx.removedAt IS NULL AND ≥1 allocation has matching categoryId AND ≥1 allocation has amount > 0`).
+**Schedule eligibility for `planned`** (per category, per period):
+- `workspaceId = ctx.workspaceId`
+- `categoryId = budget.categoryId`
+- `scheduledDate >= today` (today computed in calling user's tz via `resolveUserTz(ctx.userId)` — matches existing pattern)
+- `scheduledDate >= period.gte AND scheduledDate < period.lt`
+- `matchedTxId IS NULL`
+- `dismissedAt IS NULL`
 
-The anti-join eliminates same-day double-counting: a schedule for today whose matching tx exists (auto-categorized by Plaid sync) is excluded from `planned` regardless of whether the match cron has run yet. The schedule's amount only contributes to `planned` when there's NO real tx covering it.
+**Cardinality-aware anti-join** — replaces a simple `Set<date|categoryId>` with per-bucket consumption:
+
+For each `(scheduledDate, categoryId)` bucket among candidate schedules:
+1. Load all `Transaction` rows where `dateKeyInTz(occurredAt, callingUserTz) = scheduledDate` AND `removedAt IS NULL` AND `≥1 allocation has matching categoryId AND allocation.amount > 0`, ordered by `occurredAt asc, id asc`. Use `dateKeyInTz` (existing helper from `apps/api/src/chat/tools/periods.ts`) so the comparison matches the user-tz boundaries the rest of the system uses.
+2. Count tx in that bucket = T. Count schedules in that bucket = S (ordered by `createdAt asc, id asc`).
+3. **First `min(T, S)` schedules in the bucket are "covered"** — excluded from `planned`. The remaining `S - min(T, S)` schedules (if S > T) ARE included.
+
+**Why cardinality matters**: with 2 schedules on the same day+category and 1 covering tx, exactly 1 schedule is covered (matched implicitly) and the other contributes to `planned`. A naive `Set<date|categoryId>` would incorrectly exclude both.
 
 **Prisma sketch**:
 ```ts
-const schedulesPlanned = await prisma.scheduledSpend.findMany({
-  where: {
-    workspaceId,
-    categoryId: { in: budgetCategoryIds },
-    scheduledDate: { gte: today, gte: periodGte, lt: periodLt },
-    matchedTxId: null,
-    dismissedAt: null,
-    NOT: {
-      // anti-join: exclude schedules whose date+category already has a covering tx
-      // Prisma can't express NOT EXISTS directly, so we do an explicit anti-join:
-      // for each schedule, check there's no tx matching its day+category.
-    },
-  },
-  select: { categoryId: true, amount: true, scheduledDate: true },
+// 1. Load candidate schedules (filters above except the anti-join)
+const candidates = await prisma.scheduledSpend.findMany({
+  where: { workspaceId, categoryId: { in: budgetCategoryIds }, scheduledDate: { gte: today, lt: periodLt }, matchedTxId: null, dismissedAt: null },
+  orderBy: [{ scheduledDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+  select: { id: true, categoryId: true, scheduledDate: true, amount: true },
 });
-// ...then in JS, do per-schedule anti-join check via a single tx.transactionAllocation.findMany
-// scoped to the days+categories of the candidate schedules, building a Set<`${date}|${categoryId}`>.
-// Schedules whose day+category appears in the set are filtered out.
-// Then group remaining schedules by categoryId and sum.
+
+// 2. For each unique (date, categoryId) bucket, count covering tx in user-tz
+const tzKey = await resolveUserTz(ctx.userId);
+const bucketKey = (date: Date, catId: string) => `${dateKeyInTz(date, tzKey)}|${catId}`;
+const uniqueBuckets = new Set(candidates.map((s) => bucketKey(s.scheduledDate, s.categoryId)));
+
+// One query loads ALL tx for ALL relevant day+categoryId pairs:
+const allocs = await prisma.transactionAllocation.findMany({
+  where: {
+    categoryId: { in: budgetCategoryIds },
+    amount: { gt: 0 },
+    transaction: { workspaceId, removedAt: null, /* date range covering all candidate days */ },
+  },
+  select: {
+    categoryId: true,
+    transaction: { select: { id: true, occurredAt: true } },
+  },
+});
+// Group: bucketKey → count of distinct tx ids
+const txCountPerBucket = new Map<string, number>();
+for (const a of allocs) {
+  const key = bucketKey(a.transaction.occurredAt, a.categoryId);
+  if (uniqueBuckets.has(key)) txCountPerBucket.set(key, (txCountPerBucket.get(key) ?? 0) + 1);
+}
+
+// 3. Per-bucket consumption — sort schedules by (createdAt asc, id asc), mark first min(T,S) as covered
+const schedulesByBucket = groupBy(candidates, (s) => bucketKey(s.scheduledDate, s.categoryId));
+const planned = new Map<string, Prisma.Decimal>();  // categoryId → sum
+for (const [bucket, schedules] of schedulesByBucket) {
+  const T = txCountPerBucket.get(bucket) ?? 0;
+  const uncovered = schedules.slice(T);  // skip first T as covered; rest contribute to planned
+  for (const s of uncovered) {
+    planned.set(s.categoryId, (planned.get(s.categoryId) ?? new Prisma.Decimal(0)).plus(s.amount));
+  }
+}
 ```
 
-The anti-join is best implemented as a 2-query approach: (1) load candidate schedules, (2) load matching tx allocations for the same day+category set, (3) filter in JS. For the small N expected (active budget categories × period days), this is acceptable. Future optimization could push this into raw SQL `NOT EXISTS`.
+The `dateKeyInTz` helper ensures day-boundary matching aligns with the rest of the system — a tx at 23:30 user-local on May 15 (which is 03:30 UTC on May 16) correctly belongs to May 15's bucket.
 
 **Past unresolved** (`scheduledDate < today AND both null`) is intentionally NOT counted — counting it would inflate "planned" forever.
 
@@ -582,7 +637,9 @@ Extend `apps/api/tests/budgets.service.test.ts`:
 - POST 401 / 403 / workspace_mismatch
 - GET happy with status filter
 - DISMISS happy + idempotent + 404
-- DELETE happy + idempotent + 404 / 401 / 403
+- DELETE happy 200 `{ removed: true }`
+- DELETE idempotent 200 `{ removed: false, alreadyRemoved: true }` (no 404)
+- DELETE 401 / 403
 
 ### 8.6 Chat tool tests
 
