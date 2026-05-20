@@ -195,12 +195,15 @@ export async function compareSpendingVsBudgetService(
   }
 
   // 1. Compute schedule date bounds (calendar DATE, not tx instant range).
-  const todayParts = partsInTz(new Date(), tz);
-  const todayDateOnly = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day));
-  const scheduleLowerBound = todayDateOnly >= periodStart ? todayDateOnly : periodStart;
-  // scheduleUpperBound = first-of-month of (periodStart + 1 month), as a UTC DATE.
+  // `periodStart` from `firstOfMonthDateInTz` is noon-UTC but `@db.Date` columns
+  // round-trip as midnight-UTC, so normalise the bound to midnight before
+  // comparing to keep day-1-of-period schedules eligible.
   const psYear = periodStart.getUTCFullYear();
   const psMonth = periodStart.getUTCMonth();  // 0-11
+  const periodStartMidnight = new Date(Date.UTC(psYear, psMonth, 1));
+  const todayParts = partsInTz(new Date(), tz);
+  const todayDateOnly = new Date(Date.UTC(todayParts.year, todayParts.month - 1, todayParts.day));
+  const scheduleLowerBound = todayDateOnly >= periodStartMidnight ? todayDateOnly : periodStartMidnight;
   const scheduleUpperBound = new Date(Date.UTC(psYear, psMonth + 1, 1));
 
   let plannedByCat = new Map<string, Prisma.Decimal>();

@@ -501,4 +501,54 @@ describe("compareSpendingVsBudgetService", () => {
     // The matched tx is consumed by the first schedule; second's $60 still contributes.
     expect(item.planned).toBe("60.00");
   });
+
+  it("planned: day-1-of-this_month schedule is eligible (periodStart noon-UTC vs scheduledDate midnight-UTC)", async () => {
+    // Regression test: periodStart from firstOfMonthDateInTz returns noon UTC,
+    // but @db.Date scheduledDate round-trips at midnight UTC. The lower bound
+    // must be normalised to midnight or May-1 schedules get excluded on May 1.
+    vi.setSystemTime(new Date("2026-05-01T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 200, period: "this_month" });
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId, categoryId,
+        amount: "75",
+        scheduledDate: new Date(Date.UTC(2026, 4, 1)),  // May 1 midnight UTC
+      },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "this_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("75.00");
+  });
+
+  it("planned: next_month period picks up day-1-of-next-month schedule", async () => {
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 400, period: "next_month" });
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId, categoryId,
+        amount: "120",
+        scheduledDate: new Date(Date.UTC(2026, 5, 1)),  // June 1 midnight UTC
+      },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "next_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("120.00");
+  });
+
+  it("planned: last_month period returns 0 (schedule window collapses)", async () => {
+    // last_month periodEnd = May 1, but today (May 15) > May 1, so
+    // scheduleLowerBound >= scheduleUpperBound and the anti-join short-circuits.
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+    await setBudgetService({ workspaceId, userId }, { categoryId, amount: 300, period: "last_month" });
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId, categoryId,
+        amount: "200",
+        scheduledDate: new Date(Date.UTC(2026, 3, 20)),  // April 20 — inside last_month window
+      },
+    });
+    const r = await compareSpendingVsBudgetService({ workspaceId, userId }, { period: "last_month" });
+    const item = r.items.find((i) => i.categoryId === categoryId)!;
+    expect(item.planned).toBe("0.00");
+  });
 });

@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
+import { resolveUserTz, partsInTz } from "../chat/tools/periods.js";
 import {
   TxValidationError,
   validateAmount,
@@ -114,7 +115,6 @@ function toDTO(row: ScheduleRow, todayDateOnly: Date): ScheduleDTO {
  * `@db.Date` round-trip → midnight UTC) line up.
  */
 async function todayDateOnlyForUser(userId: string): Promise<Date> {
-  const { resolveUserTz, partsInTz } = await import("../chat/tools/periods.js");
   const tz = await resolveUserTz(userId);
   const parts = partsInTz(new Date(), tz);
   return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));

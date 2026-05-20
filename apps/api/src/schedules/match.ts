@@ -1,4 +1,3 @@
-import { prisma } from "../db.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { resolveUserTz, partsInTz, localMidnightToUtc } from "../chat/tools/periods.js";
 
