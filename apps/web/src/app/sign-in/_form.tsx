@@ -96,9 +96,24 @@ export function SignInForm() {
           name: name || email.split("@")[0]!,
         });
         if (r.error) throw new Error(r.error.message ?? "Sign up failed");
+        // Backend has emailOTP({ sendVerificationOnSignUp: true }) — code
+        // already sent. Route to verify-email; /home redirects post-verify.
+        router.replace(`/verify-email?email=${encodeURIComponent(email)}`);
+        return;
       } else {
         const r = await signIn.email({ email, password });
-        if (r.error) throw new Error(r.error.message ?? "Sign in failed");
+        if (r.error) {
+          if (
+            r.error.code === "EMAIL_NOT_VERIFIED" ||
+            /verif/i.test(r.error.message ?? "")
+          ) {
+            router.replace(
+              `/verify-email?email=${encodeURIComponent(email)}`,
+            );
+            return;
+          }
+          throw new Error(r.error.message ?? "Sign in failed");
+        }
       }
       router.replace(safeFrom ?? "/home");
     } catch (e2) {
