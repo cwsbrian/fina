@@ -305,39 +305,39 @@ For each active workspace:
      alreadyMatchedRows.map((r) => `${r.matchedTxId}|${r.categoryId}`),
    );
    ```
-5. Iterate candidates with the usedTxIds set keyed by `(txId, categoryId)` so a split tx can match ONE schedule per its allocation categories — matching the budget anti-join's per-bucket consumption model (§6.1):
+5. Iterate candidates with `usedTxAllocations` set keyed by `(txId, categoryId)` so a split tx can match ONE schedule per its allocation categories — matching the budget anti-join's per-bucket consumption model (§6.1):
    ```ts
-   // Pre-load: existing matches keyed by (matchedTxId, categoryId of the schedule)
-   const usedTxAllocations = new Set<string>(
-     alreadyMatchedRows.map((r) => `${r.matchedTxId}|${r.categoryId}`),
-   );
-
+   // (Pre-loaded above in step 4)
    for (const candidate of candidates) {
      const dayStart = ... // start of candidate.scheduledDate in workspace tz
      const nextDayStart = ... // dayStart + 1 day
-     const match = await tx.transaction.findFirst({
+     // Use findMany + walk-forward so we can skip already-consumed (tx, cat) pairs.
+     // findFirst would leave a candidate unmatched if the first tx ordered by
+     // (occurredAt, id) is already consumed for this category, even when a later
+     // tx is available. Walk forward until we find an unused (tx, cat) pair.
+     const matches = await tx.transaction.findMany({
        where: {
          workspaceId,
          removedAt: null,
-         amount: { gt: 0 },  // exclude refund/credit tx — only positive spend matches
+         amount: { gt: 0 },  // exclude refund/credit tx
          occurredAt: { gte: dayStart, lt: nextDayStart },
          allocations: {
-           some: { categoryId: candidate.categoryId, amount: { gt: 0 } },  // positive allocation
+           some: { categoryId: candidate.categoryId, amount: { gt: 0 } },
          },
        },
        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
        select: { id: true },
+       // No `take` — candidate set per day is typically small.
      });
-     // Walk forward through matching tx (small N per day) skipping already-claimed (tx, category) pairs:
-     // For typical workloads candidate count is small; the where-clause excludes most tx already.
-     // If the first match is already consumed for this category, try the next one.
-     // (Implementation detail: load matches as findMany with take=N and iterate.)
-     if (match && !usedTxAllocations.has(`${match.id}|${candidate.categoryId}`)) {
+     const pickedMatch = matches.find(
+       (m) => !usedTxAllocations.has(`${m.id}|${candidate.categoryId}`),
+     );
+     if (pickedMatch) {
        await tx.scheduledSpend.update({
          where: { id: candidate.id },
-         data: { matchedTxId: match.id },
+         data: { matchedTxId: pickedMatch.id },
        });
-       usedTxAllocations.add(`${match.id}|${candidate.categoryId}`);
+       usedTxAllocations.add(`${pickedMatch.id}|${candidate.categoryId}`);
      }
    }
    ```
@@ -349,11 +349,11 @@ For each active workspace:
 
 The pre-load step is what makes the one-to-one rule durable across cron runs: a tx already matched by Schedule A in run 1 will NOT be matched by Schedule B in run 2 (or later). Without this pre-load, run 2 starts with an empty `usedTxIds` and could double-match.
 
-**Alternative considered**: add a Postgres partial unique index `CREATE UNIQUE INDEX ON scheduled_spends(matchedTxId) WHERE matchedTxId IS NOT NULL`. Rejected for v1: the partial unique would surface as a `P2002` constraint violation at write time, requiring race-handling logic. The pre-load + `usedTxIds.notIn` approach handles the same invariant inside the workspace lock without DB-level constraint contortions. Can be added later as defense-in-depth.
+**Alternative considered**: add a Postgres partial unique index `CREATE UNIQUE INDEX ON scheduled_spends(matchedTxId, categoryId) WHERE matchedTxId IS NOT NULL`. Rejected for v1: the partial unique would surface as a `P2002` constraint violation at write time, requiring race-handling logic. The pre-load + `usedTxAllocations` set approach handles the same invariant inside the workspace lock without DB-level constraint contortions. Can be added later as defense-in-depth.
 
 ### 5.3 Edge cases
 
-- **Multiple schedules same date+category, one tx**: per §5.2's `usedTxIds.notIn` clause, only the first schedule (by `scheduledDate asc, createdAt asc, id asc`) matches; the rest stay unresolved. User can dismiss extras or they surface in the brief.
+- **Multiple schedules same date+category, one tx**: per §5.2's `usedTxAllocations` walk-forward, only the first schedule (by `scheduledDate asc, createdAt asc, id asc`) matches; the rest stay unresolved. User can dismiss extras or they surface in the brief.
 - **Multiple schedules same date+category, multiple tx**: schedules consume tx 1:1 in the deterministic order. Extras (on either side) remain unresolved.
 - **Tx HARD-deleted after match**: `onDelete: SetNull` on the FK clears `matchedTxId` automatically. The schedule goes back to unresolved state and resurfaces in the next brief.
 - **Tx SOFT-removed after match** (`removedAt = now()`): the FK doesn't fire. See §5.4 for the explicit cleanup hook.
@@ -471,7 +471,11 @@ const txBucketKey = (occurredAt: Date, catId: string) =>
 
 const uniqueBuckets = new Set(candidates.map((s) => scheduleBucketKey(s.scheduledDate, s.categoryId)));
 
-// One query loads ALL tx allocations for the relevant day+categoryId pairs:
+// One query loads ALL tx allocations for the relevant day+categoryId pairs.
+// CRITICAL: derive the tx date range from the SCHEDULE bounds (calendar DATE),
+// NOT from the existing tx range (next_month would have lt = periodStart, zero-length).
+const txLowerBound = padLowerDay(scheduleLowerBound, tz);
+const txUpperBound = padUpperDay(scheduleUpperBound, tz);
 const allocs = await prisma.transactionAllocation.findMany({
   where: {
     categoryId: { in: budgetCategoryIds },
@@ -479,8 +483,8 @@ const allocs = await prisma.transactionAllocation.findMany({
     transaction: {
       workspaceId,
       removedAt: null,
-      // date range covering all candidate schedule days — pad ±1 day for tz boundary safety
-      occurredAt: { gte: padLowerDay(periodStartDate, tz), lt: padUpperDay(period.lt, tz) },
+      amount: { gt: 0 },  // also exclude refund tx from coverage (matches cron §5.2)
+      occurredAt: { gte: txLowerBound, lt: txUpperBound },
     },
   },
   select: {
@@ -757,7 +761,7 @@ One test file per new tool. Standard pattern from existing chat tool tests — c
 - [ ] All write services use `withWorkspaceLock`
 - [ ] Category lookup re-checked inside lock (archivedAt invalidation) — same pattern as `manual-categorize` post-round-3
 - [ ] Auto-match cron filters `scheduledDate <= today AND matchedTxId IS NULL AND dismissedAt IS NULL`
-- [ ] Auto-match enforces ONE-to-ONE via `usedTxIds.notIn` clause across the inner loop (§5.2)
+- [ ] Auto-match enforces per-category ONE-to-ONE via `usedTxAllocations` set keyed by `(txId, categoryId)` (§5.2); findMany+walk-forward picks first unused pair
 - [ ] Auto-match schedule order: `scheduledDate asc, createdAt asc, id asc`
 - [ ] Auto-match tx order: `occurredAt asc, id asc`
 - [ ] Cron uses **workspace owner's tz** to compute "today"; concrete cron string `"5 9 * * *"` registered as a separate scheduler entry
