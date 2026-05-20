@@ -263,18 +263,40 @@ export async function upsertAdded(
   const accountId = await accountIdForPlaidAccount(tx, plaidItemId, t.account_id);
   const existing = await tx.transaction.findFirst({
     where: { workspaceId, plaidTransactionId: t.transaction_id },
-    select: { id: true },
+    include: { allocations: { select: { id: true, amount: true } } },
   });
   if (existing) {
+    const newAmount = new Prisma.Decimal(t.amount);
+    const amountChanged = !existing.amount.equals(newAmount);
+    const N = existing.allocations.length;
+
+    // Preserve allocation invariant: sum(allocations.amount) == tx.amount.
+    // N=1 + amount changed → update the single allocation amount.
+    // N≥2 + amount changed → invalidate (defensive: in practice cannot_split_pending
+    // blocks user splits on pending so replay should always be N=1, but guard anyway).
+    if (amountChanged) {
+      if (N === 1) {
+        await tx.transactionAllocation.update({
+          where: { id: existing.allocations[0]!.id },
+          data: { amount: newAmount },
+        });
+      } else if (N >= 2) {
+        await tx.transactionAllocation.deleteMany({ where: { transactionId: existing.id } });
+        await tx.transactionAllocation.create({
+          data: { transactionId: existing.id, categoryId: null, amount: newAmount, source: null },
+        });
+      }
+    }
     await tx.transaction.update({
       where: { id: existing.id },
       data: {
-        amount: t.amount,
+        amount: newAmount,
         merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
         occurredAt: plaidOccurredAt(t),
         postedAt: plaidPostedAt(t),
         pending: t.pending,
         rawData: t as unknown as Prisma.InputJsonValue,
+        ...(amountChanged && N >= 2 ? { needsReclassification: true } : {}),
       },
     });
     return { kind: "updated", localId: existing.id };

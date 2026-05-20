@@ -81,7 +81,7 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
     const catMap = new Map<string, { id: string; name: string; color: string | null; icon: string | null; parentId: string | null; parent: { id: string; name: string } | null }>();
     if (catIds.length > 0) {
       const cats = await prisma.category.findMany({
-        where: { id: { in: catIds } },
+        where: { id: { in: catIds }, workspaceId: ctx.workspaceId },
         select: {
           id: true,
           name: true,

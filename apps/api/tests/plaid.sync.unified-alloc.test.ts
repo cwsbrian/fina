@@ -5,7 +5,7 @@ import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { upsertModified } from "../src/plaid/sync.js";
+import { upsertAdded, upsertModified } from "../src/plaid/sync.js";
 
 const env = {
   NODE_ENV: "test" as const, PORT: 0,
@@ -196,4 +196,53 @@ describe("Plaid sync — unified allocations edge cases", () => {
   });
 
   it.todo("upsertAdded fresh insert creates 1 null-cat allocation (covered by existing sync tests once they assert allocation presence)");
+
+  it("upsertAdded existing-path replay with mutated amount updates allocation (N=1)", async () => {
+    const { wsId } = await setup("ps-replay@t.co");
+    const plaidAccountId = `acct-replay-${Date.now()}`;
+    // Create a PlaidItem (required FK for BankAccount.plaidItemId).
+    const plaidItem = await prisma.plaidItem.create({
+      data: {
+        workspaceId: wsId,
+        accessTokenCiphertext: Buffer.alloc(32),
+        accessTokenIv: Buffer.alloc(12),
+        itemId: `item-${Date.now()}`,
+        institutionId: "ins_test",
+        institutionName: "Test Bank",
+      },
+    });
+    // Create a bankAccount that accountIdForPlaidAccount can find.
+    const acct = await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        name: "Replay Checking",
+        type: "depository",
+        plaidItemId: plaidItem.id,
+        plaidAccountId,
+      },
+    });
+    const txId = await seedPlaidTx(wsId, acct.id, {
+      amount: "10", allocations: [{ categoryId: null, amount: "10", source: null }],
+    });
+    const tx = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
+    // Simulate replay with different amount — call upsertAdded directly.
+    await prisma.$transaction(async (db) =>
+      upsertAdded(db, {
+        transaction_id: tx.plaidTransactionId!,
+        account_id: plaidAccountId,
+        amount: 15,
+        date: "2026-05-19",
+        pending: false,
+        merchant_name: "Costco",
+        name: "Costco",
+      } as any, plaidItem.id, wsId),
+    );
+    const after = await prisma.transaction.findUniqueOrThrow({
+      where: { id: txId },
+      include: { allocations: true },
+    });
+    expect(after.amount.toString()).toBe("15");
+    expect(after.allocations).toHaveLength(1);
+    expect(after.allocations[0]!.amount.toString()).toBe("15");
+  });
 });

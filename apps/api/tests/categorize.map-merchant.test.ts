@@ -192,4 +192,54 @@ describe("mapMerchantToCategoryService", () => {
       mapMerchantToCategoryService({ workspaceId }, { categoryId, merchant: "Starbucks" }),
     ).rejects.toThrow("category_not_found");
   });
+
+  it("back-fill SKIPS split tx (N=2 allocations) and only updates the N=1 eligible sibling", async () => {
+    // tx A: N=1 null-cat allocation (eligible for back-fill).
+    const txAId = await seedTx({ merchantRaw: "Starbucks", merchantNormalized: "starbucks", categoryId: null });
+    // tx B: N=2 allocations (split tx, should be skipped entirely).
+    const txB = await prisma.transaction.create({
+      data: {
+        workspaceId,
+        accountId: acctId,
+        plaidTransactionId: `tx-split-${Math.random()}`,
+        amount: "20.00",
+        merchantRaw: "Starbucks",
+        merchantNormalized: "starbucks",
+        occurredAt: new Date("2026-05-10T12:00:00Z"),
+        rawData: {},
+      },
+    });
+    // Create 2 null-cat allocations for tx B so it passes the `every: { categoryId: null }` filter.
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: txB.id, categoryId: null, amount: "12.00", source: null },
+        { transactionId: txB.id, categoryId: null, amount: "8.00", source: null },
+      ],
+    });
+
+    const r = await mapMerchantToCategoryService(
+      { workspaceId },
+      { categoryId, merchant: "Starbucks" },
+    );
+
+    // Only tx A should have been back-filled.
+    expect(r.backfilledCount).toBe(1);
+
+    // tx A: allocation updated.
+    const allocsA = await prisma.transactionAllocation.findMany({ where: { transactionId: txAId } });
+    expect(allocsA).toHaveLength(1);
+    expect(allocsA[0]!.categoryId).toBe(categoryId);
+    expect(allocsA[0]!.source).toBe("mapping");
+
+    // tx B: allocations unchanged (still null, still 2).
+    const allocsB = await prisma.transactionAllocation.findMany({
+      where: { transactionId: txB.id },
+      orderBy: { amount: "desc" },
+    });
+    expect(allocsB).toHaveLength(2);
+    for (const a of allocsB) {
+      expect(a.categoryId).toBeNull();
+      expect(a.source).toBeNull();
+    }
+  });
 });

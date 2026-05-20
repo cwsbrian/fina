@@ -120,7 +120,7 @@ async function bucketizeByAllocation(
   const catMap = new Map<string, string>();
   if (catIds.length > 0) {
     const cats = await prisma.category.findMany({
-      where: { id: { in: catIds } },
+      where: { id: { in: catIds }, workspaceId },
       select: { id: true, name: true },
     });
     for (const c of cats) catMap.set(c.id, c.name);

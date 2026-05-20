@@ -145,7 +145,11 @@ export async function applyManualCategorize(
       // Atomic per-row update with guard: only update if still not manual.
       // Use OR to handle NULL source correctly (NULL != 'manual' is NULL in SQL).
       const upd = await tx.transactionAllocation.updateMany({
-        where: { id: a.id, OR: [{ source: null }, { source: { not: "manual" } }] },
+        where: {
+          id: a.id,
+          transaction: { workspaceId: input.workspaceId },  // defense-in-depth TOCTOU guard
+          OR: [{ source: null }, { source: { not: "manual" } }],
+        },
         data: { categoryId: category.id, source: "mapping" },
       });
       if (upd.count > 0) {

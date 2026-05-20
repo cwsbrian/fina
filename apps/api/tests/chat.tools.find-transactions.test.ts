@@ -199,4 +199,32 @@ describe("findTransactions tool", () => {
   it("invalid_amount_range: amount_max < amount_min is rejected", async () => {
     await expect(findTransactions.run(ctx, { amount_min: 100, amount_max: 50 })).rejects.toThrow("invalid_amount_range");
   });
+
+  it("category_name filter matches split tx when one of its allocations has the category", async () => {
+    // Seed a split tx: $60 Food + $40 Coffee. The tx total is $100.
+    const coffeeCat = await prisma.category.create({ data: { workspaceId: wsId, name: "Coffee" } });
+    const splitTx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: acctId,
+        plaidTransactionId: "ft-split",
+        amount: "100.00",
+        merchantRaw: "Costco",
+        merchantNormalized: "costco",
+        occurredAt: new Date("2026-04-28T12:00:00Z"),
+        rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: splitTx.id } });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: splitTx.id, categoryId: foodCatId, amount: "60.00", source: null },
+        { transactionId: splitTx.id, categoryId: coffeeCat.id, amount: "40.00", source: null },
+      ],
+    });
+    // Filter by Food — the split tx should be returned because one allocation is Food.
+    const r = await findTransactions.run(ctx, { category_name: "Food" });
+    const ids = r.transactions.map((t) => t.id);
+    expect(ids).toContain(splitTx.id);
+  });
 });
