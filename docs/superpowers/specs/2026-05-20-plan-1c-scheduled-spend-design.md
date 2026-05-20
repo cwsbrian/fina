@@ -513,12 +513,22 @@ for (const a of allocs) {
 // user's tz. They may differ for a multi-user workspace spanning tz boundaries.
 // Use the MATCHED TX's occurredAt + caller's tz to compute the bucket key —
 // matches how the same tx is bucketed elsewhere in this query.
+// Scope matched rows by matchedTx.occurredAt within tx bounds — NOT by scheduledDate.
+// Multi-tz workspace edge case: owner in Vancouver, caller in Toronto, tx at Toronto
+// May 20 / Vancouver May 19. Cron matched a May 19 schedule (owner's tz) against
+// that tx. For the Toronto May 20 budget view, that schedule's scheduledDate (May 19)
+// is OUTSIDE [scheduleLowerBound=May 20, ...), so a scheduledDate-scoped query would
+// miss it. But the tx itself is in the Toronto May 20 bucket — and that bucket's
+// pool needs to subtract this tx. Scoping by matchedTx.occurredAt with txLowerBound
+// /txUpperBound catches the case.
 const matchedSchedules = await prisma.scheduledSpend.findMany({
   where: {
     workspaceId,
     matchedTxId: { not: null },
     categoryId: { in: budgetCategoryIds },
-    scheduledDate: { gte: scheduleLowerBound, lt: scheduleUpperBound },
+    matchedTx: {
+      occurredAt: { gte: txLowerBound, lt: txUpperBound },
+    },
   },
   select: {
     matchedTxId: true,
