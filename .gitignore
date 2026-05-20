@@ -32,3 +32,4 @@ playwright-report/
 
 # Git worktrees
 .worktrees/
+.claude/worktrees/
