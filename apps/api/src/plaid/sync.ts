@@ -6,6 +6,7 @@ import { readAccessToken } from "./items.js";
 import { lockPlaidItem, SyncLockHeld } from "./lock.js";
 import { HttpError } from "../auth/context.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
+import { clearScheduleMatch } from "../schedules/cleanup.js";
 
 // `skipped` carries the partial counters from any pages that DID commit
 // before the lock was lost (final-tx race) — the page-level commits are
@@ -392,8 +393,15 @@ export async function markRemoved(
   plaidTransactionId: string,
   workspaceId: string,
 ): Promise<void> {
-  await tx.transaction.updateMany({
+  // First select the local tx to get its id (so we can clear schedule matches).
+  const target = await tx.transaction.findFirst({
     where: { workspaceId, plaidTransactionId, removedAt: null },
+    select: { id: true },
+  });
+  if (!target) return; // nothing to remove
+  await clearScheduleMatch(tx, target.id);
+  await tx.transaction.update({
+    where: { id: target.id },
     data: { removedAt: new Date() },
   });
 }

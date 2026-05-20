@@ -498,3 +498,42 @@ describe("syncTransactions", () => {
     await app.close();
   });
 });
+
+describe("markRemoved", () => {
+  it("clears matchedTxId on ScheduledSpend referencing the removed tx", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "plaid-sched-rm@t.co" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-plaid-sched" } });
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Plaid", type: "depository", status: "active" },
+    });
+    const ptx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id,
+        plaidTransactionId: "p_sched_rm",
+        amount: "50", merchantRaw: "PX", merchantNormalized: "px",
+        occurredAt: new Date("2026-05-25T12:00:00Z"),
+        pending: false, source: "plaid", rawData: {},
+      },
+    });
+    const sched = await prisma.scheduledSpend.create({
+      data: {
+        workspaceId: wsId, categoryId: cat.id,
+        amount: "100", scheduledDate: new Date("2026-05-25T00:00:00Z"),
+        matchedTxId: ptx.id,
+      },
+    });
+
+    await prisma.$transaction(async (tx) => {
+      const { markRemoved } = await import("../src/plaid/sync.js");
+      await markRemoved(tx, "p_sched_rm", wsId);
+    });
+
+    const after = await prisma.scheduledSpend.findUniqueOrThrow({ where: { id: sched.id } });
+    expect(after.matchedTxId).toBeNull();
+    const txAfter = await prisma.transaction.findUniqueOrThrow({ where: { id: ptx.id } });
+    expect(txAfter.removedAt).not.toBeNull();
+    await app.close();
+  });
+});

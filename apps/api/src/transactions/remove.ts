@@ -1,4 +1,5 @@
 import { withWorkspaceLock } from "../locks/workspace.js";
+import { clearScheduleMatch } from "../schedules/cleanup.js";
 
 export type RemoveTxResult =
   | { removed: true }
@@ -45,6 +46,7 @@ export async function removeTransactionService(
       where: { id: txId },
       data: { removedAt: new Date() },
     });
+    await clearScheduleMatch(tx, txId);
     return { removed: true } as const;
   });
 }
