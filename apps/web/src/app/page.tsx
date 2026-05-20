@@ -1,37 +1,60 @@
 "use client";
-import Link from "next/link";
-import { useSession } from "../auth/client";
-import { useRouter } from "next/navigation";
-import { useEffect } from "react";
+
+import { FormEvent, useState } from "react";
+import styles from "./page.module.css";
 
 export default function Landing() {
-  const { data, isPending } = useSession();
-  const router = useRouter();
+  const [email, setEmail] = useState("");
+  const [submitted, setSubmitted] = useState(false);
 
-  useEffect(() => {
-    if (data?.user) router.replace("/home");
-  }, [data, router]);
+  function onSubmit(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    if (!email || submitted) return;
+    // TODO: POST /api/waitlist when endpoint exists.
+    setSubmitted(true);
+  }
 
-  if (isPending) return null;
   return (
-    <main style={{ padding: 32, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 48, marginBottom: 16 }}>Fina</h1>
-      <p style={{ fontSize: 18, opacity: 0.7, marginBottom: 32 }}>
-        AI Financial Advisor — chat with your money.
-      </p>
-      <Link
-        href="/sign-in"
-        style={{
-          display: "inline-block",
-          background: "#111",
-          color: "#fff",
-          padding: "12px 24px",
-          borderRadius: 8,
-          textDecoration: "none",
-        }}
-      >
-        Sign in
-      </Link>
+    <main className={styles.page}>
+      <div className={styles.top}>
+        <div className={styles.logo}>Fina</div>
+        <div className={styles.topMeta}>Opening summer 2026</div>
+      </div>
+
+      <div className={styles.center}>
+        <div className={styles.eyebrow}>Now accepting early access</div>
+        <h1 className={styles.headline}>
+          Every morning,
+          <br />
+          <em>before</em> you open your wallet.
+        </h1>
+        <p className={styles.sub}>
+          An AI financial copilot for households. We&apos;re opening the
+          waitlist in small batches.
+        </p>
+        <form className={styles.form} onSubmit={onSubmit}>
+          <input
+            type="email"
+            inputMode="email"
+            autoComplete="email"
+            placeholder="you@email.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={submitted}
+            required
+            aria-label="Email address"
+          />
+          <button type="submit" disabled={submitted || email.length === 0}>
+            {submitted ? "You're in ✓" : "Join waitlist"}
+          </button>
+        </form>
+      </div>
+
+      <div className={styles.foot}>
+        <span>© 2026 Fina, Inc.</span>
+        <span>Privacy</span>
+        <span>Terms</span>
+      </div>
     </main>
   );
 }
