@@ -203,12 +203,12 @@ Validates via `editor+`. Uses category-by-name lookup pattern from existing `add
 Args: {
   from?: string;   // YYYY-MM-DD inclusive
   to?: string;     // YYYY-MM-DD inclusive
-  status?: "upcoming" | "unresolved" | "resolved" | "all";  // default "all"
+  status?: "upcoming" | "unresolved" | "resolved-matched" | "resolved-dismissed" | "all";  // default "all"
 }
 Result: { schedules: Array<{ id, categoryId, categoryName, amount, scheduledDate, note, matchedTxId, dismissedAt, status }> }
 ```
 
-`status` is the derived field computed at read time (§3.2).
+`status` is the derived field computed at read time (§3.2). The filter values exactly match the surfaced status taxonomy.
 
 #### `listUnresolvedSchedules`
 
@@ -410,42 +410,68 @@ For each `(scheduledDate, categoryId)` bucket among candidate schedules:
 
 **Prisma sketch**:
 ```ts
-// 1. Load candidate schedules (filters above except the anti-join)
+// 1. Load candidate schedules
+const periodStartDate = new Date(Math.max(today.getTime(), period.gte.getTime()));
 const candidates = await prisma.scheduledSpend.findMany({
-  where: { workspaceId, categoryId: { in: budgetCategoryIds }, scheduledDate: { gte: today, lt: periodLt }, matchedTxId: null, dismissedAt: null },
+  where: {
+    workspaceId,
+    categoryId: { in: budgetCategoryIds },
+    scheduledDate: { gte: periodStartDate, lt: period.lt },  // proper period bounds
+    matchedTxId: null,
+    dismissedAt: null,
+  },
   orderBy: [{ scheduledDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
   select: { id: true, categoryId: true, scheduledDate: true, amount: true },
 });
 
-// 2. For each unique (date, categoryId) bucket, count covering tx in user-tz
-const tzKey = await resolveUserTz(ctx.userId);
-const bucketKey = (date: Date, catId: string) => `${dateKeyInTz(date, tzKey)}|${catId}`;
-const uniqueBuckets = new Set(candidates.map((s) => bucketKey(s.scheduledDate, s.categoryId)));
+// 2. Schedule bucket key uses date-only (Postgres DATE is wall-clock, NOT an instant —
+//    do NOT apply dateKeyInTz to scheduledDate, which would shift by tz offset).
+const scheduleBucketKey = (d: Date, catId: string) =>
+  `${d.toISOString().slice(0, 10)}|${catId}`;
 
-// One query loads ALL tx for ALL relevant day+categoryId pairs:
+// Tx bucket key MUST use dateKeyInTz (occurredAt is an instant in UTC; we need the
+// user-local day boundary that matches the rest of budget aggregation).
+const tz = await resolveUserTz(ctx.userId);
+const txBucketKey = (occurredAt: Date, catId: string) =>
+  `${dateKeyInTz(occurredAt, tz)}|${catId}`;
+
+const uniqueBuckets = new Set(candidates.map((s) => scheduleBucketKey(s.scheduledDate, s.categoryId)));
+
+// One query loads ALL tx allocations for the relevant day+categoryId pairs:
 const allocs = await prisma.transactionAllocation.findMany({
   where: {
     categoryId: { in: budgetCategoryIds },
     amount: { gt: 0 },
-    transaction: { workspaceId, removedAt: null, /* date range covering all candidate days */ },
+    transaction: {
+      workspaceId,
+      removedAt: null,
+      // date range covering all candidate schedule days — pad ±1 day for tz boundary safety
+      occurredAt: { gte: padLowerDay(periodStartDate, tz), lt: padUpperDay(period.lt, tz) },
+    },
   },
   select: {
     categoryId: true,
     transaction: { select: { id: true, occurredAt: true } },
   },
 });
-// Group: bucketKey → count of distinct tx ids
-const txCountPerBucket = new Map<string, number>();
+
+// 3. Group by bucket, deduping tx ids — a tx with TWO same-category allocations
+//    still counts as ONE covering tx (otherwise a split tx with duplicate same-cat
+//    allocations would over-cover schedules).
+const txIdsByBucket = new Map<string, Set<string>>();
 for (const a of allocs) {
-  const key = bucketKey(a.transaction.occurredAt, a.categoryId);
-  if (uniqueBuckets.has(key)) txCountPerBucket.set(key, (txCountPerBucket.get(key) ?? 0) + 1);
+  const key = txBucketKey(a.transaction.occurredAt, a.categoryId);
+  if (!uniqueBuckets.has(key)) continue;
+  if (!txIdsByBucket.has(key)) txIdsByBucket.set(key, new Set());
+  txIdsByBucket.get(key)!.add(a.transaction.id);
 }
 
-// 3. Per-bucket consumption — sort schedules by (createdAt asc, id asc), mark first min(T,S) as covered
-const schedulesByBucket = groupBy(candidates, (s) => bucketKey(s.scheduledDate, s.categoryId));
+// 4. Per-bucket consumption — sort schedules by (createdAt asc, id asc), mark first
+//    min(T, S) as covered. Already-sorted from the orderBy on candidates query.
+const schedulesByBucket = groupBy(candidates, (s) => scheduleBucketKey(s.scheduledDate, s.categoryId));
 const planned = new Map<string, Prisma.Decimal>();  // categoryId → sum
 for (const [bucket, schedules] of schedulesByBucket) {
-  const T = txCountPerBucket.get(bucket) ?? 0;
+  const T = txIdsByBucket.get(bucket)?.size ?? 0;
   const uncovered = schedules.slice(T);  // skip first T as covered; rest contribute to planned
   for (const s of uncovered) {
     planned.set(s.categoryId, (planned.get(s.categoryId) ?? new Prisma.Decimal(0)).plus(s.amount));
@@ -453,7 +479,13 @@ for (const [bucket, schedules] of schedulesByBucket) {
 }
 ```
 
-The `dateKeyInTz` helper ensures day-boundary matching aligns with the rest of the system — a tx at 23:30 user-local on May 15 (which is 03:30 UTC on May 16) correctly belongs to May 15's bucket.
+Two distinct date-key functions, two distinct purposes:
+- Schedule's `scheduledDate` is a Postgres `DATE` (wall-clock May 15 with no time/tz) → key with `toISOString().slice(0, 10)`.
+- Transaction's `occurredAt` is a `TIMESTAMP` instant → key with `dateKeyInTz(occurredAt, callingUserTz)` so a 23:30 local-May-15 tx (03:30 UTC May 16) buckets as `2026-05-15`.
+
+`padLowerDay`/`padUpperDay` extend the tx query range by 24h in each direction to cover tz boundary cases — cheap and safe.
+
+**Tx dedup matters for split tx**: a Costco tx with allocations `[Health $60, Health $40]` (two same-category allocations — rare but legal) would otherwise contribute count=2 to the Health bucket, incorrectly covering two schedules. Using `Set<txId>` per bucket dedupes.
 
 **Past unresolved** (`scheduledDate < today AND both null`) is intentionally NOT counted — counting it would inflate "planned" forever.
 
@@ -525,18 +557,34 @@ export type AddScheduledSpendInput = {
 
 export type ScheduledSpendStatus = "upcoming" | "unresolved" | "resolved-matched" | "resolved-dismissed";
 
-export type AddScheduledSpendErrorCode =
-  | "invalid_amount" | "invalid_date" | "invalid_note" | "category_not_found";
+export type ScheduledSpendErrorCode =
+  | "invalid_amount"
+  | "invalid_date"
+  | "invalid_note"
+  | "category_not_found"
+  | "not_found"          // dismiss target id missing
+  | "already_matched";   // dismiss attempted on matched schedule
 
 export class ScheduledSpendError extends Error {
-  readonly code: AddScheduledSpendErrorCode | "not_found";
-  constructor(code: ScheduledSpendError["code"]);
+  readonly code: ScheduledSpendErrorCode;
+  constructor(code: ScheduledSpendErrorCode);
 }
 
+export type DismissResult =
+  | { schedule: { id: string; dismissedAt: string } }
+  | { dismissed: false; alreadyDismissed: true };
+
+export type RemoveResult =
+  | { removed: true }
+  | { removed: false; alreadyRemoved: true };
+
 export async function addScheduledSpendService(input: AddScheduledSpendInput): Promise<{ schedule: ... }>;
-export async function listScheduledSpendsService(ctx: { workspaceId: string }, filter: { from?: Date; to?: Date; status?: ScheduledSpendStatus | "all" }): Promise<{ schedules: ... }>;
+export async function listScheduledSpendsService(
+  ctx: { workspaceId: string; userId: string },
+  filter: { from?: Date; to?: Date; status?: ScheduledSpendStatus | "all" },
+): Promise<{ schedules: ... }>;
 export async function dismissScheduledSpendService(ctx, id): Promise<DismissResult>;
-export async function removeScheduledSpendService(ctx, id): Promise<{ removed: boolean }>;
+export async function removeScheduledSpendService(ctx, id): Promise<RemoveResult>;
 ```
 
 ```ts
