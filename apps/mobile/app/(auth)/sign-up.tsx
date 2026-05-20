@@ -48,6 +48,7 @@ export default function SignUpScreen() {
   return (
     <AuthScaffold
       centered
+      onBack={() => router.replace("/(auth)/sign-in")}
     >
       <View style={styles.head}>
         <Text style={styles.title}>Create your account.</Text>

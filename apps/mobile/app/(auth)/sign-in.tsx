@@ -5,6 +5,7 @@ import { signIn } from "../../src/auth/client";
 import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
+import { Wordmark } from "../../src/design/Wordmark";
 import { colors, type } from "../../src/design/tokens";
 
 export default function SignInScreen() {
@@ -34,6 +35,9 @@ export default function SignInScreen() {
 
   return (
     <AuthScaffold centered hideBack>
+      <View style={styles.brand}>
+        <Wordmark size={56} />
+      </View>
       <View style={styles.head}>
         <Text style={styles.title}>Welcome back.</Text>
         <Text style={styles.sub}>Pick up right where you left off.</Text>
@@ -99,7 +103,8 @@ export default function SignInScreen() {
 }
 
 const styles = StyleSheet.create({
-  head: { marginTop: 36 },
+  brand: { alignItems: "center", marginBottom: 12 },
+  head: { marginTop: 12 },
   title: { ...type.authTitle, color: colors.ink },
   sub: { ...type.bodyMd, color: colors.body, marginTop: 8 },
   form: { gap: 10, marginTop: 28 },

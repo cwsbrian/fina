@@ -31,7 +31,12 @@ export function AuthScaffold({
     <SafeAreaView style={styles.root}>
       {!hideBack && (
         <Pressable
-          onPress={onBack ?? (() => router.back())}
+          onPress={
+            onBack ??
+            (() => {
+              if (router.canGoBack()) router.back();
+            })
+          }
           style={styles.back}
           hitSlop={12}
           accessibilityLabel="Back"
