@@ -45,6 +45,7 @@ shape diverges enough to justify a separate entity:
 | Conversion of schedule → manual transaction | Auto-match already covers the natural path. User can dismiss + add manually if they want explicit control. |
 | Unifying Recurring + ScheduledSpend | Keep distinct; the shapes diverge enough. |
 | PATCH endpoint to mutate schedule fields | YAGNI — dismiss + re-add covers it. |
+| Cleanup hooks for tx mutations beyond soft-removal | v1 only hooks soft-removal (`removeTransactionService` + Plaid `markRemoved`). Other mutations that could invalidate a match (tx amount edit, categorize change, Plaid `modified` event) are deferred. See §5.4 for the limitation and mitigations. |
 
 ---
 
@@ -359,7 +360,19 @@ The pre-load step is what makes the one-to-one rule durable across cron runs: a 
 - **Tx SOFT-removed after match** (`removedAt = now()`): the FK doesn't fire. See §5.4 for the explicit cleanup hook.
 - **Schedule scheduledDate in the future**: skipped by the cron query (filter is `lte: today`). Counted in `planned` via §6.1.
 
-### 5.4 Cleanup hook on tx soft-removal
+### 5.4 Cleanup hook on tx soft-removal (and known v1 limitation)
+
+**v1 scope**: this hook covers the most common mutation that invalidates a match — soft-removal. Other mutations that can also invalidate a match (e.g., editing the matched tx's amount to negative, changing its occurredAt to a different day, or changing its allocations to remove the covering category) are NOT hooked in v1.
+
+**Known v1 limitation**: if a matched tx is mutated after-the-fact so that it no longer satisfies the match predicate, the schedule keeps `matchedTxId` set and shows `resolved-matched` until either (a) the tx is soft-removed, or (b) a follow-up plan adds hooks to additional mutation paths. The cron's `matchedTxId: null` candidate filter skips already-matched schedules, so cron does NOT re-evaluate.
+
+**Mitigations available without the broader hook set**:
+- Users can `dismiss` the stale schedule (resolves it as `resolved-dismissed`) and re-add a new one if intent has changed.
+- The budget anti-join's tx-id removal (§6.1 step 3b) only removes ACTUALLY-matched tx ids from the bucket — so even a stale match doesn't inflate planned. The schedule is excluded from planned (good) but also doesn't trigger the unresolved prompt (the minor gap).
+
+**Deferred to follow-up**: cleanup hooks on `editTransactionService`, `applyManualCategorize`, `upsertModified`, and the pending→posted promotion. When added, each clears `matchedTxId` for schedules referencing the mutated tx whenever the mutation changes a field involved in the match predicate (amount sign, occurredAt date, allocation categories).
+
+
 
 When a transaction is soft-removed via `removeTransactionService` (`apps/api/src/transactions/remove.ts`) OR via Plaid's `markRemoved` (`apps/api/src/plaid/sync.ts:markRemoved`), the schedule's `matchedTxId` becomes stale — it points to a tx that is no longer counted in `spent`.
 
