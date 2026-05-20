@@ -329,6 +329,25 @@ header + URL path convention.
 Reused middleware: the existing session/cookie auth from
 Better Auth — no rewrites.
 
+### 5.2 Workspace membership check moves to the message body
+
+For `POST /chat/threads/:tid/messages`, the handler must still verify
+`session.user` is a member of `body.workspaceId` — otherwise the user
+could bind a stranger's workspace to their own thread. The check uses
+the existing `@@unique([userId, workspaceId])` index on `Membership`
+(schema.prisma:127):
+
+```ts
+const membership = await prisma.membership.findUnique({
+  where: { userId_workspaceId: { userId: session.userId, workspaceId: body.workspaceId } },
+  select: { role: true },
+});
+if (!membership) throw new HttpError(403, "not_member");
+```
+
+The `role` is then plumbed into the same `ToolContext.role` field as
+today.
+
 ### 5.3 Response shapes
 
 All `/chat/*` endpoints serialize threads with this exact shape:
@@ -390,25 +409,6 @@ runs an LLM turn:
   read access is open so Lite users can still read their daily-brief
   threads (Plan 2B writes those without a tier gate either — Lite
   briefs are the entire point of the Lite tier per master design §13.3).
-
-### 5.2 Workspace membership check moves to the message body
-
-For `POST /chat/threads/:tid/messages`, the handler must still verify
-`session.user` is a member of `body.workspaceId` — otherwise the user
-could bind a stranger's workspace to their own thread. The check uses
-the existing `@@unique([userId, workspaceId])` index on `Membership`
-(schema.prisma:127):
-
-```ts
-const membership = await prisma.membership.findUnique({
-  where: { userId_workspaceId: { userId: session.userId, workspaceId: body.workspaceId } },
-  select: { role: true },
-});
-if (!membership) throw new HttpError(403, "not_member");
-```
-
-The `role` is then plumbed into the same `ToolContext.role` field as
-today.
 
 ---
 
