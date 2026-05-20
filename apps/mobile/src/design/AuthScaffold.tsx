@@ -16,17 +16,10 @@ type Props = {
   children: ReactNode;
   onBack?: () => void;
   centered?: boolean;
-  foot?: ReactNode;
   hideBack?: boolean;
 };
 
-export function AuthScaffold({
-  children,
-  onBack,
-  centered,
-  foot,
-  hideBack,
-}: Props) {
+export function AuthScaffold({ children, onBack, centered, hideBack }: Props) {
   return (
     <SafeAreaView style={styles.root}>
       {!hideBack && (
@@ -57,7 +50,6 @@ export function AuthScaffold({
         >
           <View style={styles.body}>{children}</View>
         </ScrollView>
-        {foot ? <View style={styles.foot}>{foot}</View> : null}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -83,9 +75,4 @@ const styles = StyleSheet.create({
     paddingBottom: 24,
   },
   body: { flex: 1 },
-  foot: {
-    paddingHorizontal: 24,
-    paddingBottom: 28,
-    alignItems: "center",
-  },
 });

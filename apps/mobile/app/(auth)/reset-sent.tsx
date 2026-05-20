@@ -35,14 +35,7 @@ export default function ResetLinkSentScreen() {
 
   return (
     <AuthScaffold
-      foot={
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Text style={styles.changeText}>
-            Wrong address?{" "}
-            <Text style={styles.changeLink}>Change email</Text>
-          </Text>
-        </Pressable>
-      }
+
     >
       <View style={styles.head}>
         <View style={styles.illo}>
@@ -94,6 +87,12 @@ export default function ResetLinkSentScreen() {
           </Text>
         )}
       </Text>
+      <Pressable onPress={() => router.back()} hitSlop={8}>
+          <Text style={styles.changeText}>
+            Wrong address?{" "}
+            <Text style={styles.changeLink}>Change email</Text>
+          </Text>
+        </Pressable>
     </AuthScaffold>
   );
 }
@@ -107,10 +106,11 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(59,123,255,0.10)",
     alignItems: "center",
     justifyContent: "center",
+    alignSelf: "center",
     marginBottom: 24,
   },
-  title: { ...type.authTitle, color: colors.ink },
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8 },
+  title: { ...type.authTitle, color: colors.ink, textAlign: "center" },
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
   subStrong: { color: colors.ink, fontWeight: "600" },
   checklist: {
     marginTop: 24,
@@ -140,7 +140,7 @@ const styles = StyleSheet.create({
   },
   resendStrong: { color: colors.body, fontWeight: "500" },
   resendLink: { color: colors.primary, fontWeight: "600" },
-  changeText: { ...type.bodySm, color: colors.muted },
+  changeText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
   changeLink: { color: colors.primary, fontWeight: "600" },
   devLink: {
     alignSelf: "center",

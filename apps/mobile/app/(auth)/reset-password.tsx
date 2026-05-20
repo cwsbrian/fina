@@ -67,19 +67,7 @@ export default function ResetPasswordScreen() {
   }
 
   return (
-    <AuthScaffold
-      foot={
-        <Text style={styles.foot}>
-          Changed your mind?{" "}
-          <Text
-            style={styles.footLink}
-            onPress={() => router.replace("/(auth)/sign-in")}
-          >
-            Cancel
-          </Text>
-        </Text>
-      }
-    >
+    <AuthScaffold>
       <View style={styles.head}>
         <Text style={styles.title}>Pick a new password.</Text>
         <Text style={styles.sub}>
@@ -120,6 +108,16 @@ export default function ResetPasswordScreen() {
         disabled={!canSubmit}
         style={{ marginTop: 12 }}
       />
+
+      <Text style={styles.foot}>
+        Changed your mind?{" "}
+        <Text
+          style={styles.footLink}
+          onPress={() => router.replace("/(auth)/sign-in")}
+        >
+          Cancel
+        </Text>
+      </Text>
     </AuthScaffold>
   );
 }
@@ -136,7 +134,12 @@ const styles = StyleSheet.create({
     color: colors.down,
     textAlign: "center",
   },
-  foot: { ...type.bodySm, color: colors.muted, textAlign: "center" },
+  foot: {
+    ...type.bodySm,
+    color: colors.muted,
+    textAlign: "center",
+    marginTop: 14,
+  },
   footLink: { color: colors.primary, fontWeight: "600" },
 });
 

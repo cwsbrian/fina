@@ -68,15 +68,7 @@ export default function VerifyScreen() {
   const ss = String(cooldown % 60).padStart(2, "0");
 
   return (
-    <AuthScaffold
-      foot={
-        <Pressable onPress={() => router.back()} hitSlop={8}>
-          <Text style={styles.footText}>
-            Wrong address? <Text style={styles.footLink}>Change email</Text>
-          </Text>
-        </Pressable>
-      }
-    >
+    <AuthScaffold>
       <View style={styles.head}>
         <View style={styles.illo}>
           <Icon name="mailOpen" size={28} color={colors.primary} strokeWidth={1.6} />
@@ -131,6 +123,12 @@ export default function VerifyScreen() {
           </Text>
         )}
       </Text>
+
+      <Pressable onPress={() => router.back()} hitSlop={8}>
+        <Text style={styles.footText}>
+          Wrong address? <Text style={styles.footLink}>Change email</Text>
+        </Text>
+      </Pressable>
     </AuthScaffold>
   );
 }
@@ -188,6 +186,11 @@ const styles = StyleSheet.create({
   },
   resendStrong: { color: colors.body, fontWeight: "500" },
   resendLink: { color: colors.primary, fontWeight: "600" },
-  footText: { ...type.bodySm, color: colors.muted },
+  footText: {
+    ...type.bodySm,
+    color: colors.muted,
+    marginTop: 14,
+    textAlign: "center",
+  },
   footLink: { color: colors.primary, fontWeight: "600" },
 });
