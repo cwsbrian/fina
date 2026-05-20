@@ -9,6 +9,7 @@ vi.mock("croner", () => ({
 vi.mock("../src/cron/jobs/daily-refresh.js", () => ({ runDailyRefresh: vi.fn() }));
 vi.mock("../src/cron/jobs/retry-unprocessed.js", () => ({ runRetryUnprocessed: vi.fn() }));
 vi.mock("../src/cron/jobs/cleanup-events.js", () => ({ runCleanupEvents: vi.fn() }));
+vi.mock("../src/cron/jobs/scheduled-spend-match.js", () => ({ runScheduledSpendMatch: vi.fn() }));
 
 import { Cron } from "croner";
 import { startScheduler, stopScheduler } from "../src/cron/scheduler.js";
@@ -45,9 +46,9 @@ describe("scheduler", () => {
     expect(Cron).not.toHaveBeenCalled();
   });
 
-  it("CRON_ENABLED=true → exactly 3 Cron instances created", () => {
+  it("CRON_ENABLED=true → exactly 4 Cron instances created", () => {
     startScheduler({ ...env, CRON_ENABLED: true });
-    expect(Cron).toHaveBeenCalledTimes(3);
+    expect(Cron).toHaveBeenCalledTimes(4);
   });
 
   it("stopScheduler calls stop() on all registered jobs", () => {
