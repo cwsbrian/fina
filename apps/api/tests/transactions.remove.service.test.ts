@@ -146,4 +146,23 @@ describe("removeTransactionService", () => {
     const tx = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
     expect(tx.removedAt).not.toBeNull();
   });
+
+  it("clears matchedTxId on scheduled_spends that referenced the removed tx", async () => {
+    const { wsId, userId } = await setupEditor("rm-sched@t.co");
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-rm-sched" } });
+    const r = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "X", amount: 50, occurredAt: "2026-05-25" },
+    );
+    const sched = await prisma.scheduledSpend.create({
+      data: {
+        workspaceId: wsId, categoryId: cat.id,
+        amount: "100", scheduledDate: new Date("2026-05-25T00:00:00Z"),
+        matchedTxId: r.transaction.id,
+      },
+    });
+    await removeTransactionService({ workspaceId: wsId }, r.transaction.id);
+    const after = await prisma.scheduledSpend.findUniqueOrThrow({ where: { id: sched.id } });
+    expect(after.matchedTxId).toBeNull();
+  });
 });

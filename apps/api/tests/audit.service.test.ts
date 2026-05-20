@@ -127,7 +127,7 @@ describe("logAuditEvent", () => {
 });
 
 describe("AUDIT_WRITE_TOOLS", () => {
-  it("contains all 7 expected tool names", () => {
+  it("contains all 10 expected tool names", () => {
     for (const t of [
       "categorizeTransaction",
       "createCategory",
@@ -136,6 +136,9 @@ describe("AUDIT_WRITE_TOOLS", () => {
       "mapMerchantToCategory",
       "addRecurring",
       "removeRecurring",
+      "addScheduledSpend",
+      "dismissScheduledSpend",
+      "removeScheduledSpend",
     ]) {
       expect(AUDIT_WRITE_TOOLS.has(t)).toBe(true);
     }

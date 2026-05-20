@@ -110,6 +110,7 @@ model Workspace {
   recurringExpenses  RecurringExpense[]
   actionIntents      ActionIntent[]
   auditEvents        AuditEvent[]
+  scheduledSpends    ScheduledSpend[]
 
   @@map("workspaces")
 }
@@ -294,7 +295,8 @@ model Transaction {
   // The Prisma model is BankAccount but the field name is unchanged.
   account     BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
   plaidItem   PlaidItem?  @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
-  allocations TransactionAllocation[]
+  allocations      TransactionAllocation[]
+  matchedSchedules ScheduledSpend[] @relation("ScheduledSpendMatch")
 
   @@index([workspaceId, occurredAt(sort: Desc)])
   @@index([workspaceId, accountId, occurredAt(sort: Desc)])
@@ -319,6 +321,28 @@ model TransactionAllocation {
   @@map("transaction_allocations")
 }
 
+model ScheduledSpend {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  categoryId    String
+  amount        Decimal   @db.Decimal(14, 2)
+  scheduledDate DateTime  @db.Date
+  note          String?
+  matchedTxId   String?
+  dismissedAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  workspace Workspace    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  category  Category     @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  matchedTx Transaction? @relation("ScheduledSpendMatch", fields: [matchedTxId], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, scheduledDate])
+  @@index([workspaceId, categoryId, scheduledDate])
+  @@index([matchedTxId])
+  @@map("scheduled_spends")
+}
+
 enum TransactionSource {
   plaid
   manual
@@ -339,6 +363,7 @@ model Category {
   parent             Category?         @relation("CategoryTree", fields: [parentId], references: [id])
   children           Category[]        @relation("CategoryTree")
   allocations        TransactionAllocation[]
+  scheduledSpends    ScheduledSpend[]
   merchantMappings   MerchantMapping[]
   budgets            Budget[]
   recurringExpenses  RecurringExpense[]

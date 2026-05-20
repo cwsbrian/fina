@@ -67,7 +67,7 @@ export function partsInTz(instant: Date, tz: string): Parts {
 // Starts with the desired wall-time read as UTC, then iteratively shifts by the delta
 // between the wanted wall time and the wall time the current guess actually produces in `tz`.
 // Converges in at most 2 iterations across any IANA zone, including DST transitions.
-function localMidnightToUtc(year: number, month: number, day: number, tz: string): Date {
+export function localMidnightToUtc(year: number, month: number, day: number, tz: string): Date {
   let utc = Date.UTC(year, month - 1, day, 0, 0, 0);
   for (let i = 0; i < 3; i++) {
     const got = partsInTz(new Date(utc), tz);
