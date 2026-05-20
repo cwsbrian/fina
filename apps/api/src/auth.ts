@@ -35,6 +35,13 @@ export function createAuth(env: Env) {
         ? []
         : ["http://localhost:3000", "http://localhost:3100", "fina://", ...devOrigins],
     database: prismaAdapter(prisma, { provider: "postgresql" }),
+    emailVerification: {
+      // After /email-otp/verify-email succeeds, mint a session and set the
+      // cookie in the same response so the client doesn't have to re-sign-in
+      // with the password they just typed. Default Better Auth would leave the
+      // user verified-but-signed-out, and our /home would 401.
+      autoSignInAfterVerification: true,
+    },
     emailAndPassword: {
       enabled: true,
       requireEmailVerification: true,
