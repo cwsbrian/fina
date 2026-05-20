@@ -606,7 +606,7 @@ type ScheduleRow = Prisma.ScheduledSpendGetPayload<{
 // before storage, treat the noon-UTC quirk as benign (date components match
 // the user's intent in every supported tz).
 
-function deriveStatus(row: ScheduleRow, today: Date): ScheduledSpendStatus {
+function deriveStatus(row: ScheduleRow, todayDateOnly: Date): ScheduledSpendStatus {
   // matched and tx still active → resolved-matched
   if (row.matchedTxId && row.matchedTx && row.matchedTx.removedAt === null) {
     return "resolved-matched";
@@ -615,20 +615,20 @@ function deriveStatus(row: ScheduleRow, today: Date): ScheduledSpendStatus {
   if (row.dismissedAt !== null) {
     return "resolved-dismissed";
   }
-  // matched-tx-removed or no match — date determines upcoming vs unresolved
-  // Compare scheduledDate against today as DATE wall-clock (both are date-only).
-  // todayKey = today's UTC date string (or just compare via Date.getTime, but to
-  // match Postgres DATE semantics, use day-only comparison).
+  // todayDateOnly is computed by the caller as the wall-clock date in
+  // the calling user's tz, already normalized to midnight-UTC of that date
+  // (so Date.UTC component comparisons line up with scheduledDate's @db.Date
+  // round-trip representation).
   const schedDayMs = Date.UTC(
     row.scheduledDate.getUTCFullYear(),
     row.scheduledDate.getUTCMonth(),
     row.scheduledDate.getUTCDate(),
   );
-  const todayDayMs = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const todayDayMs = todayDateOnly.getTime();
   return schedDayMs >= todayDayMs ? "upcoming" : "unresolved";
 }
 
-function toDTO(row: ScheduleRow, today: Date): ScheduleDTO {
+function toDTO(row: ScheduleRow, todayDateOnly: Date): ScheduleDTO {
   return {
     id: row.id,
     categoryId: row.categoryId,
@@ -637,8 +637,20 @@ function toDTO(row: ScheduleRow, today: Date): ScheduleDTO {
     note: row.note,
     matchedTxId: row.matchedTxId,
     dismissedAt: row.dismissedAt?.toISOString() ?? null,
-    status: deriveStatus(row, today),
+    status: deriveStatus(row, todayDateOnly),
   };
+}
+
+/**
+ * Compute the calling user's wall-clock "today" as a UTC midnight Date,
+ * so component-by-component comparisons against scheduledDate (Postgres
+ * `@db.Date` round-trip → midnight UTC) line up.
+ */
+async function todayDateOnlyForUser(userId: string): Promise<Date> {
+  const { resolveUserTz, partsInTz } = await import("../chat/tools/periods.js");
+  const tz = await resolveUserTz(userId);
+  const parts = partsInTz(new Date(), tz);
+  return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
 }
 
 export async function addScheduledSpendService(
@@ -666,7 +678,18 @@ export async function addScheduledSpendService(
       },
       include: { matchedTx: { select: { removedAt: true } } },
     });
-    return { schedule: toDTO(row, new Date()) };
+    // addScheduledSpendService doesn't accept userId; toDTO needs a "today"
+    // for status derivation, but a freshly created schedule with no matchedTxId
+    // and no dismissedAt always derives to "upcoming" (if scheduledDate >= today)
+    // or "unresolved" (if past). For the add result we pass the workspace owner's
+    // tz today via a fallback path — or accept that callers will re-list to get
+    // the canonical status. For simplicity here use UTC midnight; the list
+    // endpoint computes the correct tz-aware today.
+    const utcToday = (() => {
+      const n = new Date();
+      return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
+    })();
+    return { schedule: toDTO(row, utcToday) };
   });
 }
 
@@ -696,8 +719,8 @@ export async function listScheduledSpendsService(
     include: { matchedTx: { select: { removedAt: true } } },
   });
 
-  const today = new Date();
-  let dtos = rows.map((r) => toDTO(r, today));
+  const todayDateOnly = await todayDateOnlyForUser(ctx.userId);
+  let dtos = rows.map((r) => toDTO(r, todayDateOnly));
   if (filter.status && filter.status !== "all") {
     dtos = dtos.filter((d) => d.status === filter.status);
   }
@@ -802,8 +825,10 @@ EOF
 
 **Files:**
 - Create: `apps/api/src/schedules/match.ts`
+- Modify: `apps/api/src/chat/tools/periods.ts` (export `localMidnightToUtc` — 1-line change to add `export` keyword)
 - Create: `apps/api/src/cron/jobs/scheduled-spend-match.ts`
 - Modify: `apps/api/src/cron/scheduler.ts` (add new cron entry)
+- Modify: `apps/api/tests/cron.scheduler.test.ts` (update count assertion: 3 → 4 entries)
 - Create: `apps/api/tests/schedules.match.test.ts`
 
 **Spec refs:** §5.2 (algorithm), §5.3 (edge cases), §8.2 (test cases).
@@ -1295,13 +1320,19 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina
 
 Expected: all PASS.
 
+### Step 7b: Update cron scheduler test
+
+`apps/api/tests/cron.scheduler.test.ts` currently asserts exactly 3 cron entries. With the new entry there are 4. Update the assertion (find lines around `48`) — the test's `expect(jobs.length).toBe(3)` or equivalent count check becomes `4`; if it enumerates names, add `"scheduled-spend-match"` to the expected names array.
+
 ### Step 8: Commit
 
 ```bash
 git add apps/api/src/schedules/match.ts \
         apps/api/src/cron/jobs/scheduled-spend-match.ts \
         apps/api/src/cron/scheduler.ts \
-        apps/api/tests/schedules.match.test.ts
+        apps/api/src/chat/tools/periods.ts \
+        apps/api/tests/schedules.match.test.ts \
+        apps/api/tests/cron.scheduler.test.ts
 git commit -m "$(cat <<'EOF'
 feat(plan 1c-scheduled-spend): match cron + scheduler entry
 
@@ -2004,6 +2035,7 @@ EOF
 - Create: `apps/api/src/chat/tools/dismiss-scheduled-spend.ts`
 - Create: `apps/api/src/chat/tools/remove-scheduled-spend.ts`
 - Modify: `apps/api/src/chat/tools/index.ts` (register the 5 tools)
+- Modify: `apps/api/tests/chat.tools.registry.test.ts` (update registry length: 22 → 27; if it asserts tool name list, add the 5 new names)
 - Create: `apps/api/tests/chat.tools.scheduled-spends.test.ts`
 
 **Spec refs:** §4.1.
@@ -2456,7 +2488,8 @@ EOF
 - Modify: `apps/api/src/intents/service.ts` (add 3 write tools to `CONFIRMABLE_TOOLS`)
 - Modify: `apps/api/src/audit/service.ts` (add 3 entries to `AUDIT_WRITE_TOOLS` + `TARGET_TYPE_MAP` + `extractTargetId` switch)
 - Modify: `apps/api/src/chat/tools/present-confirm-card.ts` (extend the description text enumerating confirmable tools)
-- Modify (existing tests touching the lists)
+- Modify: `apps/api/tests/chat.tools.registry.test.ts` (around line 255 — update the exact description string assertion for `presentConfirmCard` to include the 3 new tool names in the comma list)
+- Modify (other existing tests touching the lists, e.g., `intents.service.test.ts` or `audit.service.test.ts` if they assert membership)
 
 **Spec refs:** §4.3, §7 (file list).
 
@@ -3036,7 +3069,8 @@ Expected: 201.
 Open the API process, OR temporarily call the match function via a one-shot script. **Important**: pass a `today` Date that's clearly AFTER the schedule's date in the workspace owner's tz — using midnight UTC like `new Date('2099-12-25')` can leave the schedule on Dec 24 in Toronto, causing the candidate filter `scheduledDate <= today` to skip it. Use noon UTC of the day after:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina pnpm --filter @fina/api exec tsx -e "import('./apps/api/src/schedules/match.js').then(({matchScheduledSpends}) => matchScheduledSpends('$WS', new Date('2099-12-26T12:00:00Z')))"
+# pnpm --filter sets cwd to apps/api, so paths are RELATIVE to apps/api/
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina pnpm --filter @fina/api exec tsx -e "import('./src/schedules/match.js').then(({matchScheduledSpends}) => matchScheduledSpends('$WS', new Date('2099-12-26T12:00:00Z')))"
 ```
 (Or restart the dev server with cron enabled and wait until 09:05 UTC.)
 
@@ -3103,7 +3137,7 @@ curl -sS -X POST "http://localhost:3001/workspaces/$WS/schedules" \
 # the chat tool is invoked from the chat thread or via this one-shot)
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina \
   pnpm --filter @fina/api exec tsx -e "
-import('./apps/api/src/budgets/service.js').then(async ({ compareSpendingVsBudgetService }) => {
+import('./src/budgets/service.js').then(async ({ compareSpendingVsBudgetService }) => {
   const r = await compareSpendingVsBudgetService(
     { workspaceId: '$WS', userId: '<your-user-id>' },
     { period: 'this_month' },
