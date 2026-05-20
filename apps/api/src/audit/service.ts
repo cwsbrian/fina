@@ -9,6 +9,9 @@ export const AUDIT_WRITE_TOOLS = new Set([
   "mapMerchantToCategory",
   "addRecurring",
   "removeRecurring",
+  "addScheduledSpend",
+  "dismissScheduledSpend",
+  "removeScheduledSpend",
 ]);
 
 const TARGET_TYPE_MAP: Record<string, string> = {
@@ -19,6 +22,9 @@ const TARGET_TYPE_MAP: Record<string, string> = {
   mapMerchantToCategory: "merchant_mapping",
   addRecurring: "recurring_expense",
   removeRecurring: "recurring_expense",
+  addScheduledSpend: "scheduled_spend",
+  dismissScheduledSpend: "scheduled_spend",
+  removeScheduledSpend: "scheduled_spend",
 };
 
 export function resolveTargetType(action: string): string | null {
@@ -44,6 +50,21 @@ export function extractTargetId(action: string, result: unknown): string | null 
   if (action === "addRecurring") {
     const rec = r.recurring as Record<string, unknown> | undefined;
     return typeof rec?.id === "string" ? rec.id : null;
+  }
+  if (action === "addScheduledSpend") {
+    const s = (result as any)?.schedule as Record<string, unknown> | undefined;
+    return typeof s?.id === "string" ? s.id : null;
+  }
+  if (action === "dismissScheduledSpend") {
+    // result is either { schedule: {id} } or { dismissed: false }
+    const s = (result as any)?.schedule as Record<string, unknown> | undefined;
+    return typeof s?.id === "string" ? s.id : null;
+  }
+  if (action === "removeScheduledSpend") {
+    // result is { removed: bool, alreadyRemoved?: true } — no id returned.
+    // Best-effort: pull from the original intent's args if it ever lands here.
+    // For v1, return null (audit row is still created, just without targetId).
+    return null;
   }
   return null;
 }

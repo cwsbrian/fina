@@ -252,7 +252,7 @@ describe("REGISTRY (plan 1c-confirmation)", () => {
   const EXPECTED = [
     [
       "presentConfirmCard",
-      "Display a Yes/No confirmation card for a deferred mutation. accept_action.tool must be one of: createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring. Server validates args against the target tool's schema before issuing the intent. Use this for destructive ops (removeRecurring) and ambiguous or large changes. The action runs only when the user taps accept.",
+      "Display a Yes/No confirmation card for a deferred mutation. accept_action.tool must be one of: createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring, addScheduledSpend, dismissScheduledSpend, removeScheduledSpend. Server validates args against the target tool's schema before issuing the intent. Use this for destructive ops (removeRecurring) and ambiguous or large changes. The action runs only when the user taps accept.",
     ],
   ] as const;
 

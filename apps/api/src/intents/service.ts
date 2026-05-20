@@ -27,6 +27,9 @@ export const CONFIRMABLE_TOOLS = [
   "mapMerchantToCategory",
   "addRecurring",
   "removeRecurring",
+  "addScheduledSpend",
+  "dismissScheduledSpend",
+  "removeScheduledSpend",
 ] as const;
 export type ConfirmableTool = (typeof CONFIRMABLE_TOOLS)[number];
 
