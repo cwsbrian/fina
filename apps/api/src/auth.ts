@@ -1,4 +1,5 @@
-import { betterAuth } from "better-auth";
+import { betterAuth, APIError } from "better-auth";
+import { createAuthMiddleware } from "better-auth/api";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { magicLink, emailOTP } from "better-auth/plugins";
 import { prisma } from "./db.js";
@@ -44,7 +45,13 @@ export function createAuth(env: Env) {
     },
     emailAndPassword: {
       enabled: true,
-      requireEmailVerification: true,
+      // Anti-enumeration off so duplicate sign-ups get an explicit
+      // USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL error (Better Auth otherwise
+      // returns a synthetic "success" when requireEmailVerification is on,
+      // which made our UX show "Check your email" for already-registered
+      // emails). Sign-in for unverified users is blocked manually below via
+      // hooks.before.
+      requireEmailVerification: false,
       sendResetPassword: async ({ user, url }) => {
         await sendEmail(env.RESEND_API_KEY, env.EMAIL_FROM, {
           to: user.email,
@@ -85,6 +92,28 @@ export function createAuth(env: Env) {
           },
         },
       },
+    },
+    hooks: {
+      // Replaces emailAndPassword.requireEmailVerification (which we turned
+      // off so duplicate signups throw an explicit error instead of returning
+      // a synthetic success). Manually reject sign-in for unverified users.
+      // signUp itself doesn't autoSignIn for unverified accounts because the
+      // email-otp plugin owns the verify-then-session handoff.
+      before: createAuthMiddleware(async (ctx) => {
+        if (ctx.path !== "/sign-in/email") return;
+        const email = (ctx.body as { email?: unknown })?.email;
+        if (typeof email !== "string") return;
+        const found = await ctx.context.internalAdapter.findUserByEmail(
+          email.toLowerCase(),
+        );
+        if (found?.user && !found.user.emailVerified) {
+          throw new APIError("FORBIDDEN", {
+            code: "EMAIL_NOT_VERIFIED",
+            message:
+              "Email not verified. Check your inbox for the verification code.",
+          });
+        }
+      }),
     },
   });
 }

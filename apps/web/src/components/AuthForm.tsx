@@ -105,7 +105,17 @@ export function AuthForm({ mode }: { mode: Mode }) {
           password,
           name: name || email.split("@")[0]!,
         });
-        if (r.error) throw new Error(r.error.message ?? "Sign up failed");
+        if (r.error) {
+          if (
+            r.error.code === "USER_ALREADY_EXISTS_USE_ANOTHER_EMAIL" ||
+            /already/i.test(r.error.message ?? "")
+          ) {
+            throw new Error(
+              "This email is already registered. Sign in instead?",
+            );
+          }
+          throw new Error(r.error.message ?? "Sign up failed");
+        }
         // Backend has emailOTP({ sendVerificationOnSignUp: true }) — code
         // already sent. Route to verify-email; /home redirects post-verify.
         router.replace(`/verify-email?email=${encodeURIComponent(email)}`);
