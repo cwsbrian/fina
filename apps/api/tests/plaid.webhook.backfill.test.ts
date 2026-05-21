@@ -19,22 +19,10 @@ vi.mock("../src/plaid/items.js", async () => {
 });
 
 import { backfillWebhookUrls } from "../src/plaid/webhook-backfill.js";
+import { testEnv } from "./helpers/test-env.js";
 
-const baseEnv = {
-  NODE_ENV: "test" as const,
-  PORT: 0,
-  DATABASE_URL: process.env.DATABASE_URL!,
-  BETTER_AUTH_SECRET: "x".repeat(48),
-  BETTER_AUTH_URL: "http://localhost:0",
-  EMAIL_FROM: "test@fina.app",
-  WEB_APP_URL: "http://localhost:3000",
-  PLAID_CLIENT_ID: "test_client_id",
-  PLAID_SECRET: "test_secret",
-  PLAID_ENV: "sandbox" as const,
-  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test_gemini_key",
-  // Note: NO PLAID_WEBHOOK_URL — tests that need it override via { ...baseEnv, PLAID_WEBHOOK_URL: "..." }
-};
+// Note: NO PLAID_WEBHOOK_URL by default — tests that need it override via testEnv({ PLAID_WEBHOOK_URL: "..." })
+const baseEnv = testEnv();
 
 async function seedItem(opts: { webhookUrl?: string | null; status?: "active" | "error" } = {}) {
   const ws = await prisma.workspace.create({ data: { name: "W" } });

@@ -12,6 +12,7 @@ function baseEnv(): NodeJS.ProcessEnv {
     PLAID_SECRET: "x",
     ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
     GEMINI_API_KEY: "x",
+    TRUST_PROXY: "false", // NEW: 1J Task 2 strict opt-in requires explicit value
   };
 }
 
@@ -68,19 +69,53 @@ describe("loadEnv new keys", () => {
     process.env = old;
   });
 
-  it("TRUST_PROXY defaults to true in production, false in dev", () => {
-    const old = process.env;
-    process.env = { ...baseEnv(), NODE_ENV: "production", RESEND_API_KEY: "re_" + "a".repeat(24) };
-    expect(loadEnv().TRUST_PROXY).toBe(true);
-    process.env = { ...baseEnv(), NODE_ENV: "development" };
-    expect(loadEnv().TRUST_PROXY).toBe(false);
-    process.env = old;
-  });
-
   it("RATE_LIMIT_TEST is optional", () => {
     const old = process.env;
     process.env = { ...baseEnv(), NODE_ENV: "test", RATE_LIMIT_TEST: "1" };
     expect(loadEnv().RATE_LIMIT_TEST).toBe("1");
+    process.env = old;
+  });
+});
+
+describe("loadEnv TRUST_PROXY strict opt-in", () => {
+  it("rejects production with unset TRUST_PROXY", () => {
+    const old = process.env;
+    const { TRUST_PROXY: _drop, ...noTrust } = baseEnv();
+    void _drop;
+    process.env = {
+      ...noTrust,
+      NODE_ENV: "production",
+      RESEND_API_KEY: "re_" + "a".repeat(24),
+    };
+    expect(() => loadEnv()).toThrow(/TRUST_PROXY/);
+    process.env = old;
+  });
+
+  it("rejects dev with unset TRUST_PROXY", () => {
+    const old = process.env;
+    const { TRUST_PROXY: _drop, ...noTrust } = baseEnv();
+    void _drop;
+    process.env = { ...noTrust, NODE_ENV: "development" };
+    expect(() => loadEnv()).toThrow(/TRUST_PROXY/);
+    process.env = old;
+  });
+
+  it("accepts TRUST_PROXY=true in production (assumed behind a CDN)", () => {
+    const old = process.env;
+    process.env = {
+      ...baseEnv(),
+      NODE_ENV: "production",
+      RESEND_API_KEY: "re_" + "a".repeat(24),
+      TRUST_PROXY: "true",
+    };
+    expect(loadEnv().TRUST_PROXY).toBe(true);
+    process.env = old;
+  });
+
+  it("accepts TRUST_PROXY=false in dev", () => {
+    const old = process.env;
+    process.env = { ...baseEnv(), NODE_ENV: "development", TRUST_PROXY: "false" };
+    expect(loadEnv().TRUST_PROXY).toBe(false);
     process.env = old;
   });
 });
