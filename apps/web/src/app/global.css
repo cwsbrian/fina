@@ -12,7 +12,10 @@
   --color-muted-soft: #a8acb3;
   --color-hairline: #dee1e6;
   --color-hairline-soft: #eef0f3;
-  --color-accent: #d97743;
+  /* Single accent color across the app — Fina Blue. The landing variant's
+     original orange (#d97743) was tied to the cream "Centered manifesto"
+     palette we no longer use globally. */
+  --color-accent: #3b7bff;
   --color-primary: #3b7bff;
   --color-primary-active: #2a64db;
   --color-primary-disabled: #bccae0;
