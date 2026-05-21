@@ -4,6 +4,7 @@ import { prisma } from "../db.js";
 import { verifyPlaidWebhook, PlaidWebhookVerifyError } from "../plaid/webhook-jwks.js";
 import { dispatchWebhookSync } from "../plaid/webhook-dispatch.js";
 import { dispatchItemEvent } from "../plaid/webhook-item.js";
+import { logError } from "../logger.js";
 
 const WebhookBodySchema = z.object({
   webhook_type: z.string(),
@@ -64,7 +65,12 @@ export async function plaidWebhookRoutes(app: FastifyInstance): Promise<void> {
     const isItemRelevant = parsed.webhook_type === "ITEM" && item !== null;
 
     if (isSyncRelevant) {
-      void dispatchWebhookSync(app.fina.env, item.workspaceId, item.id, event.id).catch(() => {});
+      void dispatchWebhookSync(app.fina.env, item.workspaceId, item.id, event.id).catch((err) => {
+        logError(
+          { plaidEvent: parsed.webhook_code, plaidItemId: item.id, err },
+          "plaid webhook dispatch failed",
+        );
+      });
     } else if (isItemRelevant) {
       void dispatchItemEvent(
         item,
