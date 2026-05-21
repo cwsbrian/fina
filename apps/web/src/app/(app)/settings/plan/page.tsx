@@ -1,332 +1,315 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
-  trialDaysLeft as daysLeft,
-  type MeDTO as Me,
-  type Tier,
+  PRICING,
+  TIER_LIMITS,
+  trialDaysLeft,
+  type MeDTO,
+  type SubscriptionDTO,
+  type PaidTier,
 } from "@fina/shared";
 import { apiFetch } from "../../../../lib/api";
-import { WebIcon } from "../../../../components/WebIcon";
 import styles from "../settings.module.css";
 
-type PlanKey = Tier;
-
-const PLANS: Record<PlanKey, { name: string; price: number }> = {
-  free: { name: "Free", price: 0 },
-  lite: { name: "Lite", price: 7 },
-  pro: { name: "Pro", price: 15 },
-};
-
-type CompareRow = {
-  label: string;
-  free: string | boolean;
-  lite: string | boolean;
-  pro: string | boolean;
-  highlight?: boolean;
-};
-
-const COMPARE_ROWS: CompareRow[] = [
-  { label: "Bank connections", free: "None", lite: "1 bank", pro: "Unlimited", highlight: true },
-  { label: "AI chat", free: "No", lite: "Daily ritual only", pro: "Full two-way chat", highlight: true },
-  { label: "Daily morning brief", free: false, lite: true, pro: true },
-  { label: "Workspace sharing", free: true, lite: true, pro: true },
-  { label: "Manual entry", free: true, lite: true, pro: true },
-  { label: "CSV import", free: true, lite: true, pro: true },
-  { label: "Support", free: "Email", lite: "Email", pro: "Priority email" },
-];
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-CA", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
 export default function PlanPage() {
-  const [me, setMe] = useState<Me | null>(null);
+  const router = useRouter();
+  const [me, setMe] = useState<MeDTO | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState<null | "checkout-lite" | "checkout-pro" | "portal">(null);
+
+  const refresh = useCallback(async () => {
+    try {
+      setMe(await apiFetch<MeDTO>("/me"));
+    } catch (e) {
+      setErr((e as { code?: string }).code ?? "load_error");
+    }
+  }, []);
 
   useEffect(() => {
-    apiFetch<Me>("/me")
-      .then(setMe)
-      .catch((e) => setErr((e as { code?: string }).code ?? "load_error"));
-  }, []);
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("status");
+    const sessionId = params.get("sessionId") ?? undefined;
+    if (status === "success") {
+      // POST /billing/sync first (codex R2), then strip query, then refresh.
+      (async () => {
+        try {
+          const m = await apiFetch<MeDTO>("/billing/sync", {
+            method: "POST",
+            body: JSON.stringify({ sessionId }),
+          });
+          setMe(m);
+        } catch (e) {
+          setErr((e as { code?: string }).code ?? "sync_error");
+        }
+        router.replace("/settings/plan");
+      })();
+    } else {
+      refresh();
+    }
+  }, [refresh, router]);
 
   if (err) {
     return (
       <div className={styles.container}>
-        <p style={{ color: "var(--color-down)" }}>Could not load: {err}</p>
+        <p style={{ color: "var(--color-down)" }}>Could not load plan: {err}</p>
       </div>
     );
   }
-  if (!me) {
-    return <div className={styles.container} />;
-  }
+  if (!me) return <div className={styles.container}>Loading…</div>;
 
-  const isTrial = me.trial.active;
-  const tier = me.tier;
-  const currentForCompare: PlanKey = isTrial ? "pro" : tier;
-  const days = daysLeft(me.trial.endsAt);
-  const trialEnds = formatDate(me.trial.endsAt);
+  const onUpgrade = async (tier: PaidTier) => {
+    setBusy(tier === "lite" ? "checkout-lite" : "checkout-pro");
+    try {
+      const { url } = await apiFetch<{ url: string }>("/billing/checkout", {
+        method: "POST",
+        body: JSON.stringify({ tier }),
+      });
+      window.location.href = url;
+    } catch (e) {
+      setErr((e as { code?: string }).code ?? "checkout_failed");
+      setBusy(null);
+    }
+  };
 
-  const onCheckout = (_plan: PlanKey) => {
-    // TODO: open Stripe checkout when billing is wired
-    alert("Billing isn't wired yet. Stripe checkout will go here.");
+  const onManage = async () => {
+    setBusy("portal");
+    try {
+      const { url } = await apiFetch<{ url: string }>("/billing/portal", { method: "POST" });
+      window.location.href = url;
+    } catch (e) {
+      setErr((e as { code?: string }).code ?? "portal_failed");
+      setBusy(null);
+    }
+  };
+
+  const trialActive = me.trial.active;
+  const days = trialDaysLeft(me.trial.endsAt);
+  const sub: SubscriptionDTO | null = me.subscription;
+
+  const renderCurrentCard = () => {
+    // Decision matrix from spec §"MeDTO extension" → "UI decision matrix".
+    if (trialActive && !sub) {
+      return (
+        <div className={styles.planCurrent}>
+          <div>
+            <div className={styles.planCurrentLabel}>Current plan</div>
+            <div className={styles.planCurrentName}>Pro trial</div>
+            <div className={styles.planCurrentStatus}>
+              {days != null ? `${days} day${days === 1 ? "" : "s"} left` : ""}
+              {" · Add a card to keep Pro after your trial ends."}
+            </div>
+          </div>
+          <div className={styles.planCurrentActions}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnPrimary}`}
+              onClick={() => onUpgrade("pro")}
+              disabled={busy !== null}
+            >
+              {busy === "checkout-pro" ? "Opening…" : "Add card · Stay on Pro"}
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (trialActive && sub) {
+      return (
+        <div className={styles.planCurrent}>
+          <div>
+            <div className={styles.planCurrentLabel}>Current plan</div>
+            <div className={styles.planCurrentName}>Pro trial</div>
+            <div className={styles.planCurrentStatus}>
+              {days != null ? `${days} day${days === 1 ? "" : "s"} left.` : ""}{" "}
+              {PRICING[sub.tier].displayPrice} charged on{" "}
+              {new Date(sub.currentPeriodEnd).toLocaleDateString()}
+            </div>
+          </div>
+          <div className={styles.planCurrentActions}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnOutline}`}
+              onClick={onManage}
+              disabled={busy !== null}
+            >
+              {busy === "portal" ? "Opening…" : "Manage subscription"}
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (sub && sub.status === "past_due") {
+      return (
+        <div className={styles.planCurrent} style={{ borderColor: "var(--color-down)" }}>
+          <div>
+            <div className={styles.planCurrentLabel} style={{ color: "var(--color-down)" }}>
+              Payment failed
+            </div>
+            <div className={styles.planCurrentName}>{sub.tier === "pro" ? "Pro" : "Lite"}</div>
+            <div className={styles.planCurrentStatus}>
+              Update your card to keep your subscription active.
+            </div>
+          </div>
+          <div className={styles.planCurrentActions}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnPrimary}`}
+              onClick={onManage}
+              disabled={busy !== null}
+            >
+              Update card
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (sub && sub.cancelAtPeriodEnd) {
+      return (
+        <div className={styles.planCurrent}>
+          <div>
+            <div className={styles.planCurrentLabel}>Current plan</div>
+            <div className={styles.planCurrentName}>{sub.tier === "pro" ? "Pro" : "Lite"}</div>
+            <div className={styles.planCurrentStatus}>
+              Ends on {new Date(sub.currentPeriodEnd).toLocaleDateString()}
+            </div>
+          </div>
+          <div className={styles.planCurrentActions}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnOutline}`}
+              onClick={onManage}
+              disabled={busy !== null}
+            >
+              Resume
+            </button>
+          </div>
+        </div>
+      );
+    }
+    if (sub) {
+      return (
+        <div className={styles.planCurrent}>
+          <div>
+            <div className={styles.planCurrentLabel}>Current plan</div>
+            <div className={styles.planCurrentName}>{sub.tier === "pro" ? "Pro" : "Lite"}</div>
+            <div className={styles.planCurrentStatus}>
+              Renews on {new Date(sub.currentPeriodEnd).toLocaleDateString()}
+            </div>
+          </div>
+          <div className={styles.planCurrentActions}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnOutline}`}
+              onClick={onManage}
+              disabled={busy !== null}
+            >
+              Manage subscription
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div className={styles.planCurrent}>
+        <div>
+          <div className={styles.planCurrentLabel}>Current plan</div>
+          <div className={styles.planCurrentName}>Free</div>
+          <div className={styles.planCurrentStatus}>
+            Upgrade to reconnect a bank with automatic syncing.
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderUpgradeButton = (tier: PaidTier) => {
+    const isCurrent = sub?.tier === tier && !sub?.cancelAtPeriodEnd;
+    if (isCurrent) {
+      return (
+        <button type="button" className={`${styles.btn} ${styles.btnOutline}`} disabled>
+          Current plan
+        </button>
+      );
+    }
+    return (
+      <button
+        type="button"
+        className={`${styles.btn} ${styles.btnPrimary}`}
+        onClick={() => onUpgrade(tier)}
+        disabled={busy !== null}
+      >
+        {busy === (tier === "lite" ? "checkout-lite" : "checkout-pro")
+          ? "Opening…"
+          : `Upgrade to ${tier === "lite" ? "Lite" : "Pro"}`}
+      </button>
+    );
   };
 
   return (
     <div className={styles.container}>
       <div className={styles.head}>
-        <h1 className={styles.title}>Plan &amp; billing</h1>
-        <p className={styles.sub}>
-          Subscriptions are per-user. Members can be on different tiers in
-          the same workspace.
-        </p>
+        <h1 className={styles.title}>Plan & billing</h1>
+        <p className={styles.sub}>Manage your Fina subscription.</p>
       </div>
 
-      <div className={styles.section}>
-        <div
-          className={`${styles.planCurrent} ${isTrial ? styles.withAside : ""}`}
-        >
-          <div>
-            <div className={styles.planCurrentLabel}>Your plan</div>
-            <div className={styles.planCurrentName}>
-              {isTrial ? "Pro" : PLANS[tier].name}
-              <span
-                className={`${styles.pill} ${
-                  isTrial
-                    ? styles.pillWarn
-                    : tier === "free"
-                      ? styles.pillNeutral
-                      : styles.pillActive
-                }`}
-              >
-                <span className={styles.pillDot} />
-                {isTrial
-                  ? "Trial"
-                  : tier === "free"
-                    ? "Free tier"
-                    : "Active"}
-              </span>
-            </div>
-            <div className={styles.planCurrentStatus}>
-              {isTrial && (
-                <>
-                  Trial ends <strong>{trialEnds}</strong>. After trial,
-                  you&apos;ll move to Free unless you add a payment method.
-                </>
-              )}
-              {tier === "pro" && !isTrial && <>${PLANS.pro.price}/mo</>}
-              {tier === "lite" && !isTrial && <>${PLANS.lite.price}/mo</>}
-              {tier === "free" && !isTrial && (
-                <>
-                  No active subscription. Bank connections and AI features are
-                  locked.
-                </>
-              )}
-            </div>
-            <div className={styles.planCurrentActions}>
-              {isTrial && (
-                <button
-                  type="button"
-                  className={`${styles.btn} ${styles.btnPrimary}`}
-                  onClick={() => onCheckout("pro")}
-                >
-                  Add payment method
-                </button>
-              )}
-              {(tier === "pro" || tier === "lite") && !isTrial && (
-                <>
-                  <button
-                    type="button"
-                    className={`${styles.btn} ${styles.btnOutline}`}
-                  >
-                    Update payment method
-                  </button>
-                  <button
-                    type="button"
-                    className={`${styles.btn} ${styles.btnGhost}`}
-                  >
-                    Cancel subscription
-                  </button>
-                </>
-              )}
-              {tier === "free" && !isTrial && (
-                <button
-                  type="button"
-                  className={`${styles.btn} ${styles.btnPrimary}`}
-                  onClick={() => onCheckout("pro")}
-                >
-                  Start a plan
-                </button>
-              )}
-            </div>
-          </div>
-
-          {isTrial && days !== null && (
-            <div className={styles.planTrialAside}>
-              <div className={styles.planTrialAsideDays}>{days}</div>
-              <div className={styles.planTrialAsideLabel}>Days left on trial</div>
-              <div className={styles.planTrialAsideDate}>Ends {trialEnds}</div>
-            </div>
-          )}
-        </div>
-      </div>
+      {renderCurrentCard()}
 
       <div className={styles.section}>
         <div className={styles.sectionHead}>
           <div>
             <div className={styles.sectionTitle}>Compare plans</div>
-            <div className={styles.sectionSub}>
-              Headline prices in CAD. Subscriptions purchased in the iOS or
-              Android app are managed in the App Store or Google Play.
-            </div>
           </div>
         </div>
-
-        <div className={styles.compare}>
-          <div className={`${styles.compareCell} ${styles.header}`}>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 600,
-                color: "var(--color-muted)",
-                letterSpacing: 0.5,
-                textTransform: "uppercase",
-              }}
-            >
-              For one user
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                color: "var(--color-muted)",
-                marginTop: 4,
-              }}
-            >
-              Monthly billing
-            </div>
-          </div>
-          {(["free", "lite", "pro"] as PlanKey[]).map((k) => {
-            const isCurrent = k === currentForCompare;
-            return (
-              <div
-                key={k}
-                className={`${styles.compareCell} ${styles.header} ${isCurrent ? styles.compareCellCurrent : ""}`}
-              >
-                <div className={styles.compareTier}>{PLANS[k].name}</div>
-                <div className={styles.comparePrice}>
-                  ${PLANS[k].price}
-                  <small>/mo</small>
-                </div>
-                {isCurrent && (
-                  <span className={styles.compareCurrentPill}>
-                    {isTrial ? "Current · trial" : "Current"}
-                  </span>
-                )}
-              </div>
-            );
-          })}
-
-          {COMPARE_ROWS.map((row, ri) => (
-            <Fragment key={ri}>
-              <div className={`${styles.compareCell} ${styles.label}`}>
-                {row.label}
-              </div>
-              {(["free", "lite", "pro"] as PlanKey[]).map((k) => {
-                const v = row[k];
-                return (
-                  <div key={k} className={styles.compareCell}>
-                    {v === true ? (
-                      <WebIcon
-                        name="check"
-                        size={18}
-                        strokeWidth={2.2}
-                        color="var(--color-up)"
-                      />
-                    ) : v === false ? (
-                      <span className={styles.compareNo}>
-                        <WebIcon name="x" size={16} strokeWidth={2} />
-                      </span>
-                    ) : (
-                      <span
-                        style={
-                          row.highlight
-                            ? { fontWeight: 500, color: "var(--color-ink)" }
-                            : undefined
-                        }
-                      >
-                        {v}
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </Fragment>
-          ))}
-
-          <div
-            className={`${styles.compareCell} ${styles.foot}`}
-            style={{
-              alignItems: "center",
-              color: "var(--color-muted)",
-              fontSize: 13,
-            }}
-          >
-            Choose a plan
-          </div>
-          {(["free", "lite", "pro"] as PlanKey[]).map((k) => {
-            const isCurrent = k === currentForCompare;
-            const lower =
-              (k === "free" &&
-                (currentForCompare === "lite" || currentForCompare === "pro")) ||
-              (k === "lite" && currentForCompare === "pro");
-            const higher = !isCurrent && !lower;
-            return (
-              <div key={k} className={`${styles.compareCell} ${styles.foot}`}>
-                {isCurrent ? (
-                  <button
-                    type="button"
-                    className={`${styles.btn} ${styles.btnOutline}`}
-                    disabled
-                  >
-                    Current plan
-                  </button>
-                ) : lower ? (
-                  <button
-                    type="button"
-                    className={`${styles.btn} ${styles.btnOutline}`}
-                    onClick={() => onCheckout(k)}
-                  >
-                    Downgrade
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className={`${styles.btn} ${styles.btnPrimary}`}
-                    onClick={() => onCheckout(k)}
-                  >
-                    {higher && tier === "free" && !isTrial
-                      ? `Start ${PLANS[k].name}`
-                      : `Upgrade to ${PLANS[k].name}`}
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        <div className={styles.billingFootnote}>
-          <strong style={{ color: "var(--color-ink)" }}>
-            Subscribed via mobile?
-          </strong>{" "}
-          Subscriptions purchased through the iOS or Android app are billed by
-          Apple or Google and managed in those stores — not here.
+        <div className={styles.card}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th style={{ textAlign: "left", padding: 12 }}></th>
+                <th style={{ textAlign: "left", padding: 12 }}>Free</th>
+                <th style={{ textAlign: "left", padding: 12 }}>
+                  Lite · {PRICING.lite.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                </th>
+                <th style={{ textAlign: "left", padding: 12 }}>
+                  Pro · {PRICING.pro.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
+                <td style={{ padding: 12 }}>Bank connections</td>
+                <td style={{ padding: 12 }}>0 (manual / CSV)</td>
+                <td style={{ padding: 12 }}>{TIER_LIMITS.lite.plaidItems}</td>
+                <td style={{ padding: 12 }}>{TIER_LIMITS.pro.plaidItems}</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
+                <td style={{ padding: 12 }}>AI advisor chat</td>
+                <td style={{ padding: 12 }}>—</td>
+                <td style={{ padding: 12 }}>Read-only ritual</td>
+                <td style={{ padding: 12 }}>Full two-way</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
+                <td style={{ padding: 12 }}>Workspace sharing</td>
+                <td style={{ padding: 12 }}>✓</td>
+                <td style={{ padding: 12 }}>✓</td>
+                <td style={{ padding: 12 }}>✓</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
+                <td style={{ padding: 12 }}></td>
+                <td style={{ padding: 12 }}></td>
+                <td style={{ padding: 12 }}>{renderUpgradeButton("lite")}</td>
+                <td style={{ padding: 12 }}>{renderUpgradeButton("pro")}</td>
+              </tr>
+            </tbody>
+          </table>
         </div>
       </div>
+
+      <p className={styles.sectionSub} style={{ marginTop: 24 }}>
+        Subscriptions purchased through the iOS or Android app are managed in
+        the App Store / Google Play, not here.
+      </p>
     </div>
   );
 }
