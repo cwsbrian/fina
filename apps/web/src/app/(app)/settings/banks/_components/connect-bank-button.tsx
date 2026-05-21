@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { usePlaidLink } from "react-plaid-link";
 import { apiFetch } from "../../../../../lib/api";
+import styles from "../../settings.module.css";
 
 export function ConnectBankButton({
   workspaceId,
@@ -30,7 +31,11 @@ export function ConnectBankButton({
       setLinkToken(r.linkToken);
     } catch (e) {
       const code = (e as { code?: string }).code ?? "error";
-      setErr(code === "upgrade_required" ? "Pro tier required to connect a bank." : `Could not start: ${code}`);
+      setErr(
+        code === "upgrade_required"
+          ? "Pro tier required to connect a bank."
+          : `Could not start: ${code}`,
+      );
     } finally {
       setBusy(false);
     }
@@ -51,7 +56,9 @@ export function ConnectBankButton({
         onConnected();
         setLinkToken(null);
       } catch (e) {
-        setErr(`Could not finalize: ${(e as { code?: string }).code ?? "error"}`);
+        setErr(
+          `Could not finalize: ${(e as { code?: string }).code ?? "error"}`,
+        );
       }
     },
     onExit: (e) => {
@@ -70,44 +77,41 @@ export function ConnectBankButton({
   }, [linkToken, ready, open]);
 
   if (!isOwner) {
-    return null; // Server enforces owner-only too; this just hides the affordance.
+    return (
+      <div className={styles.rowMeta}>
+        Only the workspace owner can connect or manage banks.
+      </div>
+    );
   }
 
   if (!isPro) {
     return (
-      <div style={{ padding: "12px 0" }}>
-        <span
-          style={{
-            display: "inline-block",
-            padding: "12px 24px",
-            background: "#eee",
-            color: "#666",
-            borderRadius: 8,
-          }}
+      <div>
+        <div className={styles.rowMeta} style={{ marginBottom: 12 }}>
+          Connecting a bank requires the Pro tier.
+        </div>
+        <a
+          href="/settings/plan"
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          style={{ textDecoration: "none", display: "inline-flex" }}
         >
-          Plaid is a Pro feature — upgrade to connect a bank
-        </span>
+          Upgrade to Pro
+        </a>
       </div>
     );
   }
 
   return (
-    <div style={{ padding: "12px 0" }}>
+    <div>
       <button
+        type="button"
+        className={`${styles.btn} ${styles.btnPrimary}`}
         onClick={fetchToken}
         disabled={busy}
-        style={{
-          padding: "12px 24px",
-          background: "#111",
-          color: "#fff",
-          borderRadius: 8,
-          border: "none",
-          cursor: busy ? "default" : "pointer",
-        }}
       >
-        {busy ? "..." : "Connect a bank"}
+        {busy ? "Starting…" : "Connect a bank"}
       </button>
-      {err && <p style={{ color: "#c00", marginTop: 8 }}>{err}</p>}
+      {err && <div className={styles.feedbackErr}>{err}</div>}
     </div>
   );
 }

@@ -529,3 +529,43 @@
   font-weight: 600;
   letter-spacing: 0.3px;
 }
+
+.memberAvatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 999px;
+  background: var(--color-ink);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  flex-shrink: 0;
+}
+
+.inlineForm {
+  display: flex;
+  gap: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.inlineForm > .field {
+  margin-bottom: 0;
+}
+
+.inlineFormEmail { flex: 1; min-width: 220px; }
+.inlineFormRole  { flex: 0 0 140px; }
+
+.feedbackOk {
+  color: var(--color-up);
+  font-size: 13px;
+  margin-top: 8px;
+}
+.feedbackErr {
+  color: var(--color-down);
+  font-size: 13px;
+  margin-top: 8px;
+}

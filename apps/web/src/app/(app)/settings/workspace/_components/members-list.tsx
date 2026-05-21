@@ -2,7 +2,21 @@
 
 import { useState } from "react";
 import type { Member } from "@fina/shared";
+import { initials } from "@fina/shared";
 import { apiFetch } from "../../../../../lib/api";
+import styles from "../../settings.module.css";
+
+const ROLES: Member["role"][] = ["owner", "editor", "viewer"];
+
+function rolePillClass(role: Member["role"]): string {
+  if (role === "owner") return `${styles.pill} ${styles.pillActive}`;
+  if (role === "editor") return `${styles.pill} ${styles.pillWarn}`;
+  return `${styles.pill} ${styles.pillNeutral}`;
+}
+
+function roleLabel(role: Member["role"]): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
 
 export function MembersList({
   members,
@@ -22,7 +36,10 @@ export function MembersList({
 
   async function patchRole(userId: string, role: Member["role"]) {
     // Transfer is a one-way demotion of the current user — confirm before firing.
-    if (role === "owner" && !window.confirm("Transfer ownership? You will become an editor.")) {
+    if (
+      role === "owner" &&
+      !window.confirm("Transfer ownership? You will become an editor.")
+    ) {
       return;
     }
     setBusyId(userId);
@@ -47,7 +64,9 @@ export function MembersList({
     setBusyId(userId);
     setErr(null);
     try {
-      await apiFetch(`/workspaces/${workspaceId}/members/${userId}`, { method: "DELETE" });
+      await apiFetch(`/workspaces/${workspaceId}/members/${userId}`, {
+        method: "DELETE",
+      });
       onChange();
     } catch (e) {
       setErr((e as { code?: string }).code ?? "error");
@@ -57,63 +76,61 @@ export function MembersList({
   }
 
   return (
-    <div>
-      <h2 style={{ fontSize: 18, marginBottom: 12 }}>Members</h2>
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
-        <thead>
-          <tr style={{ textAlign: "left", borderBottom: "1px solid #eee" }}>
-            <th style={{ padding: 8 }}>Email</th>
-            <th style={{ padding: 8 }}>Role</th>
-            <th style={{ padding: 8 }}></th>
-          </tr>
-        </thead>
-        <tbody>
-          {members.map((m) => {
-            const isSelf = m.userId === currentUserId;
-            return (
-              <tr key={m.userId} style={{ borderBottom: "1px solid #f5f5f5" }}>
-                <td style={{ padding: 8 }}>
-                  {m.email}
-                  {isSelf && <span style={{ opacity: 0.5 }}> (you)</span>}
-                </td>
-                <td style={{ padding: 8 }}>
-                  {isOwner && !isSelf ? (
-                    <select
-                      value={m.role}
-                      disabled={busyId === m.userId}
-                      onChange={(e) => patchRole(m.userId, e.target.value as Member["role"])}
-                    >
-                      <option value="owner">owner (transfer)</option>
-                      <option value="editor">editor</option>
-                      <option value="viewer">viewer</option>
-                    </select>
-                  ) : (
-                    m.role
-                  )}
-                </td>
-                <td style={{ padding: 8, textAlign: "right" }}>
-                  {(isOwner || isSelf) && (
-                    <button
-                      onClick={() => remove(m.userId)}
-                      disabled={busyId === m.userId}
-                      style={{
-                        padding: "6px 12px",
-                        background: "#fff",
-                        border: "1px solid #ddd",
-                        borderRadius: 6,
-                        cursor: "pointer",
-                      }}
-                    >
-                      {isSelf ? "Leave" : "Remove"}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-      {err && <p style={{ color: "#c00", marginTop: 8 }}>Error: {err}</p>}
+    <div className={styles.group}>
+      {members.map((m) => {
+        const isSelf = m.userId === currentUserId;
+        const displayName = m.name?.trim() || m.email.split("@")[0];
+        const canEditRole = isOwner && !isSelf;
+        return (
+          <div key={m.userId} className={styles.row}>
+            <span className={styles.memberAvatar}>
+              {initials(m.name, m.email)}
+            </span>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className={styles.rowTitle}>
+                {displayName}
+                {isSelf && (
+                  <span className={styles.tagCurrent}>You</span>
+                )}
+              </div>
+              <div className={styles.rowMeta}>{m.email}</div>
+            </div>
+            {canEditRole ? (
+              <select
+                className={styles.select}
+                style={{ width: 130 }}
+                value={m.role}
+                disabled={busyId === m.userId}
+                onChange={(e) =>
+                  patchRole(m.userId, e.target.value as Member["role"])
+                }
+              >
+                {ROLES.map((r) => (
+                  <option key={r} value={r}>
+                    {r === "owner" ? "Owner (transfer)" : roleLabel(r)}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className={rolePillClass(m.role)}>
+                <span className={styles.pillDot} />
+                {roleLabel(m.role)}
+              </span>
+            )}
+            {(isOwner || isSelf) && (
+              <button
+                type="button"
+                className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`}
+                onClick={() => remove(m.userId)}
+                disabled={busyId === m.userId}
+              >
+                {isSelf ? "Leave" : "Remove"}
+              </button>
+            )}
+          </div>
+        );
+      })}
+      {err && <div className={styles.feedbackErr}>Could not update: {err}</div>}
     </div>
   );
 }
