@@ -1,6 +1,18 @@
 import { loadEnv } from "./env.js";
 import { buildApp } from "./server.js";
 import { backfillWebhookUrls } from "./plaid/webhook-backfill.js";
+import { logger, logFatal, logError } from "./logger.js";
+
+// Register process handlers BEFORE any async work so a startup crash
+// still gets logged + flushed.
+process.on("unhandledRejection", (reason) => {
+  logFatal({ err: reason }, "unhandled_rejection");
+  logger.flush(() => process.exit(1));
+});
+process.on("uncaughtException", (err) => {
+  logFatal({ err }, "uncaught_exception");
+  logger.flush(() => process.exit(1));
+});
 
 async function start(): Promise<void> {
   const env = loadEnv();
@@ -9,7 +21,7 @@ async function start(): Promise<void> {
 
   // Detached — don't block server start. Backfill logs internally.
   void backfillWebhookUrls(env).catch((err) => {
-    console.error("webhook backfill failed", err);
+    logError({ err }, "webhook backfill failed");
   });
 
   let stopScheduler: (() => void) | undefined;
@@ -29,6 +41,6 @@ async function start(): Promise<void> {
 }
 
 start().catch((err) => {
-  console.error(err);
-  process.exit(1);
+  logFatal({ err }, "start_failed");
+  logger.flush(() => process.exit(1));
 });
