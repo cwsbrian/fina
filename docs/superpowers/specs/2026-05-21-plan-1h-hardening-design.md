@@ -380,10 +380,14 @@ No model changes. No new tables. Behaviour additions:
 
 ### 6.1 Rate limit per-user keying race
 
-Better Auth cookie parsing inside `keyGenerator` is sync (cookie is on the
-request) — no race. If the cookie is missing/invalid, the plugin falls
-back to IP. No user can ever route to another user's bucket because
-keys are namespaced by route + key family.
+Under Option A (§3.2), session resolution runs in an `onRequest` hook
+BEFORE `@fastify/rate-limit` fires its `keyGenerator`. By the time
+`keyGenerator` reads `req.userId`, the async session lookup has
+completed (or thrown into the catch, leaving `req.userId`
+undefined). Result: `keyGenerator` is a sync function reading a
+plain string — no race window. If the cookie is missing/invalid,
+the plugin falls back to IP. No user can ever route to another
+user's bucket because keys are namespaced by route + key family.
 
 ### 6.2 Logger initialisation
 
@@ -395,8 +399,10 @@ test transport) — added as a devDependency.
 
 ### 6.3 Health `/ready` DB-ping leak
 
-`SELECT 1` is wrapped in a 1-second `AbortSignal.timeout(1000)`. A hung
-DB doesn't pile up requests in the readiness probe path.
+`SELECT 1` is wrapped in a 1-second `Promise.race` timeout (see §3.4
+for the snippet — Prisma doesn't accept `AbortSignal`). A hung DB
+doesn't pile up requests in the readiness probe path; the racing
+`setTimeout` rejects and the handler returns 503.
 
 ### 6.4 Process handler ordering
 
