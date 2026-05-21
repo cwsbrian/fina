@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
+import { logWarn } from "../logger.js";
 
 export const AUDIT_WRITE_TOOLS = new Set([
   "categorizeTransaction",
@@ -97,10 +98,9 @@ export async function logAuditEvent(event: AuditEventInput): Promise<void> {
       },
     });
   } catch (err) {
-    console.warn("audit log failed", {
-      action: event.action,
-      workspaceId: event.workspaceId,
-      err,
-    });
+    logWarn(
+      { auditAction: event.action, workspaceId: event.workspaceId, err },
+      "audit log failed",
+    );
   }
 }

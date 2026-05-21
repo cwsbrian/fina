@@ -2,6 +2,7 @@ import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { syncTransactions } from "./sync.js";
 import { categorizeNewTransactions } from "../categorize/service.js";
+import { logError } from "../logger.js";
 
 /**
  * Detached worker called by the webhook handler. The handler has already
@@ -31,7 +32,10 @@ export async function dispatchWebhookSync(
       // A DB error here would otherwise jump to the catch block and set processedAt,
       // losing the NULL that signals cron to retry the unfinished sync.
       await categorizeNewTransactions(env, workspaceId, r.newTxIds).catch((catErr) => {
-        console.error("categorize after webhook sync failed", { err: catErr, plaidItemId, webhookEventId });
+        logError(
+          { plaidItemId, err: catErr },
+          `categorize after webhook sync failed webhookEventId=${webhookEventId}`,
+        );
       });
     }
 
@@ -52,6 +56,9 @@ export async function dispatchWebhookSync(
         data: { processedAt: new Date(), processError: msg },
       })
       .catch(() => {/* swallow — log handles diagnostic */});
-    console.error("webhook sync failed", { err: e, plaidItemId, webhookEventId });
+    logError(
+      { plaidItemId, err: e },
+      `webhook sync failed webhookEventId=${webhookEventId}`,
+    );
   }
 }

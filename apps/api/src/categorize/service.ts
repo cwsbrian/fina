@@ -2,6 +2,7 @@ import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "./normalize.js";
 import { callGeminiCategorize, type LLMTransaction } from "./llm.js";
+import { logError } from "../logger.js";
 
 /**
  * Categorize a list of newly-inserted transactions in a workspace.
@@ -151,7 +152,7 @@ export async function categorizeNewTransactions(
       // NOTE: callGeminiCategorize may throw on network errors OR on
       // JSON.parse failure (malformed structured response). Both are caught
       // here so the "best-effort, leave uncategorized" contract holds.
-      console.error("[categorize] Gemini batch failed", e);
+      logError({ workspaceId, err: e }, "[categorize] Gemini batch failed");
       continue;
     }
 

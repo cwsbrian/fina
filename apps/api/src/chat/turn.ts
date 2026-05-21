@@ -15,6 +15,7 @@ import {
   resolveTargetType,
   extractTargetId,
 } from "../audit/service.js";
+import { logWarn } from "../logger.js";
 
 const SYSTEM_PROMPT = `You are Fina, a personal-finance assistant for Canadian users. You help users
 understand their spending, categorize transactions, and plan their budgets.
@@ -149,14 +150,14 @@ export async function processChatTurn(
     if (fcs.length === 0) return { assistantText: resp.text ?? "", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
 
     if (dispatched + fcs.length > MAX_TOOL_CALLS) {
-      console.warn("chat: max tool calls exceeded", { threadId: thread.id, dispatched, requested: fcs.length });
+      logWarn({ threadId: thread.id }, `chat: max tool calls exceeded (dispatched=${dispatched}, requested=${fcs.length})`);
       return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
     }
 
     const newContents: GeminiContent[] = [...contents];
     let dispatchedThisRound = 0;
     for (const fc of fcs) {
-      if (!fc.name) { console.warn("chat: function call missing name", { threadId: thread.id }); continue; }
+      if (!fc.name) { logWarn({ threadId: thread.id }, "chat: function call missing name"); continue; }
       const fcName = fc.name;
       const fcArgs = (fc.args ?? {}) as Record<string, unknown>;
       const dispatch = await dispatchTool(toolCtx, fcName, fcArgs, REGISTRY);
@@ -185,7 +186,7 @@ export async function processChatTurn(
     }
 
     if (dispatchedThisRound === 0) {
-      console.warn("chat: function-call round with no dispatchable calls", { threadId: thread.id, requested: fcs.length });
+      logWarn({ threadId: thread.id }, `chat: function-call round with no dispatchable calls (requested=${fcs.length})`);
       return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
     }
 

@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { logWarn } from "../logger.js";
 
 let client: Resend | null = null;
 
@@ -25,7 +26,9 @@ export async function sendEmail(
 ): Promise<void> {
   const c = getClient(apiKey);
   if (!c) {
-    // Dev fallback: log so the magic link is still usable.
+    // Dev fallback: log magic links to stdout when RESEND_API_KEY is
+    // unset. Intentional — surviving the logger sweep so dev signup
+    // flows keep working without a real Resend key.
     // eslint-disable-next-line no-console
     console.log(`[dev email] to=${input.to} subject="${input.subject}"\n${input.text}`);
     return;
@@ -46,12 +49,9 @@ export async function sendEmail(
     // password reset row written, etc.) during dev — log the would-be email
     // and continue. In prod the right fix is to verify a domain on Resend.
     if (isSandboxRecipientRestriction(message) || isUnverifiedDomain(message)) {
-      // eslint-disable-next-line no-console
-      console.warn(
-        `[email fallback] Resend rejected (${shortReason(message)}). ` +
-          `Logging below so you can copy the link manually. ` +
-          `Verify a domain at resend.com/domains to fix.\n` +
-          `[dev email] to=${input.to} subject="${input.subject}"\n${input.text}`,
+      logWarn(
+        {},
+        `[email fallback] Resend rejected (${shortReason(message)}) to=${input.to} subject="${input.subject}" — verify domain at resend.com/domains to fix`,
       );
       return;
     }

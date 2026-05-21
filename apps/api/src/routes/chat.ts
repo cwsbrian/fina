@@ -13,6 +13,7 @@ import type { PresentationBlock } from "../chat/blocks.js";
 import { threadsService } from "../chat/threads.js";
 import { processChatTurn } from "../chat/turn.js";
 import { prisma } from "../db.js";
+import { logError, logWarn } from "../logger.js";
 
 function serializeThread(t: {
   id: string; userId: string; workspaceId: string | null; title: string | null;
@@ -272,7 +273,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           membership.role,
         );
       } catch (e) {
-        console.error("chat provider failed", { threadId: thread.id, err: e });
+        logError({ threadId: thread.id, err: e }, "chat provider failed");
         return reply.code(500).send({ error: "chat_provider_error" });
       }
 
@@ -312,7 +313,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
             });
           }
         } catch (err) {
-          console.warn("auto-title trigger gate failed", { threadId: thread.id, err });
+          logWarn({ threadId: thread.id, err }, "auto-title trigger gate failed");
         }
       }
 
