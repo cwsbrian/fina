@@ -1,5 +1,4 @@
-// Brand IDs + core enums
-export * from "./ids.js";
+// Core enums
 export * from "./roles.js";
 export * from "./tier.js";
 
@@ -19,6 +18,10 @@ export * from "./dto/plaid.js";
 // Validators (pure helpers used by both API services and frontend forms)
 export * from "./validation/money.js";
 export * from "./validation/dates.js";
+export * from "./validation/password.js";
+
+// UI-display helpers
+export * from "./format/identity.js";
 
 // Zod request schemas
 export * from "./schemas/chat.js";

@@ -36,3 +36,23 @@ export type EffectiveTier = {
    * `/me` response carries the cap without callers having to re-derive. */
   plaidItemLimit: number;
 };
+
+/** Human-readable tier label for badges / settings copy. */
+export function tierLabel(tier: Tier, trialActive: boolean): string {
+  if (trialActive) return "Pro trial";
+  if (tier === "pro") return "Pro";
+  if (tier === "lite") return "Lite";
+  return "Free";
+}
+
+/** Whole days remaining until `endsAt` (ISO string from MeDTO.trial.endsAt
+ *  or a Date). Returns 0 if already past, null when endsAt is missing.
+ *  Used for trial-ending UI ("3 days left"). */
+export function trialDaysLeft(endsAt: string | Date | null | undefined): number | null {
+  if (!endsAt) return null;
+  const t = typeof endsAt === "string" ? new Date(endsAt).getTime() : endsAt.getTime();
+  if (Number.isNaN(t)) return null;
+  const ms = t - Date.now();
+  if (ms <= 0) return 0;
+  return Math.ceil(ms / (24 * 60 * 60 * 1000));
+}
