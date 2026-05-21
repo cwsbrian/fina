@@ -7,6 +7,8 @@ import {
   trialDaysLeft,
   type MeDTO as Me,
   type WorkspaceSummary as Workspace,
+  type Member,
+  type PlaidItemDTO,
 } from "@fina/shared";
 import { useSession } from "../../../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
@@ -31,6 +33,8 @@ export default function HomePage() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [memberCount, setMemberCount] = useState<number | null>(null);
+  const [bankCount, setBankCount] = useState<number | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -43,11 +47,28 @@ export default function HomePage() {
         ]);
         setMe(meData);
         const activeId = getActiveWorkspaceId();
-        setWorkspace(
+        const active =
           wsData.workspaces.find((w) => w.id === activeId) ??
-            wsData.workspaces[0] ??
-            null,
-        );
+          wsData.workspaces[0] ??
+          null;
+        setWorkspace(active);
+
+        if (active) {
+          // Pull member + bank counts in parallel; tolerate either failing
+          // (the card just falls back to its loading state).
+          const [membersRes, plaidRes] = await Promise.allSettled([
+            apiFetch<{ members: Member[] }>(`/workspaces/${active.id}/members`),
+            apiFetch<{ plaidItems: PlaidItemDTO[] }>(
+              `/workspaces/${active.id}/plaid-items`,
+            ),
+          ]);
+          if (membersRes.status === "fulfilled") {
+            setMemberCount(membersRes.value.members.length);
+          }
+          if (plaidRes.status === "fulfilled") {
+            setBankCount(plaidRes.value.plaidItems.length);
+          }
+        }
       } catch (e) {
         setErr((e as { code?: string }).code ?? "load_error");
       }
@@ -132,13 +153,20 @@ export default function HomePage() {
                 <span className={styles.pillDot} />
                 {workspace.role}
               </span>
-              {/* Member count placeholder — wire to /workspaces/:id/members later */}
-              <span>Just you</span>
+              <span>
+                {memberCount === null
+                  ? "…"
+                  : memberCount === 1
+                    ? "Just you"
+                    : `${memberCount} members`}
+              </span>
             </div>
             <div className={styles.wsCardFoot}>
               <div style={{ fontSize: 13, color: "var(--color-body)" }}>
-                <strong style={{ color: "var(--color-ink)" }}>0</strong> banks
-                connected
+                <strong style={{ color: "var(--color-ink)" }}>
+                  {bankCount ?? "…"}
+                </strong>{" "}
+                {bankCount === 1 ? "bank" : "banks"} connected
               </div>
               <button
                 type="button"
