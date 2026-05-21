@@ -1,12 +1,14 @@
-import { TIER_LIMITS, type EffectiveTier } from "@fina/shared";
+import { ACTIVE_SUBSCRIPTION_STATUSES, TIER_LIMITS, type EffectiveTier, type Tier } from "@fina/shared";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError } from "./context.js";
 
-/** Pure computation — accepts an already-fetched user so callers that already
- *  hold the row (e.g. GET /me) avoid a redundant findUniqueOrThrow. */
-export function computeEffectiveTier(user: {
-  trialEndsAt: Date | null;
-}): EffectiveTier {
+/** Pure computation when caller already has the User + active subs.
+ *  Order of precedence: trial > active paid sub (highest tier) > free. */
+export function computeEffectiveTier(
+  user: { trialEndsAt: Date | null },
+  activeSubs: ReadonlyArray<{ tier: string }> = [],
+): EffectiveTier {
   if (user.trialEndsAt && user.trialEndsAt > new Date()) {
     return {
       tier: "pro",
@@ -16,7 +18,20 @@ export function computeEffectiveTier(user: {
       plaidItemLimit: TIER_LIMITS.pro.plaidItems,
     };
   }
-  // Future: check paid subscription column here → "lite" or "pro".
+  // Pick highest tier from active subs.
+  const ranked = activeSubs
+    .map((s) => s.tier as Tier)
+    .filter((t): t is "lite" | "pro" => t === "lite" || t === "pro");
+  if (ranked.length > 0) {
+    const tier: "lite" | "pro" = ranked.includes("pro") ? "pro" : "lite";
+    return {
+      tier,
+      source: "paid",
+      trialActive: false,
+      trialEndsAt: user.trialEndsAt,
+      plaidItemLimit: TIER_LIMITS[tier].plaidItems,
+    };
+  }
   return {
     tier: "free",
     source: "default",
@@ -27,8 +42,14 @@ export function computeEffectiveTier(user: {
 }
 
 export async function effectiveTier(userId: string): Promise<EffectiveTier> {
-  const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
-  return computeEffectiveTier(user);
+  const [user, activeSubs] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+    prisma.subscription.findMany({
+      where: { userId, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] } },
+      select: { tier: true },
+    }),
+  ]);
+  return computeEffectiveTier(user, activeSubs);
 }
 
 export async function requireProTier(userId: string): Promise<void> {
