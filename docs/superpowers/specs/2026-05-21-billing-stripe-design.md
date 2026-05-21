@@ -216,12 +216,21 @@ if (await hasActiveSubscription(user.id)) {
   throw new HttpError(409, "already_subscribed");
 }
 const priceId = priceIdForTier(body.tier);   // env lookup, returns string | null
+
+// Ensure a Stripe Customer exists and is persisted on the User row
+// BEFORE creating the Checkout Session. If we instead pass
+// customer_email to Stripe, two concurrent Checkouts for the same
+// Fina user create two distinct Stripe Customers, leaving one
+// subscription unreachable via the Portal (Portal only sees the
+// one customerId we end up storing). Idempotency key makes the
+// customer create itself safe to retry across DB-write failures.
+const customerId = await ensureStripeCustomer(user);
+
 const session = await stripe.checkout.sessions.create({
   mode: "subscription",
   line_items: [{ price: priceId, quantity: 1 }],
   client_reference_id: user.id,
-  customer: user.stripeCustomerId ?? undefined,
-  customer_email: user.stripeCustomerId ? undefined : user.email,
+  customer: customerId,                       // always set, never customer_email
   success_url: `${env.WEB_APP_URL}/settings/plan?status=success&sessionId={CHECKOUT_SESSION_ID}`,
   cancel_url: `${env.WEB_APP_URL}/settings/plan?status=cancel`,
   allow_promotion_codes: true,
@@ -230,6 +239,30 @@ const session = await stripe.checkout.sessions.create({
     : undefined,
 });
 return { url: session.url! };
+```
+
+```ts
+// Lazy create + persist. Idempotent across retries because the
+// stripeIdempotencyKey is derived from userId; Stripe returns the
+// same Customer for repeat calls with the same key, so a DB-write
+// failure between create() and User.update() doesn't orphan a
+// customer in Stripe — the next call returns the same ID.
+async function ensureStripeCustomer(user: User): Promise<string> {
+  if (user.stripeCustomerId) return user.stripeCustomerId;
+  const customer = await stripe.customers.create(
+    {
+      email: user.email,
+      name: user.name ?? undefined,
+      metadata: { fina_user_id: user.id },
+    },
+    { idempotencyKey: `customer-create-${user.id}` },
+  );
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { stripeCustomerId: customer.id },
+  });
+  return customer.id;
+}
 ```
 
 ```ts
@@ -450,7 +483,8 @@ Cases:
 
 | Case | Assertion |
 |---|---|
-| Free user POST /billing/checkout `{ tier: "pro" }` | 200 `{ url }`, Stripe called with correct line_items and `client_reference_id` |
+| Free user (no stripeCustomerId) POST /billing/checkout `{ tier: "pro" }` | 200 `{ url }`. Stripe `customers.create` called with idempotencyKey `customer-create-<userId>`. User.stripeCustomerId persisted BEFORE Checkout Session create. Session uses `customer: <id>`, NOT `customer_email`. |
+| Free user with existing stripeCustomerId POST /billing/checkout | 200 `{ url }`. Stripe `customers.create` NOT called (short-circuit). Session uses the stored `customer:`. |
 | User with active sub POST /billing/checkout | 409 `already_subscribed` |
 | Trial user (>48h left) POST /billing/checkout | Stripe called with `subscription_data.trial_end = Math.floor(trialEndsAt.getTime()/1000)` |
 | Trial user (<48h left) POST /billing/checkout | Stripe called WITHOUT `subscription_data.trial_end` (avoids Stripe's 48h-minimum rejection) |
