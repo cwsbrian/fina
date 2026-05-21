@@ -172,6 +172,37 @@ from `@fina/shared`. Don't introduce a new `MAX_AMOUNT` literal in any
 file: `grep -rn '999_999_999\.99\|99_999_999\.99' apps/` should match
 **nothing**.
 
+For passwords:
+
+- `MIN_PASSWORD_LENGTH` is `8`. `meetsPasswordPolicy(pw)` is the
+  boolean used by every sign-up form + the API minimum check.
+- `passwordStrength(pw)` returns `"weak" | "okay" | "strong" | null`
+  for UI strength meters. App-side adapters can map to UI-specific
+  labels ("Weak"/"Okay"/"Strong" capitalized).
+
+## Identity / display helpers
+
+Use these from `@fina/shared/format/identity.ts` for any UI that
+renders user-friendly text from a user record:
+
+- `initials(name, email)` → 2-char avatar text. Falls back to email.
+- `displayName(user)` → first space-delimited token of `name`, else
+  email local-part. Use for "Hi {firstName}".
+- `localPartOfEmail(email)` → text before `@`. Used as default
+  workspace name on bootstrap, default name on sign-up.
+
+## Tier UI helpers
+
+From `@fina/shared/tier.ts`:
+
+- `tierLabel(tier, trialActive)` → `"Pro trial" | "Pro" | "Lite" | "Free"`
+  for badges and settings copy.
+- `trialDaysLeft(endsAt)` → whole days remaining, `0` if past,
+  `null` if missing. Accepts ISO string or Date.
+- `TIER_LIMITS[tier]` → per-tier caps (`plaidItems`, etc.).
+- `isProFeature(feature)` → boolean gate for advisor/chat/plan
+  features (currently always true for non-Free).
+
 ---
 
 ## Enums / string-literal unions
