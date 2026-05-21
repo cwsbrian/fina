@@ -23,11 +23,12 @@ model User {
   updatedAt     DateTime @updatedAt
 
   // Fina extensions
-  tz             String    @default("America/Toronto")
-  locale         String    @default("en-CA")
-  trialStartedAt DateTime?
-  trialEndsAt    DateTime?
-  trialConsumed  Boolean   @default(false)
+  tz               String    @default("America/Toronto")
+  locale           String    @default("en-CA")
+  trialStartedAt   DateTime?
+  trialEndsAt      DateTime?
+  trialConsumed    Boolean   @default(false)
+  stripeCustomerId String?   @unique // Billing — set on first Stripe checkout
 
   // Better Auth relations
   sessions Session[]
@@ -40,6 +41,7 @@ model User {
   plaidItems      PlaidItem[]
   actionIntents   ActionIntent[]
   chatThreads     ChatThread[]
+  subscriptions   Subscription[]
 
   @@map("users")
 }
@@ -204,6 +206,29 @@ enum PlaidItemStatus {
   error
   relink_required
   disconnected
+}
+
+// Mirrors every status Stripe can send so the webhook can write the
+// value verbatim without enum-validation failures. Only `trialing` /
+// `active` / `past_due` count as active for EffectiveTier — see
+// apps/api/src/auth/tier.ts.
+enum SubscriptionStatus {
+  trialing
+  active
+  past_due
+  canceled
+  unpaid               // final state after Smart Retries exhausted
+  incomplete           // first invoice never settled
+  incomplete_expired   // Checkout abandoned, auto-canceled by Stripe
+  paused               // admin-paused; rare
+}
+
+// Source-agnostic per design spec §13.7. Only `stripe` populated in
+// v1; iap_* future-proof for the mobile billing PR.
+enum SubscriptionSource {
+  stripe
+  iap_apple
+  iap_google
 }
 
 model PlaidWebhookEvent {
@@ -524,4 +549,45 @@ model AuditEvent {
 
   @@index([workspaceId, createdAt])
   @@map("audit_events")
+}
+
+model Subscription {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // "lite" | "pro" — String not Prisma enum because it must match
+  // @fina/shared Tier union (free|lite|pro) exactly. Validated by
+  // tierForPriceId() at write boundaries; free never appears here.
+  tier   String
+  source SubscriptionSource
+  // Stripe "sub_..."
+  sourceSubscriptionId String
+  // Stripe "cus_..."; mirrors User.stripeCustomerId for query convenience.
+  sourceCustomerId String?
+
+  status            SubscriptionStatus
+  currentPeriodEnd  DateTime
+  cancelAtPeriodEnd Boolean @default(false)
+  // "monthly" | "annual" — annual deferred to v1.5+ per spec.
+  billingPeriod String @default("monthly")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([source, sourceSubscriptionId])
+  @@index([userId, status])
+  @@map("subscriptions")
+}
+
+// Stores enough to dedupe; no body retained (PII + volume).
+model WebhookEvent {
+  // Stripe event.id ("evt_...") — also serves as idempotency key.
+  id          String   @id
+  source      String
+  type        String
+  receivedAt  DateTime @default(now())
+
+  @@index([source, type])
+  @@map("webhook_events")
 }
