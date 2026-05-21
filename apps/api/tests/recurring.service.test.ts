@@ -67,11 +67,11 @@ describe("addRecurringService", () => {
     ).rejects.toThrow("invalid_amount");
   });
 
-  it("rejects amount over Decimal(10,2) cap with invalid_amount", async () => {
+  it("rejects amount over Decimal(14,2) cap (MAX_AMOUNT 999_999_999.99) with invalid_amount", async () => {
     await expect(
       addRecurringService(
         { workspaceId },
-        { name: "X", amount: 100_000_000, cadence: "monthly", nextOccurrenceDate: "2026-06-01" },
+        { name: "X", amount: 1_000_000_000, cadence: "monthly", nextOccurrenceDate: "2026-06-01" },
       ),
     ).rejects.toThrow("invalid_amount");
   });

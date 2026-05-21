@@ -61,9 +61,12 @@ describe("setBudgetService", () => {
     ).rejects.toThrow("invalid_amount");
   });
 
-  it("rejects amount > 99999999.99 with invalid_amount", async () => {
+  it("rejects amount > MAX_AMOUNT (999_999_999.99) with invalid_amount", async () => {
     await expect(
-      setBudgetService({ workspaceId, userId }, { categoryId, amount: 100_000_000, period: "this_month" }),
+      setBudgetService(
+        { workspaceId, userId },
+        { categoryId, amount: 1_000_000_000, period: "this_month" },
+      ),
     ).rejects.toThrow("invalid_amount");
   });
 
