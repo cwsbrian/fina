@@ -16,3 +16,20 @@ export const DEFAULT_CURRENCY = "CAD";
 
 /** Default user timezone. Mirrors `User.tz` Prisma default. */
 export const DEFAULT_TZ = "America/Toronto";
+
+/** Per-route rate-limit policies. Keys map 1:1 to logical buckets;
+ * the API's `withRateLimit(key)` helper translates these into the
+ * @fastify/rate-limit plugin config. Frontend may import for
+ * client-side "X requests remaining" UI later. */
+export const RATE_LIMITS = {
+  /** Default for any route without an explicit override. Keyed by IP. */
+  globalDefault: { max: 60, windowMs: 60_000 },
+  /** Heaviest cost — guards LLM token spend. Keyed by user id. */
+  chatMessages: { max: 30, windowMs: 60_000 },
+  /** Credential stuffing protection. Keyed by IP. */
+  auth: { max: 5, windowMs: 60_000 },
+  /** Plaid Link callback / re-exchange. Keyed by user id. */
+  plaidExchange: { max: 5, windowMs: 60_000 },
+} as const;
+
+export type RateLimitKey = keyof typeof RATE_LIMITS;
