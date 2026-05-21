@@ -31,10 +31,11 @@ export function cleanTitle(raw: string): string | null {
 // Fire-and-forget. Caller does `void generateAndPersistThreadTitle(...)`.
 // On any failure, logs via console.warn and resolves — never throws.
 // The DB update uses `WHERE title IS NULL` so a manual PATCH during the
-// async window is preserved.
+// async window is preserved. Auth is enforced at the route layer
+// (thread.userId === session.userId), so the conditional update needs
+// no further scoping.
 export async function generateAndPersistThreadTitle(
   env: Env,
-  workspaceId: string,
   threadId: string,
   firstMessageText: string,
 ): Promise<void> {
@@ -43,10 +44,10 @@ export async function generateAndPersistThreadTitle(
     const cleaned = cleanTitle(raw);
     if (cleaned === null) return;
     await prisma.chatThread.updateMany({
-      where: { id: threadId, workspaceId, title: null },
+      where: { id: threadId, title: null },
       data: { title: cleaned, updatedAt: new Date() },
     });
   } catch (err) {
-    console.warn("auto-title failed", { workspaceId, threadId, err });
+    console.warn("auto-title failed", { threadId, err });
   }
 }
