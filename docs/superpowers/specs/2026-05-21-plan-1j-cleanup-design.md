@@ -126,11 +126,11 @@ TRUST_PROXY: z.preprocess(
 
 No transform on TRUST_PROXY. `.env.example` clearly states "must be set; use `true` only behind a CDN that overwrites X-Forwarded-For from clients, otherwise `false`".
 
-**Fixture sweep required**: only 3 test files (`health.test.ts`, `helmet.test.ts`, `rate-limit.test.ts`) currently set `TRUST_PROXY: false` in their `env` literal. Removing the transform default makes `TRUST_PROXY: boolean` non-optional in the `Env` type, so **every other test fixture that constructs an env literal will TS-fail**. Approach:
+**Fixture sweep required (~51 files)**: only 3 test files (`health.test.ts`, `helmet.test.ts`, `rate-limit.test.ts`) currently set `TRUST_PROXY: false` in their `env` literal. The remaining ~48 test files inline-construct `env` objects or call `loadEnv()` against `process.env`. Removing the transform default makes `TRUST_PROXY: boolean` non-optional in the `Env` type, so **every fixture that constructs an env literal without setting `TRUST_PROXY` will TS-fail**. Approach:
 
-1. Audit pass: `grep -rn "NODE_ENV.*test" apps/api/tests/ | grep -v "^Binary"` finds the fixtures.
-2. Create `apps/api/tests/helpers/test-env.ts` exporting a `testEnv(overrides?)` helper that returns a complete `Env` shape with sensible test defaults (`TRUST_PROXY: false`, `PRISMA_CONNECTION_LIMIT: 10`, etc.) — single source of truth.
-3. Migrate existing fixtures to the helper as part of Task 2. The migration is mechanical — replace the inline `const env = { ... }` with `const env = testEnv()`.
+1. Audit pass: `grep -rln "NODE_ENV.*test\|loadEnv()" apps/api/tests/` returns the file list (~51 files at spec time).
+2. Create `apps/api/tests/helpers/test-env.ts` exporting a `testEnv(overrides?: Partial<Env>): Env` helper that returns a complete `Env` shape with sensible test defaults (`TRUST_PROXY: false`, `PRISMA_CONNECTION_LIMIT: 10`, `NODE_ENV: "test"`, etc.) — single source of truth. New file, no collision (verified `apps/api/tests/helpers/` exists but no `test-env.ts`).
+3. Migrate existing fixtures to the helper as part of Task 2. The migration is mechanical — replace the inline `const env = { ... } as Env` literal with `const env = testEnv()` (or `testEnv({ RATE_LIMIT_TEST: "1" })` for the rate-limit tests). Volume: ~48 files × ~1-3 lines per file = ~100 line diff bundled into a single commit.
 4. `.env.example` updates from `TRUST_PROXY=` (blank) to `TRUST_PROXY=false` — empty value would `preprocess → undefined → z.boolean()` reject under strict opt-in.
 
 The buildApp test fixtures (already passing `TRUST_PROXY: false`) and `env.test.ts` itself (which directly asserts on the schema) are explicit-update sites. `env.test.ts` line 71-78's "dev defaults to false" assertion is removed alongside the "prod defaults to true" assertion — neither defaults under strict opt-in.
@@ -323,7 +323,7 @@ Every task follows TDD: failing test → implementation → green test. Test sur
 | 4 (F) | Each modified route file's existing test runs unchanged. Add one smoke assertion (in any of the three route test files) that spies on `loggerMod.logError` and verifies one of the migrated callsites emits via the singleton, not `app.log`. Catches future regressions where a contributor adds `app.log.error` back. |
 | 5 (C) | `apps/api/tests/chat.tools.find-transactions.test.ts` — fixture: user with `tz="Asia/Seoul"`, transaction at `occurredAt = 2026-03-31T15:30Z` (which is `2026-04-01T00:30 KST`). With `start_date="2026-04-01"`, OLD impl excludes (UTC midnight boundary), NEW impl INCLUDES (KST midnight boundary). Assert the row appears in the result. Second case: `occurredAt = 2026-04-01T15:30Z` (`2026-04-02T00:30 KST`) with `end_date="2026-04-01"` — OLD includes (UTC 04-01T23:59 boundary), NEW excludes (KST day rolled to 04-02). Assert NOT in result. |
 | 6 (D) | `apps/api/tests/chat.tools.detect-recurring-merchants.test.ts` — USD + CAD same-merchant fixture, assert two Candidates with distinct currencies. |
-| 7 (B) | `apps/api/tests/cron.cleanup-events.test.ts` — seed a `resolved-matched` ScheduledSpend with `resolvedAt = now - 91 days`, run job, assert deleted. Seed one with `resolvedAt = now - 30 days`, assert NOT deleted. |
+| 7 (B) | `apps/api/tests/cron.cleanup-events.test.ts` — seed a resolved ScheduledSpend (`dismissedAt: <past>` OR `matchedTxId: <id>`), then immediately `prisma.$executeRaw\`UPDATE scheduled_spends SET updated_at = NOW() - INTERVAL '91 days' WHERE id = ${id}\`` to override the `@updatedAt` field (which would otherwise be set to `now` by the `create` call). Run job → assert deleted. Repeat with `updated_at - INTERVAL '30 days'` → assert NOT deleted. Also seed an unresolved row (dismissedAt + matchedTxId both null) with old updatedAt → assert NOT deleted. |
 | 8 (I) | `apps/api/tests/rate-limit.test.ts` — split the existing "auth bucket" test into two: (a) sign-in 6th = 429 (authStrict), (b) get-session 31st = 429 (auth). |
 
 Full suite must pass at each commit boundary.
@@ -344,7 +344,7 @@ Full suite must pass at each commit boundary.
 
 ## 6. Success criteria
 
-After all 9 commits land and merge to main:
+After all 9 commits land and merge to main (1 shared-lib prep commit + 8 item commits):
 
 - `grep -n "workspace:" apps/api/src/routes/plaid.ts` returns 0 matches (H fixed).
 - `loadEnv` with `NODE_ENV=production` and unset `TRUST_PROXY` throws (E fixed).
