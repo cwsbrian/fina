@@ -90,6 +90,28 @@ SELECT * FROM sessions;          -- active sessions
 Connect to `localhost:5432`, user `fina`, password `fina`, database `fina`. Use this for
 larger explorations, ER diagrams, or managing multiple environments side-by-side.
 
+## Stripe local setup (billing)
+
+1. Sign up at https://dashboard.stripe.com/register (free).
+2. In **Developers → API keys**, copy the test-mode Secret key into
+   `STRIPE_SECRET_KEY` (`sk_test_...`).
+3. **Products** → New product (do both):
+   - "Fina Lite" — recurring **$7.00 CAD / month** → copy price ID into
+     `STRIPE_PRICE_LITE_MONTHLY`.
+   - "Fina Pro" — recurring **$15.00 CAD / month** → copy price ID into
+     `STRIPE_PRICE_PRO_MONTHLY`.
+4. **Settings → Billing → Customer portal** → **Activate**. Enable: cancel
+   subscription, update payment method, view invoices, allow switching
+   between Lite and Pro.
+5. Forward webhooks to your local API (in a separate terminal):
+   ```bash
+   stripe listen --forward-to localhost:4000/webhooks/stripe
+   ```
+   Copy the `whsec_...` it prints into `STRIPE_WEBHOOK_SECRET`.
+6. Restart the API so the new env values load (`pnpm smoke:api`).
+7. Visit `http://localhost:3100/settings/plan`, click Upgrade. Use Stripe's
+   test card `4242 4242 4242 4242`, any future expiry, any CVC, any postal.
+
 ## Status — 2026-05-11
 
 - ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready.
