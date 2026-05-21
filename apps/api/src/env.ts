@@ -15,6 +15,11 @@ const Schema = z.object({
   // Default empty; baseline allowlist still includes localhost:3000 and :3100.
   // Use this to add LAN/Tailscale IPs when smoke-testing from another device.
   DEV_ORIGINS: z.string().optional(),
+  // Stripe
+  STRIPE_SECRET_KEY: z.string(),
+  STRIPE_WEBHOOK_SECRET: z.string(),
+  STRIPE_PRICE_LITE_MONTHLY: z.string(),
+  STRIPE_PRICE_PRO_MONTHLY: z.string(),
   // Plaid
   PLAID_CLIENT_ID: z.string(),
   PLAID_SECRET: z.string(),
