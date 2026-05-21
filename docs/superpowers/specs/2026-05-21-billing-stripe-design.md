@@ -222,8 +222,8 @@ const session = await stripe.checkout.sessions.create({
   client_reference_id: user.id,
   customer: user.stripeCustomerId ?? undefined,
   customer_email: user.stripeCustomerId ? undefined : user.email,
-  success_url: `${env.WEB_BASE_URL}/settings/plan?status=success&sessionId={CHECKOUT_SESSION_ID}`,
-  cancel_url: `${env.WEB_BASE_URL}/settings/plan?status=cancel`,
+  success_url: `${env.WEB_APP_URL}/settings/plan?status=success&sessionId={CHECKOUT_SESSION_ID}`,
+  cancel_url: `${env.WEB_APP_URL}/settings/plan?status=cancel`,
   allow_promotion_codes: true,
   subscription_data: useTrialEnd(user.trialEndsAt)
     ? { trial_end: Math.floor(user.trialEndsAt!.getTime() / 1000) }
@@ -255,7 +255,7 @@ if (!user.stripeCustomerId) {
 }
 const session = await stripe.billingPortal.sessions.create({
   customer: user.stripeCustomerId,
-  return_url: `${env.WEB_BASE_URL}/settings/plan`,
+  return_url: `${env.WEB_APP_URL}/settings/plan`,
 });
 return { url: session.url };
 ```
@@ -396,10 +396,10 @@ STRIPE_SECRET_KEY=sk_test_xxx
 STRIPE_WEBHOOK_SECRET=whsec_xxx
 STRIPE_PRICE_LITE_MONTHLY=price_xxx
 STRIPE_PRICE_PRO_MONTHLY=price_yyy
-WEB_BASE_URL=http://localhost:3100
+# WEB_APP_URL already exists for invite links — billing reuses it.
 ```
 
-`apps/api/src/env.ts` zod schema gets 5 new required strings.
+`apps/api/src/env.ts` zod schema gets 4 new required strings (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LITE_MONTHLY`, `STRIPE_PRICE_PRO_MONTHLY`). `WEB_APP_URL` already exists — reuse it for `success_url` / `cancel_url` / `return_url`.
 
 Local Stripe webhook forwarding for dev: `stripe listen --forward-to localhost:4000/webhooks/stripe`.
 
