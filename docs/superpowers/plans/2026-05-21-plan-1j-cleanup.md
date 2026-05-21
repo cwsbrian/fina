@@ -293,15 +293,41 @@ const ParsedSchema = Schema.refine(
 export type Env = z.infer<typeof ParsedSchema>;
 ```
 
-- [ ] **Step 2.4: Run env.test.ts — expect pass on the new cases, FAIL on others**
+- [ ] **Step 2.4: Run env.test.ts — note which cases fail**
 
 ```bash
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/env.test.ts
 ```
 
-Expected: the 4 new `TRUST_PROXY` cases pass. Existing cases like "PRISMA_CONNECTION_LIMIT defaults to 10" might fail because their `baseEnv()` doesn't include `TRUST_PROXY`. Update `baseEnv()`:
+Expected: the 4 new `TRUST_PROXY` cases pass. Existing cases like "PRISMA_CONNECTION_LIMIT defaults to 10" fail because their `baseEnv()` returns an env literal that doesn't include `TRUST_PROXY` — under the new strict schema, those calls throw.
 
-In `apps/api/tests/env.test.ts`, find `function baseEnv()` and add `TRUST_PROXY: "false"` to the returned object. Then re-run. Expected: all env.test.ts cases pass.
+- [ ] **Step 2.4a: Update `baseEnv()` in env.test.ts**
+
+In `apps/api/tests/env.test.ts`, find `function baseEnv()` (around line 12) and add `TRUST_PROXY: "false"` to the returned object:
+
+```ts
+function baseEnv(): NodeJS.ProcessEnv {
+  return {
+    DATABASE_URL: "postgresql://localhost/x",
+    BETTER_AUTH_SECRET: "x".repeat(48),
+    BETTER_AUTH_URL: "http://localhost:0",
+    WEB_APP_URL: "http://localhost:3000",
+    PLAID_CLIENT_ID: "x",
+    PLAID_SECRET: "x",
+    ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    GEMINI_API_KEY: "x",
+    TRUST_PROXY: "false", // NEW: 1J Task 2 strict opt-in requires explicit value
+  };
+}
+```
+
+Re-run env.test.ts:
+
+```bash
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/env.test.ts
+```
+
+Expected: all env.test.ts cases pass.
 
 - [ ] **Step 2.5: Create the testEnv helper**
 
@@ -407,13 +433,55 @@ spoofing risk if mis-set."
 
 ## Task 3: G — Frontend `rate_limit_exceeded` toast
 
-**Goal:** When `apiFetch` rejects with `ApiError` code `rate_limit_exceeded`, fire a localized sonner toast. Install sonner as a new `apps/web` dep.
+**Goal:** When `apiFetch` rejects with `ApiError` code `rate_limit_exceeded`, fire a localized sonner toast. Install sonner as a new `apps/web` dep. **Also includes** setting up vitest in `apps/web` — verified absent at plan time (no `test` script, no `vitest` devDep, no `vitest.config.ts`).
 
 **Files:**
-- Modify: `apps/web/package.json` (+ lockfile)
+- Modify: `apps/web/package.json` (+ lockfile) — add sonner + vitest + jsdom + @types/node + test script
+- Create: `apps/web/vitest.config.ts`
 - Modify: `apps/web/src/app/layout.tsx`
 - Modify: `apps/web/src/lib/api.ts`
 - Create: `apps/web/src/lib/api.test.ts`
+
+- [ ] **Step 3.0: Set up vitest in `apps/web`**
+
+`apps/web/package.json` currently has no `test` script and no vitest dep (verified). Install:
+
+```bash
+pnpm --filter @fina/web add -D vitest @vitest/ui jsdom @types/node
+```
+
+Add a test script in `apps/web/package.json` under `"scripts"`:
+
+```json
+"test": "vitest run",
+"test:watch": "vitest"
+```
+
+Create `apps/web/vitest.config.ts`:
+
+```ts
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    environment: "node",
+    // api.test.ts only stubs fetch — no DOM needed. Switch to "jsdom" if a
+    // future test renders React components.
+    globals: false,
+    include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
+  },
+});
+```
+
+(Even though `jsdom` was installed above, we set `environment: "node"` for the api test since it doesn't render. Keep jsdom available for future component tests.)
+
+Verify the setup:
+
+```bash
+pnpm --filter @fina/web exec vitest run --reporter=verbose 2>&1 | tail -5
+```
+
+Expected: "no test files found" — but no error. Setup is good.
 
 - [ ] **Step 3.1: Install sonner**
 
@@ -560,10 +628,8 @@ describe("apiFetch rate_limit_exceeded handler", () => {
 - [ ] **Step 3.5: Run the new test**
 
 ```bash
-pnpm --filter @fina/web exec vitest run --config vitest.config.ts src/lib/api.test.ts
+pnpm --filter @fina/web exec vitest run src/lib/api.test.ts
 ```
-
-(Adjust the command if `apps/web` uses a different test setup — check `apps/web/package.json` for the `"test"` script and use whatever command it points to.)
 
 Expected: 3 tests pass.
 
@@ -578,7 +644,7 @@ Expected: clean.
 - [ ] **Step 3.7: Commit**
 
 ```bash
-git add apps/web/package.json pnpm-lock.yaml apps/web/src/app/layout.tsx apps/web/src/lib/api.ts apps/web/src/lib/api.test.ts
+git add apps/web/package.json pnpm-lock.yaml apps/web/vitest.config.ts apps/web/src/app/layout.tsx apps/web/src/lib/api.ts apps/web/src/lib/api.test.ts
 git commit -m "feat(web): localized rate_limit_exceeded toast via sonner
 
 apiFetch now wraps the @fina/shared makeApiFetch factory and
@@ -619,11 +685,11 @@ Expected: exactly 7 hits (2 in invites, 3 in plaid, 2 in plaid-webhook). If the 
 
 - [ ] **Step 4.2: Migrate `invites.ts`**
 
-For each `app.log.error("msg", ctx)` or `app.log.warn(...)` etc., apply the transform:
+Fastify's `app.log.X(...)` already follows the pino convention of `(ctx, msg)` argument order (verified by reading the existing callsites). So the transform is a name swap, NOT an argument-order swap:
 
 ```ts
 // Before
-app.log.error("msg", { foo: 1, err });
+app.log.error({ foo: 1, err }, "msg");
 // After
 import { logError } from "../logger.js";
 logError({ foo: 1, err }, "msg");
@@ -631,8 +697,10 @@ logError({ foo: 1, err }, "msg");
 
 Steps per file:
 1. Add the import at the top: `import { logError, logWarn, logInfo } from "../logger.js";` (only import the helpers you actually use — `logInfo` if there's a `app.log.info`, etc.).
-2. For each `app.log.LEVEL(msg, ctx)`, swap the arg order: `logLEVEL(ctx, msg)`. Note: Fastify's `app.log.error(msg, ctx)` puts msg first; pino's argument order via our wrappers is `(ctx, msg)`.
-3. Use `LogContext` keys appropriate to the site: `plaidEvent`, `plaidItemId`, `workspaceId`, `userId`, etc. If the existing context object had nonstandard keys, fold them into the message string OR add a one-off `note: "..."` field via `LogContext.err` only if it's an error context.
+2. For each `app.log.LEVEL(ctx, msg)`, rename to `logLEVEL(ctx, msg)` — keep the argument order.
+3. If a callsite uses a context key NOT in `LogContext` (the type at `libs/shared/src/logging.ts`), either:
+   - Rename to a `LogContext` key if there's a natural fit (`plaidEvent`, `plaidItemId`, `workspaceId`, `userId`, `threadId`, `tool`, `auditAction`, `durationMs`, `err`, `requestId`); or
+   - Fold the value into the message string (e.g., `logError({ err }, \`xxx failed for item ${itemId}\`)`)
 
 Read `apps/api/src/routes/invites.ts`, locate the 2 `app.log.*` callsites, edit them.
 
@@ -679,6 +747,16 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina
 
 Expected: all tests pass.
 
+- [ ] **Step 4.7b: Run the full suite for regression catch**
+
+Other tests may have been spying on `app.log.*` via the Fastify root logger (e.g., a generic request-lifecycle test that ascertains messages flowed through). Run the full API suite to surface any silent regression:
+
+```bash
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts 2>&1 | tail -5
+```
+
+Expected: ≥952 tests pass (the smoke assertion added in Step 4.6 is the +1).
+
 - [ ] **Step 4.8: Typecheck**
 
 ```bash
@@ -716,24 +794,46 @@ re-introduces app.log.* on a touched route."
 
 - [ ] **Step 5.1: Write the failing KST test**
 
-Read `apps/api/tests/chat.tools.find-transactions.test.ts` to understand its existing fixture pattern (how it seeds a user with a tz, how it inserts transactions with specific `occurredAt`).
-
-Add a new test case in a new `describe("tz-aware date boundaries", ...)` block:
+The existing `apps/api/tests/chat.tools.find-transactions.test.ts` uses inline `prisma.*.create()` calls (no helper functions — verified at plan time). Follow the same inline pattern. Add a new `describe` block at the bottom of the file:
 
 ```ts
-import { resolveUserTz } from "../src/chat/tools/periods.js"; // adjust if needed
-import { describe, expect, it } from "vitest";
-
 describe("findTransactions tz-aware boundaries", () => {
+  let kstCtx: ToolContext;
+  let kstWsId: string;
+  let kstUserId: string;
+  let kstAcctId: string;
+
+  beforeEach(async () => {
+    // Inline-seed a KST user + workspace + account. Pattern matches the
+    // module's outer beforeEach at lines 14-27.
+    const u = await prisma.user.create({
+      data: {
+        id: `kst-${Date.now()}`,
+        email: `kst-${Date.now()}@t.co`,
+        name: "KST",
+        tz: "Asia/Seoul",
+      },
+    });
+    kstUserId = u.id;
+    const ws = await prisma.workspace.create({ data: { name: "kst-ws" } });
+    kstWsId = ws.id;
+    await prisma.membership.create({ data: { userId: kstUserId, workspaceId: kstWsId, role: "owner" } });
+    kstCtx = { env: {} as never, workspaceId: kstWsId, userId: kstUserId };
+
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: kstWsId, name: "KRW Chequing", type: "depository", currency: "KRW" },
+    });
+    kstAcctId = acct.id;
+  });
+
   it("includes a transaction at KST 00:30 on the start_date day", async () => {
-    // Seed: user with tz="Asia/Seoul", one transaction at occurredAt = 2026-03-31T15:30Z
-    // (which is 2026-04-01T00:30 KST — the user's notion of April 1 begins here).
-    const { userId, workspaceId } = await seedTestUser({ tz: "Asia/Seoul" }); // use existing helper
-    const accountId = await seedTestBankAccount(workspaceId, { currency: "KRW" });
+    // occurredAt = 2026-03-31T15:30Z = 2026-04-01T00:30 KST (the user's
+    // notion of April 1 begins here — old UTC-midnight impl missed it).
     const tx = await prisma.transaction.create({
       data: {
-        workspaceId,
-        accountId,
+        workspaceId: kstWsId,
+        accountId: kstAcctId,
+        plaidTransactionId: "kst-1",
         amount: "10000",
         merchantRaw: "Coffee KST",
         occurredAt: new Date("2026-03-31T15:30:00.000Z"),
@@ -741,22 +841,23 @@ describe("findTransactions tz-aware boundaries", () => {
       },
     });
 
-    const result = await findTransactions.run(
-      { userId, workspaceId },
-      { start_date: "2026-04-01", end_date: "2026-04-01" },
-    );
+    const result = await findTransactions.run(kstCtx, {
+      start_date: "2026-04-01",
+      end_date: "2026-04-01",
+    });
 
     expect(result.transactions.some((t) => t.id === tx.id)).toBe(true);
   });
 
   it("excludes a transaction at KST 00:30 on the day AFTER end_date", async () => {
-    const { userId, workspaceId } = await seedTestUser({ tz: "Asia/Seoul" });
-    const accountId = await seedTestBankAccount(workspaceId, { currency: "KRW" });
     // occurredAt = 2026-04-01T15:30Z = 2026-04-02T00:30 KST
+    // OLD UTC impl would include (end-of-day 04-01 UTC = 23:59:59 UTC includes 15:30 UTC)
+    // NEW tz impl excludes (KST day rolled to 04-02 by then)
     const tx = await prisma.transaction.create({
       data: {
-        workspaceId,
-        accountId,
+        workspaceId: kstWsId,
+        accountId: kstAcctId,
+        plaidTransactionId: "kst-2",
         amount: "10000",
         merchantRaw: "Coffee KST next day",
         occurredAt: new Date("2026-04-01T15:30:00.000Z"),
@@ -764,17 +865,17 @@ describe("findTransactions tz-aware boundaries", () => {
       },
     });
 
-    const result = await findTransactions.run(
-      { userId, workspaceId },
-      { start_date: "2026-04-01", end_date: "2026-04-01" },
-    );
+    const result = await findTransactions.run(kstCtx, {
+      start_date: "2026-04-01",
+      end_date: "2026-04-01",
+    });
 
     expect(result.transactions.some((t) => t.id === tx.id)).toBe(false);
   });
 });
 ```
 
-Replace `seedTestUser`, `seedTestBankAccount`, etc. with whatever helpers the existing test file uses (read it first to find the actual helper names). Use the existing test's `tz` setting mechanism for the user. The `Transaction.currency` selector etc. — but Transaction has no currency field; use `BankAccount.currency` via the account relation if the existing fixture pattern needs it.
+Note: `User.tz` is a field on the Prisma User model. If your version of the schema doesn't have it, check `apps/api/prisma/schema.prisma` — should be present (used by `resolveUserTz`).
 
 - [ ] **Step 5.2: Run test — expect fail**
 
@@ -867,45 +968,61 @@ plan should apply this fix uniformly once verified here."
 
 - [ ] **Step 6.1: Write the failing multi-currency test**
 
-Read `apps/api/tests/chat.tools.detect-recurring-merchants.test.ts` for fixture helpers. Add:
+The existing `apps/api/tests/chat.tools.detect-recurring-merchants.test.ts` uses inline `prisma.*.create()` (no helper functions). Read the existing fixture pattern in the file's `beforeEach`. Add a new `describe` block at the bottom:
 
 ```ts
 describe("multi-currency grouping", () => {
   it("returns separate Candidates for the same merchant in different currencies", async () => {
-    const { userId, workspaceId } = await seedTestUser({ tz: "America/Toronto" });
-    const usdAccount = await seedTestBankAccount(workspaceId, { currency: "USD" });
-    const cadAccount = await seedTestBankAccount(workspaceId, { currency: "CAD" });
-    // 4 USD transactions, monthly cadence
+    // Inline seed — pattern matches the module's existing beforeEach.
+    const u = await prisma.user.create({
+      data: { id: `mc-${Date.now()}`, email: `mc-${Date.now()}@t.co`, name: "MC" },
+    });
+    const ws = await prisma.workspace.create({ data: { name: "mc-ws" } });
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    const ctx = { env: {} as never, workspaceId: ws.id, userId: u.id };
+
+    const usdAccount = await prisma.bankAccount.create({
+      data: { workspaceId: ws.id, name: "USD Acct", type: "depository", currency: "USD" },
+    });
+    const cadAccount = await prisma.bankAccount.create({
+      data: { workspaceId: ws.id, name: "CAD Acct", type: "depository", currency: "CAD" },
+    });
+
+    // 4 USD transactions, monthly cadence (one per month, Jan-Apr 2026)
     for (let i = 0; i < 4; i++) {
       await prisma.transaction.create({
         data: {
-          workspaceId,
-          accountId: usdAccount,
+          workspaceId: ws.id,
+          accountId: usdAccount.id,
+          plaidTransactionId: `mc-usd-${i}`,
           amount: "9.99",
           merchantRaw: "Netflix",
+          merchantNormalized: "netflix",
           occurredAt: new Date(`2026-0${i + 1}-15T00:00:00.000Z`),
           rawData: {},
         },
       });
     }
-    // 4 CAD transactions, same merchant + same cadence
+    // 4 CAD transactions, same merchant + cadence
     for (let i = 0; i < 4; i++) {
       await prisma.transaction.create({
         data: {
-          workspaceId,
-          accountId: cadAccount,
+          workspaceId: ws.id,
+          accountId: cadAccount.id,
+          plaidTransactionId: `mc-cad-${i}`,
           amount: "13.99",
           merchantRaw: "Netflix",
+          merchantNormalized: "netflix",
           occurredAt: new Date(`2026-0${i + 1}-20T00:00:00.000Z`),
           rawData: {},
         },
       });
     }
 
-    const result = await detectRecurringMerchants.run(
-      { userId, workspaceId },
-      { lookback_months: 6, min_occurrences: 3 },
-    );
+    const result = await detectRecurringMerchants.run(ctx, {
+      lookback_months: 6,
+      min_occurrences: 3,
+    });
 
     const netflixUsd = result.candidates.find((c) => c.currency === "USD");
     const netflixCad = result.candidates.find((c) => c.currency === "CAD");
@@ -1129,9 +1246,11 @@ entirely (no other code path needed it)."
 
 - [ ] **Step 7.1: Add the env key**
 
-In `apps/api/src/env.ts`, locate the cron-related env keys (around the existing `CRON_EVENT_TTL_DAYS` field). Add:
+In `apps/api/src/env.ts`, find the `CRON_EVENT_TTL_DAYS` line (around line 52). Insert the new key immediately after it:
 
 ```ts
+// TTL for plaid_webhook_events rows in days. Default 30 applied at use site with ?? 30.
+CRON_EVENT_TTL_DAYS: z.coerce.number().int().positive().optional(),
 // TTL for resolved ScheduledSpend rows in days. Default 90 applied at use
 // site with ?? 90. "Resolved" = dismissedAt set OR matchedTxId set.
 SCHEDULED_SPEND_TTL_DAYS: z.coerce.number().int().positive().optional(),
@@ -1139,45 +1258,70 @@ SCHEDULED_SPEND_TTL_DAYS: z.coerce.number().int().positive().optional(),
 
 - [ ] **Step 7.2: Write the failing test**
 
-Read `apps/api/tests/cron.cleanup-events.test.ts` for existing test patterns. Add a new describe block:
+The existing `apps/api/tests/cron.cleanup-events.test.ts` (read at plan time) only seeds `plaidWebhookEvent` — no workspace/category/transaction setup. Add an inline seed in a new describe block. Append to the end of the file:
 
 ```ts
 describe("cleanup-events ScheduledSpend pass", () => {
   it("deletes resolved ScheduledSpends older than the TTL (default 90 days)", async () => {
-    // Resolved + old: should delete
+    // Seed workspace + category + bank account + tx inline (no helper exists).
+    const ws = await prisma.workspace.create({ data: { name: "ss-cleanup-ws" } });
+    const cat = await prisma.category.create({ data: { workspaceId: ws.id, name: "Bills" } });
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: ws.id, name: "Chequing", type: "depository" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: ws.id,
+        accountId: acct.id,
+        plaidTransactionId: "ss-tx-1",
+        amount: "30.00",
+        merchantRaw: "Rent",
+        occurredAt: new Date("2026-04-01T12:00:00Z"),
+        rawData: {},
+      },
+    });
+
+    // Resolved + old (dismissedAt set, updatedAt 91 days ago) → should DELETE
     const oldDismissed = await prisma.scheduledSpend.create({
       data: {
-        workspaceId,
-        categoryId,
+        workspaceId: ws.id,
+        categoryId: cat.id,
         amount: "20.00",
         scheduledDate: new Date("2025-12-01"),
         dismissedAt: new Date("2026-01-01"),
       },
     });
-    await prisma.$executeRaw`UPDATE scheduled_spends SET updated_at = NOW() - INTERVAL '91 days' WHERE id = ${oldDismissed.id}`;
+    // @updatedAt auto-sets on create — override via raw SQL.
+    await prisma.$executeRawUnsafe(
+      `UPDATE scheduled_spends SET updated_at = NOW() - INTERVAL '91 days' WHERE id = '${oldDismissed.id}'`,
+    );
 
-    // Resolved + recent: should NOT delete
+    // Resolved + recent (matchedTxId set, updatedAt 30 days ago) → should NOT delete
     const recentMatched = await prisma.scheduledSpend.create({
       data: {
-        workspaceId,
-        categoryId,
+        workspaceId: ws.id,
+        categoryId: cat.id,
         amount: "30.00",
         scheduledDate: new Date("2026-04-01"),
-        matchedTxId: existingTxId, // use a real tx in the same workspace
+        matchedTxId: tx.id,
       },
     });
-    await prisma.$executeRaw`UPDATE scheduled_spends SET updated_at = NOW() - INTERVAL '30 days' WHERE id = ${recentMatched.id}`;
+    await prisma.$executeRawUnsafe(
+      `UPDATE scheduled_spends SET updated_at = NOW() - INTERVAL '30 days' WHERE id = '${recentMatched.id}'`,
+    );
 
-    // Unresolved + old: should NOT delete (neither dismissedAt nor matchedTxId set)
+    // Unresolved + old (neither set, updatedAt 120 days ago) → should NOT delete
     const oldUnresolved = await prisma.scheduledSpend.create({
       data: {
-        workspaceId,
-        categoryId,
+        workspaceId: ws.id,
+        categoryId: cat.id,
         amount: "40.00",
         scheduledDate: new Date("2025-12-15"),
       },
     });
-    await prisma.$executeRaw`UPDATE scheduled_spends SET updated_at = NOW() - INTERVAL '120 days' WHERE id = ${oldUnresolved.id}`;
+    await prisma.$executeRawUnsafe(
+      `UPDATE scheduled_spends SET updated_at = NOW() - INTERVAL '120 days' WHERE id = '${oldUnresolved.id}'`,
+    );
 
     await runCleanupEvents(env);
 
@@ -1188,7 +1332,7 @@ describe("cleanup-events ScheduledSpend pass", () => {
 });
 ```
 
-Replace `workspaceId`, `categoryId`, `existingTxId`, `env`, `runCleanupEvents` with whatever symbols the existing test file already imports / seeds. If the existing test seeds a workspace + category at module scope, reuse those.
+Note: `$executeRawUnsafe` is used because Prisma's `$executeRaw` tagged-template syntax doesn't interpolate UUIDs cleanly into INTERVAL math. The id is a server-generated `cuid` (no SQL injection risk for tests). The `@updatedAt` decorator auto-sets `updatedAt` on every `update`/`create`, so the raw SQL is the only way to backdate it for testing.
 
 - [ ] **Step 7.3: Run test — expect fail**
 
@@ -1353,7 +1497,12 @@ it("sign-in failures do NOT consume the auth/get-session bucket", async () => {
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/rate-limit.test.ts
 ```
 
-Expected: the new sign-in / sign-up tests will pass under the CURRENT code (because /api/auth/* catch-all uses auth 30/min, so sign-in 5th attempt does NOT 429 yet — the test asserts 6th IS 429 because the limit is 30). Actually the FIRST test expects 6th = 429 but with current 30/min it won't. So this test fails until Task 8 wires authStrict.
+Expected behavior on current code (BEFORE Task 8 wiring):
+- The two new `authStrict` tests (sign-in / sign-up 6th = 429) FAIL — `/api/auth/*` catch-all currently uses the lenient `auth` bucket (30/min), so the 6th request returns 200, not 429.
+- The new `auth (lenient)` test (get-session 31st = 429) PASSES — that's the current behavior on main.
+- The new "sign-in does not consume get-session bucket" test PASSES — they share the same bucket today (so 4 sign-in attempts don't exhaust the 30/min auth bucket).
+
+This mix proves the wiring is needed: only `authStrict`-routed sign-in/sign-up trigger 429 at 6th. Implementing Task 8 makes the failing tests pass.
 
 - [ ] **Step 8.3: Edit `server.ts` — extract `makeBetterAuthHandler`**
 
