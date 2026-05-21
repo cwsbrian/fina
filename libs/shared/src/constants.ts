@@ -26,8 +26,12 @@ export const RATE_LIMITS = {
   globalDefault: { max: 60, windowMs: 60_000 },
   /** Heaviest cost — guards LLM token spend. Keyed by user id. */
   chatMessages: { max: 30, windowMs: 60_000 },
-  /** Credential stuffing protection. Keyed by IP. */
-  auth: { max: 5, windowMs: 60_000 },
+  /** Credential stuffing protection. Keyed by IP. 30/min still defeats any
+   *  realistic password-guessing attempt while accommodating Better Auth's
+   *  /api/auth/get-session polling (fired on every page load by the web
+   *  client). 5/min was too tight — a logged-in user would hit 429 after
+   *  ~5 page navigations. */
+  auth: { max: 30, windowMs: 60_000 },
   /** Plaid Link callback / re-exchange. Keyed by user id. */
   plaidExchange: { max: 5, windowMs: 60_000 },
 } as const;

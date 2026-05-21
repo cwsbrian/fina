@@ -36,10 +36,10 @@ describe("rate limits", () => {
     await app.close();
   });
 
-  it("auth bucket — 5/min per IP on /api/auth/*", async () => {
+  it("auth bucket — 30/min per IP on /api/auth/*", async () => {
     const app = await buildApp(env);
     let last;
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 31; i++) {
       last = await app.inject({
         method: "POST",
         url: "/api/auth/sign-in/email",
