@@ -15,6 +15,8 @@ codex review --base main --title "Billing — Stripe Integration (Lite + Pro)"
 
 Full pass-1 log archived at `/tmp/codex-billing-review.log`.
 Full pass-2 log archived at `/tmp/codex-billing-pass2.log`.
+Full pass-3 log archived at `/tmp/codex-billing-pass3.log`.
+Full pass-4 log archived at `/tmp/codex-billing-pass4.log`.
 
 ## Pass 1 — Findings
 
@@ -48,19 +50,33 @@ The MeDTO extension example showed `tier: EffectiveTier`, but the existing wire 
 
 After R1-R4 fixes:
 
-```bash
-codex review --base main --title "Billing Stripe spec — pass 2 after R1-R4 fixes"
-```
-
 > The change only adds a design document and does not modify executable code or tests. I found no discrete, actionable bug introduced by this patch.
+
+## Pass 3 — Additional finding
+
+### R5 [P2] — Webhook handlers must be order-independent
+
+Stripe webhook delivery is not ordered. With the spec's previous wording:
+
+- `subscription.updated` could land before `subscription.created` → update-only handler had no row to update → state change lost.
+- A stale `subscription.created` retry could land AFTER a newer `subscription.updated` → handler with payload-only data would overwrite the row with stale state.
+
+**Fix (commit 3a69bd0):** Every subscription-touching handler (`checkout.session.completed`, `subscription.created` / `.updated` / `.deleted`) now re-fetches the subscription from Stripe via `stripe.subscriptions.retrieve` and UPSERTs. The event payload identifies WHICH sub changed; current state comes from the API. This is Stripe's documented best practice ("use webhook as notification, read state from API"). Pulled into a `syncSubscriptionFromStripe(subId, userId)` helper. Added two regression test cases for out-of-order delivery.
+
+## Pass 4 — Verification
+
+After R5 fix:
+
+> The diff only adds design/review documentation and does not modify executable code, schemas, or tests. I found no discrete introduced issue that would break existing behavior.
 
 ## Status
 
-Spec is review-clean. Ready to proceed to implementation plan.
+Spec is review-clean across two rounds (Pass 2 + Pass 4). Ready to proceed to implementation plan.
 
 Resulting commits on `worktree-billing-stripe`:
 
 ```
+3a69bd0 docs(plan billing-stripe): codex R5 P2 — order-independent webhook handlers
 e82b231 docs(plan billing-stripe): codex R4 P2 — preserve MeDTO.tier wire shape
 08b2d5a docs(plan billing-stripe): codex R3 P2 — 48h trial_end minimum guard
 a2dcd6c docs(plan billing-stripe): codex R2 P2 — make /billing/sync work on first Checkout
