@@ -25,6 +25,7 @@ import { categorizeNewTransactions } from "../src/categorize/service.js";
 import { checkBackgroundSyncGate } from "../src/cron/tier-gate.js";
 import { runDailyRefresh } from "../src/cron/jobs/daily-refresh.js";
 import { resetPlaidMock } from "./helpers/plaid-mock.js";
+import * as loggerMod from "../src/logger.js";
 
 const env = {
   NODE_ENV: "test" as const,
@@ -174,15 +175,15 @@ describe("runDailyRefresh", () => {
   it("null connectedBy: skips tier gate, still syncs, warns", async () => {
     await seedActiveItem(null); // connectedBy = null
     vi.mocked(syncTransactions).mockResolvedValue(syncOk);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(loggerMod, "logWarn").mockImplementation(() => {});
 
     await runDailyRefresh(env);
 
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
     expect(syncTransactions).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ cron: "daily-refresh" }),
       expect.stringContaining("connectedBy null"),
-      expect.any(Object),
     );
     warnSpy.mockRestore();
   });
