@@ -1,8 +1,6 @@
 .page {
   min-height: 100vh;
-  /* Landing variant A "Centered manifesto" — local cream, not the app
-     canvas. Hardcoded so the global token (white) can stay clean. */
-  background: #f6f4ef;
+  background: var(--color-canvas);
   display: flex;
   flex-direction: column;
   padding: 36px 56px;
