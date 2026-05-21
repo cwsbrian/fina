@@ -59,10 +59,7 @@ describe("rate limits", () => {
       headers: { cookie: u.cookie, "content-type": "application/json" },
       payload: "{}",
     });
-    if (create.statusCode !== 201) {
-      await app.close();
-      return;
-    }
+    expect(create.statusCode).toBe(201);
     const threadId = create.json().thread.id;
 
     let last;

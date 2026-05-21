@@ -3,15 +3,23 @@ import { buildApp } from "./server.js";
 import { backfillWebhookUrls } from "./plaid/webhook-backfill.js";
 import { logger, logFatal, logError } from "./logger.js";
 
+// 1s watchdog: if pino's flush stalls (e.g. stdout pipe back-pressure),
+// kill the process anyway. .unref() so the timer never keeps the loop
+// alive when flush completes first.
+function flushAndExit(code: number): void {
+  setTimeout(() => process.exit(code), 1000).unref();
+  logger.flush(() => process.exit(code));
+}
+
 // Register process handlers BEFORE any async work so a startup crash
 // still gets logged + flushed.
 process.on("unhandledRejection", (reason) => {
   logFatal({ err: reason }, "unhandled_rejection");
-  logger.flush(() => process.exit(1));
+  flushAndExit(1);
 });
 process.on("uncaughtException", (err) => {
   logFatal({ err }, "uncaught_exception");
-  logger.flush(() => process.exit(1));
+  flushAndExit(1);
 });
 
 async function start(): Promise<void> {
@@ -42,5 +50,5 @@ async function start(): Promise<void> {
 
 start().catch((err) => {
   logFatal({ err }, "start_failed");
-  logger.flush(() => process.exit(1));
+  flushAndExit(1);
 });

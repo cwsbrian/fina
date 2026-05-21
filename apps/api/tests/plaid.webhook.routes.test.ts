@@ -314,30 +314,35 @@ describe("POST /plaid/webhook", () => {
   it("dispatch failure → still returns 200 and calls logError with context", async () => {
     vi.mocked(dispatchWebhookSync).mockRejectedValueOnce(new Error("sync boom"));
     const logErrorSpy = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
-    const app = await buildApp(env);
-    const { pi } = await seedItem();
-    const body = {
-      webhook_type: "TRANSACTIONS",
-      webhook_code: "SYNC_UPDATES_AVAILABLE",
-      item_id: pi.itemId,
-      environment: "sandbox",
-    };
-    const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+    // try/finally so the module-scoped spy is restored even if an
+    // expect() throws — otherwise later tests see a stubbed logError.
+    try {
+      const app = await buildApp(env);
+      const { pi } = await seedItem();
+      const body = {
+        webhook_type: "TRANSACTIONS",
+        webhook_code: "SYNC_UPDATES_AVAILABLE",
+        item_id: pi.itemId,
+        environment: "sandbox",
+      };
+      const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
 
-    const res = await postWebhook(app, body, jwt);
+      const res = await postWebhook(app, body, jwt);
 
-    expect(res.statusCode).toBe(200);
-    // The fire-and-forget promise settles asynchronously; wait briefly.
-    await new Promise((r) => setTimeout(r, 100));
-    expect(logErrorSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        plaidEvent: "SYNC_UPDATES_AVAILABLE",
-        plaidItemId: expect.any(String),
-        err: expect.anything(),
-      }),
-      expect.stringContaining("dispatch failed"),
-    );
-    logErrorSpy.mockRestore();
-    await app.close();
+      expect(res.statusCode).toBe(200);
+      // The fire-and-forget promise settles asynchronously; wait briefly.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plaidEvent: "SYNC_UPDATES_AVAILABLE",
+          plaidItemId: expect.any(String),
+          err: expect.anything(),
+        }),
+        expect.stringContaining("dispatch failed"),
+      );
+      await app.close();
+    } finally {
+      logErrorSpy.mockRestore();
+    }
   });
 });
