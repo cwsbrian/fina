@@ -7,6 +7,7 @@ import { lockPlaidItem, SyncLockHeld } from "./lock.js";
 import { HttpError } from "../auth/context.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { clearScheduleMatch } from "../schedules/cleanup.js";
+import { logWarn } from "../logger.js";
 
 // `skipped` carries the partial counters from any pages that DID commit
 // before the lock was lost (final-tx race) — the page-level commits are
@@ -231,10 +232,10 @@ export async function upsertAdded(
           data: { amount: newAmount },
         });
       } else {
-        console.warn("plaid sync promotion: unexpected allocation count", {
-          txId: promotion.id,
-          count: promotion.allocations.length,
-        });
+        logWarn(
+          {},
+          `plaid sync promotion: unexpected allocation count txId=${promotion.id} count=${promotion.allocations.length}`,
+        );
       }
       await tx.transaction.update({
         where: { id: promotion.id },

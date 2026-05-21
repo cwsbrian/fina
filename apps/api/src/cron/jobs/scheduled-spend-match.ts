@@ -1,6 +1,9 @@
 import { prisma } from "../../db.js";
 import { matchScheduledSpends } from "../../schedules/match.js";
 import type { Env } from "../../env.js";
+import { logInfo, logError } from "../../logger.js";
+
+const CRON_NAME = "scheduled-spend-match";
 
 /**
  * Iterate active workspaces and run match. Errors per workspace are caught
@@ -17,8 +20,14 @@ export async function runScheduledSpendMatch(_env: Env): Promise<void> {
       totalMatched += r.matched;
       totalUnresolved += r.unresolved;
     } catch (e) {
-      console.error("scheduled-spend-match: workspace failed", { workspaceId: ws.id, err: e });
+      logError(
+        { cron: CRON_NAME, workspaceId: ws.id, err: e },
+        "scheduled-spend-match: workspace failed",
+      );
     }
   }
-  console.info("scheduled-spend-match: complete", { totalMatched, totalUnresolved });
+  logInfo(
+    { cron: CRON_NAME },
+    `scheduled-spend-match complete — totalMatched=${totalMatched} totalUnresolved=${totalUnresolved}`,
+  );
 }

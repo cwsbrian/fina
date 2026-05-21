@@ -12,8 +12,9 @@ vi.mock("../src/cron/jobs/cleanup-events.js", () => ({ runCleanupEvents: vi.fn()
 vi.mock("../src/cron/jobs/scheduled-spend-match.js", () => ({ runScheduledSpendMatch: vi.fn() }));
 
 import { Cron } from "croner";
-import { startScheduler, stopScheduler } from "../src/cron/scheduler.js";
+import { startScheduler, stopScheduler, safe } from "../src/cron/scheduler.js";
 import { runDailyRefresh } from "../src/cron/jobs/daily-refresh.js";
+import * as loggerMod from "../src/logger.js";
 
 const env = {
   NODE_ENV: "test" as const,
@@ -70,18 +71,69 @@ describe("scheduler", () => {
     let capturedCallback: (() => Promise<void>) | undefined;
     vi.mocked(Cron).mockImplementationOnce((_expr, _opts, fn) => {
       capturedCallback = fn as () => Promise<void>;
-      return { stop: vi.fn() };
+      return { stop: vi.fn() } as unknown as Cron;
     });
 
     vi.mocked(runDailyRefresh).mockRejectedValueOnce(new Error("job failed"));
     startScheduler({ ...env, CRON_ENABLED: true });
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
     await expect(capturedCallback?.()).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(
-      "cron job uncaught",
-      expect.objectContaining({ jobName: "daily-refresh" }),
+      expect.objectContaining({ cron: "daily-refresh", event: "fail" }),
+      expect.any(String),
     );
     errorSpy.mockRestore();
+  });
+});
+
+describe("scheduler structured logs", () => {
+  it("emits cron.event=start and cron.event=success on a successful run", async () => {
+    const spyInfo = vi.spyOn(loggerMod, "logInfo").mockImplementation(() => {});
+
+    await safe("daily-refresh", async () => {
+      // no-op success
+    });
+
+    expect(spyInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ cron: "daily-refresh", event: "start" }),
+      expect.any(String),
+    );
+    expect(spyInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cron: "daily-refresh",
+        event: "success",
+        durationMs: expect.any(Number),
+      }),
+      expect.any(String),
+    );
+    spyInfo.mockRestore();
+  });
+
+  it("emits cron.event=fail with durationMs+err when the job throws", async () => {
+    const spyInfo = vi.spyOn(loggerMod, "logInfo").mockImplementation(() => {});
+    const spyError = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
+
+    const boom = new Error("explode");
+    await safe("retry-unprocessed", async () => {
+      throw boom;
+    });
+
+    // start is still emitted before the throw.
+    expect(spyInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ cron: "retry-unprocessed", event: "start" }),
+      expect.any(String),
+    );
+    expect(spyError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cron: "retry-unprocessed",
+        event: "fail",
+        durationMs: expect.any(Number),
+        err: boom,
+      }),
+      expect.any(String),
+    );
+    spyInfo.mockRestore();
+    spyError.mockRestore();
   });
 });

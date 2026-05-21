@@ -1,5 +1,8 @@
 import { prisma } from "../../db.js";
 import type { Env } from "../../env.js";
+import { logInfo } from "../../logger.js";
+
+const CRON_NAME = "cleanup-events";
 
 // CRON_EVENT_TTL_DAYS is optional (| undefined) in Env — always apply this default.
 // Callers that add new TTL-consuming jobs must also use `?? DEFAULT_TTL_DAYS` or
@@ -14,5 +17,8 @@ export async function runCleanupEvents(env: Env): Promise<void> {
   const r = await prisma.plaidWebhookEvent.deleteMany({
     where: { receivedAt: { lt: cutoff } },
   });
-  console.info("cleanup-events complete", { deleted: r.count, cutoff });
+  logInfo(
+    { cron: CRON_NAME },
+    `cleanup-events complete — deleted=${r.count} cutoff=${cutoff.toISOString()}`,
+  );
 }

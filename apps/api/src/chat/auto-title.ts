@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { callTitleLLM } from "./auto-title-llm.js";
 import type { Env } from "../env.js";
+import { logWarn } from "../logger.js";
 
 const MAX_LEN = 200; // matches chat_threads.title TEXT(200) cap
 
@@ -29,7 +30,7 @@ export function cleanTitle(raw: string): string | null {
 }
 
 // Fire-and-forget. Caller does `void generateAndPersistThreadTitle(...)`.
-// On any failure, logs via console.warn and resolves — never throws.
+// On any failure, logs via logWarn and resolves — never throws.
 // The DB update uses `WHERE title IS NULL` so a manual PATCH during the
 // async window is preserved. Auth is enforced at the route layer
 // (thread.userId === session.userId), so the conditional update needs
@@ -48,6 +49,6 @@ export async function generateAndPersistThreadTitle(
       data: { title: cleaned, updatedAt: new Date() },
     });
   } catch (err) {
-    console.warn("auto-title failed", { threadId, err });
+    logWarn({ threadId, err }, "auto-title failed");
   }
 }

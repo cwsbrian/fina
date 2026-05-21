@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { dispatchTool } from "../src/chat/dispatcher.js";
 import type { ToolContext, ToolDef } from "../src/chat/tools/types.js";
+import * as loggerModule from "../src/logger.js";
 
 const FAKE_CTX = { env: {}, workspaceId: "ws1", userId: "u1" } as ToolContext;
 
@@ -49,9 +50,13 @@ describe("dispatchTool", () => {
   });
 
   it("catches tool throws and returns error without rethrow", async () => {
-    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const spy = vi.spyOn(loggerModule, "logError").mockImplementation(() => {});
     const res = await dispatchTool(FAKE_CTX, "boom", {}, [exploder]);
     expect(res).toEqual({ ok: false, error: "kapow" });
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ tool: "boom" }),
+      "chat tool failed",
+    );
     spy.mockRestore();
   });
 });

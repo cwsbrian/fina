@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@fastify/cors": "^11.2.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^10.3.0",
     "@fastify/sensible": "^6.0.1",
     "@google/genai": "^1",
     "@prisma/client": "^5.22.0",
@@ -23,6 +25,7 @@
     "croner": "^10.0.1",
     "fastify": "^5.0.0",
     "jose": "^6",
+    "pino": "^10.3.1",
     "plaid": "^42",
     "resend": "^6.12.3",
     "zod": "^3.23.8",

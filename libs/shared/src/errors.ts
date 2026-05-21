@@ -72,6 +72,9 @@ export const API_ERROR_CODES = [
   // Chat
   "chat_provider_error",
   "not_member",
+
+  // Rate limiting
+  "rate_limit_exceeded",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

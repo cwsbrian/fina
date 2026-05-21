@@ -6,12 +6,14 @@ import {
   ChatMessageBody,
 } from "@fina/shared";
 import { HttpError, requireSession } from "../auth/context.js";
+import { withRateLimit } from "../auth/rate-limit.js";
 import { effectiveTier } from "../auth/tier.js";
 import { generateAndPersistThreadTitle } from "../chat/auto-title.js";
 import type { PresentationBlock } from "../chat/blocks.js";
 import { threadsService } from "../chat/threads.js";
 import { processChatTurn } from "../chat/turn.js";
 import { prisma } from "../db.js";
+import { logError, logWarn } from "../logger.js";
 
 function serializeThread(t: {
   id: string; userId: string; workspaceId: string | null; title: string | null;
@@ -180,7 +182,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post("/chat/threads/:tid/messages", async (req, reply) => {
+  app.post("/chat/threads/:tid/messages", { config: withRateLimit("chatMessages") }, async (req, reply) => {
     const params = req.params as { tid: string };
     const parsed = ChatMessageBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
@@ -271,7 +273,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           membership.role,
         );
       } catch (e) {
-        console.error("chat provider failed", { threadId: thread.id, err: e });
+        logError({ threadId: thread.id, err: e }, "chat provider failed");
         return reply.code(500).send({ error: "chat_provider_error" });
       }
 
@@ -311,7 +313,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
             });
           }
         } catch (err) {
-          console.warn("auto-title trigger gate failed", { threadId: thread.id, err });
+          logWarn({ threadId: thread.id, err }, "auto-title trigger gate failed");
         }
       }
 

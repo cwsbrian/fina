@@ -3,6 +3,7 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
+import { withRateLimit } from "../auth/rate-limit.js";
 import { effectiveTier } from "../auth/tier.js";
 import { plaidClient, mapPlaidError, PLAID_PRODUCTS, PLAID_COUNTRY_CODES } from "../plaid/client.js";
 import { storeAccessToken } from "../plaid/items.js";
@@ -56,7 +57,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post("/workspaces/:id/plaid/exchange", async (req, reply) => {
+  app.post("/workspaces/:id/plaid/exchange", { config: withRateLimit("plaidExchange") }, async (req, reply) => {
     const params = req.params as { id: string };
     const parsed = ExchangeBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });

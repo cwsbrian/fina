@@ -1,7 +1,10 @@
 import { prisma } from "../../db.js";
 import type { Env } from "../../env.js";
+import { logInfo } from "../../logger.js";
 import { dispatchWebhookSync } from "../../plaid/webhook-dispatch.js";
 import { checkBackgroundSyncGate } from "../tier-gate.js";
+
+const CRON_NAME = "retry-unprocessed";
 
 export async function runRetryUnprocessed(env: Env): Promise<void> {
   // 24h window: Plaid retries undelivered webhooks for up to 24h, so retrying
@@ -59,5 +62,8 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
     attempted++;
   }
 
-  console.info("retry-unprocessed complete", { found: events.length, attempted, gated });
+  logInfo(
+    { cron: CRON_NAME },
+    `retry-unprocessed complete — found=${events.length} attempted=${attempted} gated=${gated}`,
+  );
 }

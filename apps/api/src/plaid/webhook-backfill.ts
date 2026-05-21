@@ -2,6 +2,7 @@ import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { plaidClient, sanitizePlaidError } from "./client.js";
 import { readAccessToken } from "./items.js";
+import { logWarn, logError } from "../logger.js";
 
 /**
  * One-shot startup task: ensure every active Plaid item has its current
@@ -14,7 +15,7 @@ import { readAccessToken } from "./items.js";
  */
 export async function backfillWebhookUrls(env: Env): Promise<void> {
   if (!env.PLAID_WEBHOOK_URL) {
-    console.warn("backfillWebhookUrls: PLAID_WEBHOOK_URL not set, skipping");
+    logWarn({}, "backfillWebhookUrls: PLAID_WEBHOOK_URL not set, skipping");
     return;
   }
   const wantUrl = env.PLAID_WEBHOOK_URL;
@@ -41,7 +42,10 @@ export async function backfillWebhookUrls(env: Env): Promise<void> {
     } catch (e) {
       // sanitizePlaidError strips axios request config (which contains access_token)
       // from the logged object, preventing accidental token leakage in logs.
-      console.error("backfillWebhookUrls: failed for item", { itemId: item.id, err: sanitizePlaidError(e) });
+      logError(
+        { plaidItemId: item.id, err: sanitizePlaidError(e) },
+        "backfillWebhookUrls: failed for item",
+      );
     }
   }
 }

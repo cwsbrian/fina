@@ -14,6 +14,7 @@ export * from "./dto/chat.js";
 export * from "./dto/transactions.js";
 export * from "./dto/accounts.js";
 export * from "./dto/plaid.js";
+export * from "./dto/health.js";
 
 // Validators (pure helpers used by both API services and frontend forms)
 export * from "./validation/money.js";
@@ -34,3 +35,6 @@ export * from "./schemas/workspaces.js";
 
 // HTTP client factory
 export * from "./http/api-client.js";
+
+// Logging
+export * from "./logging.js";
