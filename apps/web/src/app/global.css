@@ -1,12 +1,17 @@
 :root {
-  --color-canvas: #f6f4ef;
-  --color-surface-soft: #efeae0;
-  --color-surface-strong: #e6e1d6;
+  /* App canvas + neutrals: match Fina Web App design tokens (white canvas,
+     cool grays). The cream #f6f4ef from the landing "Centered manifesto"
+     variant is local to that page (page.module.css), not global. */
+  --color-canvas: #ffffff;
+  --color-surface-soft: #f7f7f7;
+  --color-surface-strong: #eef0f3;
   --color-ink: #0a0b0d;
   --color-body: #5b616e;
+  --color-body-strong: #0a0b0d;
   --color-muted: #7c828a;
   --color-muted-soft: #a8acb3;
   --color-hairline: #dee1e6;
+  --color-hairline-soft: #eef0f3;
   --color-accent: #d97743;
   --color-primary: #3b7bff;
   --color-primary-active: #2a64db;
