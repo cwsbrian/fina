@@ -27,6 +27,15 @@ The "user has never sent a message to this thread" rule and the
 column (`workspaceId IS NULL`), which is also the brief's selection
 predicate. No separate `type` field or message-count query.
 
+### Glossary
+
+- **Binding** — the act of setting `chat_threads.workspaceId` on a
+  previously-null thread.
+- **Bound** — a thread whose `workspaceId IS NOT NULL`. All subsequent
+  messages in this thread must use the same workspaceId.
+- **Unbound** — a thread whose `workspaceId IS NULL`. Daily brief
+  (Plan 2B) targets these. The user's first message will bind it.
+
 ### What does NOT change
 
 - The LLM dispatcher is still **workspace-scoped per turn**: it sees
@@ -54,6 +63,9 @@ predicate. No separate `type` field or message-count query.
   the thread to it.
 - Thread list returns the user's threads regardless of which workspace
   they ended up bound to (or whether bound at all).
+- `apps/api/src/chat/auto-title.ts` signature drops `workspaceId`
+  (the route no longer has it; thread id is sufficient for the
+  conditional UPDATE). See §9.3.
 
 ### Out of scope
 
@@ -565,6 +577,13 @@ behavior and a hard reject in `POST /workspaces`.
   on their own thread returns 402 `upgrade_required` (matches §5.5).
 - Pro-gate: GET endpoints succeed for non-Pro users (Lite reading
   daily-brief threads is the intended UX).
+- Concurrent `DELETE /chat/threads/:tid` + `POST .../messages` on the
+  same unbound thread: either the archive wins (POST returns 404) or
+  the bind wins (DELETE archives the now-bound thread); the system
+  never ends up with an archived-but-bound thread that was visible
+  bound. (Exercises the §6.1 `$transaction` wrap.)
+- Missing `workspaceId` in `POST /chat/threads/:tid/messages` body
+  returns 400 `invalid_body`.
 
 ### 8.1.1 Migration smoke
 
@@ -572,6 +591,18 @@ A migration test that seeds a non-empty chat history (a thread + a
 few messages + one action_intent) and then runs the migration —
 asserts the chat tables come up empty, `action_intents` is empty,
 and `audit_events` rows are preserved (verify total count unchanged).
+
+Also assert the new index exists:
+
+```sql
+SELECT indexname FROM pg_indexes WHERE indexname = 'chat_threads_userId_archivedAt_lastMessageAt_idx';
+```
+
+And assert `EXPLAIN` on the listing query (`SELECT * FROM chat_threads
+WHERE userId = ? AND archivedAt IS NULL ORDER BY lastMessageAt DESC
+NULLS LAST LIMIT 50`) plans an Index Scan / Index Only Scan against
+that index — not a Seq Scan. (Plan 1B + 1E set this precedent for
+index-coverage smoke tests.)
 
 ### 8.2 Removed tests
 
@@ -650,7 +681,17 @@ multi-workspace will need to revisit (probably move bound threads to
 `workspaceId = NULL` instead of cascading, so the user keeps
 read-only history).
 
-### 9.7 v2 friction not addressed
+### 9.7 Transport policy silent-fallback
+
+`X-Workspace-Id` header is silently ignored on `/chat/*` routes
+(§5.1). A stale frontend client that still sets the header AND a
+mismatching body `workspaceId` will see the server use the body —
+the header value is discarded without an error. Acceptable: the body
+is authoritative and the user's actual intent travels there. Document
+this for the frontend worktree so it knows it can stop sending the
+header without server changes.
+
+### 9.8 v2 friction not addressed
 
 When v2 lifts the 1-workspace constraint, the lazy-binding model
 needs a small extension: a brief might need to mention multiple
