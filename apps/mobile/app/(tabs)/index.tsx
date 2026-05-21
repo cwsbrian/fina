@@ -2,18 +2,11 @@ import { useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ActivityIndicator } from "react-native";
 import { router } from "expo-router";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import type { MeDTO as Me, WorkspaceSummary as Workspace } from "@fina/shared";
 import { useSession, signOut } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { clearActiveWorkspaceId } from "../../src/workspace/active";
-
-type Me = {
-  user: { id: string; email: string; tz: string; locale: string };
-  tier: "free" | "lite" | "pro";
-  trial: { active: boolean; endsAt: string | null };
-};
-
-type Workspace = { id: string; name: string; role: string };
 
 export default function Home() {
   const { data: session } = useSession();

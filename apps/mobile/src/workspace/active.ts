@@ -1,6 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ACTIVE_WORKSPACE_STORAGE_KEY } from "@fina/shared";
 
-const KEY = "fina.activeWorkspaceId";
+const KEY = ACTIVE_WORKSPACE_STORAGE_KEY;
 
 let cached: string | null = null;
 
