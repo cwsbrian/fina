@@ -108,15 +108,16 @@ export type LogContext = {
   tool?: string;
   /** Cron */
   cron?: string;
-  event?: "start" | "skip" | "protected_skip" | "success" | "fail";
+  event?: "start" | "protected_skip" | "success" | "fail";
   durationMs?: number;
   /** Plaid */
   plaidEvent?: string;
   plaidItemId?: string;
   /** Audit log linkage */
   auditAction?: string;
-  /** Error context — arbitrary error shape allowed under `err` */
-  err?: unknown;
+  /** Error context. Pino accepts Error directly (serializes message +
+   *  stack); pass other shapes if no Error is available. */
+  err?: Error | unknown;
 };
 ```
 
@@ -155,10 +156,37 @@ accepts a Pino instance directly and `app.log` becomes the same logger.
 
 `@fastify/rate-limit` registered with a route-aware policy. The plugin
 supports `config: { rateLimit: ... }` on individual routes; we expose a
-helper `withRateLimit(key: RateLimitKey)` in `src/auth/rate-limit.ts`:
+helper `withRateLimit(key: RateLimitKey)` in `src/auth/rate-limit.ts`.
+
+**Session id extraction is async** (Better Auth's `getSession` returns
+a Promise). Two equivalent options — the implementation plan picks
+one and sticks with it:
+
+**Option A (preferred)** — a Fastify `onRequest` hook resolves the
+session and decorates `req.userId` BEFORE rate-limit runs. The
+`keyGenerator` then reads `req.userId` synchronously:
+
+```ts
+// auth/session-decorator.ts
+app.addHook("onRequest", async (req) => {
+  try {
+    const s = await app.fina.auth.api.getSession({ headers: buildHeaders(req) });
+    if (s?.user) (req as any).userId = s.user.id;
+  } catch { /* leave undefined; route auth handles */ }
+});
+```
+
+**Option B** — `keyGenerator` itself is async (the plugin accepts
+`string | Promise<string>`). Skip the decorator, but every keyed
+route pays the session-lookup cost twice (once for the limiter, once
+for `requireSession`). Plan-phase picks A unless there's a reason.
 
 ```ts
 import { RATE_LIMITS, type RateLimitKey } from "@fina/shared";
+
+const userKey = (req: FastifyRequest): string =>
+  (req as { userId?: string }).userId ?? `ip:${req.ip}`;
+const ipKey = (req: FastifyRequest): string => `ip:${req.ip}`;
 
 export function withRateLimit(key: RateLimitKey) {
   const policy = RATE_LIMITS[key];
@@ -166,21 +194,21 @@ export function withRateLimit(key: RateLimitKey) {
     rateLimit: {
       max: policy.max,
       timeWindow: policy.windowMs,
-      keyGenerator: key === "chatMessages" || key === "plaidExchange"
-        ? userKeyGenerator   // session-based
-        : ipKeyGenerator,    // IP-based
+      keyGenerator:
+        key === "chatMessages" || key === "plaidExchange" ? userKey : ipKey,
     },
   };
 }
 ```
 
-User-keyed routes pull the session id from the request via Better Auth
-cookie reading (same path as `requireSession`). On unauth requests the
-plugin falls back to IP keying.
+On unauth requests `userKey` falls back to IP — fine because the
+route itself returns 401 before the limit window matters.
 
-Test environment: `process.env.NODE_ENV === "test"` ⇒ plugin globally
-disabled via `skipOnError + max: Infinity` on registration. Rate limit
-integration tests opt in by setting an env var that toggles.
+**Test environment**: skip plugin registration entirely when
+`process.env.NODE_ENV === "test" && process.env.RATE_LIMIT_TEST !== "1"`.
+Rate-limit integration tests set `RATE_LIMIT_TEST=1` in their env
+block to opt in. Avoids the `skipOnError` / `max: Infinity` ambiguity
+flagged by R1.
 
 ### 3.3 Helmet (`server.ts`)
 
@@ -194,9 +222,27 @@ Default Helmet config plus:
 
 Three routes, all unauthenticated:
 - `GET /live` — returns `{ status: "ok" }` with 200, always.
-- `GET /ready` — runs `prisma.$queryRaw\`SELECT 1\`` with a 1s timeout. On
-  success returns `HealthDTO` with `checks.db: "ok"` and 200. On failure
-  returns the same DTO with `checks.db: "down"` and 503.
+- `GET /ready` — runs `prisma.$queryRaw\`SELECT 1\`` with a 1s timeout.
+  Prisma doesn't accept an `AbortSignal`, so the timeout is a manual
+  `Promise.race`:
+
+  ```ts
+  const dbCheck = Promise.race([
+    prisma.$queryRaw<[{ "?column?": number }]>`SELECT 1`,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("db_timeout")), 1000),
+    ),
+  ]);
+  try {
+    await dbCheck;
+    return reply.code(200).send({ status: "ok", checks: { db: "ok" } });
+  } catch {
+    return reply.code(503).send({ status: "degraded", checks: { db: "down" } });
+  }
+  ```
+
+  On success returns `HealthDTO` with `checks.db: "ok"` and 200. On
+  failure returns the same DTO with `checks.db: "down"` and 503.
 - `GET /health` — alias for `/ready` (back-compat for existing LB configs).
 
 ### 3.5 Process handlers (`main.ts`)
@@ -238,7 +284,14 @@ const envSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   // …
 }).refine(
-  (e) => e.NODE_ENV !== "production" || (e.RESEND_API_KEY && !e.RESEND_API_KEY.startsWith("re_dev_") && e.RESEND_API_KEY !== "re_..."),
+  (e) => {
+    if (e.NODE_ENV !== "production") return true;
+    if (!e.RESEND_API_KEY) return false;
+    // Real Resend keys all start with "re_" and are long (~30+ chars).
+    // The doc placeholder "re_..." and any dev "re_dev_*" stub get rejected
+    // because they don't meet the length bar.
+    return e.RESEND_API_KEY.startsWith("re_") && e.RESEND_API_KEY.length >= 20;
+  },
   { message: "RESEND_API_KEY must be a real Resend key in production", path: ["RESEND_API_KEY"] },
 );
 ```
@@ -283,29 +336,31 @@ Response still returns 200 to prevent Plaid retry storms.
 
 ## 4. console.* → logger migration map
 
-The audit grep `grep -rn 'console\.' apps/api/src/` reports ~33 lines.
-The breakdown below covers the major files. The implementer should
-re-run the grep at task start and migrate every match — the table is
-illustrative of where the work lives.
+`grep -rn 'console\.' apps/api/src/` reports ~32 lines at spec time.
+The implementer MUST re-run the grep at task start and migrate every
+match. The file list below is illustrative, NOT authoritative — file
+names and line numbers will drift.
 
-| File | Calls | Replacement context |
-|---|---|---|
-| `audit/service.ts:100` | 1× `console.error` | `{ auditAction, err }` |
-| `cron/scheduler.ts` | 3× `console.warn/error` | `{ cron, event, err }` |
-| `cron/jobs/daily-refresh.ts` | 4× | `{ cron: "daily-refresh", … }` |
-| `cron/jobs/retry-unprocessed-events.ts` | 2× | `{ cron: "retry-unprocessed-events", … }` |
-| `cron/jobs/cleanup-events.ts` | 2× | `{ cron: "cleanup-events", … }` |
-| `cron/jobs/scheduled-spend-match.ts` | 2× | `{ cron: "scheduled-spend-match", … }` |
-| `chat/turn.ts` | 1× `console.error` | `{ threadId, err }` |
-| `chat/dispatcher.ts:24` | 1× | `{ tool, err }` |
-| `routes/chat.ts:274,314` | 2× | `{ threadId, err }` |
-| `chat/auto-title.ts:51` | 1× | `{ threadId, err }` |
-| `plaid/sync.ts:234` | 1× | `{ plaidEvent, err }` |
-| `plaid/webhook-dispatch.ts:34,55` | 2× | `{ plaidEvent, plaidItemId, err }` |
-| `plaid/webhook-backfill.ts:17,44` | 2× | `{ plaidItemId, err }` |
-| `email/send.ts:30` | 1× (dev fallback) | leave as `console.log` — intentional dev-only signal |
+Known clusters:
+- `audit/service.ts` (1× error)
+- `cron/scheduler.ts` (3× warn/error) — emit `{ cron, event, err }`
+- `cron/jobs/daily-refresh.ts` (multiple)
+- `cron/jobs/retry-unprocessed.ts` (multiple) — note file name has no
+  `-events` suffix
+- `cron/jobs/cleanup-events.ts`
+- `cron/jobs/scheduled-spend-match.ts`
+- `chat/turn.ts` (a handful)
+- `chat/dispatcher.ts`
+- `routes/chat.ts` (auto-title trigger paths)
+- `chat/auto-title.ts`
+- `plaid/sync.ts`, `plaid/webhook-dispatch.ts`, `plaid/webhook-backfill.ts`, `plaid/webhook-item.ts`
+- `categorize/service.ts`
+- `main.ts` (process-handler bootstrap — these are the new fatal logs added by §3.5)
 
-The lone surviving `console.log` is the dev-mode email fallback (`email/send.ts:30`). It writes magic links to stdout when `RESEND_API_KEY` is unset. Marked with an inline comment explaining the exception so a future audit doesn't sweep it.
+The lone surviving `console.log` is the dev-mode email fallback in
+`email/send.ts`. It writes magic links to stdout when
+`RESEND_API_KEY` is unset. Marked with an inline comment explaining
+the exception so a future audit sweep doesn't drag it in.
 
 ---
 
@@ -463,13 +518,42 @@ When `PRISMA_CONNECTION_LIMIT=10` and vitest singleFork runs 101 test
 files sequentially, the same Prisma instance is reused. No contention.
 For parallel tests (not enabled today) the limit would matter.
 
+### 9.9 Process exit drops in-flight requests
+
+`unhandledRejection` / `uncaughtException` handlers exit with code 1
+after a 100ms log flush. Any active Fastify request is dropped
+mid-flight. This is intentional — uncaught errors mean the process
+is in an unknown state and continuing to serve traffic could corrupt
+data. Health probes notice the dead pod and re-route. Documented here
+so a reviewer doesn't propose `app.close()` integration.
+
+### 9.10 Logger PII
+
+`LogContext` carries `userId` + `workspaceId` on every keyed log
+line. These are stable internal cuids (not email or other PII) and
+match the values already written to `audit_events`. Safe to ship to
+external log aggregators under the same redaction policy as audit
+data. Email, password, raw merchant strings, and Plaid access tokens
+must never be logged — enforced by code review, not by the type.
+
+### 9.11 Helmet CSP impact
+
+The API serves no HTML, so `default-src 'none'` is safe for the API's
+own responses. `crossOriginResourcePolicy: "same-site"` is the right
+default for production where api + web share the parent domain
+(`api.fina.app` ↔ `fina.app`). Dev environments running web on a
+different origin (Tailscale + LAN port) already rely on `cors` with
+`DEV_ORIGINS` allowing the dev hosts — the CORP header doesn't block
+JSON fetches, only resource embedding, so XHR continues to work.
+
 ---
 
 ## 10. Success criteria
 
 When this plan ships:
 
-- `npm install` shows `@fastify/rate-limit` and `@fastify/helmet` in dependencies.
+- `pnpm list --filter @fina/api @fastify/rate-limit @fastify/helmet`
+  shows both packages installed.
 - `pnpm typecheck` passes across api/web/mobile/shared with the new
   shared exports.
 - All 4 shared additions visible in `@fina/shared`:
@@ -482,7 +566,8 @@ When this plan ships:
   a clear error.
 - `/live` always returns 200; `/ready` returns 503 if `prisma.$queryRaw\`SELECT 1\``
   fails.
-- 31st `POST /chat/threads/:tid/messages` from one user in a minute
-  returns 429 + `rate_limit_exceeded`.
+- 31st sequential `POST /chat/threads/:tid/messages` (same session
+  cookie) from one user inside a 60-second window returns 429 +
+  `rate_limit_exceeded`.
 - A deliberate `throw` in a route logs `fatal` then exits the process
   with code 1.
