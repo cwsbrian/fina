@@ -1,21 +1,29 @@
 import type { ChatThread } from "@prisma/client";
 import { prisma } from "../db.js";
 
+// User-scoped CRUD. Lazy workspace binding is the route layer's
+// responsibility — see routes/chat.ts POST /chat/threads/:tid/messages.
 export const threadsService = {
-  async create(input: { workspaceId: string; title?: string | null }): Promise<ChatThread> {
+  async create(input: { userId: string; title?: string | null }): Promise<ChatThread> {
     return prisma.chatThread.create({
-      data: { workspaceId: input.workspaceId, title: input.title ?? null },
+      data: {
+        userId: input.userId,
+        workspaceId: null,
+        title: input.title ?? null,
+      },
     });
   },
 
-  async list(input: { workspaceId: string; includeArchived: boolean; limit: number }): Promise<ChatThread[]> {
+  async list(input: {
+    userId: string;
+    includeArchived: boolean;
+    limit: number;
+  }): Promise<ChatThread[]> {
     return prisma.chatThread.findMany({
       where: {
-        workspaceId: input.workspaceId,
+        userId: input.userId,
         ...(input.includeArchived ? {} : { archivedAt: null }),
       },
-      // Postgres' default for `DESC` is NULLS FIRST. We want empty threads (lastMessageAt is null)
-      // sorted last so active conversations show up first.
       orderBy: [
         { lastMessageAt: { sort: "desc", nulls: "last" } },
         { createdAt: "desc" },
@@ -25,15 +33,19 @@ export const threadsService = {
     });
   },
 
-  async findOwned(input: { threadId: string; workspaceId: string }): Promise<ChatThread | null> {
+  async findOwned(input: { threadId: string; userId: string }): Promise<ChatThread | null> {
     return prisma.chatThread.findFirst({
-      where: { id: input.threadId, workspaceId: input.workspaceId },
+      where: { id: input.threadId, userId: input.userId },
     });
   },
 
-  async patch(input: { threadId: string; workspaceId: string; title: string | null }): Promise<ChatThread | null> {
+  async patch(input: {
+    threadId: string;
+    userId: string;
+    title: string | null;
+  }): Promise<ChatThread | null> {
     const existing = await prisma.chatThread.findFirst({
-      where: { id: input.threadId, workspaceId: input.workspaceId },
+      where: { id: input.threadId, userId: input.userId },
       select: { id: true },
     });
     if (!existing) return null;
@@ -43,14 +55,13 @@ export const threadsService = {
     });
   },
 
-  async archive(input: { threadId: string; workspaceId: string }): Promise<ChatThread | null> {
+  async archive(input: { threadId: string; userId: string }): Promise<ChatThread | null> {
     const existing = await prisma.chatThread.findFirst({
-      where: { id: input.threadId, workspaceId: input.workspaceId },
+      where: { id: input.threadId, userId: input.userId },
       select: { id: true, archivedAt: true },
     });
     if (!existing) return null;
     if (existing.archivedAt) {
-      // Already archived — return current row unchanged.
       return prisma.chatThread.findFirstOrThrow({ where: { id: existing.id } });
     }
     return prisma.chatThread.update({
