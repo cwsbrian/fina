@@ -410,7 +410,7 @@ No model changes. No new tables. Behaviour additions:
   logger.info start → job → logger.info/error end.
 - Plaid webhook → JWKS verify (unchanged) → respond 200 immediately →
   fire-and-forget dispatch with logger-bound `.catch`.
-- Process crash → handler logs fatal → 100ms drain → exit 1.
+- Process crash → handler logs fatal → `logger.flush(cb)` → exit 1.
 
 ---
 
@@ -460,7 +460,7 @@ doesn't pile up requests in the readiness probe path; the racing
 ### 6.4 Process handler ordering
 
 `unhandledRejection` fires before `uncaughtException` for promise
-rejections that surface as throws. Both handlers log + setTimeout + exit
+rejections that surface as throws. Both handlers log + flush + exit
 identically, so the order doesn't matter for correctness.
 
 ---
@@ -592,7 +592,7 @@ For parallel tests (not enabled today) the limit would matter.
 ### 9.9 Process exit drops in-flight requests
 
 `unhandledRejection` / `uncaughtException` handlers exit with code 1
-after a 100ms log flush. Any active Fastify request is dropped
+after `logger.flush(cb)` resolves. Any active Fastify request is dropped
 mid-flight. This is intentional — uncaught errors mean the process
 is in an unknown state and continuing to serve traffic could corrupt
 data. Health probes notice the dead pod and re-route. Documented here
