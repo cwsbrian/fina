@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { initials, type MeDTO as Me } from "@fina/shared";
-import { signOut } from "../../../../auth/client";
+import {
+  initials,
+  MIN_PASSWORD_LENGTH,
+  meetsPasswordPolicy,
+  type MeDTO as Me,
+} from "@fina/shared";
+import { authClient, signOut } from "../../../../auth/client";
 import { apiFetch } from "../../../../lib/api";
 import { WebIcon } from "../../../../components/WebIcon";
 import styles from "../settings.module.css";
@@ -17,7 +22,16 @@ export default function AccountPage() {
   const [email, setEmail] = useState("");
   const [tz, setTz] = useState("America/Toronto");
   const [locale, setLocale] = useState("en");
+
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileErr, setProfileErr] = useState<string | null>(null);
+
   const [changingPw, setChangingPw] = useState(false);
+  const [currentPw, setCurrentPw] = useState("");
+  const [newPw, setNewPw] = useState("");
+  const [confirmPw, setConfirmPw] = useState("");
+  const [pwBusy, setPwBusy] = useState(false);
+  const [pwErr, setPwErr] = useState<string | null>(null);
 
   useEffect(() => {
     apiFetch<Me>("/me")
@@ -46,29 +60,90 @@ export default function AccountPage() {
   const onDiscard = () => {
     setName(me.user.name ?? "");
     setEmail(me.user.email);
+    setProfileErr(null);
   };
 
-  const onSave = () => {
-    // TODO: wire to /users/me PATCH endpoint when available
-    alert("Profile save isn't wired to backend yet.");
+  const onSave = async () => {
+    if (savingProfile) return;
+    setProfileErr(null);
+    setSavingProfile(true);
+    try {
+      // Better Auth only edits the name today (email change goes through a
+      // separate verification flow we haven't wired). If/when email change
+      // lands we'll branch on emailChanging.
+      const trimmedName = name.trim();
+      const res = await authClient.updateUser({ name: trimmedName });
+      if (res.error) {
+        throw new Error(res.error.message ?? "Could not save profile");
+      }
+      setMe({ ...me, user: { ...me.user, name: trimmedName } });
+    } catch (e) {
+      setProfileErr(e instanceof Error ? e.message : "Could not save profile");
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const onChangePassword = async () => {
+    if (pwBusy) return;
+    setPwErr(null);
+    if (!meetsPasswordPolicy(newPw)) {
+      setPwErr(`New password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
+      return;
+    }
+    if (newPw !== confirmPw) {
+      setPwErr("New passwords don't match.");
+      return;
+    }
+    setPwBusy(true);
+    try {
+      const res = await authClient.changePassword({
+        currentPassword: currentPw,
+        newPassword: newPw,
+        revokeOtherSessions: true,
+      });
+      if (res.error) {
+        throw new Error(res.error.message ?? "Could not update password");
+      }
+      setChangingPw(false);
+      setCurrentPw("");
+      setNewPw("");
+      setConfirmPw("");
+    } catch (e) {
+      setPwErr(e instanceof Error ? e.message : "Could not update password");
+    } finally {
+      setPwBusy(false);
+    }
   };
 
   const onSignOutEverywhere = async () => {
-    if (!confirm("Sign out from all devices?")) return;
-    // TODO: wire to /api/auth/sessions DELETE or similar. For now sign out
-    // current session only.
+    if (!confirm("Sign out from all devices (including this one)?")) return;
+    try {
+      await authClient.revokeSessions();
+    } catch {
+      // Tolerate — the local signOut below still cleans up this device.
+    }
     await signOut();
     router.replace("/sign-in");
   };
 
-  const onDelete = () => {
+  const onDelete = async () => {
     if (
       !confirm(
         "Permanently delete your account and all data? This cannot be undone.",
       )
     )
       return;
-    alert("Account deletion isn't wired yet.");
+    try {
+      const res = await authClient.deleteUser({});
+      if (res.error) {
+        alert(res.error.message ?? "Could not delete account");
+        return;
+      }
+      router.replace("/");
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not delete account");
+    }
   };
 
   return (
@@ -175,12 +250,22 @@ export default function AccountPage() {
             </div>
           </div>
 
+          {profileErr && (
+            <div
+              className={styles.fieldHelper}
+              style={{ color: "var(--color-down)", marginTop: 12 }}
+            >
+              {profileErr}
+            </div>
+          )}
+
           {dirty && (
             <div className={styles.formActions}>
               <button
                 type="button"
                 className={`${styles.btn} ${styles.btnGhost}`}
                 onClick={onDiscard}
+                disabled={savingProfile}
               >
                 Discard
               </button>
@@ -188,8 +273,15 @@ export default function AccountPage() {
                 type="button"
                 className={`${styles.btn} ${styles.btnPrimary}`}
                 onClick={onSave}
+                disabled={
+                  savingProfile ||
+                  // Email change is server-validated separately; for now we
+                  // disable Save while email is dirty to avoid promising
+                  // something the API doesn't do yet.
+                  emailChanging
+                }
               >
-                Save changes
+                {savingProfile ? "Saving…" : "Save changes"}
               </button>
             </div>
           )}
@@ -241,6 +333,8 @@ export default function AccountPage() {
                 className={styles.input}
                 type="password"
                 autoComplete="current-password"
+                value={currentPw}
+                onChange={(e) => setCurrentPw(e.target.value)}
                 autoFocus
               />
             </div>
@@ -250,34 +344,51 @@ export default function AccountPage() {
                 className={styles.input}
                 type="password"
                 autoComplete="new-password"
-                placeholder="At least 8 characters"
+                placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+                value={newPw}
+                onChange={(e) => setNewPw(e.target.value)}
               />
             </div>
-            <div className={styles.field} style={{ marginBottom: 0 }}>
+            <div className={styles.field}>
               <label className={styles.fieldLabel}>Confirm new password</label>
               <input
                 className={styles.input}
                 type="password"
                 autoComplete="new-password"
+                value={confirmPw}
+                onChange={(e) => setConfirmPw(e.target.value)}
               />
             </div>
+            {pwErr && (
+              <div
+                className={styles.fieldHelper}
+                style={{ color: "var(--color-down)" }}
+              >
+                {pwErr}
+              </div>
+            )}
             <div className={styles.formActions}>
               <button
                 type="button"
                 className={`${styles.btn} ${styles.btnGhost}`}
-                onClick={() => setChangingPw(false)}
+                onClick={() => {
+                  setChangingPw(false);
+                  setCurrentPw("");
+                  setNewPw("");
+                  setConfirmPw("");
+                  setPwErr(null);
+                }}
+                disabled={pwBusy}
               >
                 Cancel
               </button>
               <button
                 type="button"
                 className={`${styles.btn} ${styles.btnPrimary}`}
-                onClick={() => {
-                  alert("Password change isn't wired yet.");
-                  setChangingPw(false);
-                }}
+                onClick={onChangePassword}
+                disabled={pwBusy || !currentPw || !newPw || !confirmPw}
               >
-                Update password
+                {pwBusy ? "Updating…" : "Update password"}
               </button>
             </div>
           </div>
