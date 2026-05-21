@@ -35,7 +35,7 @@ References this spec builds on:
 | `libs/shared/src/dto/subscription.ts` (new) | `SubscriptionDTO`, `SubscriptionStatus`, `SubscriptionSource` | `SubscriptionDTO = { tier: "lite" \| "pro"; status: SubscriptionStatus; currentPeriodEnd: string; cancelAtPeriodEnd: boolean; source: "stripe" }`. Status = `"trialing" \| "active" \| "past_due" \| "canceled" \| "unpaid" \| "incomplete" \| "incomplete_expired" \| "paused"` (mirrors Stripe; only the first three count as active for EffectiveTier). Source = `"stripe" \| "iap_apple" \| "iap_google"` (only `"stripe"` populated in v1). | `/me` response payload + `/settings/plan` rendering |
 | `libs/shared/src/dto/me.ts` (modify) | extend `MeDTO` | Add `subscription: SubscriptionDTO \| null` field | UI distinguishes "trial only" vs "trial + card on file" vs "paid, no trial" vs "past_due" |
 | `libs/shared/src/errors.ts` (modify) | extend `API_ERROR_CODES` | Add `payment_required`, `checkout_failed`, `portal_failed`, `webhook_invalid_signature`, `already_subscribed` | error codes for the new routes |
-| `libs/shared/src/schemas/billing.ts` (new) | `CheckoutBody` zod schema | `z.object({ tier: z.enum(["lite", "pro"]) })` | request body validation for `POST /billing/checkout`. `/billing/portal` and `/billing/sync` have no body. |
+| `libs/shared/src/schemas/billing.ts` (new) | `CheckoutBody`, `SyncBody` zod schemas | `CheckoutBody = z.object({ tier: z.enum(["lite", "pro"]) })`. `SyncBody = z.object({ sessionId: z.string().optional() })`. | request body validation for `POST /billing/checkout` and `POST /billing/sync`. `/billing/portal` has no body. |
 | `libs/shared/src/tier.ts` (verify, no change) | `EffectiveTier.source` already has `"paid"` | unchanged | keeps EffectiveTier focused on "what tier"; payment details live on `MeDTO.subscription` |
 
 Re-exported from `libs/shared/src/index.ts` so `apps/api` and `apps/web` import via `@fina/shared`.
@@ -193,7 +193,7 @@ UI decision matrix:
 |---|---|---|---|---|---|
 | POST | `/billing/checkout` | session required | `{ tier: "lite" \| "pro" }` (zod: `CheckoutBody`) | `{ url: string }` | 400 `invalid_body`, 409 `already_subscribed`, 500 `checkout_failed` |
 | POST | `/billing/portal` | session required | — | `{ url: string }` | 404 `portal_failed` (no customer yet), 500 `portal_failed` |
-| POST | `/billing/sync` | session required | — | `MeDTO` | 500 `checkout_failed` |
+| POST | `/billing/sync` | session required | `{ sessionId?: string }` (optional Stripe Checkout Session ID from the success redirect) | `MeDTO` | 500 `checkout_failed` |
 | POST | `/webhooks/stripe` | **unauth, Stripe-signed** | raw bytes | `{ ok: true }` | 400 `webhook_invalid_signature` |
 
 ### Price ↔ tier helpers (apps/api/src/stripe/pricing-map.ts)
@@ -218,7 +218,7 @@ const session = await stripe.checkout.sessions.create({
   client_reference_id: user.id,
   customer: user.stripeCustomerId ?? undefined,
   customer_email: user.stripeCustomerId ? undefined : user.email,
-  success_url: `${env.WEB_BASE_URL}/settings/plan?status=success`,
+  success_url: `${env.WEB_BASE_URL}/settings/plan?status=success&sessionId={CHECKOUT_SESSION_ID}`,
   cancel_url: `${env.WEB_BASE_URL}/settings/plan?status=cancel`,
   allow_promotion_codes: true,
   subscription_data: user.trialEndsAt && user.trialEndsAt > new Date()
@@ -250,16 +250,39 @@ Stripe Portal config (set in Stripe dashboard) enables: cancel subscription, upd
 
 Bridges the gap between Checkout success redirect and webhook delivery (webhook is usually fast but not guaranteed pre-redirect).
 
+Two code paths because on a user's FIRST Checkout, `stripeCustomerId` is still null until the webhook (or this sync) writes it:
+
 ```ts
 const user = await currentUser();
-if (!user.stripeCustomerId) return await buildMeDTO(user);   // nothing to sync
-const subs = await stripe.subscriptions.list({
-  customer: user.stripeCustomerId,
-  status: "all",
-  limit: 10,
-});
-for (const sub of subs.data) {
-  await upsertSubscription(sub, user.id);  // same helper webhook uses
+
+// Path A: caller passed the Checkout Session ID from ?sessionId=...
+// This works even when stripeCustomerId is still null — fetch the
+// session, extract customer + subscription, upsert. Covers the
+// "first Checkout, webhook hasn't landed" race.
+if (body.sessionId) {
+  const sess = await stripe.checkout.sessions.retrieve(body.sessionId, {
+    expand: ["subscription", "subscription.items.data.price"],
+  });
+  // Defence-in-depth: verify the session belongs to this user.
+  if (sess.client_reference_id !== user.id) {
+    throw new HttpError(403, "checkout_failed", "Session does not belong to caller");
+  }
+  if (sess.customer) await setStripeCustomerId(user.id, sess.customer as string);
+  if (sess.subscription) await upsertSubscription(sess.subscription, user.id);
+}
+
+// Path B: no sessionId (e.g. just refreshing /settings/plan). Sync
+// the customer's subscriptions list if a customer exists.
+const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+if (fresh.stripeCustomerId) {
+  const subs = await stripe.subscriptions.list({
+    customer: fresh.stripeCustomerId,
+    status: "all",
+    limit: 10,
+  });
+  for (const sub of subs.data) {
+    await upsertSubscription(sub, user.id);  // same helper webhook uses
+  }
 }
 return await buildMeDTO(user);
 ```
@@ -348,7 +371,10 @@ Local Stripe webhook forwarding for dev: `stripe listen --forward-to localhost:4
 useEffect(() => {
   const params = new URLSearchParams(location.search);
   if (params.get("status") === "success") {
-    apiFetch("/billing/sync", { method: "POST" })
+    apiFetch("/billing/sync", {
+      method: "POST",
+      body: JSON.stringify({ sessionId: params.get("sessionId") ?? undefined }),
+    })
       .then(() => router.replace("/settings/plan"))
       .then(refreshMe);
   } else {
