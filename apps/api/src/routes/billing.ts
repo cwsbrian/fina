@@ -158,7 +158,7 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
         }
         if (sess.subscription) {
           const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
-          await syncSubscriptionFromStripe(app.fina.env, subId, user.id);
+          await syncSubscriptionFromStripe(app.fina.env, subId, user.id, app.log);
         }
       }
 
@@ -171,7 +171,7 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
           limit: 10,
         });
         for (const sub of subs.data) {
-          await syncSubscriptionFromStripe(app.fina.env, sub.id, user.id);
+          await syncSubscriptionFromStripe(app.fina.env, sub.id, user.id, app.log);
         }
       }
 

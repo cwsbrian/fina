@@ -83,7 +83,7 @@ async function handleEvent(app: FastifyInstance, event: Stripe.Event): Promise<v
       }
       if (sess.subscription) {
         const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
-        await syncSubscriptionFromStripe(app.fina.env, subId, userId);
+        await syncSubscriptionFromStripe(app.fina.env, subId, userId, app.log);
       }
       return;
     }
@@ -97,7 +97,7 @@ async function handleEvent(app: FastifyInstance, event: Stripe.Event): Promise<v
         app.log.info({ eventId: event.id, customerId }, "no local user for customer; skipping");
         return;
       }
-      await syncSubscriptionFromStripe(app.fina.env, sub.id, userId);
+      await syncSubscriptionFromStripe(app.fina.env, sub.id, userId, app.log);
       return;
     }
     case "invoice.payment_failed":

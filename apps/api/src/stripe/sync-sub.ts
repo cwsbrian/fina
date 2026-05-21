@@ -3,6 +3,16 @@ import { prisma } from "../db.js";
 import { stripeClient } from "./client.js";
 import { tierForPriceId } from "./pricing-map.js";
 
+// Minimal logger contract — Pino's level methods + console both satisfy.
+type Logger = {
+  error: (obj: object, msg: string) => void;
+  warn?: (obj: object, msg: string) => void;
+};
+
+const consoleLogger: Logger = {
+  error: (obj, msg) => console.error(JSON.stringify({ ...obj, msg })),
+};
+
 /** Re-fetch a subscription from Stripe and UPSERT the local row.
  *
  * Used by every subscription-touching event handler (checkout.session.
@@ -18,6 +28,7 @@ export async function syncSubscriptionFromStripe(
   env: Env,
   subscriptionId: string,
   userId: string,
+  log: Logger = consoleLogger,
 ): Promise<{ status: string; tier: string } | null> {
   const stripe = stripeClient(env);
   const sub = await stripe.subscriptions.retrieve(subscriptionId, {
@@ -25,12 +36,12 @@ export async function syncSubscriptionFromStripe(
   });
   const priceId = sub.items.data[0]?.price.id;
   if (!priceId) {
-    console.error(`stripe sub ${sub.id} has no price`);
+    log.error({ subscriptionId: sub.id }, "stripe sub has no price");
     return null;
   }
   const tier = tierForPriceId(env, priceId);
   if (!tier) {
-    console.error(`stripe sub ${sub.id} has unknown price ${priceId}`);
+    log.error({ subscriptionId: sub.id, priceId }, "stripe sub has unknown price ID");
     return null;
   }
   const upserted = await prisma.subscription.upsert({
