@@ -860,9 +860,11 @@ In `apps/api/src/server.ts`:
 ```ts
 import rateLimit from "@fastify/rate-limit";
 import { RATE_LIMITS } from "@fina/shared";
-import { registerSessionDecorator, ipKey, userKey } from "./auth/session-decorator.js";
+import { registerSessionDecorator, ipKey } from "./auth/session-decorator.js";
 import { withRateLimit } from "./auth/rate-limit.js";
 ```
+
+Note: only `ipKey` is needed in `server.ts` (used as the global keyGenerator). `userKey` lives inside `auth/rate-limit.ts` where `withRateLimit` references it for `chatMessages` + `plaidExchange` buckets — don't re-import it here or `tsc` will flag it as unused.
 
 2. Pass `trustProxy` into the Fastify factory and configure registration order. Replace the existing `Fastify({ logger: ... })` block:
 
@@ -1146,9 +1148,11 @@ describe("health endpoints", () => {
     // that breaks spy restore under singleFork, leaving the next test
     // with a stubbed $queryRaw. Replace + finally-restore is the rule.
     const original = prisma.$queryRaw;
-    (prisma as unknown as { $queryRaw: unknown }).$queryRaw = () => {
-      throw new Error("simulated db down");
-    };
+    // Return a rejected Promise (not a sync throw) so the race in
+    // readyPayload actually runs against the rejecting branch instead
+    // of throwing before Promise.race constructs.
+    (prisma as unknown as { $queryRaw: unknown }).$queryRaw = () =>
+      Promise.reject(new Error("simulated db down"));
     try {
       const res = await app.inject({ method: "GET", url: "/ready" });
       expect(res.statusCode).toBe(503);
