@@ -229,7 +229,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       if ("newTxIds" in r && r.newTxIds.length > 0) {
         const newTxIds = r.newTxIds;
         void categorizeNewTransactions(app.fina.env, verifiedWsId, newTxIds).catch((e) => {
-          app.log.error({ err: e, plaidItemId, workspace: verifiedWsId }, "categorize after exchange failed");
+          app.log.error({ err: e, plaidItemId, workspaceId: verifiedWsId }, "categorize after exchange failed");
         });
       }
     } catch {
