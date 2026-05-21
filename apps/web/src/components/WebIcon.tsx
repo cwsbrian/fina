@@ -6,9 +6,17 @@ type IconName =
   | "lock"
   | "users"
   | "chevLeft"
+  | "chevDown"
   | "alert"
   | "clock"
-  | "arrowRight";
+  | "arrowRight"
+  | "bank"
+  | "card"
+  | "smartphone"
+  | "user"
+  | "logOut"
+  | "sparkle"
+  | "plus";
 
 type Props = {
   name: IconName;
@@ -103,6 +111,59 @@ function paths(name: IconName) {
         <>
           <line x1="5" y1="12" x2="19" y2="12" />
           <polyline points="12 5 19 12 12 19" />
+        </>
+      );
+    case "chevDown":
+      return <polyline points="6 9 12 15 18 9" />;
+    case "bank":
+      return (
+        <>
+          <line x1="3" y1="22" x2="21" y2="22" />
+          <line x1="6" y1="18" x2="6" y2="11" />
+          <line x1="10" y1="18" x2="10" y2="11" />
+          <line x1="14" y1="18" x2="14" y2="11" />
+          <line x1="18" y1="18" x2="18" y2="11" />
+          <polygon points="12 2 20 7 4 7 12 2" />
+        </>
+      );
+    case "card":
+      return (
+        <>
+          <rect x="2" y="5" width="20" height="14" rx="2" />
+          <line x1="2" y1="10" x2="22" y2="10" />
+        </>
+      );
+    case "smartphone":
+      return (
+        <>
+          <rect x="5" y="2" width="14" height="20" rx="2" />
+          <line x1="12" y1="18" x2="12" y2="18.01" />
+        </>
+      );
+    case "user":
+      return (
+        <>
+          <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+          <circle cx="12" cy="7" r="4" />
+        </>
+      );
+    case "logOut":
+      return (
+        <>
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+          <polyline points="16 17 21 12 16 7" />
+          <line x1="21" y1="12" x2="9" y2="12" />
+        </>
+      );
+    case "sparkle":
+      return (
+        <polygon points="12 2 13.5 7.5 19 9 13.5 10.5 12 16 10.5 10.5 5 9 10.5 7.5" />
+      );
+    case "plus":
+      return (
+        <>
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
         </>
       );
   }

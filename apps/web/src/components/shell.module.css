@@ -1,0 +1,254 @@
+.shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--color-canvas);
+}
+
+.nav {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--color-canvas);
+  border-bottom: 1px solid var(--color-hairline);
+}
+
+.navInner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--color-ink);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.brandMark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--color-primary);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  font-weight: 500;
+  letter-spacing: -0.6px;
+}
+
+.brandWord {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.4px;
+}
+
+.links {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+}
+
+.link {
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: transparent;
+  border: 0;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-body);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.link:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+}
+
+.linkActive {
+  background: var(--color-surface-strong);
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.tierBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--color-surface-strong);
+  color: var(--color-body);
+  border: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.tierBadge:hover { background: var(--color-hairline); }
+
+.tierBadgeTrial {
+  background: rgba(244, 176, 0, 0.14);
+  color: #7a5500;
+}
+
+.tierBadgeTrial:hover { background: rgba(244, 176, 0, 0.22); }
+
+.tierBadgePro {
+  background: rgba(59, 123, 255, 0.1);
+  color: var(--color-primary);
+}
+
+.tierBadgePro:hover { background: rgba(59, 123, 255, 0.18); }
+
+.tierDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.wsBtn,
+.avatarBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+  border: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.wsBtn:hover, .avatarBtn:hover { background: var(--color-surface-strong); }
+
+.wsBtnRole {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  color: var(--color-muted);
+}
+
+.avatarBtn {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 999px;
+  background: var(--color-ink);
+  color: #fff;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  letter-spacing: 0.3px;
+}
+
+.menu {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 8px;
+  min-width: 240px;
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(11, 15, 23, 0.08);
+  padding: 8px;
+  z-index: 50;
+}
+
+.menuHead {
+  padding: 8px 12px 10px;
+  border-bottom: 1px solid var(--color-hairline-soft, var(--color-hairline));
+  margin-bottom: 4px;
+}
+
+.menuHeadName {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.menuHeadMail {
+  font-size: 12px;
+  color: var(--color-muted);
+  margin-top: 1px;
+}
+
+.menuItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  font-size: 14px;
+  color: var(--color-body);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.menuItem:hover { background: var(--color-surface-soft); color: var(--color-ink); }
+
+.menuItemActive {
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+.menuItemDanger {
+  color: var(--color-down);
+}
+
+.menuItemDanger:hover {
+  background: rgba(207, 32, 47, 0.08);
+}
+
+.menuDivider {
+  height: 1px;
+  background: var(--color-hairline-soft, var(--color-hairline));
+  margin: 6px 0;
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+}
+
+.wsWrap {
+  position: relative;
+}
+
+.page {
+  flex: 1;
+}
