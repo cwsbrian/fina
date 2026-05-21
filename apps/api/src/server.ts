@@ -2,7 +2,11 @@ import Fastify, { type FastifyInstance } from "fastify";
 import helmet from "@fastify/helmet";
 import sensible from "@fastify/sensible";
 import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
+import { RATE_LIMITS } from "@fina/shared";
 import type { Env } from "./env.js";
+import { registerSessionDecorator, ipKey } from "./auth/session-decorator.js";
+import { withRateLimit } from "./auth/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
 import { meRoutes } from "./routes/me.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
@@ -31,6 +35,7 @@ declare module "fastify" {
 export async function buildApp(env: Env): Promise<FastifyInstance> {
   const app = Fastify({
     logger: env.NODE_ENV === "test" ? false : { level: "info" },
+    trustProxy: env.TRUST_PROXY,
   });
   const auth = createAuth(env);
   app.decorate("fina", { env, auth });
@@ -43,6 +48,27 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     frameguard: { action: "deny" },
   });
   await app.register(sensible);
+
+  // ORDER MATTERS: session-decorator MUST register before rate-limit so
+  // req.userId is populated when the plugin's keyGenerator runs.
+  registerSessionDecorator(app);
+
+  const isTest = env.NODE_ENV === "test";
+  const rateLimitEnabled = !isTest || env.RATE_LIMIT_TEST === "1";
+  if (rateLimitEnabled) {
+    await app.register(rateLimit, {
+      global: true,
+      max: RATE_LIMITS.globalDefault.max,
+      timeWindow: RATE_LIMITS.globalDefault.windowMs,
+      keyGenerator: ipKey,
+      errorResponseBuilder: (_req, ctx) => ({
+        statusCode: 429,
+        error: "rate_limit_exceeded",
+        message: `Rate limit exceeded. Retry in ${Math.ceil(ctx.ttl / 1000)}s.`,
+      }),
+    });
+  }
+
   await app.register(cors, {
     origin:
       env.NODE_ENV === "production"
@@ -60,7 +86,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   });
 
   // Bridge Fastify request → Web Fetch handler that Better Auth expects.
-  app.all("/api/auth/*", async (req, reply) => {
+  app.all("/api/auth/*", { config: withRateLimit("auth") }, async (req, reply) => {
     const url = new URL(req.url, env.BETTER_AUTH_URL);
     const headers = new Headers();
     for (const [k, v] of Object.entries(req.headers)) {

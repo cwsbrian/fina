@@ -6,6 +6,7 @@ import {
   ChatMessageBody,
 } from "@fina/shared";
 import { HttpError, requireSession } from "../auth/context.js";
+import { withRateLimit } from "../auth/rate-limit.js";
 import { effectiveTier } from "../auth/tier.js";
 import { generateAndPersistThreadTitle } from "../chat/auto-title.js";
 import type { PresentationBlock } from "../chat/blocks.js";
@@ -180,7 +181,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  app.post("/chat/threads/:tid/messages", async (req, reply) => {
+  app.post("/chat/threads/:tid/messages", { config: withRateLimit("chatMessages") }, async (req, reply) => {
     const params = req.params as { tid: string };
     const parsed = ChatMessageBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
