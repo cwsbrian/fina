@@ -1,4 +1,5 @@
 import Fastify, { type FastifyInstance } from "fastify";
+import helmet from "@fastify/helmet";
 import sensible from "@fastify/sensible";
 import cors from "@fastify/cors";
 import type { Env } from "./env.js";
@@ -34,6 +35,13 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   const auth = createAuth(env);
   app.decorate("fina", { env, auth });
 
+  await app.register(helmet, {
+    contentSecurityPolicy: {
+      directives: { "default-src": ["'none'"] },
+    },
+    crossOriginResourcePolicy: { policy: "same-site" },
+    frameguard: { action: "deny" },
+  });
   await app.register(sensible);
   await app.register(cors, {
     origin:
