@@ -72,4 +72,24 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(500).send({ error: "checkout_failed" });
     }
   });
+
+  app.post("/billing/portal", async (req, reply) => {
+    try {
+      const session = await requireSession(req, app);
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+      if (!user.stripeCustomerId) {
+        return reply.code(404).send({ error: "portal_failed" });
+      }
+      const stripe = stripeClient(app.fina.env);
+      const portal = await stripe.billingPortal.sessions.create({
+        customer: user.stripeCustomerId,
+        return_url: `${app.fina.env.WEB_APP_URL}/settings/plan`,
+      });
+      return { url: portal.url };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      app.log.error({ err: e }, "portal_failed");
+      return reply.code(500).send({ error: "portal_failed" });
+    }
+  });
 }
