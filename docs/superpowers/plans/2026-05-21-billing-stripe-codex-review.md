@@ -17,6 +17,9 @@ Full pass-1 log archived at `/tmp/codex-billing-review.log`.
 Full pass-2 log archived at `/tmp/codex-billing-pass2.log`.
 Full pass-3 log archived at `/tmp/codex-billing-pass3.log`.
 Full pass-4 log archived at `/tmp/codex-billing-pass4.log`.
+Full pass-5 log archived at `/tmp/codex-billing-pass5.log`.
+Full pass-6 log archived at `/tmp/codex-billing-pass6.log`.
+Full pass-7 log archived at `/tmp/codex-billing-pass7.log`.
 
 ## Pass 1 — Findings
 
@@ -69,13 +72,44 @@ After R5 fix:
 
 > The diff only adds design/review documentation and does not modify executable code, schemas, or tests. I found no discrete introduced issue that would break existing behavior.
 
+## Pass 5 — Clean
+
+No new codex findings. While reading codex's context dump I noticed a cross-file consistency issue codex couldn't flag (no code in the diff): the spec was introducing a new `WEB_BASE_URL` env var when `WEB_APP_URL` already exists in `apps/api/.env` for invite-link generation. Filed as self-discovered R6.
+
+### R6 [self-discovered] — Reuse existing `WEB_APP_URL`
+
+Two env vars for the same URL would be a foot-gun in prod (forget to set one → redirects to localhost). Replaced `WEB_BASE_URL` with `WEB_APP_URL` throughout the spec. Env addition list drops from 5 to 4 (Stripe-only). Fix in commit `ed4d466`.
+
+## Pass 6 — Additional findings
+
+### R7 [P1] — Persist Stripe Customer before first Checkout
+
+For a first-time upgrade, the spec passed `customer_email` (no customer ID) to Stripe Checkout. If the user hits Upgrade in two tabs before either webhook lands, Stripe creates TWO distinct Customer records — one per Checkout — and both subscribe. The webhook stores only the latest `customerId` on `User.stripeCustomerId`; the other customer (and its subscription) becomes orphaned. Portal only sees the stored one. User is double-billed and can't manage one of the subs via the app.
+
+**Fix (commit 4151518):** `ensureStripeCustomer(user)` runs BEFORE Checkout. Creates Stripe Customer if needed, persists `customerId` on the User row, then returns it. Checkout always passes `customer:` (never `customer_email`). Both concurrent Checkouts now use the same Customer → same subscription path → Portal-manageable. Idempotency key `customer-create-<userId>` makes the Stripe create itself safe to retry across DB-write failures (Stripe returns the same record for repeat calls with the same key).
+
+### R8 [P2] — `MeDTO.subscription` must carry active subs only
+
+The decision matrix said "canceled → Free, no Manage CTA", but the rule "UI infers paid source from `subscription !== null`" would classify a user with a stale `status: canceled` row as paid — because we retain canceled rows for history.
+
+**Fix (commit 3aaf7cb):** Made the rule explicit. `MeDTO.subscription` returns the user's ACTIVE subscription (`status ∈ {trialing, active, past_due}`) or `null`. Canceled / unpaid / incomplete / incomplete_expired / paused rows are retained in DB but excluded from `MeDTO`. UI gets exactly one source of truth that already reflects the right active/inactive split. Documented the multi-active-sub tie-break (highest tier wins, matching EffectiveTier precedence) — rare but deterministic.
+
+## Pass 7 — Verification
+
+After R7 + R8 fixes:
+
+> The diff only adds design/review documentation and does not modify executable code, schemas, or tests. I found no discrete introduced issue that would break existing behavior.
+
 ## Status
 
-Spec is review-clean across two rounds (Pass 2 + Pass 4). Ready to proceed to implementation plan.
+Spec is review-clean across three rounds (Pass 2 + Pass 4 + Pass 5 + Pass 7). Ready to proceed to implementation plan.
 
 Resulting commits on `worktree-billing-stripe`:
 
 ```
+3aaf7cb docs(plan billing-stripe): codex R8 P2 — MeDTO.subscription carries active subs only
+4151518 docs(plan billing-stripe): codex R7 P1 — persist Stripe customer before Checkout
+ed4d466 docs(plan billing-stripe): self-discovered R6 — reuse existing WEB_APP_URL
 3a69bd0 docs(plan billing-stripe): codex R5 P2 — order-independent webhook handlers
 e82b231 docs(plan billing-stripe): codex R4 P2 — preserve MeDTO.tier wire shape
 08b2d5a docs(plan billing-stripe): codex R3 P2 — 48h trial_end minimum guard
