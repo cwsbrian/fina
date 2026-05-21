@@ -220,7 +220,7 @@ describe("audit hook — processChatTurn direct write (actorType: agent)", () =>
     const ws = await prisma.workspace.create({ data: { name: "ct-ws" } });
     workspaceId = ws.id;
     await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
-    const thread = await prisma.chatThread.create({ data: { workspaceId } });
+    const thread = await prisma.chatThread.create({ data: { userId, workspaceId } });
     threadId = thread.id;
     await prisma.chatMessage.create({
       data: { threadId, role: "user", blocks: [{ type: "text", markdown: "make me a Coffee cat" }] },

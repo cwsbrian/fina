@@ -22,7 +22,7 @@ describe("processChatTurn", () => {
     const ws = await prisma.workspace.create({ data: { name: "tr-ws" } });
     wsId = ws.id;
     await prisma.membership.create({ data: { userId, workspaceId: wsId, role: "owner" } });
-    const thread = await prisma.chatThread.create({ data: { workspaceId: wsId } });
+    const thread = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     threadId = thread.id;
     await prisma.chatMessage.create({ data: { threadId, role: "user", blocks: [{ type: "text", markdown: "hi" }] } });
   });
