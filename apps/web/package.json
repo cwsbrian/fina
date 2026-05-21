@@ -7,6 +7,7 @@
     "smoke:lan": "NEXT_PUBLIC_API_URL=http://100.65.93.102:4000 next dev -p 3100 -H 0.0.0.0"
   },
   "dependencies": {
+    "@fina/shared": "workspace:*",
     "better-auth": "^1.6.9",
     "next": "14.2.35",
     "react": "18.3.1",

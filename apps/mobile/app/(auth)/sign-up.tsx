@@ -12,10 +12,16 @@ import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
 import { colors, type } from "../../src/design/tokens";
 
+const STRENGTH_LABELS = {
+  weak: "Weak",
+  fair: "Fair",
+  good: "Good",
+  strong: "Strong",
+} as const;
+
 function strengthLabel(pw: string): string | undefined {
   const s = passwordStrength(pw);
-  if (!s) return undefined;
-  return s === "weak" ? "Weak" : s === "okay" ? "Okay" : "Strong";
+  return s ? STRENGTH_LABELS[s] : undefined;
 }
 
 export default function SignUpScreen() {

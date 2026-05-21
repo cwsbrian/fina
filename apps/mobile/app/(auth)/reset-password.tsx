@@ -9,10 +9,16 @@ import { Icon } from "../../src/design/Icon";
 import { authClient } from "../../src/auth/client";
 import { colors, type } from "../../src/design/tokens";
 
+const STRENGTH_LABELS = {
+  weak: "Weak",
+  fair: "Fair",
+  good: "Good",
+  strong: "Strong",
+} as const;
+
 function strengthOf(pw: string): string | undefined {
   const s = passwordStrength(pw);
-  if (!s) return undefined;
-  return s === "weak" ? "Weak" : s === "okay" ? "Okay" : "Strong";
+  return s ? STRENGTH_LABELS[s] : undefined;
 }
 
 function hasLetterAndNumber(pw: string) {
