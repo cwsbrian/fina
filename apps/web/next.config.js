@@ -12,6 +12,21 @@ const nextConfig = {
     // See: https://github.com/gregberge/svgr
     svgr: false,
   },
+  // @fina/shared uses NodeNext-style `.js` suffix imports in its TS source
+  // (e.g. `from "./roles.js"`). With moduleResolution: "Bundler" the
+  // package's TS compiles fine, but webpack at build time resolves the
+  // string literally and 404s. Two-part fix:
+  //  1. transpilePackages — Next runs the package through its TS loader.
+  //  2. extensionAlias — webpack treats `.js` as also resolvable to `.ts`
+  //     so `./roles.js` finds `./roles.ts`.
+  transpilePackages: ["@fina/shared"],
+  webpack: (config) => {
+    config.resolve.extensionAlias = {
+      ".js": [".ts", ".tsx", ".js"],
+      ".mjs": [".mts", ".mjs"],
+    };
+    return config;
+  },
   // Proxy /api-proxy/* → backend API so E2E tests stay same-origin.
   // The browser at localhost:3100 calls /api-proxy/... which Next.js
   // rewrites to the real API server. Cookie domain is localhost:3100 so

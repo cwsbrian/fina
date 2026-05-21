@@ -2,30 +2,34 @@
 
 import { FormEvent, Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import {
+  MIN_PASSWORD_LENGTH,
+  meetsPasswordPolicy,
+  passwordStrength,
+  type PasswordStrength,
+} from "@fina/shared";
 import { authClient } from "../../auth/client";
 import { AuthTopBar } from "../../components/AuthTopBar";
 import { WebIcon } from "../../components/WebIcon";
 import styles from "../../components/auth.module.css";
 
-type Strength = { pct: number; label: string; color: string };
+// UI presentation for the 4-level shared strength scale. Logic lives in
+// @fina/shared/passwordStrength; this map is pure CSS metadata.
+const STRENGTH_UI: Record<
+  PasswordStrength,
+  { pct: number; label: string; color: string }
+> = {
+  weak: { pct: 30, label: "Weak", color: "var(--color-down)" },
+  fair: { pct: 55, label: "Fair", color: "#f4b000" },
+  good: { pct: 80, label: "Good", color: "var(--color-primary)" },
+  strong: { pct: 100, label: "Strong", color: "var(--color-up)" },
+};
 
-function pwStrength(pw: string): Strength {
-  if (!pw) return { pct: 0, label: "", color: "var(--color-muted)" };
-  let score = 0;
-  if (pw.length >= 8) score++;
-  if (pw.length >= 12) score++;
-  if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
-  if (/\d/.test(pw)) score++;
-  if (/[^A-Za-z0-9]/.test(pw)) score++;
-  const buckets: Strength[] = [
-    { pct: 20, label: "Weak", color: "var(--color-down)" },
-    { pct: 40, label: "Weak", color: "var(--color-down)" },
-    { pct: 60, label: "Fair", color: "#f4b000" },
-    { pct: 80, label: "Good", color: "var(--color-primary)" },
-    { pct: 100, label: "Strong", color: "var(--color-up)" },
-  ];
-  return buckets[Math.min(score, 4)]!;
-}
+const STRENGTH_EMPTY = {
+  pct: 0,
+  label: "",
+  color: "var(--color-muted)",
+};
 
 export default function ResetPasswordPage() {
   return (
@@ -47,13 +51,14 @@ function ResetPasswordInner() {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const strength = pwStrength(pw);
+  const strengthLevel = passwordStrength(pw);
+  const strength = strengthLevel ? STRENGTH_UI[strengthLevel] : STRENGTH_EMPTY;
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (busy) return;
-    if (pw.length < 8) {
-      setErr("Password must be at least 8 characters.");
+    if (!meetsPasswordPolicy(pw)) {
+      setErr(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
     if (pw !== pw2) {
