@@ -50,6 +50,9 @@ const Schema = z.object({
   ),
   // TTL for plaid_webhook_events rows in days. Default 30 applied at use site with ?? 30.
   CRON_EVENT_TTL_DAYS: z.coerce.number().int().positive().optional(),
+  // TTL for resolved ScheduledSpend rows in days. Default 90 applied at use
+  // site with ?? 90. "Resolved" = dismissedAt set OR matchedTxId set.
+  SCHEDULED_SPEND_TTL_DAYS: z.coerce.number().int().positive().optional(),
   // Chat — all .optional() (test-env friendly); use-site applies defaults via `?? N`.
   CHAT_MODEL: z.string().optional(),
   CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().optional(),

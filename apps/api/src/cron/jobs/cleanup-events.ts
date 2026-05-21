@@ -21,4 +21,23 @@ export async function runCleanupEvents(env: Env): Promise<void> {
     { cron: CRON_NAME },
     `cleanup-events complete — deleted=${r.count} cutoff=${cutoff.toISOString()}`,
   );
+
+  // ScheduledSpend resolved TTL (Plan 1J Task 7). Uses updatedAt as a proxy
+  // for "time of resolution" since the schema has no resolvedAt column.
+  // "Resolved" = dismissedAt set OR matchedTxId set.
+  const ssTtlDays = env.SCHEDULED_SPEND_TTL_DAYS ?? 90;
+  const scheduledSpendCutoff = new Date(Date.now() - ssTtlDays * 24 * 60 * 60 * 1000);
+  const ssDeleted = await prisma.scheduledSpend.deleteMany({
+    where: {
+      OR: [
+        { dismissedAt: { not: null } },
+        { matchedTxId: { not: null } },
+      ],
+      updatedAt: { lt: scheduledSpendCutoff },
+    },
+  });
+  logInfo(
+    { cron: CRON_NAME, deletedScheduledSpends: ssDeleted.count, ttlDays: ssTtlDays },
+    "cleanup-events scheduled-spend pass",
+  );
 }
