@@ -72,6 +72,13 @@ export const API_ERROR_CODES = [
   // Chat
   "chat_provider_error",
   "not_member",
+
+  // Billing
+  "payment_required",
+  "checkout_failed",
+  "portal_failed",
+  "webhook_invalid_signature",
+  "already_subscribed",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

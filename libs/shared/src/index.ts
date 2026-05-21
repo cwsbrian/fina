@@ -7,6 +7,9 @@ export * from "./constants.js";
 export * from "./enums.js";
 export * from "./errors.js";
 
+// Pricing / billing
+export * from "./pricing.js";
+
 // DTOs (HTTP response shapes)
 export * from "./dto/me.js";
 export * from "./dto/workspace.js";
@@ -14,6 +17,7 @@ export * from "./dto/chat.js";
 export * from "./dto/transactions.js";
 export * from "./dto/accounts.js";
 export * from "./dto/plaid.js";
+export * from "./dto/subscription.js";
 
 // Validators (pure helpers used by both API services and frontend forms)
 export * from "./validation/money.js";
@@ -31,6 +35,7 @@ export * from "./schemas/schedules.js";
 export * from "./schemas/categories.js";
 export * from "./schemas/invites.js";
 export * from "./schemas/workspaces.js";
+export * from "./schemas/billing.js";
 
 // HTTP client factory
 export * from "./http/api-client.js";
