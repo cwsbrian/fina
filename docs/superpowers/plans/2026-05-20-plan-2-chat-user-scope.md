@@ -414,7 +414,7 @@ export const threadsService = {
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.threads.test.ts
 ```
 
-Expected: `Test Files  1 passed (1)` with all 11 tests green.
+Expected: `Test Files  1 passed (1)` with all 13 tests green (create×2, list×4, findOwned×2, patch×2, archive×3).
 
 - [ ] **Step 2.5: Commit**
 
@@ -572,13 +572,21 @@ import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 
-// `processChatTurn` is mocked — message-route tests don't need a real LLM.
+// `processChatTurn` and `callTitleLLM` are mocked — message-route tests
+// don't need a real LLM. The auto-title mock is critical: without it,
+// the fire-and-forget `void generateAndPersistThreadTitle(...)` in the
+// message route would issue a real Gemini HTTP call in test, which
+// (a) hangs in CI without GEMINI_API_KEY, and (b) under vitest
+// singleFork can bleed into subsequent tests in the same file.
 vi.mock("../src/chat/turn.js", () => ({
   processChatTurn: vi.fn().mockResolvedValue({
     assistantText: "ok",
     presentationBlocks: [],
     toolCalls: [],
   }),
+}));
+vi.mock("../src/chat/auto-title-llm.js", () => ({
+  callTitleLLM: vi.fn().mockResolvedValue("Auto Title"),
 }));
 
 const env = {
@@ -953,6 +961,14 @@ describe("GET /chat/threads/:tid", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().thread.archivedAt).toBeTruthy();
   });
+
+  it("200 — open to non-Pro users (Lite needs to read brief threads)", async () => {
+    const { userId, cookie } = await setup("gti5@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    await downgradeToFree(userId);
+    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+  });
 });
 
 describe("PATCH /chat/threads/:tid", () => {
@@ -1048,6 +1064,14 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina
 Expected: 404 / "no route matched" failures for `GET/PATCH/DELETE /chat/threads/:tid`.
 
 - [ ] **Step 5.3: Add item route handlers to chat.ts**
+
+**Precondition check** — verify Task 4's state before editing:
+
+```bash
+grep -cE "^  app\.(get|post|patch|delete)" apps/api/src/routes/chat.ts
+```
+
+Expected: `2` (the two collection routes from Task 4). If you see a different count, Task 4 was not applied cleanly — stop and resolve before continuing.
 
 Task 4 left `chat.ts` with only the collection routes; this step appends the three item routes inside the `chatRoutes` function body (above the closing `}`). Also add the `PatchBody` schema next to `CreateBody` and `ListQuery` at the top of the file:
 
@@ -1303,6 +1327,14 @@ Expected: 404/no-route failures.
 
 - [ ] **Step 6.3: Add the messages route to chat.ts**
 
+**Precondition check** — verify Tasks 4 + 5's state before editing:
+
+```bash
+grep -cE "^  app\.(get|post|patch|delete)" apps/api/src/routes/chat.ts
+```
+
+Expected: `5` (POST/GET collection from Task 4, GET/PATCH/DELETE item from Task 5). If you see a different count, prior tasks were not applied cleanly — stop and resolve before continuing.
+
 Task 4 / 5 left `chat.ts` without a messages route. This step appends it inside the `chatRoutes` function body (above the closing `}`). Also add the `MessageBody` schema next to `CreateBody`/`ListQuery`/`PatchBody` at the top of the file, and add the imports for `generateAndPersistThreadTitle`, `processChatTurn`, and `PresentationBlock`:
 
 ```ts
@@ -1525,6 +1557,9 @@ vi.mock("../src/chat/turn.js", () => ({
     toolCalls: [],
   }),
 }));
+vi.mock("../src/chat/auto-title-llm.js", () => ({
+  callTitleLLM: vi.fn().mockResolvedValue("Auto Title"),
+}));
 
 const env = {
   NODE_ENV: "test" as const, PORT: 0,
@@ -1565,7 +1600,10 @@ describe("lazy binding races", () => {
     });
 
     const [a, b] = await Promise.all([post(wsId), post(otherWs.id)]);
-    const statuses = [a.statusCode, b.statusCode].sort();
+    // Numeric sort with explicit comparator — JS default sort is
+    // lexicographic, which coincidentally works for [200, 400] but
+    // breaks if status codes ever differ in length (e.g., 200 vs 1000).
+    const statuses = [a.statusCode, b.statusCode].sort((x, y) => x - y);
     expect(statuses).toEqual([200, 400]);
     const loser = a.statusCode === 400 ? a : b;
     expect(loser.json().error).toBe("workspace_mismatch");
