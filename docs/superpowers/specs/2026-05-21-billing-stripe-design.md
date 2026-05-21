@@ -164,14 +164,18 @@ Order of precedence, top wins:
 
 ## MeDTO extension
 
+Existing wire shape is preserved — `tier` stays a plain `Tier` string and `trial` keeps its `{ active, endsAt }` shape. Only one new top-level field is added.
+
 ```ts
 type MeDTO = {
   user: { id, email, name, tz, locale, ... },
-  tier: EffectiveTier,                              // existing
+  tier: Tier,                                        // existing — "free" | "lite" | "pro" string
   trial: { active: boolean, endsAt: string | null }, // existing
   subscription: SubscriptionDTO | null,              // NEW
 };
 ```
+
+UI infers `EffectiveTier.source` from the combination of `trial.active` and `subscription`: trial active → trial source; subscription non-null → paid source; both absent → default. The full `EffectiveTier` object stays an internal server-side type (`auth/tier.ts`); no consumer needs the union member, so nothing changes on the wire.
 
 UI decision matrix:
 
