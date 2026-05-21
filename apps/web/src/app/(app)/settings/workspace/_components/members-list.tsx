@@ -1,14 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import type { Member } from "@fina/shared";
 import { apiFetch } from "../../../../../lib/api";
-
-type Member = {
-  userId: string;
-  email: string;
-  name: string | null;
-  role: "owner" | "editor" | "viewer";
-};
 
 export function MembersList({
   members,

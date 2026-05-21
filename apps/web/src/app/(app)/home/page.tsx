@@ -2,19 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { MeDTO as Me, WorkspaceSummary as Workspace } from "@fina/shared";
 import { useSession } from "../../../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
 import { getActiveWorkspaceId } from "../../../lib/active-workspace";
 import { WebIcon } from "../../../components/WebIcon";
 import styles from "./home.module.css";
-
-type Me = {
-  user: { id: string; email: string; tz: string; locale: string; name?: string };
-  tier: "free" | "lite" | "pro";
-  trial: { active: boolean; endsAt: string | null };
-};
-
-type Workspace = { id: string; name: string; role: "owner" | "editor" | "viewer" };
 
 function formatToday(): string {
   return new Date().toLocaleDateString("en-CA", {

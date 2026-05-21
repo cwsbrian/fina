@@ -1,26 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { Member, Invite } from "@fina/shared";
 import { useSession } from "../../../../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../../lib/api";
 import { getActiveWorkspaceId } from "../../../../lib/active-workspace";
 import { MembersList } from "./_components/members-list";
 import { InviteForm } from "./_components/invite-form";
 import { PendingInvites } from "./_components/pending-invites";
-
-type Member = {
-  userId: string;
-  email: string;
-  name: string | null;
-  role: "owner" | "editor" | "viewer";
-};
-type Invite = {
-  id: string;
-  invitedEmail: string;
-  invitedRole: "editor" | "viewer";
-  expiresAt: string;
-  createdAt: string;
-};
 
 export default function WorkspaceSettingsPage() {
   const { data: session } = useSession();

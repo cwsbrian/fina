@@ -1,4 +1,6 @@
-const COOKIE = "fina-active-workspace";
+import { ACTIVE_WORKSPACE_STORAGE_KEY } from "@fina/shared";
+
+const COOKIE = ACTIVE_WORKSPACE_STORAGE_KEY;
 const ONE_YEAR = 60 * 60 * 24 * 365;
 
 function readCookie(name: string): string | null {

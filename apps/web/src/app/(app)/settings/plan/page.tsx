@@ -1,17 +1,12 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
+import type { MeDTO as Me, Tier } from "@fina/shared";
 import { apiFetch } from "../../../../lib/api";
 import { WebIcon } from "../../../../components/WebIcon";
 import styles from "../settings.module.css";
 
-type Me = {
-  user: { id: string; email: string };
-  tier: "free" | "lite" | "pro";
-  trial: { active: boolean; endsAt: string | null };
-};
-
-type PlanKey = "free" | "lite" | "pro";
+type PlanKey = Tier;
 
 const PLANS: Record<PlanKey, { name: string; price: number }> = {
   free: { name: "Free", price: 0 },

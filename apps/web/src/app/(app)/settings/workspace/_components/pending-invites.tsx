@@ -1,15 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import type { Invite } from "@fina/shared";
 import { apiFetch } from "../../../../../lib/api";
-
-type Invite = {
-  id: string;
-  invitedEmail: string;
-  invitedRole: "editor" | "viewer";
-  expiresAt: string;
-  createdAt: string;
-};
 
 export function PendingInvites({
   invites,

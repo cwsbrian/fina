@@ -2,6 +2,7 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import type { MeDTO, WorkspaceSummary } from "@fina/shared";
 import { useSession, signOut } from "../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../lib/api";
 import {
@@ -11,17 +12,9 @@ import {
 import { WebIcon } from "./WebIcon";
 import styles from "./shell.module.css";
 
-type Workspace = { id: string; name: string; role: "owner" | "editor" | "viewer" };
-
-type MeData = {
-  user: { id: string; email: string; tz: string; locale: string; name?: string };
-  tier: "free" | "lite" | "pro";
-  trial: { active: boolean; endsAt: string | null };
-};
-
 export type ShellState = {
-  me: MeData | null;
-  workspaces: Workspace[];
+  me: MeDTO | null;
+  workspaces: WorkspaceSummary[];
   activeWorkspaceId: string | null;
   error: string | null;
 };
@@ -34,7 +27,7 @@ const NAV_ITEMS = [
   { id: "account", label: "Account", path: "/settings/account" },
 ];
 
-function tierLabel(tier: MeData["tier"], trialActive: boolean): string {
+function tierLabel(tier: MeDTO["tier"], trialActive: boolean): string {
   if (trialActive) return "Pro trial";
   if (tier === "pro") return "Pro";
   if (tier === "lite") return "Lite";
@@ -48,7 +41,7 @@ function trialDaysLeft(endsAt: string | null): number | null {
   return Math.ceil(ms / (24 * 60 * 60 * 1000));
 }
 
-function initials(name: string | undefined, email: string): string {
+function initials(name: string | null | undefined, email: string): string {
   const source = name?.trim() || email;
   const parts = source.split(/[\s@.]+/).filter(Boolean);
   if (parts.length === 0) return "?";
@@ -61,8 +54,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname() ?? "";
   const { data: session } = useSession();
 
-  const [me, setMe] = useState<MeData | null>(null);
-  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  const [me, setMe] = useState<MeDTO | null>(null);
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -71,8 +64,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       try {
         await bootstrapActiveWorkspace();
         const [meData, wsData] = await Promise.all([
-          apiFetch<MeData>("/me"),
-          apiFetch<{ workspaces: Workspace[] }>("/workspaces"),
+          apiFetch<MeDTO>("/me"),
+          apiFetch<{ workspaces: WorkspaceSummary[] }>("/workspaces"),
         ]);
         setMe(meData);
         setWorkspaces(wsData.workspaces);
@@ -191,8 +184,8 @@ function WorkspaceMenu({
   workspaces,
   onSwitch,
 }: {
-  active: Workspace | null;
-  workspaces: Workspace[];
+  active: WorkspaceSummary | null;
+  workspaces: WorkspaceSummary[];
   onSwitch: (id: string) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -261,7 +254,7 @@ function UserMenu({
   onSignOut,
 }: {
   email: string;
-  name?: string | undefined;
+  name?: string | null | undefined;
   initialsText: string;
   onNavigate: (path: string) => void;
   onSignOut: () => void;

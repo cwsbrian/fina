@@ -1,11 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { Member } from "@fina/shared";
 import { apiFetch, useMe, useActiveWorkspaceId } from "../../../../lib/api";
 import { ConnectBankButton } from "./_components/connect-bank-button";
 import { ConnectedBanksList, type PlaidItemView } from "./_components/connected-banks-list";
-
-type Member = { userId: string; role: "owner" | "editor" | "viewer" };
 
 export default function BanksPage() {
   const wsId = useActiveWorkspaceId();

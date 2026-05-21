@@ -1,16 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import type { PlaidItemDTO } from "@fina/shared";
 import { apiFetch } from "../../../../../lib/api";
 
-export type PlaidItemView = {
-  id: string;
-  institutionName: string;
-  status: "active" | "error" | "relink_required";
-  errorCode: string | null;
-  lastSyncAt: string | null;
-  accountCount: number;
-};
+/** Re-exported under the legacy name so existing callers keep working. */
+export type PlaidItemView = PlaidItemDTO;
 
 export function ConnectedBanksList({
   items,

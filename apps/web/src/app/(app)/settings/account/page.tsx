@@ -2,18 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import type { MeDTO as Me } from "@fina/shared";
 import { signOut } from "../../../../auth/client";
 import { apiFetch } from "../../../../lib/api";
 import { WebIcon } from "../../../../components/WebIcon";
 import styles from "../settings.module.css";
 
-type Me = {
-  user: { id: string; email: string; tz: string; locale: string; name?: string };
-  tier: "free" | "lite" | "pro";
-  trial: { active: boolean; endsAt: string | null };
-};
-
-function initials(name: string | undefined, email: string): string {
+function initials(name: string | null | undefined, email: string): string {
   const src = name?.trim() || email;
   const parts = src.split(/[\s@.]+/).filter(Boolean);
   if (parts.length === 0) return "?";

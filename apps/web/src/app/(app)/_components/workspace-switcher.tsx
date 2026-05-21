@@ -1,13 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import type { WorkspaceSummary as Workspace } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
 import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../../../lib/active-workspace";
-
-type Workspace = { id: string; name: string; role: string };
 
 export function WorkspaceSwitcher() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
