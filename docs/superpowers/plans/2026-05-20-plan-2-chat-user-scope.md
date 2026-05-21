@@ -132,7 +132,13 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina pnpm --filter @fina/api 
 
 Expected output: `Applying migration 20260520130000_chat_user_scope` and `All migrations have been successfully applied.`
 
-If you get an FK error about an existing `chat_threads.userId`, the migration ran but the column already exists — verify with `psql ... -c '\d chat_threads'` and reset if needed.
+Troubleshooting: if the migration was partially applied from an earlier failed run (the implementer sees errors about `userId` already existing or the index name colliding), reset the dev DB and re-run:
+
+```bash
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina pnpm --filter @fina/api exec prisma migrate reset --force
+```
+
+Safe to do — this worktree is on a dev DB with no production data.
 
 - [ ] **Step 1.5: Regenerate Prisma client**
 
@@ -434,18 +440,44 @@ thread paths."
 
 - [ ] **Step 3.1: Update the existing tests**
 
-Edit `apps/api/tests/chat.auto-title.test.ts`. Each call to `generateAndPersistThreadTitle(env, workspaceId, threadId, text)` must become `generateAndPersistThreadTitle(env, threadId, text)`. The "wrong-workspaceId → no update" test at the bottom of the file (around line 66) no longer makes sense — replace it with a "wrong threadId → no update" test:
+Edit `apps/api/tests/chat.auto-title.test.ts`. Three changes:
+
+**a. Update `beforeEach` to include `userId` on the ChatThread create** (the schema after Task 1 requires it):
+
+Find this line in `beforeEach` (around line 29):
 
 ```ts
-  it("respects threadId boundary (wrong threadId → no update)", async () => {
-    titleLLMMock.mockResolvedValueOnce("Some Title");
-    await generateAndPersistThreadTitle(env, "wrong-thread-id", "first msg");
-    const t = await prisma.chatThread.findUniqueOrThrow({ where: { id: threadId } });
-    expect(t.title).toBeNull();
-  });
+const t = await prisma.chatThread.create({ data: { workspaceId, title: null } });
 ```
 
-Other calls (e.g., `await generateAndPersistThreadTitle(env, workspaceId, threadId, "Coffee 카테고리 만들어줘")`) lose the `workspaceId` arg — read the file and update each call site (4 calls, lines 39/47/54/61).
+Change to:
+
+```ts
+const t = await prisma.chatThread.create({ data: { userId: stamp, workspaceId, title: null } });
+```
+
+**b. Drop `workspaceId` arg from every `generateAndPersistThreadTitle` call.** The file has 4 calls (around lines 39, 47, 54, 61) that look like:
+
+```ts
+await generateAndPersistThreadTitle(env, workspaceId, threadId, "...");
+```
+
+Update each to:
+
+```ts
+await generateAndPersistThreadTitle(env, threadId, "...");
+```
+
+**c. Replace the "wrong-workspaceId" test with "wrong-threadId"** (the bottom test, around line 66). The mock pattern in this file is `vi.mocked(callTitleLLM).mockResolvedValue(...)` — match that style:
+
+```ts
+it("respects threadId boundary (wrong threadId → no update)", async () => {
+  vi.mocked(callTitleLLM).mockResolvedValue("Should Not Land");
+  await generateAndPersistThreadTitle(env, "wrong-thread-id", "first msg");
+  const t = await prisma.chatThread.findUnique({ where: { id: threadId } });
+  expect(t?.title).toBeNull();
+});
+```
 
 - [ ] **Step 3.2: Run tests to verify they fail**
 
@@ -1695,6 +1727,20 @@ describe("plan 2-chat-user-scope migration smoke", () => {
     expect(byName.get("userId")).toBe("NO");
     expect(byName.get("workspaceId")).toBe("YES");
   });
+
+  it("migration SQL does not touch audit_events (preservation guarantee)", async () => {
+    // Spec §3 commits to preserving audit_events rows across the migration.
+    // The migration runs once at deploy-time, so we can't replay it in-test.
+    // Instead, statically verify the migration SQL never references
+    // audit_events — a one-line grep that would fail loudly if a later
+    // edit accidentally adds a DELETE.
+    const fs = await import("node:fs/promises");
+    const sql = await fs.readFile(
+      "prisma/migrations/20260520130000_chat_user_scope/migration.sql",
+      "utf8",
+    );
+    expect(sql).not.toMatch(/audit_events/i);
+  });
 });
 ```
 
@@ -1704,7 +1750,23 @@ describe("plan 2-chat-user-scope migration smoke", () => {
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/chat.migration.smoke.test.ts
 ```
 
-Expected: all 4 tests green. If the EXPLAIN test fails with Seq Scan, double-check the migration created the index with the exact name (Step 1.3 SQL). If Postgres still picks Seq Scan after ANALYZE, increase the seeded row count (50 → 200) and retry — small tables can still pick Seq Scan as faster.
+The audit-events grep test reads the migration SQL file directly. The test runs from the `apps/api/` working directory (where pnpm filter sets cwd), so the relative path `prisma/migrations/...` resolves correctly.
+
+Expected: all 5 tests green. If the EXPLAIN test fails with Seq Scan, the planner is choosing it because the table is small. Two fallbacks (in order of preference):
+
+1. Increase the seeded row count from 50 → 500.
+2. As a last resort, force the planner: wrap the EXPLAIN query in a session that does `SET LOCAL enable_seqscan = OFF;` first. Note this proves the index *can* serve the query, not that the planner *will* pick it in production — but production tables have many more rows, so the index will be picked there.
+
+Pseudo-snippet for the fallback:
+
+```ts
+const plan = await prisma.$transaction(async (tx) => {
+  await tx.$executeRawUnsafe("SET LOCAL enable_seqscan = OFF;");
+  return tx.$queryRawUnsafe<Array<{ "QUERY PLAN": string }>>(
+    `EXPLAIN SELECT * FROM chat_threads WHERE "userId" = '${stamp}' AND "archivedAt" IS NULL ORDER BY "lastMessageAt" DESC NULLS LAST LIMIT 10`,
+  );
+});
+```
 
 - [ ] **Step 8.3: Run the FULL test suite to catch cross-file regressions**
 
