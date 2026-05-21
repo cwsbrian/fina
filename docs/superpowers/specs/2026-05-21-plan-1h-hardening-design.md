@@ -102,7 +102,9 @@ export type LogContext = {
   /** Request-scoped */
   requestId?: string;
   userId?: string;
-  workspaceId?: string;
+  /** Nullable because post-Plan-2 `ChatThread.workspaceId` is `String?` —
+   *  unbound threads log `null`. */
+  workspaceId?: string | null;
   /** Chat / LLM */
   threadId?: string;
   tool?: string;
@@ -210,6 +212,16 @@ Rate-limit integration tests set `RATE_LIMIT_TEST=1` in their env
 block to opt in. Avoids the `skipOnError` / `max: Infinity` ambiguity
 flagged by R1.
 
+`env.ts` adds `RATE_LIMIT_TEST: z.string().optional()` so the zod
+validator doesn't reject the opt-in env.
+
+**Hook registration order matters.** Fastify executes `onRequest`
+hooks in registration order. The session-decorator hook MUST be
+registered before `app.register(rateLimit, ...)` so `req.userId` is
+populated when the plugin's own `onRequest` evaluates the
+`keyGenerator`. Document this in `server.ts` with a one-line comment
+at the registration site.
+
 ### 3.3 Helmet (`server.ts`)
 
 Default Helmet config plus:
@@ -243,23 +255,31 @@ Three routes, all unauthenticated:
 
   On success returns `HealthDTO` with `checks.db: "ok"` and 200. On
   failure returns the same DTO with `checks.db: "down"` and 503.
-- `GET /health` — alias for `/ready` (back-compat for existing LB configs).
+- `GET /health` — alias for `/ready` (back-compat for existing LB
+  configs). Current `routes/health.ts` returns `{ status: "ok" }`
+  unconditionally with 200; the alias preserves that shape on success
+  paths (since `/ready` returns 200 + `{ status: "ok", checks: { db: "ok" } }`)
+  while adding the failure path (503 + `{ status: "degraded", checks: { db: "down" } }`).
+  Downstream LBs that string-match `"status":"ok"` keep working;
+  LBs that check 200 vs 503 also keep working.
 
 ### 3.5 Process handlers (`main.ts`)
 
 ```ts
 process.on("unhandledRejection", (reason) => {
   logFatal({ err: reason }, "unhandled_rejection");
-  // Allow logger to flush before exit.
-  setTimeout(() => process.exit(1), 100);
+  // pino-bound flush is deterministic; fall back to a short timeout
+  // if logger.flush isn't available on this transport.
+  logger.flush(() => process.exit(1));
 });
 process.on("uncaughtException", (err) => {
   logFatal({ err }, "uncaught_exception");
-  setTimeout(() => process.exit(1), 100);
+  logger.flush(() => process.exit(1));
 });
 ```
 
-Existing `SIGTERM` graceful shutdown stays.
+Existing `SIGTERM` graceful shutdown stays. In-flight requests are
+dropped (see §9.9 — intentional for uncaught state).
 
 ### 3.6 Prisma pool (`db.ts` + `env.ts`)
 
@@ -287,10 +307,10 @@ const envSchema = z.object({
   (e) => {
     if (e.NODE_ENV !== "production") return true;
     if (!e.RESEND_API_KEY) return false;
-    // Real Resend keys all start with "re_" and are long (~30+ chars).
-    // The doc placeholder "re_..." and any dev "re_dev_*" stub get rejected
-    // because they don't meet the length bar.
-    return e.RESEND_API_KEY.startsWith("re_") && e.RESEND_API_KEY.length >= 20;
+    // Real Resend keys are "re_" + 24 random chars (~27 total).
+    // 24 is the floor — rejects the doc placeholder "re_..." (6 chars),
+    // any "re_dev_*" stub, and most paste-error truncations.
+    return e.RESEND_API_KEY.startsWith("re_") && e.RESEND_API_KEY.length >= 24;
   },
   { message: "RESEND_API_KEY must be a real Resend key in production", path: ["RESEND_API_KEY"] },
 );
@@ -315,10 +335,28 @@ try {
 }
 ```
 
-The `protect: true` skip event (croner reports it via the `protect`
-callback) emits `logWarn({ cron: name, event: "protected_skip" }, "cron skipped — previous run still in flight")`.
+**`protect` event capture** — croner's `protect: true` (boolean) is a
+silent skip; to be notified of skip events we MUST pass a callback:
 
-### 3.9 Plaid webhook silent error (`routes/plaid-webhook.ts:67`)
+```ts
+new Cron("5 9 * * *", {
+  name: "scheduled-spend-match",
+  protect: (job) =>
+    logWarn({ cron: job.name, event: "protected_skip" },
+            "cron skipped — previous run still in flight"),
+}, runScheduledSpendMatch);
+```
+
+Every existing `new Cron(...)` in `scheduler.ts` migrates from
+`protect: true` → the callback form. Behavioural impact: previously
+silent skips now emit a `warn` log line; no other change.
+
+### 3.9 Plaid webhook silent error (`routes/plaid-webhook.ts`)
+
+Only the silent `.catch(() => {})` on the dispatch fire-and-forget is
+replaced (current location ~line 67 — implementer should grep
+`.catch(() => {})` in `routes/plaid-webhook.ts` to confirm). Any
+nearby `.catch((e) => { /* log already */ })` blocks are left as-is.
 
 ```ts
 // Before:
@@ -393,9 +431,24 @@ user's bucket because keys are namespaced by route + key family.
 
 The Pino instance is constructed at module load. Fastify reuses it via
 `buildApp({ logger })`. Test environments set `level: "silent"` to avoid
-log noise in `vitest run` output. Existing tests that assert on log
-shape (e.g., 1J's audit tests) use `pino-test` (lightweight Pino
-test transport) — added as a devDependency.
+log noise in `vitest run` output.
+
+Tests that assert on log shape — `tests/logger.test.ts` + the cron
+tests that check `event: "success" | "protected_skip"` — use Pino's
+built-in `multistream` with an in-memory `Writable` rather than a
+new devDependency:
+
+```ts
+import { Writable } from "node:stream";
+const lines: string[] = [];
+const sink = new Writable({
+  write(chunk, _enc, cb) { lines.push(chunk.toString()); cb(); },
+});
+const testLogger = pino({ level: "info" }, sink);
+// assertions read JSON.parse(lines[0]) etc.
+```
+
+No new devDependency required.
 
 ### 6.3 Health `/ready` DB-ping leak
 
@@ -431,12 +484,22 @@ identically, so the order doesn't matter for correctness.
 ### 8.1 New tests
 
 - `tests/rate-limit.test.ts` (new) — 4 tests: global default, chat
-  per-user, auth per-IP, plaid per-user. Each fires `policy.max + 1`
-  requests and asserts the last is 429 with `error: "rate_limit_exceeded"`.
+  per-user, auth per-IP, plaid per-user. Each test sets
+  `process.env.RATE_LIMIT_TEST = "1"` BEFORE `buildApp` so the plugin
+  registers. Sequential `inject` calls fire `policy.max + 1` requests
+  (same session cookie for user-keyed routes); assert the last is
+  429 with `error: "rate_limit_exceeded"`. For chat-per-user, reuse
+  the existing `signUpAndGetCookie` helper from
+  `tests/helpers/auth.ts` (it already extracts a real session
+  cookie via Better Auth).
 - `tests/helmet.test.ts` (new) — 1 test: GET `/live` response includes
   `x-frame-options: DENY` and `content-security-policy`.
 - `tests/health.test.ts` (existing) — extend to cover `/live` 200,
   `/ready` 200, `/ready` with DB disconnected → 503, `/health` alias.
+  The DB-disconnect path uses `vi.spyOn(prisma, "$queryRaw")` to
+  throw a synthetic error — simulates a DB-down condition without
+  actually closing the connection (which would break other tests
+  under vitest singleFork).
 - `tests/env.test.ts` (existing) — extend to test the new RESEND
   refine: production + missing key throws; production + real key passes;
   dev + missing key passes.
@@ -475,9 +538,11 @@ and:
 
 If the app is deployed behind a load balancer / CDN, the immediate IP
 is the proxy's. The rate-limit plugin reads `req.ip` which honours
-Fastify's `trustProxy` option. Document in deployment notes: when
-fronted by CloudFront / Vercel / etc., set `trustProxy: true` so X-Forwarded-For
-is the source-of-truth.
+Fastify's `trustProxy` option. `server.ts` reads `TRUST_PROXY` from
+env (default `false` in dev / `true` in production via NODE_ENV)
+so IP keying is correct from day one of the first prod deploy. Without
+this, all requests behind the CDN share a single IP-keyed bucket.
+`env.ts` gains `TRUST_PROXY: z.coerce.boolean().optional()`.
 
 ### 9.2 Per-user rate limit on `chatMessages` requires an authed session
 
