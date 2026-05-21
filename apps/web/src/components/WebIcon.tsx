@@ -16,7 +16,10 @@ type IconName =
   | "user"
   | "logOut"
   | "sparkle"
-  | "plus";
+  | "plus"
+  | "laptop"
+  | "monitor"
+  | "x";
 
 type Props = {
   name: IconName;
@@ -164,6 +167,28 @@ function paths(name: IconName) {
         <>
           <line x1="12" y1="5" x2="12" y2="19" />
           <line x1="5" y1="12" x2="19" y2="12" />
+        </>
+      );
+    case "laptop":
+      return (
+        <>
+          <rect x="3" y="4" width="18" height="12" rx="2" />
+          <line x1="2" y1="20" x2="22" y2="20" />
+        </>
+      );
+    case "monitor":
+      return (
+        <>
+          <rect x="2" y="3" width="20" height="14" rx="2" />
+          <line x1="8" y1="21" x2="16" y2="21" />
+          <line x1="12" y1="17" x2="12" y2="21" />
+        </>
+      );
+    case "x":
+      return (
+        <>
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
         </>
       );
   }
