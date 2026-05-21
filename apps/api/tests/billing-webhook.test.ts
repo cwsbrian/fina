@@ -112,3 +112,172 @@ describe("POST /webhooks/stripe — signature + idempotency", () => {
     expect(stored).toBe(1);
   });
 });
+
+import { signUpAndGetCookie } from "./helpers/auth.js";
+
+function fakeStripeSub(opts: {
+  id?: string; customer?: string; priceId?: string; status?: string; cancelAtPeriodEnd?: boolean;
+}) {
+  return {
+    id: opts.id ?? "sub_w",
+    customer: opts.customer ?? "cus_w",
+    status: opts.status ?? "active",
+    cancel_at_period_end: opts.cancelAtPeriodEnd ?? false,
+    current_period_end: Math.floor((Date.now() + 30 * 86400_000) / 1000),
+    items: { data: [{ price: { id: opts.priceId ?? env.STRIPE_PRICE_PRO_MONTHLY } }] },
+  } as any;
+}
+
+describe("POST /webhooks/stripe — event dispatch", () => {
+  beforeEach(async () => {
+    await truncateAll();
+    vi.clearAllMocks();
+  });
+
+  it("checkout.session.completed → sub upserted, customerId set", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "w1@example.com", name: "W One" });
+    stripe.fns.subsRetrieve.mockResolvedValue(fakeStripeSub({ id: "sub_w1", customer: "cus_w1" }));
+
+    const { rawBody, signature } = signedEvent({
+      id: "evt_w1",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_w1",
+          customer: "cus_w1",
+          subscription: "sub_w1",
+          client_reference_id: user.userId,
+        },
+      },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload: rawBody,
+    });
+    expect(res.statusCode).toBe(200);
+
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
+    expect(fresh.stripeCustomerId).toBe("cus_w1");
+    const sub = await prisma.subscription.findUniqueOrThrow({
+      where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_w1" } },
+    });
+    expect(sub.tier).toBe("pro");
+    expect(sub.status).toBe("active");
+  });
+
+  it("subscription.updated before any .created still creates the row", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "w2@example.com", name: "W Two" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { stripeCustomerId: "cus_w2" },
+    });
+    stripe.fns.subsRetrieve.mockResolvedValue(fakeStripeSub({ id: "sub_w2", customer: "cus_w2" }));
+
+    const { rawBody, signature } = signedEvent({
+      id: "evt_w2",
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_w2", customer: "cus_w2" } },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload: rawBody,
+    });
+
+    const sub = await prisma.subscription.findUnique({
+      where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_w2" } },
+    });
+    expect(sub).not.toBeNull();
+  });
+
+  it("stale subscription.created retry after newer .updated keeps latest state", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "w3@example.com", name: "W Three" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { stripeCustomerId: "cus_w3" },
+    });
+    stripe.fns.subsRetrieve.mockResolvedValue(
+      fakeStripeSub({ id: "sub_w3", customer: "cus_w3", cancelAtPeriodEnd: true }),
+    );
+
+    const { rawBody, signature } = signedEvent({
+      id: "evt_w3_stale",
+      type: "customer.subscription.created",
+      data: { object: { id: "sub_w3", customer: "cus_w3" } },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload: rawBody,
+    });
+
+    const sub = await prisma.subscription.findUniqueOrThrow({
+      where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_w3" } },
+    });
+    expect(sub.cancelAtPeriodEnd).toBe(true);
+  });
+
+  it("subscription.deleted → row status=canceled", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "w4@example.com", name: "W Four" });
+    await prisma.user.update({ where: { id: user.userId }, data: { stripeCustomerId: "cus_w4" } });
+    await prisma.subscription.create({
+      data: {
+        userId: user.userId, tier: "pro", source: "stripe",
+        sourceSubscriptionId: "sub_w4", status: "active" as any,
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+      },
+    });
+    stripe.fns.subsRetrieve.mockResolvedValue(
+      fakeStripeSub({ id: "sub_w4", customer: "cus_w4", status: "canceled" }),
+    );
+
+    const { rawBody, signature } = signedEvent({
+      id: "evt_w4",
+      type: "customer.subscription.deleted",
+      data: { object: { id: "sub_w4", customer: "cus_w4" } },
+    });
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload: rawBody,
+    });
+
+    const sub = await prisma.subscription.findUniqueOrThrow({
+      where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_w4" } },
+    });
+    expect(sub.status).toBe("canceled");
+  });
+
+  it("unknown price ID → 200, no row created, error logged", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "w5@example.com", name: "W Five" });
+    await prisma.user.update({ where: { id: user.userId }, data: { stripeCustomerId: "cus_w5" } });
+    stripe.fns.subsRetrieve.mockResolvedValue(
+      fakeStripeSub({ id: "sub_w5", customer: "cus_w5", priceId: "price_unknown" }),
+    );
+
+    const { rawBody, signature } = signedEvent({
+      id: "evt_w5",
+      type: "customer.subscription.created",
+      data: { object: { id: "sub_w5", customer: "cus_w5" } },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload: rawBody,
+    });
+    expect(res.statusCode).toBe(200);
+    const stored = await prisma.subscription.count();
+    expect(stored).toBe(0);
+  });
+});

@@ -9,6 +9,9 @@ export async function truncateAll(): Promise<void> {
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE "workspaces" RESTART IDENTITY CASCADE;`);
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE "users" RESTART IDENTITY CASCADE;`);
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE "verifications" RESTART IDENTITY CASCADE;`);
+  // webhook_events has no FK dependencies; truncate to prevent idempotency
+  // short-circuits from prior test runs bleeding into the next run.
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "webhook_events" RESTART IDENTITY CASCADE;`);
 }
 
 export async function disconnect(): Promise<void> {
