@@ -326,14 +326,38 @@ A second delivery of the same event ID hits step 2 and short-circuits. Within th
 
 ### Event handlers
 
+**Stripe webhook delivery is NOT ordered.** A `subscription.updated` can land before its `subscription.created`, and a stale `subscription.created` retry can land after a newer `subscription.updated`. To keep DB convergence order-independent, every subscription event handler re-fetches the current subscription state from Stripe and UPSERTs the row — the event payload is used only to identify WHICH subscription changed, never as the source of truth for its current state.
+
+```ts
+async function syncSubscriptionFromStripe(
+  subscriptionId: string,
+  userId: string,
+): Promise<void> {
+  const sub = await stripe.subscriptions.retrieve(subscriptionId, {
+    expand: ["items.data.price"],
+  });
+  await prisma.subscription.upsert({
+    where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: sub.id } },
+    create: { /* full row from sub */ userId, ... },
+    update: { /* status, currentPeriodEnd, cancelAtPeriodEnd, tier from sub */ ... },
+  });
+}
+```
+
+Handler dispatch:
+
 | event.type | Handler |
 |---|---|
-| `checkout.session.completed` | Find user by `session.client_reference_id`. Fetch `session.subscription` from Stripe (with `expand: ["items.data.price"]`). Upsert Subscription row. Set `User.stripeCustomerId` if not set. |
-| `customer.subscription.created` | Upsert Subscription. Race with checkout.session.completed handled by `@@unique`. |
-| `customer.subscription.updated` | Update matching Subscription row: `status`, `currentPeriodEnd`, `cancelAtPeriodEnd`, `tier` (price change). |
-| `customer.subscription.deleted` | Update matching Subscription row to `status = canceled`. Row retained for history. |
-| `invoice.payment_failed` | No-op (next `subscription.updated` carries `status=past_due`). |
+| `checkout.session.completed` | Find user by `session.client_reference_id`. Set `User.stripeCustomerId` if not set. If `session.subscription` present → `syncSubscriptionFromStripe(session.subscription, user.id)`. |
+| `customer.subscription.created` | Resolve user from `sub.customer` → User.stripeCustomerId (must exist by now; if not, log + 200 — checkout webhook will create it). Then `syncSubscriptionFromStripe(sub.id, user.id)`. |
+| `customer.subscription.updated` | Same as `.created` — re-fetch + upsert. Order-independent. |
+| `customer.subscription.deleted` | Same as `.created` — re-fetch + upsert. Stripe still returns canceled subs via API, so the upsert lands with `status = canceled`. Row retained for history. |
+| `invoice.payment_failed` | No-op (the resulting `subscription.updated` with `status=past_due` will carry the new state). |
 | anything else | No-op (200 OK, structured log). |
+
+**Why re-fetch instead of trusting the event payload:** Stripe's documented best practice (see "Best practices for using webhooks") is to use the event purely as a notification and read current state from the API. This costs one extra API call per webhook (cheap — Stripe rate limits are generous) and eliminates an entire class of out-of-order / stale-payload bugs. The `WebhookEvent` idempotency table still protects against duplicate deliveries of the same event ID; convergence across DIFFERENT events for the same subscription comes from "always read fresh".
+
+**Where the event payload IS trusted:** `client_reference_id` on the checkout session (user → sub binding) and `customer` on subscription events (sub → user resolution). Both are immutable for the lifetime of the object; using them from the event is safe.
 
 ### Unknown price IDs
 
@@ -435,6 +459,8 @@ Cases:
 | POST /webhooks/stripe — bad signature | 400 `webhook_invalid_signature`, no DB writes |
 | POST /webhooks/stripe — `checkout.session.completed` | Subscription row created, User.stripeCustomerId set, WebhookEvent inserted |
 | Same event delivered twice | Second delivery returns 200, no second Subscription row |
+| `subscription.updated` arrives before any `subscription.created` for that sub | Handler re-fetches from Stripe → upserts row from scratch. No missing-row failure. |
+| Old `subscription.created` retry arrives after newer `subscription.updated` | Handler re-fetches → DB still reflects the latest state, not the stale event payload. |
 | `subscription.updated` with `cancelAtPeriodEnd: true` | Row updated, status still `active`, EffectiveTier still paid |
 | `subscription.updated` with `status: past_due` | Row updated, EffectiveTier still paid (Smart Retries safety) |
 | `subscription.deleted` | Row `status=canceled`. If trial also expired → EffectiveTier `free`. |
