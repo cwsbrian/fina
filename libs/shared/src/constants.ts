@@ -26,11 +26,16 @@ export const RATE_LIMITS = {
   globalDefault: { max: 60, windowMs: 60_000 },
   /** Heaviest cost — guards LLM token spend. Keyed by user id. */
   chatMessages: { max: 30, windowMs: 60_000 },
-  /** Credential stuffing protection. Keyed by IP. 30/min still defeats any
-   *  realistic password-guessing attempt while accommodating Better Auth's
-   *  /api/auth/get-session polling (fired on every page load by the web
-   *  client). 5/min was too tight — a logged-in user would hit 429 after
-   *  ~5 page navigations. */
+  /** Credential-stuffing protection — sign-in / sign-up only. 5 attempts per
+   *  minute per IP is realistic for humans and slows automated guessing to
+   *  near-zero throughput. Wired by server.ts onto /api/auth/sign-in/* and
+   *  /api/auth/sign-up/* (Plan 1J Task 8). */
+  authStrict: { max: 5, windowMs: 60_000 },
+  /** All other /api/auth/* paths (get-session, list-sessions, sign-out, etc.).
+   *  30/min/IP accommodates Better Auth's get-session polling fired on every
+   *  page load by the web client. 5/min was too tight — a logged-in user
+   *  would hit 429 after ~5 page navigations. (Was 5/min in plan 1H; raised
+   *  to 30 in hotfix 4108020 and reaffirmed here as the long-term value.) */
   auth: { max: 30, windowMs: 60_000 },
   /** Plaid Link callback / re-exchange. Keyed by user id. */
   plaidExchange: { max: 5, windowMs: 60_000 },
