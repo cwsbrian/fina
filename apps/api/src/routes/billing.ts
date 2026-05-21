@@ -178,7 +178,9 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       return await buildMeBody(user.id);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
-      app.log.error({ err: e }, "sync_failed");
+      // Log tag mirrors the response code so monitoring/alerting can grep
+      // for a single string (sync 500s show up under checkout_failed).
+      app.log.error({ err: e, route: "/billing/sync" }, "checkout_failed");
       return reply.code(500).send({ error: "checkout_failed" });
     }
   });

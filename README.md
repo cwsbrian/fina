@@ -107,7 +107,10 @@ larger explorations, ER diagrams, or managing multiple environments side-by-side
    ```bash
    stripe listen --forward-to localhost:4000/webhooks/stripe
    ```
-   Copy the `whsec_...` it prints into `STRIPE_WEBHOOK_SECRET`.
+   Copy the `whsec_...` it prints into `STRIPE_WEBHOOK_SECRET`. In **Developers
+   → Webhooks**, confirm the endpoint's "API version" is `2025-02-24.acacia`
+   or later — older versions emit payloads with different field shapes that
+   our handler doesn't parse.
 6. Restart the API so the new env values load (`pnpm smoke:api`).
 7. Visit `http://localhost:3100/settings/plan`, click Upgrade. Use Stripe's
    test card `4242 4242 4242 4242`, any future expiry, any CVC, any postal.
