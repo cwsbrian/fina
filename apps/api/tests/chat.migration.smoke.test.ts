@@ -27,33 +27,38 @@ describe("plan 2-chat-user-scope migration smoke", () => {
     // Seed a few rows so the planner doesn't pick a Seq Scan for an empty table.
     const stamp = `idx-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
     await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "I" } });
-    for (let i = 0; i < 500; i++) {
-      await prisma.chatThread.create({
-        data: { userId: stamp, workspaceId: null, lastMessageAt: new Date(Date.now() - i * 1000) },
+    try {
+      for (let i = 0; i < 500; i++) {
+        await prisma.chatThread.create({
+          data: { userId: stamp, workspaceId: null, lastMessageAt: new Date(Date.now() - i * 1000) },
+        });
+      }
+      // ANALYZE so the planner has stats.
+      await prisma.$executeRawUnsafe(`ANALYZE chat_threads`);
+
+      // Use SET LOCAL enable_seqscan = OFF so the planner is forced to choose
+      // an index scan. This validates the index exists and is structurally
+      // compatible with the query — which is the actual guarantee we need.
+      const plan = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL enable_seqscan = OFF`);
+        return tx.$queryRaw<Array<{ "QUERY PLAN": string }>>`
+          EXPLAIN SELECT * FROM chat_threads
+            WHERE "userId" = ${stamp} AND "archivedAt" IS NULL
+            ORDER BY "lastMessageAt" DESC NULLS LAST
+            LIMIT 10;
+        `;
+      });
+      const planText = plan.map((r) => r["QUERY PLAN"]).join("\n");
+      expect(planText).toMatch(/Index (Only )?Scan.*chat_threads_userId_archivedAt_lastMessageAt_idx/);
+      expect(planText).not.toMatch(/Seq Scan on chat_threads/);
+    } finally {
+      // Guard cleanup so a failing assertion doesn't leave 500 orphan rows
+      // + a dangling user in the test DB.
+      await prisma.chatThread.deleteMany({ where: { userId: stamp } });
+      await prisma.user.delete({ where: { id: stamp } }).catch(() => {
+        /* user may not exist if create itself failed */
       });
     }
-    // ANALYZE so the planner has stats.
-    await prisma.$executeRawUnsafe(`ANALYZE chat_threads`);
-
-    // Use SET LOCAL enable_seqscan = OFF so the planner is forced to choose
-    // an index scan. This validates the index exists and is structurally
-    // compatible with the query — which is the actual guarantee we need.
-    const plan = await prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe(`SET LOCAL enable_seqscan = OFF`);
-      return tx.$queryRaw<Array<{ "QUERY PLAN": string }>>`
-        EXPLAIN SELECT * FROM chat_threads
-          WHERE "userId" = ${stamp} AND "archivedAt" IS NULL
-          ORDER BY "lastMessageAt" DESC NULLS LAST
-          LIMIT 10;
-      `;
-    });
-    const planText = plan.map((r) => r["QUERY PLAN"]).join("\n");
-    expect(planText).toMatch(/Index (Only )?Scan.*chat_threads_userId_archivedAt_lastMessageAt_idx/);
-    expect(planText).not.toMatch(/Seq Scan on chat_threads/);
-
-    // Cleanup
-    await prisma.chatThread.deleteMany({ where: { userId: stamp } });
-    await prisma.user.delete({ where: { id: stamp } });
   });
 
   it("chat_threads has the post-migration column shape", async () => {
