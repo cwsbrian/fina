@@ -189,7 +189,7 @@ log aggregators."
 
 - [ ] **Step 2.1: Write the failing env.test.ts cases**
 
-Open `apps/api/tests/env.test.ts`. Find the `TRUST_PROXY` block (around lines 73-83). Replace the existing two cases with three new ones:
+Open `apps/api/tests/env.test.ts`. Find the single existing `it("TRUST_PROXY defaults to true in production, false in dev")` block (around lines 71-76). Delete that one block and add **four** new ones in its place:
 
 ```ts
 describe("loadEnv TRUST_PROXY strict opt-in", () => {
@@ -478,10 +478,10 @@ export default defineConfig({
 Verify the setup:
 
 ```bash
-pnpm --filter @fina/web exec vitest run --reporter=verbose 2>&1 | tail -5
+pnpm --filter @fina/web exec vitest run --passWithNoTests --reporter=verbose 2>&1 | tail -5
 ```
 
-Expected: "no test files found" — but no error. Setup is good.
+Expected: "No test files found, exiting with code 0" (vitest accepts the flag and exits clean). Setup is good. Skip this step if you'd rather move directly to Step 3.1; Step 3.5 will validate the setup once a real test file exists.
 
 - [ ] **Step 3.1: Install sonner**
 
@@ -1258,7 +1258,11 @@ SCHEDULED_SPEND_TTL_DAYS: z.coerce.number().int().positive().optional(),
 
 - [ ] **Step 7.2: Write the failing test**
 
-The existing `apps/api/tests/cron.cleanup-events.test.ts` (read at plan time) only seeds `plaidWebhookEvent` — no workspace/category/transaction setup. Add an inline seed in a new describe block. Append to the end of the file:
+The existing `apps/api/tests/cron.cleanup-events.test.ts` (read at plan time) only seeds `plaidWebhookEvent` — no workspace/category/transaction setup. By the time Task 7 runs, Task 2's fixture sweep should have already migrated the module-scope `env` literal in this file (lines 6-19 today) to `testEnv()`. Verify before starting Task 7: if the file still has an inline `env` literal, finish Task 2's migration first (the inline literal lacks `TRUST_PROXY` and will TS-fail under the new strict schema).
+
+The new test block continues to use the module-scope `env`; if you need to override `SCHEDULED_SPEND_TTL_DAYS`, pass `{ ...env, SCHEDULED_SPEND_TTL_DAYS: 90 }` or `testEnv({ SCHEDULED_SPEND_TTL_DAYS: 90 })` to `runCleanupEvents()`.
+
+Append to the end of the file:
 
 ```ts
 describe("cleanup-events ScheduledSpend pass", () => {
@@ -1590,7 +1594,7 @@ if (isStrict) {
 }
 ```
 
-This fallback should NOT be needed — Fastify's specificity-first matching has been stable since 3.x and this codebase is on 5.x. If you hit it, document the Fastify version in the commit message and we'll revisit.
+This fallback should NOT be needed — Fastify's specificity-first matching has been stable since 3.x and this codebase is on 5.x. **If you hit it: STOP and escalate to a human.** Do not attempt the in-handler URL check above without confirming the route specificity has actually failed (the test failure mode would be: 6th sign-in request returns 200 instead of 429). Document the observed behavior and the Fastify package version in your escalation.
 
 - [ ] **Step 8.6: Run the full suite for regressions**
 
