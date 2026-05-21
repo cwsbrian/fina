@@ -33,6 +33,38 @@ export default function AccountPage() {
   const [pwBusy, setPwBusy] = useState(false);
   const [pwErr, setPwErr] = useState<string | null>(null);
 
+  type SessionRow = {
+    id: string;
+    token: string;
+    userAgent: string | null;
+    createdAt: string | Date;
+    updatedAt: string | Date;
+  };
+  const [sessions, setSessions] = useState<SessionRow[] | null>(null);
+  const [currentSessionToken, setCurrentSessionToken] = useState<string | null>(
+    null,
+  );
+  const [revoking, setRevoking] = useState<string | null>(null);
+
+  const loadSessions = async () => {
+    try {
+      const [list, current] = await Promise.all([
+        authClient.listSessions(),
+        authClient.getSession(),
+      ]);
+      if (!list.error && Array.isArray(list.data)) {
+        setSessions(list.data as SessionRow[]);
+      }
+      if (!current.error && current.data?.session) {
+        setCurrentSessionToken(
+          (current.data.session as { token: string }).token,
+        );
+      }
+    } catch {
+      // Leave sessions === null → row collapses to a generic placeholder.
+    }
+  };
+
   useEffect(() => {
     apiFetch<Me>("/me")
       .then((data) => {
@@ -43,6 +75,7 @@ export default function AccountPage() {
         setLocale(data.user.locale);
       })
       .catch((e) => setErr((e as { code?: string }).code ?? "load_error"));
+    loadSessions();
   }, []);
 
   if (err) {
@@ -125,6 +158,59 @@ export default function AccountPage() {
     }
     await signOut();
     router.replace("/sign-in");
+  };
+
+  const onRevokeSession = async (token: string) => {
+    if (revoking) return;
+    if (!confirm("Sign this device out of Fina?")) return;
+    setRevoking(token);
+    try {
+      const res = await authClient.revokeSession({ token });
+      if (res.error) {
+        alert(res.error.message ?? "Could not revoke session");
+        return;
+      }
+      setSessions((prev) =>
+        prev ? prev.filter((s) => s.token !== token) : prev,
+      );
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not revoke session");
+    } finally {
+      setRevoking(null);
+    }
+  };
+
+  const deviceLabel = (ua: string | null): string => {
+    if (!ua) return "Unknown device";
+    if (/iPhone/.test(ua)) return "iPhone";
+    if (/iPad/.test(ua)) return "iPad";
+    if (/Android/.test(ua)) return "Android device";
+    if (/Macintosh|Mac OS X/.test(ua)) return "Mac";
+    if (/Windows/.test(ua)) return "Windows PC";
+    if (/Linux/.test(ua)) return "Linux";
+    return "Browser";
+  };
+
+  const browserLabel = (ua: string | null): string | null => {
+    if (!ua) return null;
+    if (/Edg\//.test(ua)) return "Edge";
+    if (/Chrome\//.test(ua)) return "Chrome";
+    if (/Firefox\//.test(ua)) return "Firefox";
+    if (/Safari\//.test(ua)) return "Safari";
+    return null;
+  };
+
+  const relativeTime = (d: string | Date): string => {
+    const t = typeof d === "string" ? new Date(d) : d;
+    const diffMs = Date.now() - t.getTime();
+    const mins = Math.round(diffMs / 60_000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.round(hrs / 24);
+    if (days < 30) return `${days}d ago`;
+    return t.toLocaleDateString();
   };
 
   const onDelete = async () => {
@@ -413,21 +499,67 @@ export default function AccountPage() {
           </button>
         </div>
         <div className={styles.group}>
-          <div className={styles.row}>
-            <span className={styles.rowGlyph}>
-              <WebIcon name="laptop" size={20} />
-            </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className={styles.rowTitle}>
-                This browser
-                <span className={styles.tagCurrent}>This device</span>
-              </div>
-              <div className={styles.rowMeta}>
-                Signed in right now
+          {sessions === null ? (
+            <div className={styles.row}>
+              <span className={styles.rowGlyph}>
+                <WebIcon name="laptop" size={20} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className={styles.rowMeta}>Loading sessions…</div>
               </div>
             </div>
-          </div>
-          {/* TODO: list other active sessions when /api/auth/sessions is wired */}
+          ) : sessions.length === 0 ? (
+            <div className={styles.row}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className={styles.rowMeta}>No other active sessions.</div>
+              </div>
+            </div>
+          ) : (
+            [...sessions]
+              .sort((a, b) => {
+                if (a.token === currentSessionToken) return -1;
+                if (b.token === currentSessionToken) return 1;
+                return (
+                  new Date(b.updatedAt).getTime() -
+                  new Date(a.updatedAt).getTime()
+                );
+              })
+              .map((s) => {
+                const isCurrent = s.token === currentSessionToken;
+                const device = deviceLabel(s.userAgent);
+                const browser = browserLabel(s.userAgent);
+                return (
+                  <div key={s.id} className={styles.row}>
+                    <span className={styles.rowGlyph}>
+                      <WebIcon name="laptop" size={20} />
+                    </span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div className={styles.rowTitle}>
+                        {browser ? `${device} · ${browser}` : device}
+                        {isCurrent && (
+                          <span className={styles.tagCurrent}>This device</span>
+                        )}
+                      </div>
+                      <div className={styles.rowMeta}>
+                        {isCurrent
+                          ? "Signed in right now"
+                          : `Last active ${relativeTime(s.updatedAt)}`}
+                      </div>
+                    </div>
+                    {!isCurrent && (
+                      <button
+                        type="button"
+                        className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`}
+                        onClick={() => onRevokeSession(s.token)}
+                        disabled={revoking === s.token}
+                      >
+                        {revoking === s.token ? "Revoking…" : "Revoke"}
+                      </button>
+                    )}
+                  </div>
+                );
+              })
+          )}
         </div>
       </div>
 
