@@ -3,7 +3,8 @@
   "version": "0.0.1",
   "dependencies": {
     "vite": "^5.0.0",
-    "@nx/vite": "19.8.14"
+    "@nx/vite": "19.8.14",
+    "zod": "^3.23.0"
   },
   "type": "commonjs",
   "main": "./src/index.js",

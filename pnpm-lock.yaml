@@ -315,7 +315,7 @@ importers:
     dependencies:
       better-auth:
         specifier: ^1.6.9
-        version: 1.6.11(@prisma/client@5.22.0(prisma@5.22.0))(next@14.2.35(@babel/core@7.29.0)(@playwright/test@1.60.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.99.0))(prisma@5.22.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vitest@2.1.9(@types/node@20.19.41)(@vitest/ui@1.6.1)(jsdom@20.0.3)(less@4.1.3)(lightningcss@1.32.0)(sass@1.99.0)(stylus@0.64.0)(terser@5.47.1))
+        version: 1.6.11(@prisma/client@5.22.0(prisma@5.22.0))(next@14.2.35(@babel/core@7.29.0)(@playwright/test@1.60.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.99.0))(prisma@5.22.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vitest@2.1.9(@types/node@20.19.41)(@vitest/ui@1.6.1(vitest@1.6.1))(jsdom@20.0.3)(less@4.1.3)(lightningcss@1.32.0)(sass@1.99.0)(stylus@0.64.0)(terser@5.47.1))
       next:
         specifier: 14.2.35
         version: 14.2.35(@babel/core@7.29.0)(@playwright/test@1.60.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.99.0)
@@ -340,6 +340,9 @@ importers:
       vite:
         specifier: ^5.0.0
         version: 5.4.21(@types/node@20.19.41)(less@4.1.3)(lightningcss@1.32.0)(sass@1.99.0)(stylus@0.64.0)(terser@5.47.1)
+      zod:
+        specifier: ^3.23.0
+        version: 3.25.76
 
 packages:
 
@@ -1657,7 +1660,7 @@ packages:
 
   '@expo/bunyan@4.0.1':
     resolution: {integrity: sha512-+Lla7nYSiHZirgK+U/uYzsLv/X+HaJienbD5AKX1UQZHYfWaP+9uuQluRB4GrEVWF0GZ7vEVp/jzaOT9k/SQlg==}
-    engines: {node: '>=0.10.0'}
+    engines: {'0': node >=0.10.0}
 
   '@expo/cli@0.18.31':
     resolution: {integrity: sha512-v9llw9fT3Uv+TCM6Xllo54t672CuYtinEQZ2LPJ2EJsCwuTc4Cd2gXQaouuIVD21VoeGQnr5JtJuWbF97sBKzQ==}
@@ -2894,8 +2897,8 @@ packages:
     peerDependencies:
       '@types/react': '*'
       '@types/react-dom': '*'
-      react: 19.1.0
-      react-dom: 19.1.0
+      react: ^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc
+      react-dom: ^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc
     peerDependenciesMeta:
       '@types/react':
         optional: true
@@ -3047,7 +3050,7 @@ packages:
     peerDependencies:
       '@react-native-masked-view/masked-view': '>= 0.2.0'
       '@react-navigation/native': ^7.2.4
-      react: 19.1.0
+      react: '>= 18.2.0'
       react-native: '*'
       react-native-safe-area-context: '>= 4.0.0'
     peerDependenciesMeta:
@@ -3058,7 +3061,7 @@ packages:
     resolution: {integrity: sha512-kNrJggwoB/onC0MpZIuZ6qaqeAziFchz+W9txBzhd6qbWmB1OkPVUnu6fWgc6BQc7MeMf59djVmqgX+6kJU1Ug==}
     peerDependencies:
       '@react-navigation/native': ^7.2.4
-      react: 19.1.0
+      react: '>= 18.2.0'
       react-native: '*'
       react-native-safe-area-context: '>= 4.0.0'
       react-native-screens: '>= 4.0.0'
@@ -3408,7 +3411,7 @@ packages:
 
       See migration guide: https://callstack.github.io/react-native-testing-library/docs/migration/jest-matchers
     peerDependencies:
-      react: 19.1.0
+      react: '>=16.0.0'
       react-native: '>=0.59'
       react-test-renderer: '>=16.0.0'
 
@@ -4336,8 +4339,8 @@ packages:
       next: ^14.0.0 || ^15.0.0 || ^16.0.0
       pg: ^8.0.0
       prisma: ^5.0.0 || ^6.0.0 || ^7.0.0
-      react: 19.1.0
-      react-dom: 19.1.0
+      react: ^18.0.0 || ^19.0.0
+      react-dom: ^18.0.0 || ^19.0.0
       solid-js: ^1.0.0
       svelte: ^4.0.0 || ^5.0.0
       vitest: ^2.0.0 || ^3.0.0 || ^4.0.0
@@ -5649,7 +5652,7 @@ packages:
     peerDependencies:
       '@expo/dom-webview': '*'
       '@expo/metro-runtime': ~6.1.2
-      react: 19.1.0
+      react: '*'
       react-native: '*'
       react-native-webview: '*'
     peerDependenciesMeta:
@@ -8593,13 +8596,13 @@ packages:
   react-native-is-edge-to-edge@1.3.1:
     resolution: {integrity: sha512-NIXU/iT5+ORyCc7p0z2nnlkouYKX425vuU1OEm6bMMtWWR9yvb+Xg5AZmImTKoF9abxCPqrKC3rOZsKzUYgYZA==}
     peerDependencies:
-      react: 19.1.0
+      react: '*'
       react-native: '*'
 
   react-native-safe-area-context@5.6.2:
     resolution: {integrity: sha512-4XGqMNj5qjUTYywJqpdWZ9IG8jgkS3h06sfVjfw5yZQZfWnRFXczi0GnYyFyCc2EBps/qFmoCH8fez//WumdVg==}
     peerDependencies:
-      react: 19.1.0
+      react: '*'
       react-native: '*'
 
   react-native-screens@4.16.0:
@@ -9944,7 +9947,7 @@ packages:
   use-sync-external-store@1.6.0:
     resolution: {integrity: sha512-Pp6GSwGP/NrPIrxVFAIkOQeyw8lFenOHijQWkUTrDvrF4ALqylP2C/KCkeS9dpUM3KvYRQhna5vt7IL95+ZQ9w==}
     peerDependencies:
-      react: 19.1.0
+      react: ^16.8.0 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
@@ -15755,7 +15758,7 @@ snapshots:
 
   batch@0.6.1: {}
 
-  better-auth@1.6.11(@prisma/client@5.22.0(prisma@5.22.0))(next@14.2.35(@babel/core@7.29.0)(@playwright/test@1.60.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.99.0))(prisma@5.22.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vitest@2.1.9(@types/node@20.19.41)(@vitest/ui@1.6.1)(jsdom@20.0.3)(less@4.1.3)(lightningcss@1.32.0)(sass@1.99.0)(stylus@0.64.0)(terser@5.47.1)):
+  better-auth@1.6.11(@prisma/client@5.22.0(prisma@5.22.0))(next@14.2.35(@babel/core@7.29.0)(@playwright/test@1.60.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(sass@1.99.0))(prisma@5.22.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(vitest@2.1.9(@types/node@20.19.41)(@vitest/ui@1.6.1(vitest@1.6.1))(jsdom@20.0.3)(less@4.1.3)(lightningcss@1.32.0)(sass@1.99.0)(stylus@0.64.0)(terser@5.47.1)):
     dependencies:
       '@better-auth/core': 1.6.11(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(better-call@1.3.5(zod@3.25.76))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0)
       '@better-auth/drizzle-adapter': 1.6.11(@better-auth/core@1.6.11(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(better-call@1.3.5(zod@3.25.76))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0))(@better-auth/utils@0.4.0)
@@ -15768,7 +15771,7 @@ snapshots:
       '@better-fetch/fetch': 1.1.21
       '@noble/ciphers': 2.2.0
       '@noble/hashes': 2.2.0
-      better-call: 1.3.5(zod@3.25.76)
+      better-call: 1.3.5(zod@4.4.3)
       defu: 6.1.7
       jose: 6.2.3
       kysely: 0.28.17
@@ -15798,7 +15801,7 @@ snapshots:
       '@better-fetch/fetch': 1.1.21
       '@noble/ciphers': 2.2.0
       '@noble/hashes': 2.2.0
-      better-call: 1.3.5(zod@4.4.3)
+      better-call: 1.3.5(zod@3.25.76)
       defu: 6.1.7
       jose: 6.2.3
       kysely: 0.28.17
