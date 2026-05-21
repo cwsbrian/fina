@@ -221,14 +221,26 @@ const session = await stripe.checkout.sessions.create({
   success_url: `${env.WEB_BASE_URL}/settings/plan?status=success&sessionId={CHECKOUT_SESSION_ID}`,
   cancel_url: `${env.WEB_BASE_URL}/settings/plan?status=cancel`,
   allow_promotion_codes: true,
-  subscription_data: user.trialEndsAt && user.trialEndsAt > new Date()
-    ? { trial_end: Math.floor(user.trialEndsAt.getTime() / 1000) }
+  subscription_data: useTrialEnd(user.trialEndsAt)
+    ? { trial_end: Math.floor(user.trialEndsAt!.getTime() / 1000) }
     : undefined,
 });
 return { url: session.url! };
 ```
 
-`trial_end` makes Stripe defer the first charge until our trial expires — user gets the rest of their 30 days free even after entering a card.
+```ts
+// Stripe requires trial_end to be at least 48 hours in the future.
+// If the user's local trial is closer than that, omit trial_end —
+// they'll be charged at Checkout. Documented limitation for users
+// who upgrade in their last ~2 days of trial.
+const STRIPE_TRIAL_END_MIN_MS = 48 * 60 * 60 * 1000;
+function useTrialEnd(trialEndsAt: Date | null): boolean {
+  if (!trialEndsAt) return false;
+  return trialEndsAt.getTime() - Date.now() >= STRIPE_TRIAL_END_MIN_MS;
+}
+```
+
+`trial_end` makes Stripe defer the first charge until our trial expires — user gets the rest of their 30 days free even after entering a card. The 48h guard exists because Stripe rejects `trial_end` values closer than that; users upgrading in the final two days of their local trial are charged immediately (acceptable, since they're explicitly choosing to convert and the saved cost is minimal).
 
 ### `/billing/portal` details
 
@@ -412,7 +424,8 @@ Cases:
 |---|---|
 | Free user POST /billing/checkout `{ tier: "pro" }` | 200 `{ url }`, Stripe called with correct line_items and `client_reference_id` |
 | User with active sub POST /billing/checkout | 409 `already_subscribed` |
-| Trial user POST /billing/checkout | Stripe called with `subscription_data.trial_end = Math.floor(trialEndsAt.getTime()/1000)` |
+| Trial user (>48h left) POST /billing/checkout | Stripe called with `subscription_data.trial_end = Math.floor(trialEndsAt.getTime()/1000)` |
+| Trial user (<48h left) POST /billing/checkout | Stripe called WITHOUT `subscription_data.trial_end` (avoids Stripe's 48h-minimum rejection) |
 | POST /billing/portal — user without stripeCustomerId | 404 `portal_failed` |
 | POST /billing/portal — user with customerId | 200 `{ url }` |
 | POST /webhooks/stripe — bad signature | 400 `webhook_invalid_signature`, no DB writes |
