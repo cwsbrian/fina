@@ -13,7 +13,13 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       // effectiveTier(userId) would issue.
       const t = computeEffectiveTier(user);
       return {
-        user: { id: user.id, email: user.email, tz: user.tz, locale: user.locale },
+        user: {
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          tz: user.tz,
+          locale: user.locale,
+        },
         tier: t.tier,
         trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
       };

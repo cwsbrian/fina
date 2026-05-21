@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
+import { PostScheduledSpendBody, ListScheduledSpendsQuery } from "@fina/shared";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import {
   addScheduledSpendService,
@@ -10,21 +10,6 @@ import {
   type AddScheduledSpendInput,
   type ScheduledSpendStatus,
 } from "../schedules/service.js";
-
-const StatusFilter = z.enum(["upcoming", "unresolved", "resolved-matched", "resolved-dismissed", "all"]);
-
-const PostBody = z.object({
-  categoryId: z.string().min(1),
-  amount: z.number(),
-  scheduledDate: z.string(),
-  note: z.string().optional(),
-}).strict();
-
-const QuerySchema = z.object({
-  from: z.string().optional(),
-  to: z.string().optional(),
-  status: StatusFilter.optional(),
-});
 
 function statusFromCode(code: ScheduledSpendError["code"]): number {
   if (code === "not_found" || code === "category_not_found") return 404;
@@ -41,7 +26,7 @@ export async function schedulesRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
-        const parsed = PostBody.safeParse(req.body);
+        const parsed = PostScheduledSpendBody.safeParse(req.body);
         if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
         const input: AddScheduledSpendInput = {
@@ -71,7 +56,7 @@ export async function schedulesRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
-        const q = QuerySchema.safeParse(req.query);
+        const q = ListScheduledSpendsQuery.safeParse(req.query);
         if (!q.success) return reply.code(400).send({ error: "invalid_query" });
 
         const filter: Parameters<typeof listScheduledSpendsService>[1] = {};

@@ -1,5 +1,5 @@
-import { z } from "zod";
 import type { FastifyInstance } from "fastify";
+import { SetBudgetBody } from "@fina/shared";
 import { requireWorkspaceContext, HttpError } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import {
@@ -8,16 +8,10 @@ import {
   deleteBudgetService,
 } from "../budgets/service.js";
 
-const POST_PERIOD = z.enum(["this_month", "last_month", "next_month"]);
-// Note: amount is NOT constrained to positive() here so the service-level
-// validation (`invalid_amount`) is what surfaces for 0/negative/over-cap
-// values. Otherwise Zod would short-circuit with `invalid_body` and our
-// tested error contract would break.
-const PostBody = z.object({
-  categoryId: z.string().min(1),
-  amount: z.number(),
-  period: POST_PERIOD,
-});
+// Note: amount is NOT constrained to positive() in SetBudgetBody so the
+// service-level validation (`invalid_amount`) is what surfaces for
+// 0/negative/over-cap values. Otherwise Zod would short-circuit with
+// `invalid_body` and our tested error contract would break.
 
 function isFirstOfMonth(s: string): boolean {
   // Shape: YYYY-MM-01, day component must literally be "01".
@@ -37,7 +31,7 @@ function isFirstOfMonth(s: string): boolean {
 export async function budgetsRoutes(app: FastifyInstance): Promise<void> {
   app.post("/workspaces/:id/budgets", async (req, reply) => {
     const params = req.params as { id: string };
-    const parsed = PostBody.safeParse(req.body);
+    const parsed = SetBudgetBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });

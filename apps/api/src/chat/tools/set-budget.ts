@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MAX_AMOUNT } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { setBudgetService } from "../../budgets/service.js";
 import type { ToolDef } from "./types.js";
@@ -7,7 +8,7 @@ const Args = z
   .object({
     category_id: z.string().min(1).optional(),
     category_name: z.string().min(1).max(40).optional(),
-    amount: z.number().positive().max(99_999_999.99),
+    amount: z.number().positive().max(MAX_AMOUNT),
     period: z.enum(["this_month", "last_month", "next_month"]).optional(),
   })
   .refine((a) => Boolean(a.category_id) !== Boolean(a.category_name), {

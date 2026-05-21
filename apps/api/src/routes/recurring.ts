@@ -1,5 +1,5 @@
-import { z } from "zod";
 import type { FastifyInstance } from "fastify";
+import { PostRecurringBody } from "@fina/shared";
 import { requireWorkspaceContext, HttpError } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import {
@@ -8,20 +8,10 @@ import {
   removeRecurringByIdService,
 } from "../recurring/service.js";
 
-const CADENCE = z.enum(["monthly", "semimonthly", "biweekly", "weekly", "yearly"]);
-const PostBody = z.object({
-  name: z.string().trim().min(1).max(100),
-  amount: z.number(),  // service validates positive/cap — 0/neg surfaces as invalid_amount
-  cadence: CADENCE,
-  nextOccurrenceDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  categoryId: z.string().min(1).optional(),
-  merchant: z.string().min(1).max(200).optional(),
-});
-
 export async function recurringRoutes(app: FastifyInstance): Promise<void> {
   app.post("/workspaces/:id/recurring", async (req, reply) => {
     const params = req.params as { id: string };
-    const parsed = PostBody.safeParse(req.body);
+    const parsed = PostRecurringBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });

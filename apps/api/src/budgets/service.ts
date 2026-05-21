@@ -1,11 +1,10 @@
 import { Prisma } from "@prisma/client";
+import { MAX_AMOUNT } from "@fina/shared";
 import { prisma } from "../db.js";
 import { firstOfMonthDateInTz, basicPeriodRange, resolveUserTz, partsInTz, dateKeyInTz } from "../chat/tools/periods.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 
 export type PeriodEnum = "this_month" | "last_month" | "next_month";
-
-const MAX_AMOUNT = 99_999_999.99;
 
 function offsetFor(period: PeriodEnum): number {
   if (period === "last_month") return -1;

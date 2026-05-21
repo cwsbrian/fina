@@ -1,21 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
+import { CreateCategoryBody, PatchCategoryBody } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { createCategoryService } from "../categories/create.js";
 
-const MAX_NAME_LEN = 40;
 const MAX_ACTIVE_CATEGORIES = 30;
-
-// Use .trim() BEFORE .min(1) so "   " (only spaces) is rejected as empty.
-const CreateBody = z.object({ name: z.string().trim().min(1).max(MAX_NAME_LEN) });
-
-const PatchBody = z.object({
-  name: z.string().trim().min(1).max(MAX_NAME_LEN).optional(), // trim before min(1) to reject "   "
-  icon: z.string().max(40).optional().nullable(),
-  color: z.string().max(20).optional().nullable(),
-  archived: z.boolean().optional(),
-});
 
 export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   app.get("/workspaces/:id/categories", async (req, reply) => {
@@ -39,7 +28,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/workspaces/:id/categories", async (req, reply) => {
     const params = req.params as { id: string };
-    const parsed = CreateBody.safeParse(req.body);
+    const parsed = CreateCategoryBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
     try {
@@ -73,7 +62,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch("/workspaces/:id/categories/:catId", async (req, reply) => {
     const params = req.params as { id: string; catId: string };
-    const parsed = PatchBody.safeParse(req.body);
+    const parsed = PatchCategoryBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
     try {

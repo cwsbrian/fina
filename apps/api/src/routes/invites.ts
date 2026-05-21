@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
+import { CreateInviteBody, InviteSignUpBody } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireSession, requireWorkspaceContext } from "../auth/context.js";
 import {
@@ -11,17 +11,6 @@ import {
   InviteServiceError,
 } from "../workspaces/invites.js";
 import { sendInviteEmail } from "../email/invite.js";
-
-const CreateBody = z.object({
-  email: z.string().email(),
-  role: z.enum(["editor", "viewer"]),
-});
-
-const InviteSignUpBody = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
-  name: z.string().optional(),
-});
 
 function mapInviteError(e: unknown): { statusCode: number; code: string } {
   if (e instanceof InviteServiceError) {
@@ -52,7 +41,7 @@ function mapInviteError(e: unknown): { statusCode: number; code: string } {
 export async function inviteRoutes(app: FastifyInstance): Promise<void> {
   app.post("/workspaces/:id/invites", async (req, reply) => {
     const params = req.params as { id: string };
-    const parsed = CreateBody.safeParse(req.body);
+    const parsed = CreateInviteBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });

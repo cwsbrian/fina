@@ -1,6 +1,9 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
-import type { Role } from "@fina/shared";
+import {
+  PatchMemberRoleBody,
+  PatchWorkspaceCurrencyBody,
+  type Role,
+} from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireSession, requireWorkspaceContext } from "../auth/context.js";
 import {
@@ -10,12 +13,6 @@ import {
   transferOwner,
   MembersServiceError,
 } from "../workspaces/members.js";
-
-const PatchRoleBody = z.object({ role: z.enum(["owner", "editor", "viewer"]) });
-
-const PatchCurrencyBody = z.object({
-  currency: z.string().regex(/^[A-Z]{3}$/),
-});
 
 function mapMembersError(e: unknown): { statusCode: number; code: string } {
   if (e instanceof MembersServiceError) {
@@ -81,7 +78,7 @@ export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch("/workspaces/:id/members/:userId", async (req, reply) => {
     const params = req.params as { id: string; userId: string };
-    const parsed = PatchRoleBody.safeParse(req.body);
+    const parsed = PatchMemberRoleBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
     const newRole = parsed.data.role as Role;
     try {
@@ -118,7 +115,7 @@ export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
-        const parsed = PatchCurrencyBody.safeParse(req.body);
+        const parsed = PatchWorkspaceCurrencyBody.safeParse(req.body);
         if (!parsed.success) {
           return reply.code(400).send({ error: "invalid_body" });
         }

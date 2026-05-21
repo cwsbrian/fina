@@ -1,11 +1,10 @@
 import { Prisma } from "@prisma/client";
+import { MAX_AMOUNT, type Cadence } from "@fina/shared";
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 
-export type Cadence = "monthly" | "semimonthly" | "biweekly" | "weekly" | "yearly";
-
-const MAX_AMOUNT = 99_999_999.99;
+export type { Cadence };
 
 export type AddRecurringInput = {
   name: string;

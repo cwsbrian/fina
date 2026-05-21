@@ -1,4 +1,5 @@
 import { Prisma, CategorizationSource } from "@prisma/client";
+import { MAX_AMOUNT, AMOUNT_RE } from "@fina/shared";
 
 export type AllocationInput = { categoryId: string | null; amount: number };
 
@@ -19,9 +20,6 @@ export class AllocationError extends Error {
 
 // Same Decimal(14, 2) rule as create-manual.ts: positive, ≤ MAX, ≤2 decimals,
 // rejects scientific notation via string regex.
-const MAX_AMOUNT = 999_999_999.99;
-const AMOUNT_RE = /^\d+(\.\d{1,2})?$/;
-
 function validateOneAmount(amount: number): void {
   if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) {
     throw new AllocationError("invalid_allocation_amount");

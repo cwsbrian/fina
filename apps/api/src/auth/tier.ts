@@ -1,4 +1,4 @@
-import type { EffectiveTier } from "@fina/shared";
+import { TIER_LIMITS, type EffectiveTier } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError } from "./context.js";
 
@@ -13,16 +13,16 @@ export function computeEffectiveTier(user: {
       source: "trial",
       trialActive: true,
       trialEndsAt: user.trialEndsAt,
-      plaidItemLimit: 5,
+      plaidItemLimit: TIER_LIMITS.pro.plaidItems,
     };
   }
-  // Future: check paid subscription column here → "lite" (2) or "pro" (5).
+  // Future: check paid subscription column here → "lite" or "pro".
   return {
     tier: "free",
     source: "default",
     trialActive: false,
     trialEndsAt: user.trialEndsAt,
-    plaidItemLimit: 0,
+    plaidItemLimit: TIER_LIMITS.free.plaidItems,
   };
 }
 

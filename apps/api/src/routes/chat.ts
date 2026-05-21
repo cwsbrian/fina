@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
+import {
+  CreateChatThreadBody,
+  ListChatThreadsQuery,
+  PatchChatThreadBody,
+  ChatMessageBody,
+} from "@fina/shared";
 import { HttpError, requireSession } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import { generateAndPersistThreadTitle } from "../chat/auto-title.js";
@@ -7,24 +12,6 @@ import type { PresentationBlock } from "../chat/blocks.js";
 import { threadsService } from "../chat/threads.js";
 import { processChatTurn } from "../chat/turn.js";
 import { prisma } from "../db.js";
-
-const CreateBody = z.object({
-  title: z.string().min(1).max(200).optional(),
-});
-
-const ListQuery = z.object({
-  include_archived: z.union([z.literal("true"), z.literal("false")]).optional(),
-  limit: z.coerce.number().int().min(1).max(100).optional(),
-});
-
-const PatchBody = z.object({
-  title: z.union([z.string().min(1).max(200), z.null()]),
-});
-
-const MessageBody = z.object({
-  text: z.string().min(1).max(4000),
-  workspaceId: z.string().min(1).max(64),
-});
 
 function serializeThread(t: {
   id: string; userId: string; workspaceId: string | null; title: string | null;
@@ -45,7 +32,7 @@ function serializeThread(t: {
 
 export async function chatRoutes(app: FastifyInstance): Promise<void> {
   app.post("/chat/threads", async (req, reply) => {
-    const parsed = CreateBody.safeParse(req.body ?? {});
+    const parsed = CreateChatThreadBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
     try {
@@ -65,7 +52,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/chat/threads", async (req, reply) => {
-    const parsed = ListQuery.safeParse(req.query ?? {});
+    const parsed = ListChatThreadsQuery.safeParse(req.query ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "invalid_query" });
 
     try {
@@ -150,7 +137,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   app.patch("/chat/threads/:tid", async (req, reply) => {
     const params = req.params as { tid: string };
-    const parsed = PatchBody.safeParse(req.body ?? {});
+    const parsed = PatchChatThreadBody.safeParse(req.body ?? {});
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
     try {
@@ -195,7 +182,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
 
   app.post("/chat/threads/:tid/messages", async (req, reply) => {
     const params = req.params as { tid: string };
-    const parsed = MessageBody.safeParse(req.body);
+    const parsed = ChatMessageBody.safeParse(req.body);
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
     try {
