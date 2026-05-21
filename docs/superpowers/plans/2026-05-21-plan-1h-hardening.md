@@ -196,6 +196,17 @@ API code uses them.
 **Files:**
 - Create: `apps/api/src/logger.ts`
 - Create: `apps/api/tests/logger.test.ts`
+- Modify: `apps/api/package.json` (add `pino` dependency)
+
+- [ ] **Step 2.0: Install pino as @fina/api dependency**
+
+`apps/api` does not currently depend on `pino`. Without this step, the import in Step 2.3 fails at compile time even though pino is transitively reachable.
+
+```bash
+pnpm --filter @fina/api add pino
+```
+
+Verify `apps/api/package.json` now lists `"pino"` under `dependencies`. Commit gets folded into Step 2.5 (no separate commit yet — keeps T2 as one logical commit).
 
 - [ ] **Step 2.1: Write failing test**
 
@@ -283,7 +294,7 @@ Expected: `Test Files  1 passed (1)`, 2 tests.
 - [ ] **Step 2.5: Commit**
 
 ```bash
-git add apps/api/src/logger.ts apps/api/tests/logger.test.ts
+git add apps/api/src/logger.ts apps/api/tests/logger.test.ts apps/api/package.json pnpm-lock.yaml
 git commit -m "feat(api): singleton Pino logger module
 
 Module-level logger plus logInfo/Warn/Error/Fatal wrappers narrowed
@@ -413,6 +424,8 @@ Expected: failures — Schema doesn't have the new keys.
 
 - [ ] **Step 3.3: Update `env.ts`**
 
+**CRITICAL**: existing tests (`cron.env.test.ts`, `chat.env.test.ts`) call `loadEnv(source)` with an explicit `NodeJS.ProcessEnv` argument. Preserve that signature. Also preserve the friendly `Invalid environment:\n  - <path>: <msg>` error format — current code uses `safeParse` + manual issue formatting; we keep that.
+
 In `apps/api/src/env.ts`, append to the `Schema` z.object before the closing `})`:
 
 ```ts
@@ -431,7 +444,7 @@ In `apps/api/src/env.ts`, append to the `Schema` z.object before the closing `})
   RATE_LIMIT_TEST: z.string().optional(),
 ```
 
-Then wrap the existing `Schema.parse(...)` in a `.transform` + `.refine` so the production RESEND check runs:
+Then wrap `Schema` in a `.refine` (RESEND prod check) + `.transform` (TRUST_PROXY default) and rewrite `loadEnv` to keep BOTH the `source` argument and the friendly error envelope:
 
 ```ts
 const ParsedSchema = Schema.refine(
@@ -452,12 +465,17 @@ const ParsedSchema = Schema.refine(
 
 export type Env = z.infer<typeof ParsedSchema>;
 
-export function loadEnv(): Env {
-  return ParsedSchema.parse(process.env);
+export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
+  const parsed = ParsedSchema.safeParse(source);
+  if (!parsed.success) {
+    const issues = parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
+    throw new Error(`Invalid environment:\n${issues}`);
+  }
+  return parsed.data;
 }
 ```
 
-Existing `Env` type alias may need `z.infer<typeof Schema>` → `z.infer<typeof ParsedSchema>`. Update the import/exports as needed.
+Old `Env` type alias is replaced by the `ParsedSchema` inference (post-transform shape includes the defaulted `TRUST_PROXY`).
 
 - [ ] **Step 3.4: Update `db.ts`**
 
@@ -843,6 +861,7 @@ In `apps/api/src/server.ts`:
 import rateLimit from "@fastify/rate-limit";
 import { RATE_LIMITS } from "@fina/shared";
 import { registerSessionDecorator, ipKey, userKey } from "./auth/session-decorator.js";
+import { withRateLimit } from "./auth/rate-limit.js";
 ```
 
 2. Pass `trustProxy` into the Fastify factory and configure registration order. Replace the existing `Fastify({ logger: ... })` block:
@@ -899,16 +918,39 @@ Read the current registration shape — if it already passes a route options obj
 
 - [ ] **Step 6.6: Annotate plaid exchange route**
 
-In `apps/api/src/routes/plaid.ts`, find `POST /plaid/exchange` (or the closest equivalent — grep `app.post.*plaid.*exchange` to confirm). Add `config: withRateLimit("plaidExchange")`.
-
-For Better Auth `/api/auth/*` routes: they're registered via `app.all("/api/auth/*", ...)` in `server.ts`. The auth bucket is keyed by IP, so the **global default** (60/min/IP) is too loose for credential stuffing. Add a route-level override on the auth catch-all:
+In `apps/api/src/routes/plaid.ts`, locate the registration at line 59:
 
 ```ts
-// In server.ts, replace the existing app.all("/api/auth/*", ...) line:
-app.all("/api/auth/*", { config: withRateLimit("auth") }, async (req, reply) => {
-  // ... existing handler unchanged
-});
+app.post("/workspaces/:id/plaid/exchange", async (req, reply) => {
 ```
+
+Splice in the options object as the second arg (keeping all three existing positional args — path, then handler — bumped to third):
+
+```ts
+app.post(
+  "/workspaces/:id/plaid/exchange",
+  { config: withRateLimit("plaidExchange") },
+  async (req, reply) => {
+    // ... existing handler unchanged
+  },
+);
+```
+
+Also add the import at the top of the file: `import { withRateLimit } from "../auth/rate-limit.js";`
+
+For Better Auth `/api/auth/*` routes: they're registered via `app.all("/api/auth/*", ...)` at `apps/api/src/server.ts:55`. The auth bucket is keyed by IP, so the **global default** (60/min/IP) is too loose for credential stuffing. Use Edit on `server.ts` to add a route-level override:
+
+Find:
+```ts
+  app.all("/api/auth/*", async (req, reply) => {
+```
+
+Replace with:
+```ts
+  app.all("/api/auth/*", { config: withRateLimit("auth") }, async (req, reply) => {
+```
+
+Confirm `withRateLimit` is already imported in `server.ts` (added in Step 6.4 imports list — if not, add `import { withRateLimit } from "./auth/rate-limit.js";`).
 
 - [ ] **Step 6.7: Write failing tests**
 
@@ -1054,7 +1096,7 @@ behind a CDN key by the real client IP, not the edge."
 Overwrite `apps/api/tests/health.test.ts`:
 
 ```ts
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { buildApp } from "../src/server.js";
 import { prisma } from "../src/db.js";
 import { disconnect } from "./helpers/db.js";
@@ -1099,16 +1141,24 @@ describe("health endpoints", () => {
 
   it("GET /ready 503 with degraded payload when DB throws", async () => {
     const app = await buildApp(env);
-    const spy = vi.spyOn(prisma, "$queryRaw" as never).mockRejectedValueOnce(
-      new Error("simulated db down"),
-    );
-    const res = await app.inject({ method: "GET", url: "/ready" });
-    expect(res.statusCode).toBe(503);
-    const body = res.json();
-    expect(body.status).toBe("degraded");
-    expect(body.checks).toEqual({ db: "down" });
-    spy.mockRestore();
-    await app.close();
+    // Manual save/restore — vi.spyOn on Prisma delegate properties is
+    // forbidden (commit 3ecc538). Prisma's runtime proxies them in a way
+    // that breaks spy restore under singleFork, leaving the next test
+    // with a stubbed $queryRaw. Replace + finally-restore is the rule.
+    const original = prisma.$queryRaw;
+    (prisma as unknown as { $queryRaw: unknown }).$queryRaw = () => {
+      throw new Error("simulated db down");
+    };
+    try {
+      const res = await app.inject({ method: "GET", url: "/ready" });
+      expect(res.statusCode).toBe(503);
+      const body = res.json();
+      expect(body.status).toBe("degraded");
+      expect(body.checks).toEqual({ db: "down" });
+    } finally {
+      (prisma as unknown as { $queryRaw: typeof original }).$queryRaw = original;
+      await app.close();
+    }
   });
 
   it("GET /health aliases /ready and includes status:ok on success", async () => {
@@ -1140,17 +1190,21 @@ import { prisma } from "../db.js";
 
 async function readyPayload(): Promise<{ status: number; body: HealthDTO }> {
   // Prisma's $queryRaw doesn't accept AbortSignal, so race manually.
-  const dbCheck = Promise.race([
-    prisma.$queryRaw<[{ "?column?": number }]>`SELECT 1`,
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error("db_timeout")), 1000),
-    ),
-  ]);
+  // clearTimeout in finally so the timer doesn't keep the event loop
+  // alive when $queryRaw wins the race (matters for graceful shutdown).
+  let timer: NodeJS.Timeout | undefined;
   try {
-    await dbCheck;
+    await Promise.race([
+      prisma.$queryRaw<[{ "?column?": number }]>`SELECT 1`,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("db_timeout")), 1000);
+      }),
+    ]);
     return { status: 200, body: { status: "ok", checks: { db: "ok" } } };
   } catch {
     return { status: 503, body: { status: "degraded", checks: { db: "down" } } };
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -1194,8 +1248,9 @@ git commit -m "feat(api): /live + /ready split with DB ping; /health alias
 
 Prisma \$queryRaw doesn't accept AbortSignal, so the 1s timeout is
 a Promise.race vs setTimeout reject. Test for the 503 path uses
-vi.spyOn(prisma, '\$queryRaw').mockRejectedValueOnce so the live
-DB stays connected for other tests under singleFork."
+manual save/restore on prisma.\$queryRaw (per commit 3ecc538 —
+vi.spyOn on Prisma delegates is forbidden) so the live DB stays
+connected for other tests under singleFork."
 ```
 
 ---
@@ -1296,6 +1351,8 @@ logError({ cron: "daily-refresh", foo: 1, err }, "xxx failed");
 ```
 
 For each replacement, add the `import { logInfo|Warn|Error } from "../../logger.js"` at the top. Use the LogContext fields appropriate to the call (audit context: `auditAction`; plaid context: `plaidEvent` / `plaidItemId`; chat: `threadId`).
+
+**Expected migration count: ~12 callsites** across the four job files + `scheduler.ts` (verified at plan time: 6 in `daily-refresh.ts`, 1 in `retry-unprocessed.ts`, 1 in `cleanup-events.ts`, 2 in `scheduled-spend-match.ts`, 2 in `scheduler.ts`). The scheduler.ts ones are superseded by the rewrite in Step 8.1 (`console.info("cron scheduler started", ...)` becomes `logInfo({}, "cron scheduler started — N jobs")`, and `console.error("cron job uncaught", ...)` becomes the `logError` in the `safe()` catch block) — so only the ~10 job-file callsites are actually swept here.
 
 Validate the file count:
 
@@ -1459,7 +1516,7 @@ behaviour changes."
 
 ## Task 10: Remaining `console.*` sweep
 
-**Goal:** Migrate every remaining `console.*` in `apps/api/src/` to the logger. Cron files were handled in T8; this task covers chat, plaid, audit, categorize. Single intentional `console.log` survives in `email/send.ts` (dev fallback).
+**Goal:** Migrate every remaining `console.*` in `apps/api/src/` to the logger. Cron files were handled in T8; this task covers chat, plaid, audit, categorize, and the Resend `email/send.ts` fallback warn. **Exactly one intentional `console.log` survives** — `email/send.ts:30`, the dev-mode magic-link fallback when `RESEND_API_KEY` is unset. (Note: `email/send.ts` has TWO console.* sites — line 30 stays, line 50 migrates to `logWarn`.)
 
 **Files (re-grep at task start):**
 - `apps/api/src/audit/service.ts`
@@ -1472,15 +1529,16 @@ behaviour changes."
 - `apps/api/src/plaid/webhook-backfill.ts`
 - `apps/api/src/plaid/webhook-item.ts`
 - `apps/api/src/categorize/service.ts`
+- `apps/api/src/email/send.ts` (line 50 `console.warn` only — line 30 `console.log` stays as dev fallback)
 - Any other hit from the grep below
 
 - [ ] **Step 10.1: Re-run the grep to ensure the surface hasn't shifted**
 
 ```bash
-grep -rn 'console\.' apps/api/src/ | grep -v -E 'email/send\.ts|node_modules'
+grep -rn 'console\.' apps/api/src/ | grep -v node_modules
 ```
 
-Capture the list. It should be ~24-25 lines (after T4 main.ts and T8 cron/ cleared their share of the 32 audit-time count).
+Capture the list. It should be ~22-24 lines (after T4 main.ts and T8 cron/ cleared their share of the 32 audit-time count). One of those is `email/send.ts:30` (`console.log` dev fallback — KEEP). All others — including `email/send.ts:50` (`console.warn`) — migrate.
 
 - [ ] **Step 10.2: Migrate each callsite**
 
@@ -1512,19 +1570,42 @@ import { logWarn } from "../logger.js";
 logWarn({ threadId, err }, "auto-title failed");
 ```
 
+Special case `email/send.ts:50` (Resend sandbox/unverified-domain fallback warn):
+
+```ts
+// Before — line 49-55 (the inner `if (isSandboxRecipientRestriction(...) || isUnverifiedDomain(...))` block):
+// eslint-disable-next-line no-console
+console.warn(
+  `[email fallback] Resend rejected (${shortReason(message)}). ` +
+    `Logging below so you can copy the link manually. ` +
+    `Verify a domain at resend.com/domains to fix.\n` +
+    `[dev email] to=${input.to} subject="${input.subject}"\n${input.text}`,
+);
+
+// After:
+import { logWarn } from "../logger.js";
+logWarn(
+  { to: input.to, subject: input.subject, reason: shortReason(message) },
+  `[email fallback] Resend rejected — logging would-be email; verify domain at resend.com/domains to fix`,
+);
+```
+
+Drop the eslint-disable comment from line 50 along with the migration. Leave the `console.log` at line 30 untouched (dev fallback for missing key).
+
 - [ ] **Step 10.3: Verify the grep is clean**
 
 ```bash
 grep -rn 'console\.' apps/api/src/ | grep -v node_modules
 ```
 
-Expected: exactly ONE line, in `apps/api/src/email/send.ts` — the dev-mode fallback. Inline-comment that line if not already:
+Expected: exactly ONE line, `apps/api/src/email/send.ts:30` — the dev-mode `console.log` fallback. The `email/send.ts:50` `console.warn` is now `logWarn`. Confirm the surviving line still has its inline comment explaining why it stays:
 
 ```ts
 // Dev fallback: log magic links to stdout when RESEND_API_KEY is
 // unset. Intentional — surviving the console.* sweep so dev signup
 // flows keep working without a real Resend key.
-console.log(`[dev email] ${input.to}: ${input.subject}`);
+// eslint-disable-next-line no-console
+console.log(`[dev email] to=${input.to} subject="${input.subject}"\n${input.text}`);
 ```
 
 - [ ] **Step 10.4: Run the full suite**
