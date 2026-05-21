@@ -32,7 +32,7 @@ References this spec builds on:
 | File | Export | Shape | Motivation |
 |---|---|---|---|
 | `libs/shared/src/pricing.ts` (new) | `PRICING` | `{ lite: { monthlyCAD: 7, displayPrice: "$7" }, pro: { monthlyCAD: 15, displayPrice: "$15" } } as const` | `/settings/plan` comparison table + any future pricing copy. Stripe Price IDs stay in API env; display prices stay here. |
-| `libs/shared/src/dto/subscription.ts` (new) | `SubscriptionDTO`, `SubscriptionStatus`, `SubscriptionSource` | `SubscriptionDTO = { tier: "lite" \| "pro"; status: SubscriptionStatus; currentPeriodEnd: string; cancelAtPeriodEnd: boolean; source: "stripe" }`. Status = `"trialing" \| "active" \| "past_due" \| "canceled" \| "incomplete"`. Source = `"stripe" \| "iap_apple" \| "iap_google"` (only `"stripe"` populated in v1). | `/me` response payload + `/settings/plan` rendering |
+| `libs/shared/src/dto/subscription.ts` (new) | `SubscriptionDTO`, `SubscriptionStatus`, `SubscriptionSource` | `SubscriptionDTO = { tier: "lite" \| "pro"; status: SubscriptionStatus; currentPeriodEnd: string; cancelAtPeriodEnd: boolean; source: "stripe" }`. Status = `"trialing" \| "active" \| "past_due" \| "canceled" \| "unpaid" \| "incomplete" \| "incomplete_expired" \| "paused"` (mirrors Stripe; only the first three count as active for EffectiveTier). Source = `"stripe" \| "iap_apple" \| "iap_google"` (only `"stripe"` populated in v1). | `/me` response payload + `/settings/plan` rendering |
 | `libs/shared/src/dto/me.ts` (modify) | extend `MeDTO` | Add `subscription: SubscriptionDTO \| null` field | UI distinguishes "trial only" vs "trial + card on file" vs "paid, no trial" vs "past_due" |
 | `libs/shared/src/errors.ts` (modify) | extend `API_ERROR_CODES` | Add `payment_required`, `checkout_failed`, `portal_failed`, `webhook_invalid_signature`, `already_subscribed` | error codes for the new routes |
 | `libs/shared/src/schemas/billing.ts` (new) | `CheckoutBody` zod schema | `z.object({ tier: z.enum(["lite", "pro"]) })` | request body validation for `POST /billing/checkout`. `/billing/portal` and `/billing/sync` have no body. |
@@ -70,12 +70,20 @@ Sub data lives in a new `Subscription` table on User (1:N). `EffectiveTier` comp
 ## Data model (Prisma)
 
 ```prisma
+// Mirrors every status Stripe can send so the webhook can write the
+// value verbatim without enum-validation failures. `unpaid` /
+// `incomplete_expired` / `paused` are rare end-states; they all count
+// as INACTIVE for EffectiveTier (only `trialing` / `active` /
+// `past_due` keep the user on a paid tier — see EffectiveTier rules).
 enum SubscriptionStatus {
   trialing
   active
   past_due
   canceled
-  incomplete
+  unpaid               // final state after Smart Retries exhausted
+  incomplete           // first invoice never settled
+  incomplete_expired   // Checkout abandoned, auto-canceled by Stripe
+  paused               // admin-paused (Stripe dashboard); rare
 }
 
 enum SubscriptionSource {
