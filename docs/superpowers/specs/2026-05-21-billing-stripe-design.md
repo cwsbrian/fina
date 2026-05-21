@@ -171,9 +171,13 @@ type MeDTO = {
   user: { id, email, name, tz, locale, ... },
   tier: Tier,                                        // existing — "free" | "lite" | "pro" string
   trial: { active: boolean, endsAt: string | null }, // existing
-  subscription: SubscriptionDTO | null,              // NEW
+  subscription: SubscriptionDTO | null,              // NEW — see "active" rule below
 };
 ```
+
+**`subscription` field carries the user's CURRENTLY ACTIVE Stripe sub, if any.** "Active" here means `status ∈ {trialing, active, past_due}` (same set used by EffectiveTier — see §"EffectiveTier computation"). Subscription rows with `status ∈ {canceled, unpaid, incomplete, incomplete_expired, paused}` are retained in DB for history but `MeDTO.subscription` returns `null` for them so the UI never accidentally shows "Manage" or "Pro — renews on …" to a user whose subscription is dead.
+
+If a user has multiple active subs (rare — would require manual Stripe intervention), the highest-tier one is returned (pro > lite), matching EffectiveTier's precedence.
 
 UI infers `EffectiveTier.source` from the combination of `trial.active` and `subscription`: trial active → trial source; subscription non-null → paid source; both absent → default. The full `EffectiveTier` object stays an internal server-side type (`auth/tier.ts`); no consumer needs the union member, so nothing changes on the wire.
 
@@ -498,6 +502,8 @@ Cases:
 | `subscription.updated` with `cancelAtPeriodEnd: true` | Row updated, status still `active`, EffectiveTier still paid |
 | `subscription.updated` with `status: past_due` | Row updated, EffectiveTier still paid (Smart Retries safety) |
 | `subscription.deleted` | Row `status=canceled`. If trial also expired → EffectiveTier `free`. |
+| `GET /me` for user with only canceled subscriptions | `MeDTO.subscription === null` (canceled rows excluded). UI shows Free state, not "Manage" CTA. |
+| `GET /me` for user with active sub | `MeDTO.subscription !== null` with matching tier/status. |
 | Webhook with unknown price ID | 200 OK, no row created, error log emitted |
 | POST /billing/sync after Checkout success | Subscription row appears, MeDTO.subscription populated |
 
