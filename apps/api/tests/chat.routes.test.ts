@@ -305,3 +305,118 @@ describe("DELETE /chat/threads/:tid", () => {
     expect(res.statusCode).toBe(402);
   });
 });
+
+describe("POST /chat/threads/:tid/messages", () => {
+  it("200 — first message binds the thread to body.workspaceId", async () => {
+    const { userId, cookie, wsId } = await setup("mt1@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "hello", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(200);
+    const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
+    expect(reload.workspaceId).toBe(wsId);
+  });
+
+  it("200 — second message in a bound thread keeps the binding", async () => {
+    const { userId, cookie, wsId } = await setup("mt2@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("400 — body.workspaceId mismatches bound thread", async () => {
+    const { userId, cookie, wsId } = await setup("mt3@t.co");
+    const otherWs = await prisma.workspace.create({ data: { name: "other" } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: otherWs.id }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("workspace_mismatch");
+  });
+
+  it("403 — user is not a member of body.workspaceId", async () => {
+    const { userId, cookie } = await setup("mt4@t.co");
+    const strangerWs = await prisma.workspace.create({ data: { name: "stranger" } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: strangerWs.id }),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("not_member");
+  });
+
+  it("403 — another user's thread", async () => {
+    const { cookie: cookieA } = await setup("mt5a@t.co");
+    const { userId: userB, wsId: wsB } = await setup("mt5b@t.co");
+    const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: wsB }),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("402 — non-Pro user", async () => {
+    const { userId, cookie, wsId } = await setup("mt6@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    await downgradeToFree(userId);
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(402);
+  });
+
+  it("404 — archived thread (binding does not happen)", async () => {
+    const { userId, cookie, wsId } = await setup("mt7@t.co");
+    const t = await prisma.chatThread.create({
+      data: { userId, workspaceId: null, archivedAt: new Date() },
+    });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("400 — invalid_body when workspaceId is missing", async () => {
+    const { userId, cookie } = await setup("mt8@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_body");
+  });
+
+  it("ignores X-Workspace-Id header — body wins", async () => {
+    const { userId, cookie, wsId } = await setup("mt9@t.co");
+    const otherWs = await prisma.workspace.create({ data: { name: "other" } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json", "x-workspace-id": otherWs.id },
+      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(200);
+    const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
+    expect(reload.workspaceId).toBe(wsId);
+  });
+});
