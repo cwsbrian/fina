@@ -178,3 +178,130 @@ describe("GET /chat/threads", () => {
     expect(typeof row.createdAt).toBe("string");
   });
 });
+
+describe("GET /chat/threads/:tid", () => {
+  it("200 — returns the thread + messages", async () => {
+    const { userId, cookie } = await setup("gti1@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.thread.id).toBe(t.id);
+    expect(Array.isArray(body.messages)).toBe(true);
+  });
+
+  it("403 — another user's thread (not 404; the row exists)", async () => {
+    const { cookie: cookieA } = await setup("gti2a@t.co");
+    const { userId: userB } = await setup("gti2b@t.co");
+    const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
+    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie: cookieA } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("404 — thread doesn't exist at all", async () => {
+    const { cookie } = await setup("gti3@t.co");
+    const res = await app.inject({ method: "GET", url: "/chat/threads/nope", headers: { cookie } });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it("200 — works on archived threads", async () => {
+    const { userId, cookie } = await setup("gti4@t.co");
+    const t = await prisma.chatThread.create({
+      data: { userId, workspaceId: null, archivedAt: new Date() },
+    });
+    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().thread.archivedAt).toBeTruthy();
+  });
+
+  it("200 — open to non-Pro users (Lite needs to read brief threads)", async () => {
+    const { userId, cookie } = await setup("gti5@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    await downgradeToFree(userId);
+    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe("PATCH /chat/threads/:tid", () => {
+  it("200 — renames an unbound thread", async () => {
+    const { userId, cookie } = await setup("pti1@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({
+      method: "PATCH", url: `/chat/threads/${t.id}`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ title: "renamed" }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().thread.title).toBe("renamed");
+  });
+
+  it("200 — renames a bound thread", async () => {
+    const { userId, cookie, wsId } = await setup("pti2@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
+    const res = await app.inject({
+      method: "PATCH", url: `/chat/threads/${t.id}`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ title: "x" }),
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("403 — another user's thread", async () => {
+    const { cookie: cookieA } = await setup("pti3a@t.co");
+    const { userId: userB } = await setup("pti3b@t.co");
+    const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
+    const res = await app.inject({
+      method: "PATCH", url: `/chat/threads/${t.id}`,
+      headers: { cookie: cookieA, "content-type": "application/json" },
+      payload: JSON.stringify({ title: "stolen" }),
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("402 — non-Pro", async () => {
+    const { userId, cookie } = await setup("pti4@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    await downgradeToFree(userId);
+    const res = await app.inject({
+      method: "PATCH", url: `/chat/threads/${t.id}`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ title: "x" }),
+    });
+    expect(res.statusCode).toBe(402);
+  });
+});
+
+describe("DELETE /chat/threads/:tid", () => {
+  it("204 — archives an unbound thread", async () => {
+    const { userId, cookie } = await setup("dti1@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(204);
+    const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
+    expect(reload.archivedAt).toBeTruthy();
+  });
+
+  it("204 — archives a bound thread", async () => {
+    const { userId, cookie, wsId } = await setup("dti2@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
+    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(204);
+  });
+
+  it("403 — another user's thread", async () => {
+    const { cookie: cookieA } = await setup("dti3a@t.co");
+    const { userId: userB } = await setup("dti3b@t.co");
+    const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
+    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie: cookieA } });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it("402 — non-Pro", async () => {
+    const { userId, cookie } = await setup("dti4@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    await downgradeToFree(userId);
+    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    expect(res.statusCode).toBe(402);
+  });
+});

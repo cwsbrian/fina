@@ -14,6 +14,10 @@ const ListQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
+const PatchBody = z.object({
+  title: z.union([z.string().min(1).max(200), z.null()]),
+});
+
 function serializeThread(t: {
   id: string; userId: string; workspaceId: string | null; title: string | null;
   lastMessageAt: Date | null; archivedAt: Date | null;
@@ -102,6 +106,84 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
-  // Item routes (GET/PATCH/DELETE /chat/threads/:tid) added in Task 5.
+  app.get("/chat/threads/:tid", async (req, reply) => {
+    const params = req.params as { tid: string };
+    try {
+      const session = await requireSession(req, app);
+      const thread = await threadsService.findOwned({
+        threadId: params.tid, userId: session.userId,
+      });
+      if (!thread) {
+        // Distinguish "row exists but wrong owner" (403) from "row doesn't
+        // exist at all" (404). One direct lookup decides which.
+        const exists = await prisma.chatThread.findUnique({ where: { id: params.tid }, select: { id: true } });
+        return reply.code(exists ? 403 : 404).send({ error: exists ? "forbidden" : "thread_not_found" });
+      }
+
+      const recent = await prisma.chatMessage.findMany({
+        where: { threadId: thread.id },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      });
+      const messages = recent.reverse();
+
+      return {
+        thread: serializeThread(thread),
+        messages: messages.map((m) => ({
+          id: m.id, role: m.role, blocks: m.blocks,
+          createdAt: m.createdAt.toISOString(),
+        })),
+      };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.patch("/chat/threads/:tid", async (req, reply) => {
+    const params = req.params as { tid: string };
+    const parsed = PatchBody.safeParse(req.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+
+    try {
+      const session = await requireSession(req, app);
+      const tier = await effectiveTier(session.userId);
+      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+
+      const updated = await threadsService.patch({
+        threadId: params.tid, userId: session.userId, title: parsed.data.title,
+      });
+      if (!updated) {
+        const exists = await prisma.chatThread.findUnique({ where: { id: params.tid }, select: { id: true } });
+        return reply.code(exists ? 403 : 404).send({ error: exists ? "forbidden" : "thread_not_found" });
+      }
+      return { thread: serializeThread(updated) };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.delete("/chat/threads/:tid", async (req, reply) => {
+    const params = req.params as { tid: string };
+    try {
+      const session = await requireSession(req, app);
+      const tier = await effectiveTier(session.userId);
+      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+
+      const archived = await threadsService.archive({
+        threadId: params.tid, userId: session.userId,
+      });
+      if (!archived) {
+        const exists = await prisma.chatThread.findUnique({ where: { id: params.tid }, select: { id: true } });
+        return reply.code(exists ? 403 : 404).send({ error: exists ? "forbidden" : "thread_not_found" });
+      }
+      return reply.code(204).send();
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
   // Messages route (POST /chat/threads/:tid/messages) added in Task 6.
 }
