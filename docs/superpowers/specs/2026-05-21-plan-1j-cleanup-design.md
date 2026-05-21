@@ -126,15 +126,47 @@ TRUST_PROXY: z.preprocess(
 
 No transform on TRUST_PROXY. `.env.example` clearly states "must be set; use `true` only behind a CDN that overwrites X-Forwarded-For from clients, otherwise `false`".
 
-Test/dev `.env` files in the repo set `TRUST_PROXY=false` so the rest of the suite keeps building. The buildApp test fixture (already passes `TRUST_PROXY: false`) is unaffected.
+**Fixture sweep required**: only 3 test files (`health.test.ts`, `helmet.test.ts`, `rate-limit.test.ts`) currently set `TRUST_PROXY: false` in their `env` literal. Removing the transform default makes `TRUST_PROXY: boolean` non-optional in the `Env` type, so **every other test fixture that constructs an env literal will TS-fail**. Approach:
+
+1. Audit pass: `grep -rn "NODE_ENV.*test" apps/api/tests/ | grep -v "^Binary"` finds the fixtures.
+2. Create `apps/api/tests/helpers/test-env.ts` exporting a `testEnv(overrides?)` helper that returns a complete `Env` shape with sensible test defaults (`TRUST_PROXY: false`, `PRISMA_CONNECTION_LIMIT: 10`, etc.) — single source of truth.
+3. Migrate existing fixtures to the helper as part of Task 2. The migration is mechanical — replace the inline `const env = { ... }` with `const env = testEnv()`.
+4. `.env.example` updates from `TRUST_PROXY=` (blank) to `TRUST_PROXY=false` — empty value would `preprocess → undefined → z.boolean()` reject under strict opt-in.
+
+The buildApp test fixtures (already passing `TRUST_PROXY: false`) and `env.test.ts` itself (which directly asserts on the schema) are explicit-update sites. `env.test.ts` line 71-78's "dev defaults to false" assertion is removed alongside the "prod defaults to true" assertion — neither defaults under strict opt-in.
 
 ### 3.3 G — frontend `rate_limit_exceeded` handler (Task 3)
 
-When `apiFetch` throws an `ApiError` with `code === "rate_limit_exceeded"`, surface a localized toast: "잠시 후 다시 시도해 주세요 (Xs 후)". The X is parsed from the message field (`Rate limit exceeded. Retry in 28s.` → `28`); if parsing fails, omit the duration.
+**Dependency reality**: `apps/web` has no toast library installed (verified — no `sonner`, no `react-hot-toast`, no Radix toast in `apps/web/package.json`, no `toast` imports in `apps/web/src`). G includes installing one. Pick **`sonner`** — single dep, ~5KB gzipped, idiomatic React 18, no provider boilerplate beyond a top-level `<Toaster />` mount.
 
-Implementation site: `apps/web/src/lib/api.ts` (or wherever `apiFetch` is constructed). Use the existing toast system (sonner / Radix; check what's in repo). No new shared additions — `isApiError(e) && e.code === "rate_limit_exceeded"` is the discriminant.
+Steps:
 
-Mobile is deferred — `apps/mobile`'s error handling is shared with web via `@fina/shared`'s `ApiError`, but the toast UI is per-app. Mobile keeps its current generic error display.
+1. `pnpm --filter @fina/web add sonner`
+2. Mount `<Toaster richColors position="bottom-right" />` once in `apps/web/src/app/layout.tsx` (the root layout). One JSX line + one import.
+3. In `apps/web/src/lib/api.ts`, after `apiFetch` resolves the response and is about to throw an `ApiError`-shaped object, add a side-effect for the `rate_limit_exceeded` case:
+
+```ts
+import { toast } from "sonner";
+import { isApiError } from "@fina/shared";
+
+// inside apiFetch's error path (right before throw):
+if (isApiError(err) && err.code === "rate_limit_exceeded") {
+  const secs = parseRetryAfter(err.message);
+  toast.error(
+    secs !== null
+      ? `잠시 후 다시 시도해 주세요 (${secs}초 후)`
+      : "잠시 후 다시 시도해 주세요",
+  );
+}
+throw err;
+```
+
+`parseRetryAfter(msg)` is a module-local helper that runs `msg.match(/Retry in (\d+)s/)?.[1]` and returns the number or `null`. Two-line function — no need to share.
+
+Notes:
+- `apiFetch` throws a plain object (not an `Error` instance), but `isApiError` is a structural guard so the discriminant works. Existing callers' `catch (e) { throw e }` patterns lose nothing.
+- The toast fires SIDE-EFFECT before `throw err` so callers still see the rejection and can handle their own retry logic. The toast is purely UX feedback.
+- Mobile is deferred — `apps/mobile`'s error handling is shared with web via `@fina/shared`'s `ApiError`, but the toast UI is per-app. Mobile keeps its current generic error display until a parallel item ships.
 
 ### 3.4 F — `app.log.*` → singleton logger sweep (Task 4)
 
@@ -171,54 +203,80 @@ if (args.end_date) {
 
 Switches from `lte` to `lt` for the upper bound (cleaner — no `.999ms` magic). Existing call sites that pass `endDate` won't care; result set is identical for users in UTC and shifts by the tz offset for non-UTC users.
 
+**Important — line 177 gate update**: the current code at `apps/api/src/chat/tools/find-transactions.ts:177` reads `if (occurredAt.gte || occurredAt.lte) where.occurredAt = occurredAt;`. After this change the key is `lt`, not `lte`, so the gate must become `if (occurredAt.gte || occurredAt.lt)` — otherwise an `end_date`-only query silently drops the filter.
+
+**`filtersApplied.endDate` response field**: still echoes the user-supplied date string (e.g., `"2026-04-01"`), but its semantic meaning shifts from "≤ 2026-04-01T23:59:59Z" to "< start of next day in user tz". The tool's `describe` text should clarify "date range is interpreted in your local timezone".
+
 DST edge: `localMidnightToUtc` is already DST-aware (used by `lookbackMonthStart`). The `+24h` step on the upper bound is fine because the result is converted back through `localMidnightToUtc`'s tz math implicitly via the source instant comparison.
 
 ### 3.6 D — `detectRecurringMerchants` currency grouping (Task 6)
 
 `apps/api/src/chat/tools/detect-recurring-merchants.ts:137`: `const key = merchantKey;` — merchant key has no currency component, so USD and CAD transactions from the same merchant fold into one Candidate. Worse, line 204 hardcodes `currency: workspace.currency` for the result, regardless of the transactions' actual currency.
 
+**Schema reality**: `Transaction` has no `currency` column. Currency lives on `BankAccount.currency` (required, default `"CAD"`). Every Transaction has a required `account: BankAccount` relation. So the fix joins on the relation and reads currency through it — no migration needed.
+
 Fix:
 
 ```ts
-// Add currency to the select
+// Add account.currency join to the select
 const rows = await prisma.transaction.findMany({
   where: { ... },
-  select: { id: true, amount: true, currency: true, merchantRaw: true, merchantNormalized: true, occurredAt: true },
-  ...
+  select: {
+    id: true,
+    amount: true,
+    merchantRaw: true,
+    merchantNormalized: true,
+    occurredAt: true,
+    account: { select: { currency: true } },
+  },
+  orderBy: { occurredAt: "asc" },
 });
 
 // Group key includes currency
-const key = `${merchantKey}|${r.currency ?? workspace.currency}`;
+const currency = r.account.currency;
+const key = `${merchantKey}|${currency}`;
 
-// Result uses the group's currency, not workspace.currency
-const groupCurrency = g.currency; // captured at group creation
+// Group struct gains a `currency: string` field, populated at group
+// creation. All rows in a group share currency by construction.
+g.currency = currency;
+
+// Result uses the group's currency (not workspace.currency)
+candidates.push({ ..., currency: g.currency });
 ```
 
-Group struct gains a `currency: string` field, populated from the first row's currency (all rows in the group share it by construction). The result Candidate's `currency` field reports that. The workspace.currency lookup stays as a fallback for transactions where `Transaction.currency` is `null` (Plaid sometimes returns null on certain item types).
+Three places change in `detect-recurring-merchants.ts`: the `select` block (add `account` join), the `Group` type declaration around line 123 (add `currency: string`), and the result push around line 204 (use `g.currency` instead of `workspace.currency`). The `workspace.currency` lookup at line 100-104 can be removed entirely after this task — no other code path needs it.
 
-Tests: add a USD + CAD same-merchant fixture, assert two Candidates.
+Tests: USD + CAD same-merchant fixture (one bank account in USD, one in CAD, same merchant raw name), assert two Candidates with distinct currencies and distinct transactionIds.
 
 ### 3.7 B — Scheduled-spend resolved TTL (Task 7)
 
-`apps/api/src/cron/jobs/cleanup-events.ts` currently deletes old `plaid_webhook_events` rows. Add a sibling query in the same job:
+**Schema reality**: `ScheduledSpend` has no `status` enum column and no `resolvedAt` column. "Resolved" status is *computed* from `(matchedTxId !== null OR dismissedAt !== null)` (see `apps/api/src/schedules/service.ts:79-86`). So the cutoff filter uses `updatedAt` as a proxy for "time of last state change" — adequate because resolved rows rarely receive further updates (the only mutations after resolution are if a user re-dismisses or the matched-tx is removed).
+
+Add a sibling query in the existing `cleanup-events` cron:
 
 ```ts
 // In cleanup-events.ts after the existing plaid_webhook_events delete:
 const scheduledSpendCutoff = new Date(Date.now() - (env.SCHEDULED_SPEND_TTL_DAYS ?? 90) * 24 * 60 * 60 * 1000);
 const ssDeleted = await prisma.scheduledSpend.deleteMany({
   where: {
-    status: { in: ["resolved-matched", "resolved-dismissed"] },
-    resolvedAt: { lt: scheduledSpendCutoff, not: null },
+    // "Resolved" is dismissedAt or matchedTxId being set. We don't have
+    // a discrete resolvedAt column; updatedAt is the closest proxy for
+    // "this row hasn't moved in a while".
+    OR: [
+      { dismissedAt: { not: null } },
+      { matchedTxId: { not: null } },
+    ],
+    updatedAt: { lt: scheduledSpendCutoff },
   },
 });
 logInfo({ cron: CRON_NAME, deletedScheduledSpends: ssDeleted.count }, "cleanup-events scheduled-spend pass");
 ```
 
-`ScheduledSpend.resolvedAt` must be set when the row transitioned to a resolved status — check the existing scheduled-spend-match job to confirm. If not, this fix needs that field populated first; verify before Task 7 begins.
+**Why `updatedAt` (not a new `resolvedAt` column)?** Adding `resolvedAt` requires a Prisma migration + backfill of existing resolved rows. `updatedAt` is auto-maintained by Prisma `@updatedAt`. The edge case where a 95-day-old resolved row gets touched (e.g., user re-dismisses) → its `updatedAt` resets, deletion delayed by one TTL cycle. Acceptable.
 
 Why the existing `cleanup-events` cron (not a new one)? Same cleanup-on-schedule semantics, low frequency (daily 3am UTC), no need for a separate timer.
 
-No new env key in `env.ts` Schema — `SCHEDULED_SPEND_TTL_DAYS` is added as `z.coerce.number().int().positive().optional()` with use-site default 90. Matches existing `CRON_EVENT_TTL_DAYS` pattern.
+No new env key in shared lib — `SCHEDULED_SPEND_TTL_DAYS` is added as `z.coerce.number().int().positive().optional()` in `apps/api/src/env.ts` with use-site default 90. Matches existing `CRON_EVENT_TTL_DAYS` pattern (apps/api-only).
 
 ### 3.8 I — Auth bucket split (Task 8)
 
@@ -234,7 +292,16 @@ app.all("/api/auth/*",          { config: withRateLimit("auth")       }, betterA
 
 Fastify's route matching: more-specific patterns (`/api/auth/sign-in/*`) beat less-specific (`/api/auth/*`) for the same method. **Verify this empirically in Task 8** — if matching priority is unstable, fall back to a single catch-all with an inline URL check that calls `reply.context.skipRateLimit` for known-read paths (but the per-route option is cleaner and is the recommended approach in Fastify docs).
 
-Handler extraction: the existing 33-line fetch bridge inside the catch-all moves into a named function `makeBetterAuthHandler(auth, env)` returning a Fastify handler, so the three routes share it without duplication.
+Handler extraction: the entire fetch bridge at `apps/api/src/server.ts:88-122` (URL build, header copy, body forwarding, `auth.handler` call, status mirroring, **and the `response.headers.getSetCookie()` workaround at lines 118-119**) moves into a named factory `makeBetterAuthHandler(auth: FinaAuth, env: Env): RouteHandlerMethod`. The factory closes over `auth` (for `auth.handler`) and `env` (for `env.BETTER_AUTH_URL`). The set-cookie workaround is intrinsic to the response forwarding and must remain inside the handler. Three call sites then use the returned handler:
+
+```ts
+const betterAuthHandler = makeBetterAuthHandler(auth, env);
+app.all("/api/auth/sign-in/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
+app.all("/api/auth/sign-up/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
+app.all("/api/auth/*",          { config: withRateLimit("auth")       }, betterAuthHandler);
+```
+
+Adding `authStrict` to the `RateLimitKey` union (Task 0) propagates safely through `withRateLimit` at `apps/api/src/auth/rate-limit.ts:18` — the switch `key === "chatMessages" || key === "plaidExchange" ? userKey : ipKey` correctly routes `authStrict` to `ipKey`, which is what we want for credential-stuffing (IP-based, not user-based).
 
 Test:
 - 6th request to `/api/auth/sign-in/email` from same IP → 429 (authStrict 5/min)
@@ -253,7 +320,7 @@ Every task follows TDD: failing test → implementation → green test. Test sur
 | 1 (H) | None — log key spelling. Visual inspection of one line. |
 | 2 (E) | `apps/api/tests/env.test.ts` — add: prod with unset TRUST_PROXY throws, prod with `TRUST_PROXY=false` accepts. Remove the "defaults to true in prod" assertion (no longer defaults). |
 | 3 (G) | `apps/web/src/lib/api.test.ts` — given a 429 response with shape `{error:"rate_limit_exceeded", message:"... Retry in 28s."}`, the toast subscriber is called with the localized text. Use vitest + a mock toast. |
-| 4 (F) | Each modified route file's existing test runs unchanged; logger spies if any. No new tests. |
+| 4 (F) | Each modified route file's existing test runs unchanged. Add one smoke assertion (in any of the three route test files) that spies on `loggerMod.logError` and verifies one of the migrated callsites emits via the singleton, not `app.log`. Catches future regressions where a contributor adds `app.log.error` back. |
 | 5 (C) | `apps/api/tests/chat.tools.find-transactions.test.ts` — fixture: user with `tz="Asia/Seoul"`, transaction at `occurredAt = 2026-03-31T15:30Z` (which is `2026-04-01T00:30 KST`). With `start_date="2026-04-01"`, OLD impl excludes (UTC midnight boundary), NEW impl INCLUDES (KST midnight boundary). Assert the row appears in the result. Second case: `occurredAt = 2026-04-01T15:30Z` (`2026-04-02T00:30 KST`) with `end_date="2026-04-01"` — OLD includes (UTC 04-01T23:59 boundary), NEW excludes (KST day rolled to 04-02). Assert NOT in result. |
 | 6 (D) | `apps/api/tests/chat.tools.detect-recurring-merchants.test.ts` — USD + CAD same-merchant fixture, assert two Candidates with distinct currencies. |
 | 7 (B) | `apps/api/tests/cron.cleanup-events.test.ts` — seed a `resolved-matched` ScheduledSpend with `resolvedAt = now - 91 days`, run job, assert deleted. Seed one with `resolvedAt = now - 30 days`, assert NOT deleted. |
@@ -268,9 +335,9 @@ Full suite must pass at each commit boundary.
 | Risk | Likelihood | Mitigation |
 |---|---|---|
 | C: KST/non-UTC users see different findTransactions results than before. Confusing? | Medium | The new behavior matches user-intent ("April 1 transactions" = "April 1 in my timezone"). Document in the chat tool's `describe` field. The other tz-affected tools (listTransactions, etc.) are explicitly out of scope to limit blast. |
-| D: Existing users have multi-currency merchants where the old behavior bundled them — result shape now shows two rows instead of one. | Low | Acceptable correction; the old "single row with wrong currency" was a bug. No DB migration needed (read-side fix). |
+| D: Existing users have multi-currency merchants where the old behavior bundled them — result shape now shows two rows instead of one. No frontend code currently reads `Candidate.currency` field, so no UI regression. | Low | Acceptable correction; the old "single row with wrong currency" was a bug. No DB migration needed (read-side fix). Confirmed by grep: `Candidate.currency` is only consumed in test fixtures, not in apps/web. |
 | I: Fastify route matching may not actually prefer `/api/auth/sign-in/*` over `/api/auth/*`. | Low–Medium | Verify with an integration test before relying on it. Fallback: skip-rate-limit inside the catch-all. |
-| B: ScheduledSpend.resolvedAt might not be populated on all `resolved-*` rows. | Medium | Audit the scheduled-spend-match cron + dismiss handler before Task 7. If missing, add a `WHERE resolvedAt IS NOT NULL` guard so unfixed rows are NEVER deleted — they need a migration first, deferred to a follow-up. |
+| B: `updatedAt` as a proxy for "resolution time" is imprecise — a 95-day-old resolved row that gets touched (e.g., user re-dismisses or the matched tx is removed) resets its `updatedAt`, delaying deletion by one TTL cycle. | Low | Acceptable. The intent is "old resolved rows" cleanup, not strict time accounting. Could revisit by adding a real `resolvedAt` column in a future plan if precision becomes important. |
 | E: Existing prod deploys with implicit `TRUST_PROXY=true` (via NODE_ENV=production) suddenly require explicit env. | High at deploy time | Document in commit message + .env.example. The 1H hotfix has not yet been deployed to prod — the cutover window is ours. |
 
 ---
