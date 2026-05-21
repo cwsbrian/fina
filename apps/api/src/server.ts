@@ -17,6 +17,7 @@ import { schedulesRoutes } from "./routes/schedules.js";
 import { categoriesRoutes } from "./routes/categories.js";
 import { intentsRoutes } from "./routes/intents.js";
 import { chatRoutes } from "./routes/chat.js";
+import { billingRoutes } from "./routes/billing.js";
 import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 
 export type AppCtx = { env: Env; auth: FinaAuth };
@@ -102,6 +103,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(schedulesRoutes);
   await app.register(intentsRoutes);
   await app.register(chatRoutes);
+  await app.register(billingRoutes);
 
   return app;
 }

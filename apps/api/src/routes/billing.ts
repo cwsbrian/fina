@@ -1,0 +1,75 @@
+import type { FastifyInstance } from "fastify";
+import type { Prisma } from "@prisma/client";
+import { CheckoutBody, ACTIVE_SUBSCRIPTION_STATUSES } from "@fina/shared";
+import { prisma } from "../db.js";
+import { HttpError, requireSession } from "../auth/context.js";
+import { stripeClient } from "../stripe/client.js";
+import { priceIdForTier } from "../stripe/pricing-map.js";
+import { ensureStripeCustomer } from "../stripe/ensure-customer.js";
+
+// Stripe requires trial_end to be at least 48h in the future (codex R3).
+// Trials expiring sooner than this are treated as already-expired — the
+// Checkout Session charges immediately rather than inheriting a short stub.
+const STRIPE_TRIAL_END_MIN_MS = 48 * 60 * 60 * 1000;
+
+function useTrialEnd(trialEndsAt: Date | null): boolean {
+  if (!trialEndsAt) return false;
+  return trialEndsAt.getTime() - Date.now() >= STRIPE_TRIAL_END_MIN_MS;
+}
+
+export async function billingRoutes(app: FastifyInstance): Promise<void> {
+  app.post("/billing/checkout", async (req, reply) => {
+    try {
+      const session = await requireSession(req, app);
+      const parsed = CheckoutBody.safeParse(req.body);
+      if (!parsed.success) {
+        return reply.code(400).send({ error: "invalid_body" });
+      }
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+
+      // 409 if any active sub already exists — Stripe Portal handles tier
+      // changes, not Checkout. ACTIVE_SUBSCRIPTION_STATUSES covers trialing /
+      // active / past_due (Smart Retries grace period).
+      const active = await prisma.subscription.count({
+        where: {
+          userId: user.id,
+          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] },
+        },
+      });
+      if (active > 0) {
+        return reply.code(409).send({ error: "already_subscribed" });
+      }
+
+      // Codex R7: persist Customer BEFORE Checkout so concurrent
+      // first-Checkout attempts don't create duplicate Customers.
+      // Idempotency key 'customer-create-<userId>' makes this safe to retry.
+      const customerId = await ensureStripeCustomer(app.fina.env, user);
+
+      const stripe = stripeClient(app.fina.env);
+      const stripeSession = await stripe.checkout.sessions.create({
+        mode: "subscription",
+        line_items: [
+          { price: priceIdForTier(app.fina.env, parsed.data.tier), quantity: 1 },
+        ],
+        client_reference_id: user.id,
+        customer: customerId,
+        // success_url includes {CHECKOUT_SESSION_ID} so /billing/sync can
+        // resolve the session even before stripeCustomerId is persisted (codex R2).
+        success_url: `${app.fina.env.WEB_APP_URL}/settings/plan?status=success&sessionId={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${app.fina.env.WEB_APP_URL}/settings/plan?status=cancel`,
+        allow_promotion_codes: true,
+        subscription_data: useTrialEnd(user.trialEndsAt)
+          ? { trial_end: Math.floor(user.trialEndsAt!.getTime() / 1000) }
+          : undefined,
+      });
+
+      return { url: stripeSession.url };
+    } catch (e) {
+      if (e instanceof HttpError) {
+        return reply.code(e.statusCode).send({ error: e.code });
+      }
+      app.log.error({ err: e }, "checkout_failed");
+      return reply.code(500).send({ error: "checkout_failed" });
+    }
+  });
+}
