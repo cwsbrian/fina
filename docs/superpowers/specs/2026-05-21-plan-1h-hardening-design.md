@@ -41,10 +41,22 @@ The nine items in scope:
 
 ---
 
-## 2. Shared library additions
+## 2. Shared library touchpoints
 
-Per the CLAUDE.md rule "API response/request types go to `@fina/shared` first".
-Four additions land before any API code:
+Per CLAUDE.md "When writing a design spec" — every spec lists what
+the feature uses from `@fina/shared` and what new shared exports it
+creates.
+
+### Uses (existing shared)
+
+- `ApiError`, `ApiErrorCode`, `isApiError` — for the 429 rate-limit
+  response and any future code-matching frontend handlers.
+- `MeDTO` (no change) — unchanged but verifying that login → me path
+  still works after env validation tightens.
+
+### Adds (new shared)
+
+Four additions land **before** any API-side code, in their own commit:
 
 ### 2.1 `rate_limit_exceeded` error code (`errors.ts`)
 
