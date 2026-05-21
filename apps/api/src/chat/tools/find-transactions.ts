@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
+import { resolveUserTz, localMidnightToUtc } from "./periods.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
@@ -115,7 +116,8 @@ export const findTransactions: ToolDef<Args, Result> = {
   name: "findTransactions",
   description:
     "Search transactions with filters: merchant text, date range, amount range, category name, account name. " +
-    "Returns up to 50 most recent matches with totalCount and hasMore for follow-up narrowing.",
+    "Returns up to 50 most recent matches with totalCount and hasMore for follow-up narrowing. " +
+    "Date ranges are interpreted in your local timezone.",
   args: Args,
   async run(ctx, args) {
     const limit = args.limit ?? 20;
@@ -164,9 +166,19 @@ export const findTransactions: ToolDef<Args, Result> = {
 
     // Build a separate Prisma.DateTimeFilter — TransactionWhereInput["occurredAt"] is a union
     // (Date | string | DateTimeFilter), which TS refuses to spread.
+    // tz-aware: use resolveUserTz + localMidnightToUtc so KST/etc. users get correct day boundaries.
+    const tz = await resolveUserTz(ctx.userId);
     const occurredAt: Prisma.DateTimeFilter = {};
-    if (args.start_date) occurredAt.gte = new Date(`${args.start_date}T00:00:00.000Z`);
-    if (args.end_date) occurredAt.lte = new Date(`${args.end_date}T23:59:59.999Z`);
+    if (args.start_date) {
+      const [y, m, d] = args.start_date.split("-").map(Number);
+      occurredAt.gte = localMidnightToUtc(y!, m!, d!, tz);
+    }
+    if (args.end_date) {
+      const [y, m, d] = args.end_date.split("-").map(Number);
+      // Exclusive upper bound: start of the next day in user tz. The +1 on the
+      // day passes through localMidnightToUtc's DST-aware date math.
+      occurredAt.lt = localMidnightToUtc(y!, m!, d! + 1, tz);
+    }
 
     const where: Prisma.TransactionWhereInput = {
       workspaceId: ctx.workspaceId,
@@ -174,7 +186,7 @@ export const findTransactions: ToolDef<Args, Result> = {
     };
     if (categoryIds) where.allocations = { some: { categoryId: { in: categoryIds } } };
     if (accountIds) where.accountId = { in: accountIds };
-    if (occurredAt.gte || occurredAt.lte) where.occurredAt = occurredAt;
+    if (occurredAt.gte || occurredAt.lt) where.occurredAt = occurredAt;
 
     // Amount filter on abs(amount): two ranges OR'd, one for expenses (positive),
     // one for refunds (negative).
