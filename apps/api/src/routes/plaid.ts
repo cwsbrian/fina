@@ -10,6 +10,7 @@ import { storeAccessToken } from "../plaid/items.js";
 import { syncTransactions } from "../plaid/sync.js";
 import { categorizeNewTransactions } from "../categorize/service.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
+import { logWarn, logError } from "../logger.js";
 
 const ExchangeBody = z.object({
   publicToken: z.string().min(1),
@@ -99,7 +100,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         try {
           await plaidClient(app.fina.env).itemRemove({ access_token: exch.data.access_token });
         } catch (e) {
-          app.log.warn({ err: e }, "plaid.itemRemove failed during currency_mismatch cleanup");
+          logWarn({ err: e }, "plaid.itemRemove failed during currency_mismatch cleanup");
         }
         const bankCurrency = mismatch.balances?.iso_currency_code ?? "unknown";
         return reply.code(400).send({
@@ -171,7 +172,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
           try {
             await plaidClient(app.fina.env).itemRemove({ access_token: exchAccessToken });
           } catch (ee) {
-            app.log.warn({ err: ee }, "plaid.itemRemove failed during in-lock currency_mismatch cleanup");
+            logWarn({ err: ee }, "plaid.itemRemove failed during in-lock currency_mismatch cleanup");
           }
         }
         const e2 = e as { bankCurrency: string; workspaceCurrency: string };
@@ -229,7 +230,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       if ("newTxIds" in r && r.newTxIds.length > 0) {
         const newTxIds = r.newTxIds;
         void categorizeNewTransactions(app.fina.env, verifiedWsId, newTxIds).catch((e) => {
-          app.log.error({ err: e, plaidItemId, workspaceId: verifiedWsId }, "categorize after exchange failed");
+          logError({ err: e, plaidItemId, workspaceId: verifiedWsId }, "categorize after exchange failed");
         });
       }
     } catch {

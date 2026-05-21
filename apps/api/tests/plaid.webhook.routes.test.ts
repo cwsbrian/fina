@@ -28,6 +28,7 @@ vi.mock("../src/plaid/webhook-dispatch.js", async () => {
   return { dispatchWebhookSync: vi.fn().mockResolvedValue(undefined) };
 });
 import { dispatchWebhookSync } from "../src/plaid/webhook-dispatch.js";
+import * as webhookItemMod from "../src/plaid/webhook-item.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
@@ -273,6 +274,38 @@ describe("POST /plaid/webhook", () => {
     expect(updatedItem.errorCode).toBeNull();
     expect(dispatchWebhookSync).not.toHaveBeenCalled();
     await app.close();
+  });
+
+  it("ITEM dispatch failure → still returns 200 and calls logError with plaidItemId (smoke: migrated app.log.error)", async () => {
+    const dispatchItemSpy = vi
+      .spyOn(webhookItemMod, "dispatchItemEvent")
+      .mockRejectedValueOnce(new Error("item dispatch boom"));
+    const logErrorSpy = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
+    try {
+      const app = await buildApp(env);
+      const { pi } = await seedItem();
+      const body = {
+        webhook_type: "ITEM",
+        webhook_code: "ERROR",
+        item_id: pi.itemId,
+        error: { error_code: "ITEM_LOGIN_REQUIRED" },
+      };
+      const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+
+      const res = await postWebhook(app, body, jwt);
+
+      expect(res.statusCode).toBe(200);
+      // The fire-and-forget promise settles asynchronously; wait briefly.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ plaidItemId: pi.id, err: expect.anything() }),
+        "ITEM webhook dispatch failed",
+      );
+      await app.close();
+    } finally {
+      dispatchItemSpy.mockRestore();
+      logErrorSpy.mockRestore();
+    }
   });
 
   it("ITEM/WEBHOOK_UPDATE_ACKNOWLEDGED for known item → 200, event row stored, status unchanged", async () => {

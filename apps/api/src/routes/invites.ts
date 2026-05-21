@@ -11,6 +11,7 @@ import {
   InviteServiceError,
 } from "../workspaces/invites.js";
 import { sendInviteEmail } from "../email/invite.js";
+import { logError } from "../logger.js";
 
 function mapInviteError(e: unknown): { statusCode: number; code: string } {
   if (e instanceof InviteServiceError) {
@@ -84,9 +85,9 @@ export async function inviteRoutes(app: FastifyInstance): Promise<void> {
             inviteId: invite.id,
           });
         } catch (revokeErr) {
-          app.log.error({ err: revokeErr, inviteId: invite.id }, "failed to revoke invite after email send failure");
+          logError({ err: revokeErr }, `failed to revoke invite after email send failure (inviteId=${invite.id})`);
         }
-        app.log.error({ err: sendErr, inviteId: invite.id }, "invite email send failed");
+        logError({ err: sendErr }, `invite email send failed (inviteId=${invite.id})`);
         return reply.code(502).send({ error: "email_send_failed" });
       }
       return reply.code(201).send({
