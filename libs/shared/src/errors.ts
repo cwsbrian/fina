@@ -78,6 +78,7 @@ export const API_ERROR_CODES = [
   "checkout_failed",
   "portal_failed",
   "webhook_invalid_signature",
+  "webhook_handler_failed",
   "already_subscribed",
 ] as const;
 
