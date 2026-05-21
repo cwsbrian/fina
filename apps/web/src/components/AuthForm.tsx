@@ -2,6 +2,11 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import {
+  MIN_PASSWORD_LENGTH,
+  meetsPasswordPolicy,
+  type InvitePreview as InvitePreviewDTO,
+} from "@fina/shared";
 import { signIn, signUp } from "../auth/client";
 import { apiFetch } from "../lib/api";
 import { env } from "../env";
@@ -9,10 +14,7 @@ import { AuthTopBar } from "./AuthTopBar";
 import { WebIcon } from "./WebIcon";
 import styles from "./auth.module.css";
 
-type InvitePreview = {
-  status: "pending" | "accepted" | "revoked" | "expired";
-  invitedEmail: string;
-};
+type InvitePreview = Pick<InvitePreviewDTO, "status" | "invitedEmail">;
 
 type Mode = "signIn" | "signUp";
 
@@ -61,8 +63,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
       setErr("Please enter a valid email address.");
       return;
     }
-    if (password.length < 8) {
-      setErr("Password must be at least 8 characters.");
+    if (!meetsPasswordPolicy(password)) {
+      setErr(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
     }
     setBusy(true);
@@ -279,7 +281,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
             <button
               type="submit"
               className={styles.btn}
-              disabled={busy || !email || password.length < 8}
+              disabled={busy || !email || !meetsPasswordPolicy(password)}
             >
               {busy ? "…" : mode === "signUp" ? "Create account" : "Sign in"}
             </button>

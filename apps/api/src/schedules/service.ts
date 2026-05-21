@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { DEFAULT_TZ } from "@fina/shared";
 import { prisma } from "../db.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { resolveUserTz, partsInTz } from "../chat/tools/periods.js";
@@ -131,7 +132,7 @@ async function workspaceOwnerTz(workspaceId: string): Promise<string> {
     orderBy: { createdAt: "asc" },
     select: { userId: true },
   });
-  return owner ? await resolveUserTz(owner.userId) : "America/Toronto";
+  return owner ? await resolveUserTz(owner.userId) : DEFAULT_TZ;
 }
 
 export async function addScheduledSpendService(

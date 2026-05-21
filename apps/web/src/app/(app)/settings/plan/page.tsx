@@ -1,7 +1,11 @@
 "use client";
 
 import { Fragment, useEffect, useState } from "react";
-import type { MeDTO as Me, Tier } from "@fina/shared";
+import {
+  trialDaysLeft as daysLeft,
+  type MeDTO as Me,
+  type Tier,
+} from "@fina/shared";
 import { apiFetch } from "../../../../lib/api";
 import { WebIcon } from "../../../../components/WebIcon";
 import styles from "../settings.module.css";
@@ -31,13 +35,6 @@ const COMPARE_ROWS: CompareRow[] = [
   { label: "CSV import", free: true, lite: true, pro: true },
   { label: "Support", free: "Email", lite: "Email", pro: "Priority email" },
 ];
-
-function daysLeft(endsAt: string | null): number | null {
-  if (!endsAt) return null;
-  const ms = new Date(endsAt).getTime() - Date.now();
-  if (ms <= 0) return 0;
-  return Math.ceil(ms / (24 * 60 * 60 * 1000));
-}
 
 function formatDate(iso: string | null): string {
   if (!iso) return "";

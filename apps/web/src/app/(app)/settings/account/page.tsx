@@ -2,19 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { MeDTO as Me } from "@fina/shared";
+import { initials, type MeDTO as Me } from "@fina/shared";
 import { signOut } from "../../../../auth/client";
 import { apiFetch } from "../../../../lib/api";
 import { WebIcon } from "../../../../components/WebIcon";
 import styles from "../settings.module.css";
-
-function initials(name: string | null | undefined, email: string): string {
-  const src = name?.trim() || email;
-  const parts = src.split(/[\s@.]+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
-}
 
 export default function AccountPage() {
   const router = useRouter();

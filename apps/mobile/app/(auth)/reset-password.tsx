@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
+import { passwordStrength } from "@fina/shared";
 import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA } from "../../src/design/AuthButtons";
@@ -9,10 +10,9 @@ import { authClient } from "../../src/auth/client";
 import { colors, type } from "../../src/design/tokens";
 
 function strengthOf(pw: string): string | undefined {
-  if (pw.length === 0) return undefined;
-  if (pw.length < 8) return "Weak";
-  if (pw.length < 12) return "Okay";
-  return "Strong";
+  const s = passwordStrength(pw);
+  if (!s) return undefined;
+  return s === "weak" ? "Weak" : s === "okay" ? "Okay" : "Strong";
 }
 
 function hasLetterAndNumber(pw: string) {

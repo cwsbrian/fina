@@ -1,3 +1,4 @@
+import { DEFAULT_TZ } from "@fina/shared";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { resolveUserTz, partsInTz, localMidnightToUtc } from "../chat/tools/periods.js";
 
@@ -23,7 +24,7 @@ export async function matchScheduledSpends(
       orderBy: { createdAt: "asc" },
       select: { userId: true },
     });
-    const ownerTz = owner ? await resolveUserTz(owner.userId) : "America/Toronto";
+    const ownerTz = owner ? await resolveUserTz(owner.userId) : DEFAULT_TZ;
 
     // 2. Pre-load already-matched (txId, categoryId) pairs for cross-run dedupe.
     const alreadyMatched = await tx.scheduledSpend.findMany({

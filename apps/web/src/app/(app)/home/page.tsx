@@ -2,7 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { MeDTO as Me, WorkspaceSummary as Workspace } from "@fina/shared";
+import {
+  displayName,
+  trialDaysLeft,
+  type MeDTO as Me,
+  type WorkspaceSummary as Workspace,
+} from "@fina/shared";
 import { useSession } from "../../../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
 import { getActiveWorkspaceId } from "../../../lib/active-workspace";
@@ -18,17 +23,7 @@ function formatToday(): string {
 }
 
 function firstName(me: Me | null): string {
-  if (!me) return "there";
-  const n = me.user.name?.trim();
-  if (n) return n.split(/\s+/)[0]!;
-  return me.user.email.split("@")[0]!;
-}
-
-function trialDaysLeft(endsAt: string | null): number | null {
-  if (!endsAt) return null;
-  const ms = new Date(endsAt).getTime() - Date.now();
-  if (ms <= 0) return 0;
-  return Math.ceil(ms / (24 * 60 * 60 * 1000));
+  return me ? displayName(me.user) : "there";
 }
 
 export default function HomePage() {

@@ -1,11 +1,10 @@
+import { DEFAULT_TZ } from "@fina/shared";
 import { prisma } from "../../db.js";
 
 export type BasicPeriod = "today" | "this_week" | "this_month" | "last_month";
 export type ReviewPeriod = BasicPeriod | "all_time";
 export type CurrentPeriod = "this_week" | "this_month";
 export type ComparisonPeriod = "previous_week" | "last_month";
-
-const DEFAULT_TZ = "America/Toronto";
 
 function isValidTz(tz: string): boolean {
   try {

@@ -1,17 +1,21 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
+import {
+  passwordStrength,
+  MIN_PASSWORD_LENGTH,
+  meetsPasswordPolicy,
+} from "@fina/shared";
 import { signUp } from "../../src/auth/client";
 import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
 import { colors, type } from "../../src/design/tokens";
 
-function passwordStrength(pw: string): string | undefined {
-  if (pw.length === 0) return undefined;
-  if (pw.length < 8) return "Weak";
-  if (pw.length < 12) return "Okay";
-  return "Strong";
+function strengthLabel(pw: string): string | undefined {
+  const s = passwordStrength(pw);
+  if (!s) return undefined;
+  return s === "weak" ? "Weak" : s === "okay" ? "Okay" : "Strong";
 }
 
 export default function SignUpScreen() {
@@ -22,7 +26,7 @@ export default function SignUpScreen() {
   const [err, setErr] = useState<string | null>(null);
 
   const canSubmit =
-    name.trim().length > 0 && email.includes("@") && password.length >= 8;
+    name.trim().length > 0 && email.includes("@") && meetsPasswordPolicy(password);
 
   async function submit() {
     if (!canSubmit) return;
@@ -95,7 +99,7 @@ export default function SignUpScreen() {
           value={password}
           onChangeText={setPassword}
           secret
-          strength={passwordStrength(password)}
+          strength={strengthLabel(password)}
           textContentType="newPassword"
         />
       </View>

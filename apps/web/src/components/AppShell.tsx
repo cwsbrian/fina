@@ -2,7 +2,13 @@
 
 import { ReactNode, useEffect, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import type { MeDTO, WorkspaceSummary } from "@fina/shared";
+import {
+  initials,
+  tierLabel,
+  trialDaysLeft,
+  type MeDTO,
+  type WorkspaceSummary,
+} from "@fina/shared";
 import { useSession, signOut } from "../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../lib/api";
 import {
@@ -26,28 +32,6 @@ const NAV_ITEMS = [
   { id: "plan", label: "Plan", path: "/settings/plan" },
   { id: "account", label: "Account", path: "/settings/account" },
 ];
-
-function tierLabel(tier: MeDTO["tier"], trialActive: boolean): string {
-  if (trialActive) return "Pro trial";
-  if (tier === "pro") return "Pro";
-  if (tier === "lite") return "Lite";
-  return "Free";
-}
-
-function trialDaysLeft(endsAt: string | null): number | null {
-  if (!endsAt) return null;
-  const ms = new Date(endsAt).getTime() - Date.now();
-  if (ms <= 0) return 0;
-  return Math.ceil(ms / (24 * 60 * 60 * 1000));
-}
-
-function initials(name: string | null | undefined, email: string): string {
-  const source = name?.trim() || email;
-  const parts = source.split(/[\s@.]+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
-  return (parts[0]![0]! + parts[1]![0]!).toUpperCase();
-}
 
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
