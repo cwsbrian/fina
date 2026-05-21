@@ -39,6 +39,7 @@ model User {
   invitesAccepted Invite[]     @relation("InvitesAccepted")
   plaidItems      PlaidItem[]
   actionIntents   ActionIntent[]
+  chatThreads     ChatThread[]
 
   @@map("users")
 }
@@ -471,20 +472,19 @@ enum CategorizationSource {
 
 model ChatThread {
   id            String    @id @default(cuid())
-  workspaceId   String
+  userId        String
+  workspaceId   String?
   title         String?
   lastMessageAt DateTime?
   archivedAt    DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  workspace Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace?    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
 
-  // NOTE: list-by-recency index is created by the migration SQL with
-  // `lastMessageAt DESC NULLS LAST`. Prisma's @@index syntax cannot express
-  // NULLS LAST, so omitting the directive here avoids schema drift. The
-  // engineer should resist adding it back in `prisma migrate dev` outputs.
+  // Index lives in the migration SQL because @@index can't express NULLS LAST.
   @@map("chat_threads")
 }
 
