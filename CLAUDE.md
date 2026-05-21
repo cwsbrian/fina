@@ -264,6 +264,48 @@ continue.
 
 ---
 
+## When writing a design spec
+
+Every design spec under `docs/superpowers/specs/` MUST include a
+**"Shared library touchpoints"** section near the top (after Goal,
+before Architecture). The section answers two questions:
+
+1. **What `@fina/shared` exports does this spec USE?** List existing
+   types, constants, schemas, validators, error codes the feature
+   depends on (so reviewers see the contract upfront).
+2. **What shared additions does this spec CREATE?** Any new shape,
+   schema, error code, constant, or helper that:
+   - Has 2+ consumers (or imminent consumers) across api/web/mobile, OR
+   - Should have a single source of truth even with 1 consumer
+     (error codes, request schemas, money/date validators, UI display
+     helpers, environment constants).
+
+   For each addition: target file (`libs/shared/src/...`), exported
+   name, brief shape, motivation.
+
+If section 2 is empty, the spec author must explicitly note "No
+shared additions needed" with a one-line reason. Don't skip the
+section.
+
+The implementation plan repeats this list in its file structure
+table, ensuring shared changes ship in their own commit BEFORE any
+app-side migrations.
+
+### Brainstorming gate
+
+Before locking the spec, the brainstorming dialogue itself must ask:
+
+> "What request/response shapes, error codes, validation rules, UI
+> display helpers, or constants does this feature add — and will
+> any be consumed by 2+ apps (api/web/mobile) now or later?"
+
+Default assumption: API response shape ≥ 1 → almost always means a
+new DTO. A new error code → register in `ApiErrorCode` union. A new
+request body validator → add zod schema. A literal magic number /
+string used in two places → constant. Bias toward "share it".
+
+---
+
 ## Anti-patterns (do not do)
 
 - ❌ `type Me = { user: { ... }; tier: "free" | "lite" | "pro"; ... }`
