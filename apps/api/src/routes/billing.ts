@@ -1,11 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import type { Prisma } from "@prisma/client";
-import { CheckoutBody, ACTIVE_SUBSCRIPTION_STATUSES } from "@fina/shared";
+import { CheckoutBody, SyncBody, ACTIVE_SUBSCRIPTION_STATUSES } from "@fina/shared";
+import type { MeDTO, SubscriptionDTO } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireSession } from "../auth/context.js";
 import { stripeClient } from "../stripe/client.js";
 import { priceIdForTier } from "../stripe/pricing-map.js";
 import { ensureStripeCustomer } from "../stripe/ensure-customer.js";
+import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
+import { computeEffectiveTier } from "../auth/tier.js";
 
 // Stripe requires trial_end to be at least 48h in the future (codex R3).
 // Trials expiring sooner than this are treated as already-expired — the
@@ -15,6 +18,44 @@ const STRIPE_TRIAL_END_MIN_MS = 48 * 60 * 60 * 1000;
 function useTrialEnd(trialEndsAt: Date | null): boolean {
   if (!trialEndsAt) return false;
   return trialEndsAt.getTime() - Date.now() >= STRIPE_TRIAL_END_MIN_MS;
+}
+
+async function buildMeBody(userId: string): Promise<MeDTO> {
+  const [user, activeSubs] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+    prisma.subscription.findMany({
+      where: {
+        userId,
+        status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] },
+      },
+      orderBy: { currentPeriodEnd: "desc" },
+    }),
+  ]);
+  const t = computeEffectiveTier(user, activeSubs);
+  // Highest-tier active sub wins (pro > lite). Canceled rows are
+  // already filtered out by ACTIVE_SUBSCRIPTION_STATUSES (codex R8).
+  const primary = activeSubs.find((s) => s.tier === "pro") ?? activeSubs[0];
+  const subscription: SubscriptionDTO | null = primary
+    ? {
+        tier: primary.tier as "lite" | "pro",
+        status: primary.status as SubscriptionDTO["status"],
+        currentPeriodEnd: primary.currentPeriodEnd.toISOString(),
+        cancelAtPeriodEnd: primary.cancelAtPeriodEnd,
+        source: primary.source as SubscriptionDTO["source"],
+      }
+    : null;
+  return {
+    user: {
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      tz: user.tz,
+      locale: user.locale,
+    },
+    tier: t.tier,
+    trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
+    subscription,
+  };
 }
 
 export async function billingRoutes(app: FastifyInstance): Promise<void> {
@@ -90,6 +131,55 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       app.log.error({ err: e }, "portal_failed");
       return reply.code(500).send({ error: "portal_failed" });
+    }
+  });
+
+  app.post("/billing/sync", async (req, reply) => {
+    try {
+      const session = await requireSession(req, app);
+      const parsed = SyncBody.safeParse(req.body ?? {});
+      if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
+      const stripe = stripeClient(app.fina.env);
+
+      // Path A — sessionId provided (Checkout success redirect, codex R2).
+      // Works even when User.stripeCustomerId is still null.
+      if (parsed.data.sessionId) {
+        const sess = await stripe.checkout.sessions.retrieve(parsed.data.sessionId);
+        if (sess.client_reference_id !== user.id) {
+          return reply.code(403).send({ error: "checkout_failed" });
+        }
+        if (sess.customer) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { stripeCustomerId: typeof sess.customer === "string" ? sess.customer : sess.customer.id },
+          });
+        }
+        if (sess.subscription) {
+          const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
+          await syncSubscriptionFromStripe(app.fina.env, subId, user.id);
+        }
+      }
+
+      // Path B — pull customer's subs list (covers plain refreshes + post-A).
+      const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+      if (fresh.stripeCustomerId) {
+        const subs = await stripe.subscriptions.list({
+          customer: fresh.stripeCustomerId,
+          status: "all",
+          limit: 10,
+        });
+        for (const sub of subs.data) {
+          await syncSubscriptionFromStripe(app.fina.env, sub.id, user.id);
+        }
+      }
+
+      return await buildMeBody(user.id);
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      app.log.error({ err: e }, "sync_failed");
+      return reply.code(500).send({ error: "checkout_failed" });
     }
   });
 }
