@@ -20,7 +20,7 @@ const STRENGTH_UI: Record<
   { pct: number; label: string; color: string }
 > = {
   weak: { pct: 30, label: "Weak", color: "var(--color-down)" },
-  fair: { pct: 55, label: "Fair", color: "#f4b000" },
+  fair: { pct: 55, label: "Fair", color: "var(--color-accent-yellow)" },
   good: { pct: 80, label: "Good", color: "var(--color-primary)" },
   strong: { pct: 100, label: "Strong", color: "var(--color-up)" },
 };

@@ -19,8 +19,8 @@ export default function GlobalError({
           flexDirection: "column",
           gap: 16,
           padding: 24,
-          background: "#f6f4ef",
-          color: "#0a0b0d",
+          background: "#fbfcfb",
+          color: "#15201e",
           fontFamily:
             "Inter, -apple-system, system-ui, 'Segoe UI', Roboto, sans-serif",
         }}
@@ -28,7 +28,7 @@ export default function GlobalError({
         <h1 style={{ fontSize: 32, fontWeight: 500, letterSpacing: -0.8 }}>
           Something went wrong.
         </h1>
-        <p style={{ color: "#7c828a" }}>
+        <p style={{ color: "#6f7a76" }}>
           We hit a snag. Try again in a moment.
         </p>
         <button
@@ -36,7 +36,7 @@ export default function GlobalError({
           style={{
             padding: "10px 20px",
             borderRadius: 999,
-            background: "#0a0b0d",
+            background: "#3eb38b",
             color: "#fff",
             border: 0,
             fontSize: 14,

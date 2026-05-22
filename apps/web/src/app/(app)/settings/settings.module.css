@@ -251,7 +251,7 @@
   letter-spacing: 0.4px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(5, 177, 105, 0.1);
+  background: rgba(31, 138, 91, 0.1);
   color: var(--color-up);
 }
 
@@ -349,7 +349,7 @@
 }
 
 .planTrialAside {
-  background: rgba(244, 176, 0, 0.1);
+  background: rgba(230, 184, 92, 0.1);
   border-radius: 14px;
   padding: 18px 22px;
   text-align: center;
@@ -360,7 +360,7 @@
   font-size: 40px;
   line-height: 1;
   font-weight: 600;
-  color: #7a5500;
+  color: #8a6a1c;
   letter-spacing: -1px;
 }
 
@@ -370,13 +370,13 @@
   font-weight: 600;
   letter-spacing: 0.4px;
   text-transform: uppercase;
-  color: #7a5500;
+  color: #8a6a1c;
 }
 
 .planTrialAsideDate {
   margin-top: 8px;
   font-size: 12px;
-  color: #7a5500;
+  color: #8a6a1c;
   opacity: 0.7;
 }
 
@@ -400,8 +400,8 @@
   opacity: 0.7;
 }
 
-.pillActive { background: rgba(5, 177, 105, 0.1); color: var(--color-up); }
-.pillWarn { background: rgba(244, 176, 0, 0.14); color: #7a5500; }
+.pillActive { background: rgba(31, 138, 91, 0.1); color: var(--color-up); }
+.pillWarn { background: rgba(230, 184, 92, 0.14); color: #8a6a1c; }
 .pillNeutral { background: var(--color-surface-strong); color: var(--color-body); }
 
 .compare {
@@ -438,7 +438,7 @@
 }
 
 .compareCellCurrent {
-  background: rgba(59, 123, 255, 0.06);
+  background: rgba(62, 179, 139, 0.06);
 }
 
 .compareTier {

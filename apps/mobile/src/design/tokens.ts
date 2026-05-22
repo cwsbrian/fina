@@ -1,29 +1,34 @@
+// Fina Design System — mirrors apps/web/src/app/global.css and the
+// design workspace's system/colors_and_type.css.
 export const colors = {
-  primary: "#3b7bff",
-  primaryActive: "#2a64db",
-  primaryDisabled: "#bccae0",
-  accentYellow: "#f4b000",
+  primary: "#3eb38b",            // Fina mint
+  primaryActive: "#2e9577",
+  primaryDisabled: "#b8e0cd",
+  mint: "#7dd8b8",               // bright accent
+  navy: "#1c2f45",               // secondary trust
+  softBlue: "#8fb8e8",           // AI / chat tint
+  accentYellow: "#e6b85c",       // coin / money hint
 
-  canvas: "#ffffff",
-  surfaceSoft: "#f7f7f7",
-  surfaceStrong: "#eef0f3",
-  surfaceDark: "#0a0b0d",
-  surfaceDarkElevated: "#16181c",
+  canvas: "#fbfcfb",
+  surfaceSoft: "#f3f5f3",
+  surfaceStrong: "#e7ebe7",
+  surfaceDark: "#15201e",
+  surfaceDarkElevated: "#1f2c2a",
 
-  hairline: "#dee1e6",
-  hairlineSoft: "#eef0f3",
+  hairline: "#dfe4df",
+  hairlineSoft: "#ecefec",
 
-  ink: "#0a0b0d",
-  body: "#5b616e",
-  bodyStrong: "#0a0b0d",
-  muted: "#7c828a",
-  mutedSoft: "#a8acb3",
+  ink: "#15201e",
+  body: "#4f5853",
+  bodyStrong: "#15201e",
+  muted: "#6f7a76",
+  mutedSoft: "#a0a9a4",
   onPrimary: "#ffffff",
   onDark: "#ffffff",
-  onDarkSoft: "#a8acb3",
+  onDarkSoft: "#a8b0aa",
 
-  up: "#05b169",
-  down: "#cf202f",
+  up: "#1f8a5b",     // text-only — never a background fill
+  down: "#cf202f",   // text-only — never a background fill
 } as const;
 
 export const space = {

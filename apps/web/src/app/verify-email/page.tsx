@@ -131,7 +131,7 @@ function VerifyEmailInner() {
       <AuthTopBar homePath="/sign-in" />
       <div className={styles.body}>
         <div className={styles.card}>
-          <div className={styles.successGlyph} style={{ background: "rgba(59,123,255,0.10)", color: "var(--color-primary)" }}>
+          <div className={styles.successGlyph} style={{ background: "rgba(62, 179, 139,0.10)", color: "var(--color-primary)" }}>
             <WebIcon name="mail" size={26} strokeWidth={1.6} />
           </div>
           <h1 className={styles.title}>Check your email</h1>

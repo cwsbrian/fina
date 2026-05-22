@@ -1,27 +1,37 @@
 :root {
-  /* App canvas + neutrals: match Fina Web App design tokens (white canvas,
-     cool grays). The cream #f6f4ef from the landing "Centered manifesto"
-     variant is local to that page (page.module.css), not global. */
-  --color-canvas: #ffffff;
-  --color-surface-soft: #f7f7f7;
-  --color-surface-strong: #eef0f3;
-  --color-ink: #0a0b0d;
-  --color-body: #5b616e;
-  --color-body-strong: #0a0b0d;
-  --color-muted: #7c828a;
-  --color-muted-soft: #a8acb3;
-  --color-hairline: #dee1e6;
-  --color-hairline-soft: #eef0f3;
-  /* Single accent color across the app — Fina Blue. The landing variant's
-     original orange (#d97743) was tied to the cream "Centered manifesto"
-     palette we no longer use globally. */
-  --color-accent: #3b7bff;
-  --color-primary: #3b7bff;
-  --color-primary-active: #2a64db;
-  --color-primary-disabled: #bccae0;
+  /* Fina Design System — see system/colors_and_type.css in the design
+     workspace. Brand is Fina mint (#3eb38b); canvas is near-white with
+     a faint mint hint. Hairlines/text shifted to green-charcoal so the
+     mint stays the only obvious accent. */
+  --color-canvas: #fbfcfb;
+  --color-surface-soft: #f3f5f3;
+  --color-surface-strong: #e7ebe7;
+  --color-surface-dark: #15201e;
+  --color-surface-dark-elevated: #1f2c2a;
+
+  --color-ink: #15201e;
+  --color-body: #4f5853;
+  --color-body-strong: #15201e;
+  --color-muted: #6f7a76;
+  --color-muted-soft: #a0a9a4;
   --color-on-primary: #ffffff;
-  --color-up: #05b169;
-  --color-down: #cf202f;
+  --color-on-dark: #ffffff;
+  --color-on-dark-soft: #a8b0aa;
+
+  --color-hairline: #dfe4df;
+  --color-hairline-soft: #ecefec;
+
+  --color-accent: #3eb38b;
+  --color-primary: #3eb38b;
+  --color-primary-active: #2e9577;
+  --color-primary-disabled: #b8e0cd;
+  --color-mint: #7dd8b8;             /* bright accent fills / illustration */
+  --color-navy: #1c2f45;             /* secondary trust signal */
+  --color-soft-blue: #8fb8e8;        /* AI / chat tint */
+  --color-accent-yellow: #e6b85c;    /* coin/money hint, sparingly */
+
+  --color-up: #1f8a5b;     /* text-only — never a background fill */
+  --color-down: #cf202f;   /* text-only — never a background fill */
 }
 
 *,
