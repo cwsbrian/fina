@@ -321,7 +321,7 @@ export default function PlanPage() {
 
       {renderCurrentCard()}
 
-      <div className={styles.section}>
+      <div className={styles.section} style={{ marginTop: 48 }}>
         <div className={styles.sectionHead}>
           <div>
             <div className={styles.sectionTitle}>Compare plans</div>
