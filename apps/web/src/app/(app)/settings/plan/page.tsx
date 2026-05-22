@@ -85,25 +85,6 @@ export default function PlanPage() {
     }
   };
 
-  // In-app tier swap (Lite ↔ Pro) for users who already have an active
-  // sub. Bypasses Portal because Portal can't express "upgrade immediate
-  // / downgrade at period end" simultaneously — that direction-aware
-  // policy lives in apps/api/src/stripe/change-tier.ts.
-  const onChangeTier = async (tier: PaidTier) => {
-    setBusy(tier === "lite" ? "checkout-lite" : "checkout-pro");
-    try {
-      const m = await apiFetch<MeDTO>("/billing/change-tier", {
-        method: "POST",
-        body: JSON.stringify({ tier }),
-      });
-      setMe(m);
-    } catch (e) {
-      setErr((e as { code?: string }).code ?? "change_tier_failed");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const trialActive = me.trial.active;
   const days = trialDaysLeft(me.trial.endsAt);
   const sub: SubscriptionDTO | null = me.subscription;
@@ -252,27 +233,21 @@ export default function PlanPage() {
         </button>
       );
     }
-    // Tier change (Lite ↔ Pro) on an existing active subscription goes
-    // through our /billing/change-tier route, NOT Portal. Reason:
-    // direction-aware behavior — upgrade invoices proration immediately,
-    // downgrade is scheduled at period end so the user keeps the current
-    // paid tier until the cycle they already paid for ends.
+    // Tier change (Lite ↔ Pro) flows through Stripe Customer Portal so
+    // Stripe handles proration + immediate switch on an existing
+    // subscription. Checkout (creating a new sub) is only correct when
+    // the user has no active subscription yet.
     if (sub !== null) {
       const label = tier === "lite" ? "Lite" : "Pro";
       const isDown = sub.tier === "pro" && tier === "lite";
-      const busyKey = tier === "lite" ? "checkout-lite" : "checkout-pro";
       return (
         <button
           type="button"
           className={`${styles.btn} ${isDown ? styles.btnOutline : styles.btnPrimary}`}
-          onClick={() => onChangeTier(tier)}
+          onClick={onManage}
           disabled={busy !== null}
         >
-          {busy === busyKey
-            ? "Switching…"
-            : isDown
-              ? "Downgrade to Lite at period end"
-              : "Upgrade to Pro now"}
+          {busy === "portal" ? "Opening…" : `Switch to ${label}`}
         </button>
       );
     }

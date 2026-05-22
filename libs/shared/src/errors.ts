@@ -83,9 +83,6 @@ export const API_ERROR_CODES = [
   "webhook_invalid_signature",
   "webhook_handler_failed",
   "already_subscribed",
-  "already_on_tier",
-  "no_active_subscription",
-  "change_tier_failed",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

@@ -8,9 +8,7 @@ import { stripeClient } from "../stripe/client.js";
 import { priceIdForTier } from "../stripe/pricing-map.js";
 import { ensureStripeCustomer } from "../stripe/ensure-customer.js";
 import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
-import { changeSubscriptionTier } from "../stripe/change-tier.js";
 import { computeEffectiveTier } from "../auth/tier.js";
-import type { PaidTier } from "@fina/shared";
 
 // Stripe requires trial_end to be at least 48h in the future (codex R3).
 // Trials expiring sooner than this are treated as already-expired — the
@@ -191,57 +189,6 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       // for a single string (sync 500s show up under checkout_failed).
       app.log.error({ err: e, route: "/billing/sync" }, "checkout_failed");
       return reply.code(500).send({ error: "checkout_failed" });
-    }
-  });
-
-  // Tier change on an existing subscription. Reuses CheckoutBody's
-  // { tier } shape. Direction-aware (see stripe/change-tier.ts):
-  //   - upgrade (Lite → Pro): proration invoiced immediately
-  //   - downgrade (Pro → Lite): scheduled at current period end
-  app.post("/billing/change-tier", async (req, reply) => {
-    try {
-      const session = await requireSession(req, app);
-      const parsed = CheckoutBody.safeParse(req.body);
-      if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
-
-      const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
-
-      const activeSub = await prisma.subscription.findFirst({
-        where: {
-          userId: user.id,
-          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] },
-        },
-        orderBy: { currentPeriodEnd: "desc" },
-      });
-      if (!activeSub) {
-        return reply.code(400).send({ error: "no_active_subscription" });
-      }
-      if (activeSub.tier === parsed.data.tier) {
-        return reply.code(400).send({ error: "already_on_tier" });
-      }
-
-      await changeSubscriptionTier(
-        app.fina.env,
-        activeSub.sourceSubscriptionId,
-        activeSub.tier as PaidTier,
-        parsed.data.tier,
-        app.log,
-      );
-
-      // Re-fetch from Stripe so /me reflects the post-update state
-      // immediately. Webhook will also fire and is idempotent.
-      await syncSubscriptionFromStripe(
-        app.fina.env,
-        activeSub.sourceSubscriptionId,
-        user.id,
-        app.log,
-      );
-
-      return await buildMeBody(user.id);
-    } catch (e) {
-      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
-      app.log.error({ err: e, route: "/billing/change-tier" }, "change_tier_failed");
-      return reply.code(500).send({ error: "change_tier_failed" });
     }
   });
 }
