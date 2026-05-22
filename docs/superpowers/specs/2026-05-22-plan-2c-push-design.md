@@ -19,13 +19,13 @@ After a daily brief is generated in 2B, send a push notification to each of the 
 |---|---|
 | Shared | `RegisterDeviceBody` zod schema + `LogContext` push fields |
 | Schema | New `UserDevice` table |
-| API | POST `/devices` route (upsert push token) |
+| API | POST `/devices` route (upsert push token via `requireSession` + `RegisterDeviceBody.safeParse`); register in `apps/api/src/server.ts` alongside the other ~16 routes (`app.register(devicesRoutes)`). Default global rate-limit bucket (60/min/IP from 1H) is sufficient — no per-route override needed. |
 | API | `expo-server-sdk` dependency + `sendBriefPush()` module |
 | API | `markdownToPlainPreview()` utility (brief MD → push body) |
 | API | Daily-brief cron (2B): extract brief text via `briefBlocksToText(blocks)` after `$transaction` commit, then call `sendBriefPush(userId, briefText)` |
 | API | `EXPO_ACCESS_TOKEN` env in `apps/api/src/env.ts` (z.string().optional()) + `.env.example` docs (free tier sends without it; recommended for production rate limits + future receipt polling) |
-| Mobile | `registerForPushNotifications()` helper using `expo-notifications` |
-| Mobile | Root layout wires register + tap listener |
+| Mobile | Install `expo-notifications` + `expo-constants` (latter is required to read `extra.eas.projectId` in helper). `registerForPushNotifications()` helper using both. |
+| Mobile | Root layout wires register + tap listener. **Also wire into sign-in success path** so a user who launches logged-out then signs in still triggers `registerForPushNotifications` (without waiting for app re-launch). |
 | Tests | Integration: POST /devices, push send mocked Expo, stale-token cleanup, cron → push triggered |
 
 ### Out of scope (deferred)
@@ -299,9 +299,16 @@ export async function registerForPushNotifications(): Promise<string | null> {
 Add inside the root layout component, after the existing `syncDeviceTz` effect (or as a new sibling effect):
 
 ```tsx
+// Watch session state — register on EVERY mount where session exists, so a
+// user who launches logged-out then signs in still gets registered without
+// waiting for an app relaunch. (If the user is logged out, registerForPush
+// returns null harmlessly since POST /devices will 401.)
 useEffect(() => {
+  if (!session) return;  // wait for sign-in
   registerForPushNotifications().catch(() => {});
+}, [session?.userId]);
 
+useEffect(() => {
   // V1: tap → app launch is enough. No deep-link routing.
   // Listener exists so Expo doesn't complain about unhandled notifications.
   const sub = Notifications.addNotificationResponseReceivedListener(() => {
@@ -328,7 +335,7 @@ Mobile app config needs:
     },
     "plugins": [
       ["expo-notifications", {
-        "icon": "./assets/notification-icon.png",
+        "icon": "./assets/icon.png",
         "color": "#000000"
       }]
     ],
@@ -352,7 +359,7 @@ Mobile app config needs:
 - **Token rotation** (rare — Expo regenerates tokens on certain OS updates): mobile re-registers on next launch; UPSERT creates new row. Old row's token will fail with `DeviceNotRegistered` on next send and get cleaned.
 - **App reinstalled with new token**: same as token rotation. Old row cleaned via `DeviceNotRegistered`.
 - **Sign-out + different sign-in on same device**: see §1 out-of-scope note. v1 leaves the old row; next send cleans via `DeviceNotRegistered`.
-- **Push permission granted but Expo `getExpoPushTokenAsync` throws** (network error, EXPO_PROJECT_ID misconfigured): mobile helper catches; `null` returned; no register. Retried next launch.
+- **Push permission granted but Expo `getExpoPushTokenAsync` throws** (network error, app.json `extra.eas.projectId` misconfigured): mobile helper catches; `null` returned; no register. Retried next launch.
 - **Concurrent registers from same device** (race during launch): unique `(userId, expoPushToken)` constraint makes upsert idempotent.
 - **Multi-account device** (user A signs out, user B signs in on same physical device): user B registers their own UserDevice row with same expoPushToken under their userId. User A's row remains until `DeviceNotRegistered` (token never expires for valid app installs; row stays inert). Acceptable v1.
 
@@ -365,13 +372,14 @@ Mobile app config needs:
 | POST /devices — upsert (create then update) | Integration |
 | POST /devices — validation rejects malformed body | Integration |
 | POST /devices — requires session (401 if anon) | Integration |
-| sendBriefPush — mocks Expo SDK; assert chunked call shape | Integration with mocked `@expo/server-sdk` |
+| sendBriefPush — mocks Expo SDK; assert chunked call shape | Integration with mocked `expo-server-sdk` |
 | sendBriefPush — DeviceNotRegistered → row deleted | Integration |
 | sendBriefPush — other error → row preserved, warn logged | Integration |
 | sendBriefPush — zero devices → no-op (logs zero count) | Integration |
 | markdownToPlainPreview — strips MD, truncates, ellipsis | Pure unit |
 | Cron tick: brief emitted → sendBriefPush invoked | Integration with mocked Expo + brief mocks |
 | Cron tick: push throws → brief still durable in DB | Integration |
+| Multi-account device (UserA signs out, UserB signs in on same physical device) — UserA's UserDevice row remains until next send returns DeviceNotRegistered | Integration |
 
 Goal: 100% spec §3-§7 coverage. No `vi.spyOn(prisma, ...)` (memory rule). Use manual save/restore where direct Prisma method substitution is unavoidable.
 
@@ -381,13 +389,14 @@ Goal: 100% spec §3-§7 coverage. No `vi.spyOn(prisma, ...)` (memory rule). Use 
 
 | Risk | Likelihood | Mitigation |
 |---|---|---|
-| `EXPO_PROJECT_ID` unset on mobile → `getExpoPushTokenAsync` throws | Medium | Mobile helper swallows the throw; returns null. Surface a one-time devlog warning. |
+| `app.json `extra.eas.projectId`` unset on mobile → `getExpoPushTokenAsync` throws | Medium | Mobile helper swallows the throw; returns null. Surface a one-time devlog warning. |
 | Expo Push service rate limits (Expo Push max ~600 req/sec) | Low at dogfooding scale | Daily brief is 1 send per user per day. 100 users = 100 sends spread over hours = no rate concern. |
 | `EXPO_ACCESS_TOKEN` (optional Expo auth for higher rate limits + receipt access) missing | Low | Spec adds it as `z.string().optional()` in env.ts. Free tier (no token) works for dogfooding. |
 | Stale `UserDevice` rows accumulate (multi-account device, no sign-out cleanup) | Low | `DeviceNotRegistered` cleanup runs on every send. Worst case: 1 stale row per device-account swap until next send. Acceptable. |
 | Mobile push permission UX rejected → "why didn't I get my brief?" | Medium (UX) | Brief is also visible in chat thread; not pure regression. Settings UI in 2D / 2E could expose toggle. |
 | User on flight mode at brief time → push lost | Low | OS queues push briefly. Expo doesn't retry forever. Acceptable: user opens chat tab to see brief. |
 | Tap → app launch but user lands on home tab, not chat | Medium (UX) | v1 explicit out-of-scope. Plan 2D / 2E adds deep link routing. |
+| iOS push permission prompt fires on first `_layout.tsx` mount with no priming UX (Apple guideline: explain first, ask second) | Medium (UX) | Acceptable for dogfooding/family beta. v1.5 introduce a priming screen / onboarding step. |
 
 ---
 
@@ -397,7 +406,7 @@ After all 10 tasks land and merge:
 
 - Sign-in on mobile + grant permission → `UserDevice` row exists with that user's expoPushToken.
 - Cron daily-brief → assistant ChatMessage created → `sendBriefPush` invoked → mocked Expo accepts → log shows `pushSent: 1`.
-- Mocked Expo returns `DeviceNotRegistered` for a token → corresponding `UserDevice` row deleted, log shows `removedDevice`.
+- Mocked Expo returns `DeviceNotRegistered` for a token → corresponding `UserDevice` row deleted, log shows `removedDeviceId`.
 - `markdownToPlainPreview` test suite covers strip + truncate + ellipsis cases.
 - `tsc --noEmit` clean across `@fina/shared`, `@fina/api`, `@fina/mobile`.
 - Full vitest suite ≥1030 pass (1027 pre-2C + ~5-10 new).
