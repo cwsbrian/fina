@@ -271,6 +271,9 @@ importers:
       '@better-auth/expo':
         specifier: ^1.6.9
         version: 1.6.11(@better-auth/core@1.6.11(@better-auth/utils@0.4.0)(@better-fetch/fetch@1.1.21)(better-call@1.3.5(zod@4.4.3))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0))(better-auth@1.6.11(@prisma/client@5.22.0(prisma@5.22.0))(next@14.2.35(@babel/core@7.29.0)(@playwright/test@1.60.0)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(sass@1.99.0))(prisma@5.22.0)(react-dom@19.1.0(react@19.1.0))(react@19.1.0)(vitest@4.1.7(@types/node@20.19.41)(@vitest/coverage-v8@1.6.1(vitest@1.6.1))(@vitest/ui@1.6.1)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@5.4.21(@types/node@20.19.41)(less@4.1.3)(lightningcss@1.32.0)(sass@1.99.0)(stylus@0.64.0)(terser@5.47.1))))(expo-constants@18.0.13)(expo-linking@8.0.12)(expo-network@8.0.8(expo@54.0.34)(react@19.1.0))
+      '@expo/vector-icons':
+        specifier: ^15.1.1
+        version: 15.1.1(expo-font@14.0.11(expo@54.0.34)(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0))(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
       '@react-native-async-storage/async-storage':
         specifier: ^2.2.0
         version: 2.2.0(react-native@0.81.5(@babel/core@7.29.0)(@types/react@19.1.17)(react@19.1.0))
