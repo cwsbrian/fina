@@ -116,6 +116,15 @@ export default function PlanPage() {
       );
     }
     if (trialActive && sub) {
+      // Trial active AND a paid sub on file. The upcoming charge tier
+      // is whichever the user will be on at trial_end — pendingTier
+      // wins if scheduled, otherwise their current sub tier.
+      const upcomingTier =
+        sub.pendingTier && sub.pendingTier !== sub.tier ? sub.pendingTier : sub.tier;
+      const upcomingLabel = upcomingTier === "pro" ? "Pro" : "Lite";
+      const upcomingPrice = PRICING[upcomingTier].displayPrice;
+      const at = new Date(sub.currentPeriodEnd).toLocaleDateString();
+      const hasSchedule = sub.pendingTier && sub.pendingTier !== sub.tier;
       return (
         <div className={styles.planCurrent}>
           <div>
@@ -123,8 +132,9 @@ export default function PlanPage() {
             <div className={styles.planCurrentName}>Pro trial</div>
             <div className={styles.planCurrentStatus}>
               {days != null ? `${days} day${days === 1 ? "" : "s"} left.` : ""}{" "}
-              {PRICING[sub.tier].displayPrice} charged on{" "}
-              {new Date(sub.currentPeriodEnd).toLocaleDateString()}
+              {hasSchedule
+                ? `Switches to ${upcomingLabel} on ${at} — ${upcomingPrice} will be charged.`
+                : `${upcomingPrice} will be charged on ${at}.`}
             </div>
           </div>
           <div className={styles.planCurrentActions}>
@@ -200,8 +210,7 @@ export default function PlanPage() {
             <div className={styles.planCurrentLabel}>Current plan</div>
             <div className={styles.planCurrentName}>{currentLabel}</div>
             <div className={styles.planCurrentStatus}>
-              Switches to {nextLabel} on {at} ·{" "}
-              {PRICING[sub.pendingTier].displayPrice} next billing.
+              Switches to {nextLabel} on {at} — {PRICING[sub.pendingTier].displayPrice} will be charged.
             </div>
           </div>
           <div className={styles.planCurrentActions}>
