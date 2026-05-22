@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import type { Prisma } from "@prisma/client";
+import type { $Enums } from "@prisma/client";
 import { CheckoutBody, SyncBody, ACTIVE_SUBSCRIPTION_STATUSES } from "@fina/shared";
 import type { MeDTO, SubscriptionDTO } from "@fina/shared";
 import { prisma } from "../db.js";
@@ -26,7 +26,7 @@ async function buildMeBody(userId: string): Promise<MeDTO> {
     prisma.subscription.findMany({
       where: {
         userId,
-        status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] },
+        status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
       },
       orderBy: { currentPeriodEnd: "desc" },
     }),
@@ -81,7 +81,7 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       const active = await prisma.subscription.count({
         where: {
           userId: user.id,
-          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] },
+          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
         },
       });
       if (active > 0) {
@@ -106,9 +106,14 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
         success_url: `${app.fina.env.WEB_APP_URL}/settings/plan?status=success&sessionId={CHECKOUT_SESSION_ID}`,
         cancel_url: `${app.fina.env.WEB_APP_URL}/settings/plan?status=cancel`,
         allow_promotion_codes: true,
-        subscription_data: useTrialEnd(user.trialEndsAt)
-          ? { trial_end: Math.floor(user.trialEndsAt!.getTime() / 1000) }
-          : undefined,
+        // `app` metadata lets the same Stripe account host multiple apps
+        // and still filter subscriptions by source.
+        subscription_data: {
+          metadata: { app: "fina" },
+          ...(useTrialEnd(user.trialEndsAt)
+            ? { trial_end: Math.floor(user.trialEndsAt!.getTime() / 1000) }
+            : {}),
+        },
       });
 
       return { url: stripeSession.url };
@@ -132,6 +137,12 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       const portal = await stripe.billingPortal.sessions.create({
         customer: user.stripeCustomerId,
         return_url: `${app.fina.env.WEB_APP_URL}/settings/plan`,
+        // App-specific portal configuration when set — gives Fina its
+        // own product list / branding / return URL even if other apps
+        // share this Stripe account in the future.
+        ...(app.fina.env.STRIPE_PORTAL_CONFIGURATION
+          ? { configuration: app.fina.env.STRIPE_PORTAL_CONFIGURATION }
+          : {}),
       });
       return { url: portal.url };
     } catch (e) {

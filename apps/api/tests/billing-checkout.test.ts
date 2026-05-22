@@ -117,6 +117,7 @@ describe("POST /billing/checkout", () => {
 
     const sessionCall = stripe.fns.sessionsCreate.mock.calls[0]?.[0];
     expect(sessionCall.subscription_data).toEqual({
+      metadata: { app: "fina" },
       trial_end: Math.floor(trialEnd.getTime() / 1000),
     });
   });
@@ -135,7 +136,9 @@ describe("POST /billing/checkout", () => {
     });
 
     const sessionCall = stripe.fns.sessionsCreate.mock.calls[0]?.[0];
-    expect(sessionCall.subscription_data).toBeUndefined();
+    // subscription_data is still set (carries app metadata) but trial_end is omitted.
+    expect(sessionCall.subscription_data).toEqual({ metadata: { app: "fina" } });
+    expect(sessionCall.subscription_data.trial_end).toBeUndefined();
   });
 
   it("returns 409 already_subscribed when user has active sub", async () => {

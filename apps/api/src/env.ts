@@ -20,6 +20,15 @@ const Schema = z.object({
   STRIPE_WEBHOOK_SECRET: z.string(),
   STRIPE_PRICE_LITE_MONTHLY: z.string(),
   STRIPE_PRICE_PRO_MONTHLY: z.string(),
+  // Per-app Stripe Portal configuration ID (cfg_...). Optional — when
+  // set, /billing/portal sessions use this configuration for branding,
+  // allowed products, and return URLs. Each app under the same Stripe
+  // account gets its own configuration so users see app-specific UI.
+  // Omit (or leave blank) to fall back to Stripe's Default configuration.
+  STRIPE_PORTAL_CONFIGURATION: z.preprocess(
+    (v) => (v === "" ? undefined : v),
+    z.string().optional(),
+  ),
   // Plaid
   PLAID_CLIENT_ID: z.string(),
   PLAID_SECRET: z.string(),
