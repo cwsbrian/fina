@@ -76,8 +76,11 @@ const VALID_TZS = new Set(Intl.supportedValuesOf("timeZone"));
 export const PatchMeBody = z.object({
   // Existing fields stay; add four optional partial-update fields:
   morningTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
-  // Date-only string ("YYYY-MM-DD"). PATCH /me handler converts to a UTC
-  // Date at noon-in-user-tz before writing to User.snoozeUntil DateTime?.
+  // Date-only string ("YYYY-MM-DD"). PATCH semantics:
+  //   undefined  → no change to User.snoozeUntil
+  //   null       → clear (User.snoozeUntil = null)
+  //   "YYYY-MM-DD" → handler converts to UTC noon in user's tz, writes to
+  //                  User.snoozeUntil DateTime?.
   snoozeUntil: z.string().date().nullable().optional(),
   pauseEnabled: z.boolean().optional(),
   // device tz auto-sync (also new — Task 4). Validated against IANA list
@@ -136,7 +139,9 @@ model User {
   // ... existing fields ...
 
   /// Time-of-day (user-local) when daily brief fires. "HH:mm" 24h format.
-  /// Default 08:00. Validated by zod regex `^([01]\d|2[0-3]):[0-5]\d$`.
+  /// Default 08:00. Validated by PatchMeBody zod regex
+  /// `^([01]\d|2[0-3]):[0-5]\d$` at the only writer (PATCH /me handler).
+  /// No DB-level CHECK constraint — API is sole writer.
   morningTime   String    @default("08:00")
 
   /// Skip brief generation until this date (ISO date, user-local). Null when
@@ -238,30 +243,62 @@ candidates = SELECT u.id, u.tz, u.morningTime
                AND (u.snoozeUntil IS NULL OR u.snoozeUntil < NOW())
 
 // App-side filter (Node, per-user tz math):
-matchUsers = candidates.filter((u) => {
-  const localNow = partsInTz(new Date(), u.tz);  // existing helper from periods.ts
-  const localHHmm = `${pad2(localNow.hour)}:${pad2(localNow.minute)}`;
-  if (localHHmm !== u.morningTime) return false;
-  const localDate = `${localNow.year}-${pad2(localNow.month)}-${pad2(localNow.day)}`;
-  // Idempotency check (separate query batched per candidate, OR pre-fetched all
-  // today-briefs for candidates in one round-trip):
-  return !alreadyBriefedToday(u.id, localDate);
+const pad2 = (n: number) => String(n).padStart(2, "0");
+// 1. Compute per-user (id, localHHmm, localDate) using existing partsInTz
+//    from apps/api/src/chat/tools/periods.ts. Use resolveUserTz(u.id) so an
+//    invalid u.tz falls back to America/Toronto (per §8 edge case).
+const enriched = await Promise.all(candidates.map(async (u) => {
+  const tz = await resolveUserTz(u.id);
+  const p = partsInTz(new Date(), tz);
+  return {
+    ...u,
+    tz,
+    localHHmm: `${pad2(p.hour)}:${pad2(p.minute)}`,
+    localDate: `${p.year}-${pad2(p.month)}-${pad2(p.day)}`,
+  };
+}));
+const timeMatched = enriched.filter((u) => u.localHHmm === u.morningTime);
+// 2. Single bulk idempotency query (NOT N+1):
+const todayBriefs = await prisma.brief.findMany({
+  where: {
+    userId: { in: timeMatched.map((u) => u.id) },
+    date: { in: timeMatched.map((u) => u.localDate) },
+  },
+  select: { userId: true, date: true },
 });
+const briefed = new Set(todayBriefs.map((b) => `${b.userId}|${b.date}`));
+const matchUsers = timeMatched.filter((u) => !briefed.has(`${u.id}|${u.localDate}`));
 
 for each user in matchUsers (sequential, awaited inside safe() wrapper):
-  briefType = determineBriefType(dateInTz(NOW(), u.tz))
+  briefType = determineBriefType(u.localDate)
   context   = await buildBriefContext(u.id, briefType)
-  recent    = await loadRecentBriefs(u.id, briefType, n=3)
-  blocks    = await generateBrief(context, recent, briefType)   // brief.ts
+  // Single round-trip — Prisma `include` joins ChatMessage:
+  const recent = await prisma.brief.findMany({
+    where: { userId: u.id, type: briefType },
+    orderBy: { date: "desc" },
+    take: 3,
+    include: { message: { select: { blocks: true } } },
+  });
+  // Flatten each brief's blocks to text (per §8 algorithm: text blocks only,
+  // join markdown with \n, truncate to 1000 chars per brief).
+  const recentTexts = recent.map(briefBlocksToText);
+  blocks    = await generateBrief(context, recentTexts, briefType)  // brief.ts
   thread    = await findOrCreateUnboundThread(u.id)
-  msg       = await prisma.chatMessage.create({ threadId: thread.id, role: "assistant", blocks })
-  await prisma.brief.create({
-    userId: u.id, type: briefType, date: dateInTz(NOW(), u.tz), messageId: msg.id
-  })
-  logInfo({ cron: "daily-brief", userId: u.id, briefType, msgId: msg.id }, "brief emitted")
+  // Atomic emit — message + brief must succeed or fail together so we never
+  // leave an orphan message visible to user with no idempotency row, which
+  // would cause cron to re-emit next minute.
+  await prisma.$transaction(async (tx) => {
+    const msg = await tx.chatMessage.create({
+      data: { threadId: thread.id, role: "assistant", blocks }
+    });
+    await tx.brief.create({
+      data: { userId: u.id, type: briefType, date: u.localDate, messageId: msg.id }
+    });
+    logInfo({ cron: "daily-brief", userId: u.id, briefType, msgId: msg.id }, "brief emitted");
+  });
 ```
 
-All paths wrapped in 1H's `safe()` so an LLM failure for one user logs + skips, the next user still runs.
+All paths wrapped in 1H's `safe()` so an LLM failure for one user logs + skips, the next user still runs. The transaction ensures atomicity within a user — partial state never escapes.
 
 ### `findOrCreateUnboundThread(userId)`
 
@@ -284,7 +321,7 @@ If an unbound thread exists, append to it (Plan 2-chat-user-scope rule). The thr
 
 | # | Task | Files |
 |---|---|---|
-| 1 | `@fina/shared` extension (MeDTO + PatchMeBody + categorize_card.workspaceId) | `libs/shared/src/dto/me.ts`, `schemas/me.ts`, `dto/chat.ts` |
+| 1 | `@fina/shared` extension — MeDTO 3 fields + PatchMeBody schema. `categorize_card` is **not** in 2B scope (per §2 — text blocks only; Plan 2D adds renderer + type). | `libs/shared/src/dto/me.ts`, `libs/shared/src/schemas/me.ts` (new file) |
 | 2 | Prisma migration (User + Brief + BriefType) | `apps/api/prisma/schema.prisma`, `prisma/migrations/...` |
 | 3 | **Create** PATCH /me handler (no PATCH route exists today; only GET) — parses `PatchMeBody`, calls `requireSession`, applies allowed updates, returns updated `MeDTO` | `apps/api/src/routes/me.ts` |
 | 4 | Device tz auto-sync — call `PATCH /me { tz }` only when device tz from `Intl.DateTimeFormat().resolvedOptions().timeZone` differs from cached value (AsyncStorage on mobile, localStorage on web). Throttle to one call per 6h via stored timestamp. Triggers on app foreground / sign-in. | `apps/mobile/src/api/auth.ts`, `apps/web/src/lib/auth.ts` (or wherever sign-in flow lives) |
@@ -328,6 +365,9 @@ Implementation order: 1 (shared) → 2 (schema) → 3 (PATCH route) → 4 (clien
 | Snooze / pause — both prevent emission | Integration |
 | `briefs UNIQUE` collision — second INSERT throws cleanly | Integration |
 | `pauseDailyBrief` chat tool — updates User.snoozeUntil correctly | Integration |
+| User with 0 active memberships — brief emits encouragement-only text | Integration |
+| `findOrCreateUnboundThread` race — concurrent calls (acceptable orphan) | Unit (deterministic concurrent invoke) |
+| Atomicity — partial failure (transaction rollback) | Integration |
 | Anti-repetition context — last 3 brief texts injected | Unit (context shape) |
 
 Goal: 100% spec coverage. No `vi.spyOn(prisma, ...)` patterns (memory rule).
@@ -346,7 +386,7 @@ Goal: 100% spec coverage. No `vi.spyOn(prisma, ...)` patterns (memory rule).
 | Device tz drift (traveling user, app not opened yet) | Low | First app launch after travel triggers `PATCH /me { tz }`. Worst case: 1 brief in old tz. |
 | Anti-repetition injecting stale tone | Low | LLM-judgment. If tone gets repetitive, increase N (3 → 5) in v1.5. |
 | Empty-financial-context brief feels hollow | Medium | LLM prompt explicitly handles "no new activity" — produces encouragement. Dogfooding will validate. |
-| `categorize_card` from one workspace tap-routed to wrong workspace | Low | Card payload carries `workspaceId`; frontend (Plan 2D) routes precisely. Add card-level integration test in Plan 2D. |
+| Multi-workspace brief tap-routes to wrong workspace | N/A in 2B | Out of scope — 2B uses text blocks only. Plan 2D will add categorize_card with workspaceId routing + integration test. |
 
 ---
 
