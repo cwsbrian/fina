@@ -50,6 +50,7 @@ model User {
   chatThreads     ChatThread[]
   subscriptions   Subscription[]
   briefs          Brief[]
+  devices UserDevice[]
 
   @@map("users")
 }
@@ -627,4 +628,24 @@ model Brief {
   @@unique([userId, date])
   @@index([userId, type, date])
   @@map("briefs")
+}
+
+model UserDevice {
+  id              String    @id @default(cuid())
+  userId          String
+  /// Expo's "ExponentPushToken[xxx]" format string. Opaque to us; Expo
+  /// translates to APNs (iOS) or FCM (Android) device tokens internally.
+  expoPushToken   String
+  /// "ios" or "android". TEXT not enum so non-target platforms (future
+  /// web push, desktop, etc.) can be added without a Prisma migration.
+  platform        String
+  /// Updated on every register/refresh call (per app foreground / launch).
+  lastSeenAt      DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, expoPushToken])
+  @@index([userId])
+  @@map("user_devices")
 }
