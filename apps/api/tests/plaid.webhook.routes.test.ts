@@ -22,6 +22,11 @@ import {
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
+// vi.spyOn(loggerMod, "logError") below works because logger.ts exports
+// logError as a `function` declaration (mutable binding). If logger.ts is
+// ever refactored to `export const logError = ...`, the spy silently no-ops
+// (immutable binding) and these tests green-light a broken codepath.
+// Switch to a transport-capture pattern if that refactor lands.
 import * as loggerMod from "../src/logger.js";
 
 vi.mock("../src/plaid/webhook-dispatch.js", async () => {

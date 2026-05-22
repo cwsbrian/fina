@@ -308,4 +308,28 @@ describe("findTransactions tz-aware boundaries", () => {
 
     expect(result.transactions.some((t) => t.id === tx.id)).toBe(false);
   });
+
+  it("end_date on last-of-month rolls correctly to next month", async () => {
+    // Boundary case: end_date="2026-01-31" → exclusive upper bound is
+    // localMidnightToUtc(2026, 1, 32, tz), which Date.UTC normalizes to
+    // 2026-02-01 in tz. A tx at 2026-01-31T23:30 KST should be INCLUDED.
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: kstWsId,
+        accountId: kstAcctId,
+        plaidTransactionId: "kst-eom",
+        amount: "5000",
+        merchantRaw: "Last day of January",
+        occurredAt: new Date("2026-01-31T14:30:00.000Z"), // = 2026-01-31T23:30 KST
+        rawData: {},
+      },
+    });
+
+    const result = await findTransactions.run(kstCtx, {
+      start_date: "2026-01-31",
+      end_date: "2026-01-31",
+    });
+
+    expect(result.transactions.some((t) => t.id === tx.id)).toBe(true);
+  });
 });

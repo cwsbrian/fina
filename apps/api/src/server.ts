@@ -130,11 +130,12 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   const betterAuthHandler = makeBetterAuthHandler(auth, env);
 
-  // Order matters for Fastify route matching: more-specific patterns must
-  // register first so /api/auth/sign-in/* and /api/auth/sign-up/* take
-  // precedence over the catch-all /api/auth/*. sign-in/up get the strict
-  // 5/min/IP bucket (credential-stuffing protection); the catch-all keeps
-  // the lenient 30/min/IP bucket to accommodate get-session polling.
+  // Fastify's router (find-my-way) picks the most-specific matching pattern
+  // automatically — registration order does NOT matter for correctness. We
+  // still write specific-first for readability so a future reader sees the
+  // exception cases before the catch-all. sign-in/up get the strict 5/min/IP
+  // bucket (credential-stuffing protection); the catch-all keeps the lenient
+  // 30/min/IP bucket to accommodate get-session polling.
   app.all("/api/auth/sign-in/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
   app.all("/api/auth/sign-up/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
   app.all("/api/auth/*",         { config: withRateLimit("auth")       }, betterAuthHandler);

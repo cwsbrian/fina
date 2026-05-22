@@ -132,4 +132,26 @@ describe("cleanup-events ScheduledSpend pass", () => {
     expect(await prisma.scheduledSpend.findUnique({ where: { id: recentMatched.id } })).not.toBeNull();
     expect(await prisma.scheduledSpend.findUnique({ where: { id: oldUnresolved.id } })).not.toBeNull();
   });
+
+  it("does NOT delete a row dismissed today (OR matches but updatedAt is recent)", async () => {
+    // Boundary case: a row that was dismissed seconds ago has both
+    // dismissedAt != null (matches the OR) AND updatedAt = now (newer than
+    // cutoff). The (A OR B) AND (updatedAt < cutoff) semantics must keep it.
+    const ws = await prisma.workspace.create({ data: { name: "ss-today-ws" } });
+    const cat = await prisma.category.create({ data: { workspaceId: ws.id, name: "Bills" } });
+    const dismissedToday = await prisma.scheduledSpend.create({
+      data: {
+        workspaceId: ws.id,
+        categoryId: cat.id,
+        amount: "20.00",
+        scheduledDate: new Date("2026-04-01"),
+        dismissedAt: new Date(),
+      },
+    });
+    // No raw-SQL override: @updatedAt is already set to "now" by the create.
+
+    await runCleanupEvents(env);
+
+    expect(await prisma.scheduledSpend.findUnique({ where: { id: dismissedToday.id } })).not.toBeNull();
+  });
 });
