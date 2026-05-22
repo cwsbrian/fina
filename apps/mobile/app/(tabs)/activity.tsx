@@ -35,6 +35,18 @@ function groupByDate(txs: TransactionDTO[]): Section[] {
   return Array.from(buckets, ([title, data]) => ({ title, data }));
 }
 
+function sectionTotal(txs: TransactionDTO[], currency: string): string {
+  const sum = txs.reduce((acc, t) => acc + Number(t.amount), 0);
+  const { display, isIncome } = formatMoney(sum.toString(), currency);
+  return `${isIncome ? "+" : "−"}${display}`;
+}
+
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
 export default function Activity() {
   const [txs, setTxs] = useState<TransactionDTO[] | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
@@ -78,9 +90,7 @@ export default function Activity() {
   if (err && txs === null) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.head}>
-          <Text style={styles.title}>Activity</Text>
-        </View>
+        <ActivityHeader />
         <View style={styles.empty}>
           <Text style={styles.errTitle}>Couldn't load activity</Text>
           <Text style={styles.errBody}>{err}</Text>
@@ -95,9 +105,7 @@ export default function Activity() {
   if (txs === null) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.head}>
-          <Text style={styles.title}>Activity</Text>
-        </View>
+        <ActivityHeader />
         <View style={styles.loading}>
           <ActivityIndicator color={colors.primary} />
         </View>
@@ -108,9 +116,7 @@ export default function Activity() {
   if (txs.length === 0) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <View style={styles.head}>
-          <Text style={styles.title}>Activity</Text>
-        </View>
+        <ActivityHeader />
         <View style={styles.empty}>
           <View style={styles.iconWrap}>
             <Ionicons name="receipt-outline" size={36} color={colors.muted} />
@@ -133,11 +139,13 @@ export default function Activity() {
 
   const sections = groupByDate(txs);
 
+  // Pick a currency for section totals — Plaid items live in one
+  // workspace and share its currency, so safe to read from first tx.
+  const currency = txs[0]?.currency ?? "CAD";
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <View style={styles.head}>
-        <Text style={styles.title}>Activity</Text>
-      </View>
+      <ActivityHeader />
       <SectionList
         sections={sections}
         keyExtractor={(t) => t.id}
@@ -147,27 +155,48 @@ export default function Activity() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
         }
         renderSectionHeader={({ section }) => (
-          <Text style={styles.sectionHead}>{section.title}</Text>
+          <View style={styles.sectionHead}>
+            <Text style={styles.sectionHeadLabel}>{section.title}</Text>
+            <Text style={styles.sectionHeadAmount}>
+              {sectionTotal(section.data, currency)}
+            </Text>
+          </View>
         )}
         renderItem={({ item }) => (
-          <TxRow tx={item} categories={categories} wsId={wsId} />
+          <TxRow tx={item} categories={categories} />
         )}
       />
     </SafeAreaView>
   );
 }
 
+function ActivityHeader() {
+  return (
+    <View style={styles.head}>
+      <Text style={styles.title}>Activity</Text>
+      <View style={styles.headActions}>
+        <Pressable style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]} hitSlop={8} accessibilityLabel="Date range">
+          <Ionicons name="calendar-outline" size={20} color={colors.ink} />
+        </Pressable>
+        <Pressable style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]} hitSlop={8} accessibilityLabel="Search">
+          <Ionicons name="search-outline" size={20} color={colors.ink} />
+        </Pressable>
+        <Pressable style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]} hitSlop={8} accessibilityLabel="Add">
+          <Ionicons name="add" size={22} color={colors.ink} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 function TxRow({
   tx,
   categories,
-  wsId,
 }: {
   tx: TransactionDTO;
   categories: Record<string, CategoryDTO>;
-  wsId: string | null;
 }) {
   const money = formatMoney(tx.amount, tx.currency);
-  // Single allocation = simple display. Multiple = "split" tag.
   const isSplit = tx.allocations.length > 1;
   const firstAllocCat = tx.allocations[0]?.categoryId
     ? categories[tx.allocations[0].categoryId]
@@ -176,6 +205,7 @@ function TxRow({
   const categoryLabel = isSplit
     ? "Split"
     : firstAllocCat?.name ?? "Uncategorized";
+  const uncategorized = !isSplit && !firstAllocCat?.id;
   return (
     <View style={styles.row}>
       <View style={styles.rowGlyph}>
@@ -185,32 +215,53 @@ function TxRow({
           color={money.isIncome ? colors.up : colors.muted}
         />
       </View>
-      <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
-          {merchant}
-        </Text>
-        <Text style={styles.rowMeta} numberOfLines={1}>
+      <View style={styles.rowMid}>
+        <View style={styles.rowMidTitle}>
+          <Text style={styles.rowTitle} numberOfLines={1}>
+            {merchant}
+          </Text>
+          {tx.pending && (
+            <View style={styles.pendingBadge}>
+              <Text style={styles.pendingText}>Pending</Text>
+            </View>
+          )}
+        </View>
+        <Text
+          style={[styles.rowMeta, uncategorized && styles.rowMetaUncat]}
+          numberOfLines={1}
+        >
           {categoryLabel}
-          {tx.pending ? " · Pending" : ""}
         </Text>
       </View>
-      <Text
-        style={[
-          styles.rowAmount,
-          money.isIncome && { color: colors.up },
-        ]}
-      >
-        {money.isIncome ? "+" : ""}
-        {money.display}
-      </Text>
+      <View style={styles.rowRight}>
+        <Text
+          style={[styles.rowAmount, money.isIncome && { color: colors.up }]}
+        >
+          {money.isIncome ? "+" : "−"}
+          {money.display}
+        </Text>
+        <Text style={styles.rowTime}>{formatTime(tx.occurredAt)}</Text>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
-  head: { padding: space.lg, paddingBottom: 0 },
+  head: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
+    paddingBottom: space.xs,
+  },
   title: { ...type$.titleLg, color: colors.ink },
+  headActions: { flexDirection: "row", alignItems: "center", gap: 2 },
+  iconBtn: {
+    width: 36, height: 36, borderRadius: 999,
+    alignItems: "center", justifyContent: "center",
+  },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
   iconWrap: {
@@ -235,24 +286,59 @@ const styles = StyleSheet.create({
     ...type$.bodyMd, color: colors.body, textAlign: "center",
     maxWidth: 320, marginBottom: space.lg,
   },
-  listContent: { padding: space.lg, paddingTop: space.sm, gap: 6 },
+  listContent: { padding: space.lg, paddingTop: space.sm },
   sectionHead: {
-    ...type$.captionStrong,
-    color: colors.muted,
-    textTransform: "uppercase",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
     marginTop: space.base,
     marginBottom: 6,
   },
+  sectionHeadLabel: {
+    ...type$.captionStrong,
+    color: colors.muted,
+    textTransform: "uppercase",
+  },
+  sectionHeadAmount: {
+    ...type$.captionStrong,
+    color: colors.muted,
+    fontVariant: ["tabular-nums"],
+  },
   row: {
-    flexDirection: "row", alignItems: "center", gap: space.sm,
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: space.sm,
     paddingVertical: 10,
   },
   rowGlyph: {
-    width: 40, height: 40, borderRadius: 12,
+    width: 36, height: 36, borderRadius: 12,
     backgroundColor: colors.surfaceSoft,
     alignItems: "center", justifyContent: "center",
+    marginTop: 2,
   },
+  rowMid: { flex: 1, minWidth: 0 },
+  rowMidTitle: { flexDirection: "row", alignItems: "center", gap: 6 },
   rowTitle: { ...type$.titleSm, color: colors.ink },
   rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
-  rowAmount: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
+  rowMetaUncat: { color: colors.accentYellow },
+  pendingBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 999,
+  },
+  pendingText: { ...type$.captionStrong, color: colors.muted, fontSize: 10 },
+  rowRight: { alignItems: "flex-end" },
+  rowAmount: {
+    ...type$.bodyMd,
+    color: colors.ink,
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  rowTime: {
+    ...type$.caption,
+    color: colors.muted,
+    marginTop: 2,
+    fontVariant: ["tabular-nums"],
+  },
 });
