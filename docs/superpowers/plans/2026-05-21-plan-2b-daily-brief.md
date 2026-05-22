@@ -845,7 +845,7 @@ export type BriefContext = {
 Append to `apps/api/src/chat/brief-context.ts`:
 
 ```ts
-import { resolveUserTz } from "./tools/periods.js";
+import { resolveUserTz, partsInTz } from "./tools/periods.js";
 
 export async function buildBriefContext(
   userId: string,
@@ -936,10 +936,13 @@ async function buildWorkspaceContext(
   }));
 
   // Budgets — fetch this-month budgets via periodStart (DateTime @db.Date,
-  // first day of month). Compute first-of-this-month UTC date and match.
-  const firstOfMonthUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  // first day of month). Compute first-of-this-month in the USER's tz so
+  // edge-of-month edge cases (e.g., UTC May 1 00:30 = Toronto April 30
+  // 20:30, user is still on April) match the user's intent.
+  const nowInUserTz = partsInTz(now, tz);
+  const firstOfMonth = new Date(Date.UTC(nowInUserTz.year, nowInUserTz.month - 1, 1));
   const budgets = await prisma.budget.findMany({
-    where: { workspaceId, periodStart: firstOfMonthUtc },
+    where: { workspaceId, periodStart: firstOfMonth },
     include: { category: { select: { name: true } } },
     take: 50,
   });
@@ -1390,6 +1393,23 @@ empty brief into the user's thread."
 - Modify: `apps/api/src/cron/scheduler.ts`
 - Create: `apps/api/tests/cron.daily-brief.test.ts`
 
+- [ ] **Step 7.0: Export `resolveTz` helper from `periods.ts`**
+
+`periods.ts` already has a private `isValidTz` and an async `resolveUserTz(userId)`. Cron needs a SYNCHRONOUS variant that takes the already-fetched `tz` string (no extra DB roundtrip). Add an exported helper.
+
+In `apps/api/src/chat/tools/periods.ts`, find the existing `function isValidTz(...)` and the import `DEFAULT_TZ` line. Add this exported helper right after the existing `resolveUserTz`:
+
+```ts
+/** Synchronous tz resolution — pass the user's already-loaded tz string;
+ *  returns DEFAULT_TZ if it's missing or no longer in the IANA list.
+ *  Used by hot paths (cron) that already have user.tz in scope and
+ *  don't want an extra DB query per candidate. */
+export function resolveTz(tz: string | null | undefined): string {
+  if (!tz) return DEFAULT_TZ;
+  return isValidTz(tz) ? tz : DEFAULT_TZ;
+}
+```
+
 - [ ] **Step 7.1: Implement the cron job**
 
 Create `apps/api/src/cron/jobs/daily-brief.ts`:
@@ -1398,7 +1418,7 @@ Create `apps/api/src/cron/jobs/daily-brief.ts`:
 import { prisma } from "../../db.js";
 import { logInfo, logError } from "../../logger.js";
 import type { Env } from "../../env.js";
-import { partsInTz, resolveUserTz } from "../../chat/tools/periods.js";
+import { partsInTz, resolveTz } from "../../chat/tools/periods.js";
 import { buildBriefContext, type BriefType } from "../../chat/brief-context.js";
 import { generateBrief, briefBlocksToText } from "../../chat/brief.js";
 import type { PresentationBlock } from "../../chat/blocks.js";
@@ -1423,10 +1443,12 @@ export async function runDailyBrief(env: Env): Promise<void> {
   });
   if (candidates.length === 0) return;
 
-  // 2. App-side filter (tz-aware time + idempotency).
+  // 2. App-side filter (tz-aware time + idempotency). Synchronous —
+  //    candidates already include u.tz; resolveTz is pure CPU (validates
+  //    against IANA list, falls back to DEFAULT_TZ) so no DB roundtrip.
   type Enriched = { id: string; morningTime: string; tz: string; localHHmm: string; localDate: string };
-  const enriched: Enriched[] = await Promise.all(candidates.map(async (u) => {
-    const tz = await resolveUserTz(u.id);
+  const enriched: Enriched[] = candidates.map((u) => {
+    const tz = resolveTz(u.tz);
     const p = partsInTz(new Date(), tz);
     return {
       id: u.id,
@@ -1435,7 +1457,7 @@ export async function runDailyBrief(env: Env): Promise<void> {
       localHHmm: `${pad2(p.hour)}:${pad2(p.minute)}`,
       localDate: `${p.year}-${pad2(p.month)}-${pad2(p.day)}`,
     };
-  }));
+  });
   const timeMatched = enriched.filter((u) => u.localHHmm === u.morningTime);
   if (timeMatched.length === 0) return;
 
@@ -1992,11 +2014,20 @@ vi.mock("@google/genai", () => ({
 beforeEach(async () => { await truncateAll(); });
 afterAll(async () => { await disconnect(); });
 
-async function makeUserMatchingNow(tz = "Asia/Seoul") {
+async function currentLocalHHmm(tz: string): Promise<string> {
   const partsInTz = (await import("../src/chat/tools/periods.js")).partsInTz;
   const p = partsInTz(new Date(), tz);
   const pad2 = (n: number) => String(n).padStart(2, "0");
-  const nowHHmm = `${pad2(p.hour)}:${pad2(p.minute)}`;
+  return `${pad2(p.hour)}:${pad2(p.minute)}`;
+}
+
+async function syncMorningTimeToNow(userId: string, tz: string): Promise<void> {
+  const now = await currentLocalHHmm(tz);
+  await prisma.user.update({ where: { id: userId }, data: { morningTime: now } });
+}
+
+async function makeUserMatchingNow(tz = "Asia/Seoul") {
+  const nowHHmm = await currentLocalHHmm(tz);
   return prisma.user.create({
     data: {
       id: `int-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -2012,6 +2043,7 @@ describe("daily-brief integration", () => {
   it("zero-membership user — brief is still generated (encouragement-only)", async () => {
     const u = await makeUserMatchingNow();
     // No memberships.
+    await syncMorningTimeToNow(u.id, "Asia/Seoul");  // anti-flake
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
@@ -2026,6 +2058,7 @@ describe("daily-brief integration", () => {
     const u = await makeUserMatchingNow();
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await syncMorningTimeToNow(u.id, "Asia/Seoul");  // anti-flake
 
     // Pre-seed a brief with today's date so the cron's bulk-idempotency check
     // ALSO would skip — so we need to bypass that. Strategy:
@@ -2059,6 +2092,7 @@ describe("daily-brief integration", () => {
     const u = await makeUserMatchingNow();
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await syncMorningTimeToNow(u.id, "Asia/Seoul");  // anti-flake
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
@@ -2073,6 +2107,7 @@ describe("daily-brief integration", () => {
 
     // Simulate "next day" by deleting today's brief — cron will re-fire.
     await prisma.brief.deleteMany({ where: { userId: u.id } });
+    await syncMorningTimeToNow(u.id, "Asia/Seoul");  // anti-flake (minute may have rolled)
 
     await runDailyBrief(testEnv());
 
@@ -2172,6 +2207,14 @@ describe("daily-brief E2E smoke", () => {
         rawData: {},
       },
     });
+
+    // Anti-flake: re-sync morningTime in case the minute has rolled over
+    // during the multi-step seed above.
+    const p2 = partsInTz(new Date(), tz);
+    const nowHHmm2 = `${pad2(p2.hour)}:${pad2(p2.minute)}`;
+    if (nowHHmm2 !== nowHHmm) {
+      await prisma.user.update({ where: { id: u.id }, data: { morningTime: nowHHmm2 } });
+    }
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
