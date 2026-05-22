@@ -12,7 +12,13 @@ function baseEnv(): NodeJS.ProcessEnv {
     PLAID_SECRET: "x",
     ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
     GEMINI_API_KEY: "x",
-    TRUST_PROXY: "false", // NEW: 1J Task 2 strict opt-in requires explicit value
+    TRUST_PROXY: "false", // 1J Task 2 strict opt-in requires explicit value
+    // 1K: billing-stripe merged 4 required Stripe env vars. Use clear
+    // "_stub" suffixes so future readers see they're test fixtures.
+    STRIPE_SECRET_KEY: "sk_test_stub",
+    STRIPE_WEBHOOK_SECRET: "whsec_stub",
+    STRIPE_PRICE_LITE_MONTHLY: "price_lite_stub",
+    STRIPE_PRICE_PRO_MONTHLY: "price_pro_stub",
   };
 }
 
