@@ -41,7 +41,7 @@ export default function TabsLayout() {
         options={{
           title: "Home",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="home-outline" color={color} size={20} />
+            <Ionicons name="home-outline" color={color} size={21} />
           ),
         }}
       />
@@ -50,7 +50,7 @@ export default function TabsLayout() {
         options={{
           title: "Activity",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="list-outline" color={color} size={20} />
+            <Ionicons name="list-outline" color={color} size={21} />
           ),
         }}
       />
@@ -59,7 +59,7 @@ export default function TabsLayout() {
         options={{
           title: "Chat",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubble-outline" color={color} size={20} />
+            <Ionicons name="chatbubble-outline" color={color} size={21} />
           ),
         }}
       />
@@ -68,7 +68,7 @@ export default function TabsLayout() {
         options={{
           title: "Goals",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="flag-outline" color={color} size={20} />
+            <Ionicons name="flag-outline" color={color} size={21} />
           ),
         }}
       />
@@ -77,7 +77,7 @@ export default function TabsLayout() {
         options={{
           title: "More",
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="ellipsis-horizontal" color={color} size={20} />
+            <Ionicons name="ellipsis-horizontal" color={color} size={21} />
           ),
         }}
       />
