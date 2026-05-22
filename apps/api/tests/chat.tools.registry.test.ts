@@ -167,10 +167,6 @@ describe("REGISTRY (plan 1c-budget)", () => {
     }
   });
 
-  it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(27);
-  });
-
   it("setBudget and getBudget and compareSpendingVsBudget are all registered", () => {
     const names = REGISTRY.map((t) => t.name);
     expect(names).toContain("setBudget");
@@ -197,10 +193,6 @@ describe("REGISTRY (plan 1c-merchant-map)", () => {
       const tool = REGISTRY.find((t) => t.name === name);
       expect(tool?.description).toBe(desc);
     }
-  });
-
-  it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(27);
   });
 
   it("mapMerchantToCategory is registered", () => {
@@ -237,8 +229,12 @@ describe("REGISTRY (plan 1c-recurring-persist)", () => {
     }
   });
 
-  it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(27);
+  it("registry has 28 tools total", () => {
+    // Cumulative source-of-truth count. Bump this when a new tool is added
+    // to apps/api/src/chat/tools/index.ts REGISTRY. The number is checked
+    // ONCE here, not in every plan-specific describe (prior duplicates
+    // removed in 1K-cleanup).
+    expect(REGISTRY).toHaveLength(28);
   });
 
   it("addRecurring, listRecurring, removeRecurring are all registered", () => {
@@ -267,10 +263,6 @@ describe("REGISTRY (plan 1c-confirmation)", () => {
       const tool = REGISTRY.find((t) => t.name === name);
       expect(tool?.description).toBe(desc);
     }
-  });
-
-  it("registry has 22 tools total", () => {
-    expect(REGISTRY).toHaveLength(27);
   });
 
   it("presentConfirmCard is registered", () => {
