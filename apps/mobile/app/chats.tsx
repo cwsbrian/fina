@@ -118,7 +118,12 @@ export default function Chats() {
           renderItem={({ item }) => (
             <Pressable
               style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
-              onPress={() => router.push(`/chat/${item.id}` as never)}
+              onPress={() =>
+                router.replace({
+                  pathname: "/(tabs)/chat",
+                  params: { thread: item.id },
+                } as never)
+              }
             >
               <View style={styles.rowGlyph}>
                 <Ionicons
