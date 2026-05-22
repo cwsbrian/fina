@@ -1,0 +1,82 @@
+import { NextResponse } from "next/server";
+import { z } from "zod";
+
+// Landing waitlist signup. Sends a notification email via Resend to the
+// operator (WAITLIST_TO). Intentionally NOT persisted — for v1 we just
+// want to know who's interested.
+//
+// Server-side env (no NEXT_PUBLIC_ prefix — these never reach the browser):
+//   RESEND_API_KEY  — required for the email send to actually fire.
+//                     If unset, the request still returns 200 so the UI
+//                     gives the user feedback (logs a server warning).
+//   WAITLIST_TO     — operator inbox; defaults to cwsbrian@gmail.com.
+//   WAITLIST_FROM   — sender. Defaults to onboarding@resend.dev which
+//                     works without domain verification but can only
+//                     deliver to the Resend account owner's email.
+//                     Once fina.app is verified, switch to noreply@fina.app.
+
+const Body = z.object({
+  email: z.string().trim().toLowerCase().email().max(254),
+});
+
+export const runtime = "nodejs";
+
+export async function POST(req: Request): Promise<NextResponse> {
+  let parsed: { email: string };
+  try {
+    const json = (await req.json()) as unknown;
+    const result = Body.safeParse(json);
+    if (!result.success) {
+      return NextResponse.json({ error: "invalid_email" }, { status: 400 });
+    }
+    parsed = result.data;
+  } catch {
+    return NextResponse.json({ error: "invalid_body" }, { status: 400 });
+  }
+
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = process.env.WAITLIST_TO ?? "cwsbrian@gmail.com";
+  const from = process.env.WAITLIST_FROM ?? "Fina waitlist <onboarding@resend.dev>";
+
+  if (!apiKey) {
+    // Dev fallback — still ack the user so the form gives feedback.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[waitlist] RESEND_API_KEY unset — would have notified ${to} about ${parsed.email}`,
+    );
+    return NextResponse.json({ ok: true });
+  }
+
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        from,
+        to,
+        subject: `New Fina waitlist signup: ${parsed.email}`,
+        text: `${parsed.email} just joined the Fina waitlist.\n\nReply directly if you want to reach out.`,
+        reply_to: parsed.email,
+      }),
+    });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      // eslint-disable-next-line no-console
+      console.error(
+        `[waitlist] Resend rejected (${res.status}) for ${parsed.email}: ${detail.slice(0, 200)}`,
+      );
+      // Don't leak provider details to the client — but the user's
+      // signup intent is recorded in logs above.
+      return NextResponse.json({ ok: true });
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error(`[waitlist] Resend fetch failed for ${parsed.email}:`, e);
+    return NextResponse.json({ ok: true });
+  }
+
+  return NextResponse.json({ ok: true });
+}

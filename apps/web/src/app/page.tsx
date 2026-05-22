@@ -6,12 +6,32 @@ import styles from "./page.module.css";
 export default function Landing() {
   const [email, setEmail] = useState("");
   const [submitted, setSubmitted] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
 
-  function onSubmit(e: FormEvent<HTMLFormElement>) {
+  async function onSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (!email || submitted) return;
-    // TODO: POST /api/waitlist when endpoint exists.
-    setSubmitted(true);
+    if (!email || submitted || busy) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch("/api/waitlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email }),
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        setErr(body.error === "invalid_email" ? "Enter a valid email." : "Something went wrong. Try again.");
+        setBusy(false);
+        return;
+      }
+      setSubmitted(true);
+    } catch {
+      setErr("Network error. Try again.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -44,14 +64,19 @@ export default function Landing() {
             placeholder="you@email.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            disabled={submitted}
+            disabled={submitted || busy}
             required
             aria-label="Email address"
           />
-          <button type="submit" disabled={submitted || email.length === 0}>
-            {submitted ? "You're in ✓" : "Join waitlist"}
+          <button type="submit" disabled={submitted || busy || email.length === 0}>
+            {submitted ? "You're in ✓" : busy ? "Joining…" : "Join waitlist"}
           </button>
         </form>
+        {err && (
+          <p style={{ marginTop: 12, color: "var(--color-down)", fontSize: 14 }}>
+            {err}
+          </p>
+        )}
       </div>
 
       <div className={styles.foot}>
