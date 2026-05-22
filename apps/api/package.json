@@ -23,6 +23,7 @@
     "@prisma/client": "^5.22.0",
     "better-auth": "^1.6.9",
     "croner": "^10.0.1",
+    "expo-server-sdk": "^6.1.0",
     "fastify": "^5.0.0",
     "jose": "^6",
     "pino": "^10.3.1",
