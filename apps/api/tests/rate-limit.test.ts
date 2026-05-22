@@ -21,10 +21,10 @@ describe("rate limits", () => {
     await app.close();
   });
 
-  it("auth bucket — 30/min per IP on /api/auth/*", async () => {
+  it("authStrict bucket — 5/min per IP on /api/auth/sign-in/*", async () => {
     const app = await buildApp(env);
     let last;
-    for (let i = 0; i < 31; i++) {
+    for (let i = 0; i < 6; i++) {
       last = await app.inject({
         method: "POST",
         url: "/api/auth/sign-in/email",
@@ -33,6 +33,47 @@ describe("rate limits", () => {
       });
     }
     expect(last?.statusCode).toBe(429);
+    expect(last?.json().error).toBe("rate_limit_exceeded");
+    await app.close();
+  });
+
+  it("authStrict bucket — 5/min per IP on /api/auth/sign-up/*", async () => {
+    const app = await buildApp(env);
+    let last;
+    for (let i = 0; i < 6; i++) {
+      last = await app.inject({
+        method: "POST",
+        url: "/api/auth/sign-up/email",
+        headers: { "content-type": "application/json" },
+        payload: JSON.stringify({ email: `n${i}@t.co`, password: "validpw1234", name: `n${i}` }),
+      });
+    }
+    expect(last?.statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("auth (lenient) bucket — 30/min per IP on /api/auth/get-session", async () => {
+    const app = await buildApp(env);
+    let last;
+    for (let i = 0; i < 31; i++) {
+      last = await app.inject({ method: "GET", url: "/api/auth/get-session" });
+    }
+    expect(last?.statusCode).toBe(429);
+    await app.close();
+  });
+
+  it("sign-in failures do NOT consume the auth/get-session bucket", async () => {
+    const app = await buildApp(env);
+    for (let i = 0; i < 4; i++) {
+      await app.inject({
+        method: "POST",
+        url: "/api/auth/sign-in/email",
+        headers: { "content-type": "application/json" },
+        payload: JSON.stringify({ email: `s${i}@t.co`, password: "wrong" }),
+      });
+    }
+    const sessionRes = await app.inject({ method: "GET", url: "/api/auth/get-session" });
+    expect(sessionRes.statusCode).not.toBe(429);
     await app.close();
   });
 
