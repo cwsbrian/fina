@@ -1,10 +1,17 @@
 import { Tabs } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors } from "../../src/design/tokens";
 
 // Five-tab structure per Fina Mobile Designs. Add (manual / OCR) is a
 // modal/sheet launched from Home/Activity FABs, not a tab.
 export default function TabsLayout() {
+  const insets = useSafeAreaInsets();
+  // Bottom safe-area inset on devices with a home indicator (modern
+  // iPhones / some Androids) is non-zero; on the rest it's 0. Either
+  // way we add a base 8px so the icons don't sit flush against the
+  // indicator line, and grow the bar height to match.
+  const bottomPad = Math.max(insets.bottom, 8);
   return (
     <Tabs
       screenOptions={{
@@ -14,14 +21,18 @@ export default function TabsLayout() {
         tabBarStyle: {
           backgroundColor: colors.canvas,
           borderTopColor: colors.hairlineSoft,
-          paddingTop: 6,
-          paddingBottom: 8,
-          height: 64,
+          paddingTop: 8,
+          paddingBottom: bottomPad,
+          height: 56 + bottomPad,
         },
         tabBarLabelStyle: {
           fontSize: 11,
           fontWeight: "600",
           letterSpacing: 0.1,
+          marginTop: 2,
+        },
+        tabBarItemStyle: {
+          paddingVertical: 4,
         },
       }}
     >
