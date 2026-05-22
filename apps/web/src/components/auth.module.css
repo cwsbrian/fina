@@ -252,7 +252,7 @@
   width: 56px;
   height: 56px;
   border-radius: 16px;
-  background: rgba(5, 177, 105, 0.1);
+  background: rgba(31, 138, 91, 0.1);
   color: var(--color-up);
   display: inline-flex;
   align-items: center;
@@ -280,7 +280,7 @@
   width: 36px;
   height: 36px;
   border-radius: 10px;
-  background: rgba(59, 123, 255, 0.1);
+  background: rgba(62, 179, 139, 0.1);
   color: var(--color-primary);
   display: inline-flex;
   align-items: center;
@@ -421,7 +421,7 @@
   width: 64px;
   height: 64px;
   border-radius: 18px;
-  background: rgba(59, 123, 255, 0.1);
+  background: rgba(62, 179, 139, 0.1);
   color: var(--color-primary);
   display: inline-flex;
   align-items: center;
@@ -435,8 +435,8 @@
 }
 
 .inviteIconWarn {
-  background: rgba(244, 176, 0, 0.14);
-  color: #7a5500;
+  background: rgba(230, 184, 92, 0.14);
+  color: #8a6a1c;
 }
 
 .inviteFrom {

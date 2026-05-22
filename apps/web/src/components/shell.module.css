@@ -110,18 +110,18 @@
 .tierBadge:hover { background: var(--color-hairline); }
 
 .tierBadgeTrial {
-  background: rgba(244, 176, 0, 0.14);
-  color: #7a5500;
+  background: rgba(230, 184, 92, 0.14);
+  color: #8a6a1c;
 }
 
-.tierBadgeTrial:hover { background: rgba(244, 176, 0, 0.22); }
+.tierBadgeTrial:hover { background: rgba(230, 184, 92, 0.22); }
 
 .tierBadgePro {
-  background: rgba(59, 123, 255, 0.1);
+  background: rgba(62, 179, 139, 0.1);
   color: var(--color-primary);
 }
 
-.tierBadgePro:hover { background: rgba(59, 123, 255, 0.18); }
+.tierBadgePro:hover { background: rgba(62, 179, 139, 0.18); }
 
 .tierDot {
   width: 6px;
