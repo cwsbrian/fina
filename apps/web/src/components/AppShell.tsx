@@ -15,6 +15,7 @@ import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../lib/active-workspace";
+import { syncDeviceTz } from "../lib/tz-sync";
 import { WebIcon } from "./WebIcon";
 import styles from "./shell.module.css";
 
@@ -63,6 +64,17 @@ export function AppShell({ children }: { children: ReactNode }) {
         setError((e as { code?: string }).code ?? "load_error");
       }
     })();
+  }, []);
+
+  // Device tz auto-sync — fires on mount + when tab becomes visible again.
+  // Throttled internally (6h) and skipped if tz hasn't changed.
+  useEffect(() => {
+    syncDeviceTz();
+    const onVis = () => {
+      if (document.visibilityState === "visible") syncDeviceTz();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
   }, []);
 
   function navigate(path: string) {
