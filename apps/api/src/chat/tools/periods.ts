@@ -21,6 +21,15 @@ export async function resolveUserTz(userId: string): Promise<string> {
   return isValidTz(tz) ? tz : DEFAULT_TZ;
 }
 
+/** Synchronous tz resolution — pass the user's already-loaded tz string;
+ *  returns DEFAULT_TZ if it's missing or no longer in the IANA list.
+ *  Used by hot paths (cron) that already have user.tz in scope and
+ *  don't want an extra DB query per candidate. */
+export function resolveTz(tz: string | null | undefined): string {
+  if (!tz) return DEFAULT_TZ;
+  return isValidTz(tz) ? tz : DEFAULT_TZ;
+}
+
 export type Parts = {
   year: number;
   month: number;

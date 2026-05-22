@@ -11,10 +11,13 @@ export type LogContext = {
   /** Chat / LLM */
   threadId?: string;
   tool?: string;
+  msgId?: string;
   /** Cron */
   cron?: string;
   event?: "start" | "protected_skip" | "success" | "fail";
   durationMs?: number;
+  /** Brief cron */
+  briefType?: "daily" | "weekly" | "monthly";
   /** Plaid */
   plaidEvent?: string;
   plaidItemId?: string;
