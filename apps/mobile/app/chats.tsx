@@ -10,7 +10,7 @@ import {
   Alert,
   Animated,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, router, Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { ChatThreadDTO } from "@fina/shared";
@@ -32,7 +32,9 @@ export default function Chats() {
   const [threads, setThreads] = useState<ThreadRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const header = useCollapsingHeader(HEADER_HEIGHT);
+  const insets = useSafeAreaInsets();
+  const totalHeader = insets.top + HEADER_HEIGHT;
+  const header = useCollapsingHeader(totalHeader);
 
   const load = useCallback(async () => {
     try {
@@ -63,9 +65,9 @@ export default function Chats() {
   };
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+    <SafeAreaView style={styles.safe} edges={["bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <Animated.View style={[styles.headerOverlay, header.headerStyle]}>
+      <Animated.View style={[styles.headerOverlay, { paddingTop: insets.top, height: totalHeader }, header.headerStyle]}>
         <View style={styles.header}>
           <HeaderIconButton
             icon="chevron-back"
@@ -110,7 +112,7 @@ export default function Chats() {
         <FlatList
           data={threads}
           keyExtractor={(t) => t.id}
-          contentContainerStyle={{ paddingHorizontal: space.lg, paddingTop: HEADER_HEIGHT, paddingBottom: space.xxl }}
+          contentContainerStyle={{ paddingHorizontal: space.lg, paddingTop: totalHeader, paddingBottom: space.xxl }}
           onScroll={header.onScroll}
           scrollEventThrottle={header.scrollEventThrottle}
           refreshControl={
@@ -118,7 +120,7 @@ export default function Chats() {
               refreshing={refreshing}
               onRefresh={onRefresh}
               tintColor={colors.primary}
-              progressViewOffset={HEADER_HEIGHT}
+              progressViewOffset={totalHeader}
             />
           }
           renderItem={({ item }) => (
@@ -175,12 +177,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   header: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: space.base,
     paddingVertical: space.sm,
-    height: HEADER_HEIGHT,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },

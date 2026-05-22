@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, Animated } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, router, useNavigation } from "expo-router";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { ThreadView } from "../../src/chat/ThreadView";
@@ -17,7 +17,9 @@ export default function ChatTab() {
   const params = useLocalSearchParams<{ thread?: string }>();
   const navigation = useNavigation();
   const tabBarHeight = useBottomTabBarHeight();
-  const header = useCollapsingHeader(HEADER_HEIGHT);
+  const insets = useSafeAreaInsets();
+  const totalHeader = insets.top + HEADER_HEIGHT;
+  const header = useCollapsingHeader(totalHeader);
   // null = pending; a real id appears only when /chats explicitly
   // routes the user back to a specific thread via ?thread=<id>.
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
@@ -51,16 +53,16 @@ export default function ChatTab() {
   }, [navigation, onNewChat]);
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <View style={styles.safe}>
       <ThreadView
         key={`${currentThreadId ?? "pending"}-${resetKey}`}
         threadId={currentThreadId}
         bottomInset={tabBarHeight}
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
-        listTopInset={HEADER_HEIGHT}
+        listTopInset={totalHeader}
       />
-      <Animated.View style={[styles.headerOverlay, header.headerStyle]}>
+      <Animated.View style={[styles.headerOverlay, { paddingTop: insets.top, height: totalHeader }, header.headerStyle]}>
         <View style={styles.header}>
           <HeaderIconButton
             icon="time-outline"
@@ -75,7 +77,7 @@ export default function ChatTab() {
           />
         </View>
       </Animated.View>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -90,12 +92,12 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
   },
   header: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: space.base,
     paddingVertical: space.sm,
-    height: HEADER_HEIGHT,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },

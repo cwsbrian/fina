@@ -9,7 +9,7 @@ import {
   RefreshControl,
   Animated,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { CategoryDTO, TransactionDTO } from "@fina/shared";
@@ -58,7 +58,9 @@ export default function Activity() {
   const [wsId, setWsId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const header = useCollapsingHeader(HEADER_HEIGHT);
+  const insets = useSafeAreaInsets();
+  const totalHeader = insets.top + HEADER_HEIGHT;
+  const header = useCollapsingHeader(totalHeader);
 
   const load = useCallback(async () => {
     try {
@@ -150,11 +152,11 @@ export default function Activity() {
   const currency = txs[0]?.currency ?? "CAD";
 
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
+    <View style={styles.safe}>
       <SectionList
         sections={sections}
         keyExtractor={(t) => t.id}
-        contentContainerStyle={[styles.listContent, { paddingTop: HEADER_HEIGHT }]}
+        contentContainerStyle={[styles.listContent, { paddingTop: totalHeader }]}
         stickySectionHeadersEnabled={false}
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
@@ -163,7 +165,7 @@ export default function Activity() {
             refreshing={refreshing}
             onRefresh={onRefresh}
             tintColor={colors.primary}
-            progressViewOffset={HEADER_HEIGHT}
+            progressViewOffset={totalHeader}
           />
         }
         renderSectionHeader={({ section }) => (
@@ -178,10 +180,10 @@ export default function Activity() {
           <TxRow tx={item} categories={categories} />
         )}
       />
-      <Animated.View style={[styles.headerOverlay, header.headerStyle]}>
+      <Animated.View style={[styles.headerOverlay, { paddingTop: insets.top, height: totalHeader }, header.headerStyle]}>
         <ActivityHeader />
       </Animated.View>
-    </SafeAreaView>
+    </View>
   );
 }
 
