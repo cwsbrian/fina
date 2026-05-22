@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router, useNavigation } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { ThreadView } from "../../src/chat/ThreadView";
@@ -12,6 +12,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 // then nothing persists. Historical conversations live in /chats.
 export default function ChatTab() {
   const params = useLocalSearchParams<{ thread?: string }>();
+  const navigation = useNavigation();
   const tabBarHeight = useBottomTabBarHeight();
   // null = pending; a real id appears only when /chats explicitly
   // routes the user back to a specific thread via ?thread=<id>.
@@ -27,10 +28,23 @@ export default function ChatTab() {
     }
   }, [params.thread]);
 
-  const onNewChat = () => {
+  const onNewChat = useCallback(() => {
     setCurrentThreadId(null);
     setResetKey((k) => k + 1);
-  };
+  }, []);
+
+  // Tapping the Chat tab while already on it should reset to a new
+  // (pending) thread. tabPress fires for every tap; we trigger only
+  // when the tab was ALREADY focused — switching from another tab
+  // is handled by normal navigation focus.
+  useEffect(() => {
+    const unsub = navigation.addListener("tabPress" as never, (() => {
+      if ((navigation as { isFocused: () => boolean }).isFocused()) {
+        onNewChat();
+      }
+    }) as never);
+    return unsub;
+  }, [navigation, onNewChat]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
