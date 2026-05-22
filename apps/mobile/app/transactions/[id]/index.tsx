@@ -22,6 +22,7 @@ import { getActiveWorkspaceId } from "../../../src/workspace/active";
 import { formatMoney } from "../../../src/format/money";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
+import { categoryMeta } from "../../../src/categories/meta";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -146,6 +147,7 @@ export default function TransactionDetail() {
   const merchant = tx.merchantNormalized || tx.merchantRaw || "—";
   const firstAlloc = tx.allocations[0];
   const firstCat = firstAlloc?.categoryId ? categories[firstAlloc.categoryId] : null;
+  const heroMeta = categoryMeta(firstCat);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -154,12 +156,8 @@ export default function TransactionDetail() {
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Hero */}
         <View style={styles.hero}>
-          <View style={styles.heroGlyph}>
-            <Ionicons
-              name={money.isIncome ? "trending-up" : "card-outline"}
-              size={22}
-              color={money.isIncome ? colors.up : colors.muted}
-            />
+          <View style={[styles.heroGlyph, { backgroundColor: heroMeta.bg }]}>
+            <Ionicons name={heroMeta.icon} size={22} color={heroMeta.fg} />
           </View>
           <Text style={styles.heroTitle}>{merchant}</Text>
           <Text
@@ -233,12 +231,8 @@ export default function TransactionDetail() {
                   router.push(`/transactions/${tx.id}/categorize` as never)
                 }
               >
-                <View style={styles.catGlyph}>
-                  <Ionicons
-                    name="pricetag-outline"
-                    size={16}
-                    color={colors.muted}
-                  />
+                <View style={[styles.catGlyph, { backgroundColor: heroMeta.bg }]}>
+                  <Ionicons name={heroMeta.icon} size={16} color={heroMeta.fg} />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.catName}>
@@ -293,14 +287,11 @@ export default function TransactionDetail() {
               {tx.allocations.map((a) => {
                 const c = a.categoryId ? categories[a.categoryId] : null;
                 const m = formatMoney(a.amount, tx.currency);
+                const am = categoryMeta(c);
                 return (
                   <View key={a.id} style={styles.allocRow}>
-                    <View style={styles.catGlyph}>
-                      <Ionicons
-                        name="pricetag-outline"
-                        size={14}
-                        color={colors.muted}
-                      />
+                    <View style={[styles.catGlyph, { backgroundColor: am.bg }]}>
+                      <Ionicons name={am.icon} size={14} color={am.fg} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={styles.catName}>

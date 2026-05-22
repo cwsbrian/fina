@@ -17,6 +17,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { formatMoney, dateBucket } from "../../src/format/money";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { categoryMeta } from "../../src/categories/meta";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 
@@ -218,17 +219,14 @@ function TxRow({
     ? "Split"
     : firstAllocCat?.name ?? "Uncategorized";
   const uncategorized = !isSplit && !firstAllocCat?.id;
+  const meta = categoryMeta(firstAllocCat);
   return (
     <Pressable
       style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
       onPress={() => router.push(`/transactions/${tx.id}` as never)}
     >
-      <View style={styles.rowGlyph}>
-        <Ionicons
-          name={money.isIncome ? "trending-up" : "card-outline"}
-          size={18}
-          color={money.isIncome ? colors.up : colors.muted}
-        />
+      <View style={[styles.rowGlyph, { backgroundColor: meta.bg }]}>
+        <Ionicons name={meta.icon} size={18} color={meta.fg} />
       </View>
       <View style={styles.rowMid}>
         <View style={styles.rowMidTitle}>
