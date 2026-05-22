@@ -3,6 +3,10 @@ import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { apiFetch } from "./client";
 
+/** Sentinel value in apps/mobile/app.json `extra.eas.projectId`. Run
+ *  `eas init` once the Expo project is initialized to overwrite it. */
+const EAS_PROJECT_ID_PLACEHOLDER = "REPLACE_WITH_EAS_PROJECT_ID";
+
 /** Best-effort registration of this device's Expo push token with the
  *  Fina API. Idempotent: safe to call on every launch + on sign-in.
  *  Returns the token on success, null on any failure (permission denied,
@@ -24,7 +28,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
   const projectId =
     Constants.expoConfig?.extra?.eas?.projectId ??
     (Constants as { easConfig?: { projectId?: string } }).easConfig?.projectId;
-  if (!projectId || projectId === "REPLACE_WITH_EAS_PROJECT_ID") {
+  if (!projectId || projectId === EAS_PROJECT_ID_PLACEHOLDER) {
     // EAS projectId not in app.json (or still the placeholder from T9). Silently
     // skip — add via `eas init` once the project is initialized on Expo's
     // dashboard. The placeholder check makes failure mode explicit instead of
