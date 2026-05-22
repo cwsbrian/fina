@@ -327,8 +327,8 @@ If an unbound thread exists, append to it (Plan 2-chat-user-scope rule). The thr
 | 4 | Device tz auto-sync — call `PATCH /me { tz }` only when device tz from `Intl.DateTimeFormat().resolvedOptions().timeZone` differs from cached value (AsyncStorage on mobile, localStorage on web). Throttle to one call per 6h via stored timestamp. Triggers on app foreground / sign-in. | `apps/mobile/src/api/auth.ts`, `apps/web/src/lib/auth.ts` (or wherever sign-in flow lives) |
 | 5 | `brief-context.ts` — multi-workspace context builder | `apps/api/src/chat/brief-context.ts` |
 | 6 | `brief.ts` — LLM call (no tool calls). Reuses from `turn.ts`: (a) `streamLLMResponse` or equivalent Gemini-call wrapper, (b) `buildSystemMessage` / `formatPresentationBlocks` if exposed, (c) tokenization / prompt assembly helpers. Bespoke: brief-specific system prompt, anti-repetition injection, `mode: "brief"` flag preventing tool advertisement to LLM. If `turn.ts` doesn't expose the helpers separately, factor them out as part of Task 6 (small refactor noted in commit). | `apps/api/src/chat/brief.ts` |
-| 7 | `daily-brief.ts` — cron job (every minute) | `apps/api/src/cron/jobs/daily-brief.ts`, register in `scheduler.ts` |
-| 8 | `pauseDailyBrief` chat tool — **callable from bound threads only** (workspaceId already set by user's first reply). Reads `ctx.userId`, ignores `ctx.workspaceId`. Updates `User.snoozeUntil` or `User.pauseEnabled`. | `apps/api/src/chat/tools/pause-daily-brief.ts`, register in `chat/tools/index.ts` |
+| 7 | `daily-brief.ts` — cron job. Register in `scheduler.ts` with pattern `"* * * * *"` (every minute) using the existing `makeCron(pattern, name, run)` helper from 1H. | `apps/api/src/cron/jobs/daily-brief.ts`, `scheduler.ts` |
+| 8 | `pauseDailyBrief` chat tool — **callable from bound threads only** (workspaceId already set by user's first reply). Reads `ctx.userId`, ignores `ctx.workspaceId`. Args zod: `{ until?: z.string().date().optional(), indefinite?: z.boolean().optional() }` (mutually exclusive enforced in handler). `until` → User.snoozeUntil; `indefinite=true` → User.pauseEnabled. | `apps/api/src/chat/tools/pause-daily-brief.ts`, register in `chat/tools/index.ts` |
 | 9 | Integration tests (per-type, snooze, pause, collision day, multi-workspace) | `apps/api/tests/cron.daily-brief.test.ts`, `chat.brief.test.ts`, `routes.me.test.ts` |
 | 10 | E2E smoke — real cron tick → brief in thread | `apps/api/tests/cron.daily-brief.e2e.test.ts` |
 
@@ -349,6 +349,7 @@ Implementation order: 1 (shared) → 2 (schema) → 3 (PATCH route) → 4 (clien
 - **`findOrCreateUnboundThread` race**: two near-simultaneous cron ticks for the same user (cron restart overlap, manual trigger) → each `findFirst` returns null → both `create`. `briefs UNIQUE(userId, date)` prevents the duplicate brief but the second thread becomes an orphan. Acceptable cosmetic leak (max one extra empty thread per race occurrence). A partial unique index `(userId) WHERE workspaceId IS NULL AND archivedAt IS NULL` could prevent this — deferred unless dogfooding reports orphan accumulation.
 - **`pauseDailyBrief` tool called in unbound thread**: not possible — tools require ctx.workspaceId (non-nullable in existing ToolContext). User must reply first (binding the thread), then call the tool in the bound thread. Tool itself ignores ctx.workspaceId and writes to User.snoozeUntil / pauseEnabled. UX impact: minor — first reply binds the thread regardless of message content.
 - **Anti-repetition text extraction**: `ChatMessage.blocks: PresentationBlock[]` is JSON. To produce the "last N brief texts" string for LLM injection, extract all `text` blocks and concat their `markdown` fields with newlines, skipping `confirm_card` (which is structured input). Truncate to 1000 chars per brief if it exceeds.
+- **Sign-out / sign-in-as-different-user with stale tz cache**: cached tz timestamp on device persists across logout. Next sign-in's first foreground tick triggers the device-tz check (Task 4), which compares device tz with the new user's `MeDTO.tz` from server — mismatch resolves it. Worst case: one brief in old tz before the next foreground.
 
 ---
 
@@ -367,7 +368,7 @@ Implementation order: 1 (shared) → 2 (schema) → 3 (PATCH route) → 4 (clien
 | `pauseDailyBrief` chat tool — updates User.snoozeUntil correctly | Integration |
 | User with 0 active memberships — brief emits encouragement-only text | Integration |
 | `findOrCreateUnboundThread` race — concurrent calls (acceptable orphan) | Unit (deterministic concurrent invoke) |
-| Atomicity — partial failure (transaction rollback) | Integration |
+| Atomicity — partial failure (transaction rollback) | Integration (force failure mid-tx by inserting a duplicate Brief row before calling generateBrief, OR by manual stub of `tx.brief.create` to throw — verify chatMessage is not visible after rollback) |
 | Anti-repetition context — last 3 brief texts injected | Unit (context shape) |
 
 Goal: 100% spec coverage. No `vi.spyOn(prisma, ...)` patterns (memory rule).
