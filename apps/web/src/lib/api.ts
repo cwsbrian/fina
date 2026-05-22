@@ -25,17 +25,45 @@ function parseRetryAfter(msg: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+/** Pages where landing on /sign-in would be the wrong reaction even on
+ *  401 — typically the auth pages themselves and the landing page. */
+const NO_REDIRECT_PATHS = [
+  "/",
+  "/sign-in",
+  "/sign-up",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-email",
+];
+
+function shouldRedirectOnUnauth(): boolean {
+  if (typeof window === "undefined") return false;
+  const path = window.location.pathname;
+  return !NO_REDIRECT_PATHS.some((p) => path === p || path.startsWith(`${p}/`));
+}
+
 export const apiFetch: typeof rawApiFetch = async (...args) => {
   try {
     return await rawApiFetch(...args);
   } catch (err) {
-    if (isApiError(err) && err.code === "rate_limit_exceeded") {
-      const secs = parseRetryAfter(err.message ?? "");
-      toast.error(
-        secs !== null
-          ? `잠시 후 다시 시도해 주세요 (${secs}초 후)`
-          : "잠시 후 다시 시도해 주세요",
-      );
+    if (isApiError(err)) {
+      if (err.code === "rate_limit_exceeded") {
+        const secs = parseRetryAfter(err.message ?? "");
+        toast.error(
+          secs !== null
+            ? `잠시 후 다시 시도해 주세요 (${secs}초 후)`
+            : "잠시 후 다시 시도해 주세요",
+        );
+      } else if (err.code === "unauthenticated" && shouldRedirectOnUnauth()) {
+        // Session is gone (Better Auth cookie expired/deleted or never
+        // existed). Send the user to sign-in with a `from` param so they
+        // land back where they were after re-auth. AuthForm reads
+        // `?from=` and redirects there on successful sign-in.
+        const from = encodeURIComponent(
+          window.location.pathname + window.location.search,
+        );
+        window.location.href = `/sign-in?from=${from}`;
+      }
     }
     throw err;
   }
