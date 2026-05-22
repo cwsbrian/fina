@@ -34,7 +34,7 @@ export default function Chats() {
   const [refreshing, setRefreshing] = useState(false);
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
-  const header = useCollapsingHeader(totalHeader);
+  const header = useCollapsingHeader(HEADER_HEIGHT);
 
   const load = useCallback(async () => {
     try {
@@ -67,7 +67,7 @@ export default function Chats() {
   return (
     <SafeAreaView style={styles.safe} edges={["bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <Animated.View style={[styles.headerOverlay, { paddingTop: insets.top, height: totalHeader }, header.headerStyle]}>
+      <Animated.View style={[styles.headerOverlay, { top: insets.top, height: HEADER_HEIGHT }, header.headerStyle]}>
         <View style={styles.header}>
           <HeaderIconButton
             icon="chevron-back"
@@ -162,6 +162,7 @@ export default function Chats() {
           ItemSeparatorComponent={() => <View style={styles.sep} />}
         />
       )}
+      <View style={[styles.statusBarBg, { height: insets.top }]} />
     </SafeAreaView>
   );
 }
@@ -170,10 +171,17 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   headerOverlay: {
     position: "absolute",
-    top: 0,
     left: 0,
     right: 0,
     zIndex: 10,
+    backgroundColor: colors.canvas,
+  },
+  statusBarBg: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 11,
     backgroundColor: colors.canvas,
   },
   header: {
