@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { Prisma } from "@prisma/client";
+import type { $Enums, Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError, requireSession } from "../auth/context.js";
 import { computeEffectiveTier } from "../auth/tier.js";
@@ -17,7 +17,7 @@ function tzNoonUtc(dateStr: string, tz: string): Date {
 
 function toMeDTO(
   user: Awaited<ReturnType<typeof prisma.user.findUnique>> & object,
-  activeSubs: Array<{ tier: string; status: string; currentPeriodEnd: Date; cancelAtPeriodEnd: boolean; source: string }>,
+  activeSubs: Array<{ tier: string; status: string; currentPeriodEnd: Date; cancelAtPeriodEnd: boolean; source: string; pendingTier: string | null; pendingTierAt: Date | null }>,
 ): MeDTO {
   const t = computeEffectiveTier(user, activeSubs as unknown as Parameters<typeof computeEffectiveTier>[1]);
   // Highest-tier active sub wins (pro > lite). MeDTO.subscription is
@@ -32,6 +32,8 @@ function toMeDTO(
         currentPeriodEnd: primary.currentPeriodEnd.toISOString(),
         cancelAtPeriodEnd: primary.cancelAtPeriodEnd,
         source: primary.source as SubscriptionDTO["source"],
+        pendingTier: primary.pendingTier as "lite" | "pro" | null,
+        pendingTierAt: primary.pendingTierAt?.toISOString() ?? null,
       }
     : null;
   // snoozeUntil → "YYYY-MM-DD" string (date portion in UTC; close enough for
@@ -63,7 +65,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       const user = await prisma.user.findUnique({ where: { id: session.userId } });
       if (!user) return reply.code(404).send({ error: "no_user" });
       const activeSubs = await prisma.subscription.findMany({
-        where: { userId: user.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] } },
+        where: { userId: user.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
         orderBy: { currentPeriodEnd: "desc" },
       });
       return toMeDTO(user, activeSubs);
@@ -108,7 +110,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         data,
       });
       const activeSubs = await prisma.subscription.findMany({
-        where: { userId: updated.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] } },
+        where: { userId: updated.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
         orderBy: { currentPeriodEnd: "desc" },
       });
       return toMeDTO(updated, activeSubs);

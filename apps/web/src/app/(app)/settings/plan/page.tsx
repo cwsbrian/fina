@@ -188,6 +188,35 @@ export default function PlanPage() {
         </div>
       );
     }
+    if (sub && sub.pendingTier && sub.pendingTier !== sub.tier) {
+      const currentLabel = sub.tier === "pro" ? "Pro" : "Lite";
+      const nextLabel = sub.pendingTier === "pro" ? "Pro" : "Lite";
+      const at = sub.pendingTierAt
+        ? new Date(sub.pendingTierAt).toLocaleDateString()
+        : new Date(sub.currentPeriodEnd).toLocaleDateString();
+      return (
+        <div className={styles.planCurrent}>
+          <div>
+            <div className={styles.planCurrentLabel}>Current plan</div>
+            <div className={styles.planCurrentName}>{currentLabel}</div>
+            <div className={styles.planCurrentStatus}>
+              Switches to {nextLabel} on {at} ·{" "}
+              {PRICING[sub.pendingTier].displayPrice} next billing.
+            </div>
+          </div>
+          <div className={styles.planCurrentActions}>
+            <button
+              type="button"
+              className={`${styles.btn} ${styles.btnOutline}`}
+              onClick={onManage}
+              disabled={busy !== null}
+            >
+              Manage subscription
+            </button>
+          </div>
+        </div>
+      );
+    }
     if (sub) {
       return (
         <div className={styles.planCurrent}>
@@ -238,6 +267,15 @@ export default function PlanPage() {
     // subscription. Checkout (creating a new sub) is only correct when
     // the user has no active subscription yet.
     if (sub !== null) {
+      // A scheduled change is already in flight for this tier — let the
+      // user manage it via Portal rather than queuing another change.
+      if (sub.pendingTier === tier) {
+        return (
+          <button type="button" className={`${styles.btn} ${styles.btnOutline}`} disabled>
+            Switch scheduled
+          </button>
+        );
+      }
       const label = tier === "lite" ? "Lite" : "Pro";
       const isDown = sub.tier === "pro" && tier === "lite";
       return (

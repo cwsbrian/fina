@@ -31,4 +31,12 @@ export type SubscriptionDTO = {
   currentPeriodEnd: string;
   cancelAtPeriodEnd: boolean;
   source: SubscriptionSource;
+  /** When a tier change is scheduled at the next period boundary (Portal
+   *  "downgrade at period end" or our /billing/change-tier downgrade
+   *  flow), this names the tier the user will switch to. Null when no
+   *  scheduled change. */
+  pendingTier: PaidTier | null;
+  /** ISO-8601 when the scheduled change takes effect — usually equals
+   *  currentPeriodEnd. Null when no scheduled change. */
+  pendingTierAt: string | null;
 };

@@ -42,6 +42,8 @@ async function buildMeBody(userId: string): Promise<MeDTO> {
         currentPeriodEnd: primary.currentPeriodEnd.toISOString(),
         cancelAtPeriodEnd: primary.cancelAtPeriodEnd,
         source: primary.source as SubscriptionDTO["source"],
+        pendingTier: primary.pendingTier as "lite" | "pro" | null,
+        pendingTierAt: primary.pendingTierAt?.toISOString() ?? null,
       }
     : null;
   // snoozeUntil → "YYYY-MM-DD" string for UI display (matches toMeDTO in me.ts).

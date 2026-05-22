@@ -581,6 +581,14 @@ model Subscription {
   // "monthly" | "annual" — annual deferred to v1.5+ per spec.
   billingPeriod String @default("monthly")
 
+  // When a downgrade or upgrade is scheduled at the end of the current
+  // billing period (via stripe.subscriptionSchedules or Portal's
+  // "switch plan at period end" flow), these capture the upcoming
+  // change. Both are set/cleared together on every sync — null means
+  // no scheduled change.
+  pendingTier   String?
+  pendingTierAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

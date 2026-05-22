@@ -44,6 +44,41 @@ export async function syncSubscriptionFromStripe(
     log.error({ subscriptionId: sub.id, priceId }, "stripe sub has unknown price ID");
     return null;
   }
+
+  // If the sub is bound to a Schedule, the next phase tells us a
+  // tier change is queued (Portal's "switch at period end" or our
+  // /billing/change-tier downgrade both use schedules). Inspect the
+  // phase AFTER the current one to surface what the user is switching
+  // to and when. Cleared (null) when no schedule or schedule has no
+  // next phase.
+  let pendingTier: "lite" | "pro" | null = null;
+  let pendingTierAt: Date | null = null;
+  if (sub.schedule) {
+    const scheduleId = typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id;
+    try {
+      const schedule = await stripe.subscriptionSchedules.retrieve(scheduleId);
+      // Current phase = the one whose [start_date, end_date) contains now.
+      const nowSec = Math.floor(Date.now() / 1000);
+      const currentIdx = schedule.phases.findIndex(
+        (p) => p.start_date <= nowSec && (p.end_date == null || p.end_date > nowSec),
+      );
+      const next = currentIdx >= 0 ? schedule.phases[currentIdx + 1] : undefined;
+      const nextPriceRef = next?.items[0]?.price;
+      if (next && nextPriceRef) {
+        const nextPriceId = typeof nextPriceRef === "string" ? nextPriceRef : nextPriceRef.id;
+        const nextTier = tierForPriceId(env, nextPriceId);
+        if (nextTier && next.start_date) {
+          pendingTier = nextTier;
+          pendingTierAt = new Date(next.start_date * 1000);
+        }
+      }
+    } catch (e) {
+      // Schedule retrieve failure is non-fatal — log and continue with
+      // pending fields null. Next sync will retry.
+      log.error({ subscriptionId: sub.id, scheduleId, err: String(e) }, "schedule retrieve failed");
+    }
+  }
+
   const upserted = await prisma.subscription.upsert({
     where: {
       source_sourceSubscriptionId: {
@@ -61,12 +96,16 @@ export async function syncSubscriptionFromStripe(
       currentPeriodEnd: new Date(sub.current_period_end * 1000),
       cancelAtPeriodEnd: sub.cancel_at_period_end,
       billingPeriod: "monthly",
+      pendingTier,
+      pendingTierAt,
     },
     update: {
       tier,
       status: sub.status,
       currentPeriodEnd: new Date(sub.current_period_end * 1000),
       cancelAtPeriodEnd: sub.cancel_at_period_end,
+      pendingTier,
+      pendingTierAt,
       // Don't change userId on update — sub belongs to one user forever.
     },
   });
