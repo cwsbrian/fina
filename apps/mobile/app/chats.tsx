@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { ChatThreadDTO } from "@fina/shared";
 import { apiFetch } from "../src/api/client";
 import { colors, space, type as type$ } from "../src/design/tokens";
+import { HeaderIconButton } from "../src/design/HeaderIconButton";
 
 type ThreadRow = ChatThreadDTO & {
   messageCount: number;
@@ -60,22 +61,17 @@ export default function Chats() {
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.header}>
-        <Pressable
-          style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.5 }]}
+        <HeaderIconButton
+          icon="chevron-back"
+          accessibilityLabel="Back"
           onPress={() => router.back()}
-          hitSlop={8}
-        >
-          <Ionicons name="chevron-back" size={22} color={colors.ink} />
-        </Pressable>
+        />
         <Text style={styles.headerTitle}>Chat history</Text>
-        <Pressable
-          style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.5 }]}
-          onPress={onNewChat}
-          hitSlop={8}
+        <HeaderIconButton
+          icon="create-outline"
           accessibilityLabel="New chat"
-        >
-          <Ionicons name="create-outline" size={22} color={colors.ink} />
-        </Pressable>
+          onPress={onNewChat}
+        />
       </View>
 
       {threads === null && !err && (
@@ -164,12 +160,11 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
+    paddingHorizontal: space.base,
+    paddingVertical: space.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
-  headerBtn: { width: 40, height: 40, alignItems: "center", justifyContent: "center" },
   headerTitle: { ...type$.titleSm, color: colors.ink },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   fallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },

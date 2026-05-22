@@ -16,6 +16,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { formatMoney, dateBucket } from "../../src/format/money";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
 type TxListResp = {
   transactions: TransactionDTO[];
@@ -175,15 +176,9 @@ function ActivityHeader() {
     <View style={styles.head}>
       <Text style={styles.title}>Activity</Text>
       <View style={styles.headActions}>
-        <Pressable style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]} hitSlop={8} accessibilityLabel="Date range">
-          <Ionicons name="calendar-outline" size={20} color={colors.ink} />
-        </Pressable>
-        <Pressable style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]} hitSlop={8} accessibilityLabel="Search">
-          <Ionicons name="search-outline" size={20} color={colors.ink} />
-        </Pressable>
-        <Pressable style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]} hitSlop={8} accessibilityLabel="Add">
-          <Ionicons name="add" size={22} color={colors.ink} />
-        </Pressable>
+        <HeaderIconButton icon="calendar-outline" accessibilityLabel="Date range" />
+        <HeaderIconButton icon="search-outline" accessibilityLabel="Search" />
+        <HeaderIconButton icon="add" size={22} accessibilityLabel="Add" />
       </View>
     </View>
   );
@@ -217,7 +212,7 @@ function TxRow({
       </View>
       <View style={styles.rowMid}>
         <View style={styles.rowMidTitle}>
-          <Text style={styles.rowTitle} numberOfLines={1}>
+          <Text style={styles.rowTitle} numberOfLines={1} ellipsizeMode="tail">
             {merchant}
           </Text>
           {tx.pending && (
@@ -257,11 +252,7 @@ const styles = StyleSheet.create({
     paddingBottom: space.xs,
   },
   title: { ...type$.titleLg, color: colors.ink },
-  headActions: { flexDirection: "row", alignItems: "center", gap: 2 },
-  iconBtn: {
-    width: 36, height: 36, borderRadius: 999,
-    alignItems: "center", justifyContent: "center",
-  },
+  headActions: { flexDirection: "row", alignItems: "center", gap: 6 },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
   iconWrap: {
@@ -316,9 +307,20 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
     marginTop: 2,
   },
+  // flex: 1 + minWidth: 0 lets the mid column shrink so the right
+  // amount stays visible even when the merchant string is long.
   rowMid: { flex: 1, minWidth: 0 },
-  rowMidTitle: { flexDirection: "row", alignItems: "center", gap: 6 },
-  rowTitle: { ...type$.titleSm, color: colors.ink },
+  // flexShrink: 1 on the row container + flex: 1 on the title Text are
+  // both required for RN's flex layout to actually clip the text with
+  // ellipsis; without flex: 1 the Text reports its full intrinsic width
+  // and pushes the amount off-screen.
+  rowMidTitle: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    flexShrink: 1,
+  },
+  rowTitle: { ...type$.titleSm, color: colors.ink, flexShrink: 1, flex: 1 },
   rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   rowMetaUncat: { color: colors.accentYellow },
   pendingBadge: {

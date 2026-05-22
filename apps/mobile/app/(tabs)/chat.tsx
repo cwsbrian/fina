@@ -2,10 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useLocalSearchParams, router, useNavigation } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { ThreadView } from "../../src/chat/ThreadView";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
 // Tapping the Chat tab always lands on a fresh, pending thread (no DB
 // row). The thread is created lazily on the user's first send — until
@@ -49,23 +49,17 @@ export default function ChatTab() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
-        <Pressable
-          style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.5 }]}
-          onPress={() => router.push("/chats" as never)}
-          hitSlop={8}
+        <HeaderIconButton
+          icon="time-outline"
           accessibilityLabel="Chat history"
-        >
-          <Ionicons name="time-outline" size={22} color={colors.ink} />
-        </Pressable>
+          onPress={() => router.push("/chats" as never)}
+        />
         <Text style={styles.headerTitle}>Chat</Text>
-        <Pressable
-          style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.5 }]}
-          onPress={onNewChat}
-          hitSlop={8}
+        <HeaderIconButton
+          icon="create-outline"
           accessibilityLabel="New chat"
-        >
-          <Ionicons name="create-outline" size={22} color={colors.ink} />
-        </Pressable>
+          onPress={onNewChat}
+        />
       </View>
 
       <ThreadView
@@ -83,16 +77,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: space.sm,
-    paddingVertical: space.xs,
+    paddingHorizontal: space.base,
+    paddingVertical: space.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
-  },
-  headerBtn: {
-    width: 40,
-    height: 40,
-    alignItems: "center",
-    justifyContent: "center",
   },
   headerTitle: { ...type$.titleSm, color: colors.ink },
 });
