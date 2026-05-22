@@ -35,9 +35,11 @@ describe("scheduler", () => {
     expect(Cron).not.toHaveBeenCalled();
   });
 
-  it("CRON_ENABLED=true → exactly 4 Cron instances created", () => {
+  it("CRON_ENABLED=true → exactly 5 Cron instances created", () => {
+    // 5 jobs: daily-brief (1m), daily-refresh, retry-unprocessed,
+    // cleanup-events, scheduled-spend-match. daily-brief added by Plan 2B.
     startScheduler({ ...env, CRON_ENABLED: true });
-    expect(Cron).toHaveBeenCalledTimes(4);
+    expect(Cron).toHaveBeenCalledTimes(5);
   });
 
   it("stopScheduler calls stop() on all registered jobs", () => {
@@ -55,10 +57,14 @@ describe("scheduler", () => {
   });
 
   it("safe() wrapper: job throw is caught, does not propagate", async () => {
-    // Capture the callback passed to the first Cron instance (daily-refresh).
+    // Capture the callback passed to the daily-refresh Cron instance.
+    // Plan 2B added daily-brief as the FIRST registered cron, pushing
+    // daily-refresh to index 1 — so we capture by opts.name not by order.
     let capturedCallback: (() => Promise<void>) | undefined;
-    vi.mocked(Cron).mockImplementationOnce((_expr, _opts, fn) => {
-      capturedCallback = fn as () => Promise<void>;
+    vi.mocked(Cron).mockImplementation((_expr, opts, fn) => {
+      if ((opts as { name?: string })?.name === "daily-refresh") {
+        capturedCallback = fn as () => Promise<void>;
+      }
       return { stop: vi.fn() } as unknown as Cron;
     });
 
