@@ -72,6 +72,7 @@ export default function CategorizePicker() {
           icon="chevron-back"
           accessibilityLabel="Back"
           onPress={() => router.back()}
+          variant="plain"
         />
         <Text style={styles.navTitle}>Category</Text>
         <View style={{ width: 34 }} />

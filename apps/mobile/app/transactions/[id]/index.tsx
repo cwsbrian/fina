@@ -401,7 +401,7 @@ export default function TransactionDetail() {
 function Header({ onBack }: { onBack: () => void }) {
   return (
     <View style={styles.nav}>
-      <HeaderIconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} />
+      <HeaderIconButton icon="chevron-back" accessibilityLabel="Back" onPress={onBack} variant="plain" />
       <Text style={styles.navTitle}>Transaction</Text>
       <View style={{ width: 34 }} />
     </View>

@@ -11,11 +11,13 @@ type Props = {
   size?: number;
   /** Optional override for the icon color (defaults to ink). */
   color?: string;
+  /** `filled` (default) — 34px circle on surface-strong, used on every
+   *  top-level tab screen (Activity / Chat / etc.). `plain` — no
+   *  background, used on drill-in / sub-screen headers (back arrows,
+   *  detail screens). */
+  variant?: "filled" | "plain";
 };
 
-/** Filled-circle icon button used on every top-level screen header
- *  (Activity / Chat / chat history / etc.). Matches the design system's
- *  .fm-iconbtn: 34px circle on surface-strong with ink-colored icon. */
 export function HeaderIconButton({
   icon,
   onPress,
@@ -23,10 +25,14 @@ export function HeaderIconButton({
   disabled,
   size = 19,
   color = colors.ink,
+  variant = "filled",
 }: Props) {
   return (
     <Pressable
-      style={({ pressed }) => [styles.btn, pressed && { opacity: 0.6 }]}
+      style={({ pressed }) => [
+        variant === "filled" ? styles.filled : styles.plain,
+        pressed && { opacity: 0.6 },
+      ]}
       onPress={onPress}
       disabled={disabled}
       accessibilityLabel={accessibilityLabel}
@@ -38,11 +44,17 @@ export function HeaderIconButton({
 }
 
 const styles = StyleSheet.create({
-  btn: {
+  filled: {
     width: 34,
     height: 34,
     borderRadius: 999,
     backgroundColor: colors.surfaceStrong,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  plain: {
+    width: 34,
+    height: 34,
     alignItems: "center",
     justifyContent: "center",
   },

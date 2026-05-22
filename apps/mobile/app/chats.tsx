@@ -73,12 +73,14 @@ export default function Chats() {
             icon="chevron-back"
             accessibilityLabel="Back"
             onPress={() => router.back()}
+            variant="plain"
           />
           <Text style={styles.headerTitle}>Chat history</Text>
           <HeaderIconButton
             icon="create-outline"
             accessibilityLabel="New chat"
             onPress={onNewChat}
+            variant="plain"
           />
         </View>
       </Animated.View>
