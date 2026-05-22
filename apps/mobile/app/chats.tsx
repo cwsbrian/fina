@@ -14,7 +14,6 @@ import { useFocusEffect, router, Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { ChatThreadDTO } from "@fina/shared";
 import { apiFetch } from "../src/api/client";
-import { findOrCreateEmptyThread } from "../src/chat/find-or-create-empty";
 import { colors, space, type as type$ } from "../src/design/tokens";
 
 type ThreadRow = ChatThreadDTO & {
@@ -28,7 +27,6 @@ export default function Chats() {
   const [threads, setThreads] = useState<ThreadRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -52,32 +50,10 @@ export default function Chats() {
     setRefreshing(false);
   };
 
-  const onNewChat = async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      // Reuse an existing empty thread if there is one — otherwise
-      // the user accumulates ghost rows every time they hit the new-
-      // chat button. Falls back to POST when no empty thread exists.
-      const id = await findOrCreateEmptyThread();
-      // Send the user back to the Chat TAB (so the bottom nav stays
-      // visible) with the resolved thread id as a param. The tab
-      // consumes the param and renders that thread instead of the
-      // "latest by lastMessageAt" default — important because an
-      // empty thread has lastMessageAt=null and so wouldn't otherwise
-      // win the latest-thread query.
-      router.replace({
-        pathname: "/(tabs)/chat",
-        params: { thread: id },
-      } as never);
-    } catch (e) {
-      Alert.alert(
-        "Could not start chat",
-        (e as { code?: string }).code ?? "Try again in a moment.",
-      );
-    } finally {
-      setCreating(false);
-    }
+  const onNewChat = () => {
+    // No DB write here — empty threads aren't persisted. Just go back
+    // to the Chat tab, which lands on the pending state by default.
+    router.replace("/(tabs)/chat" as never);
   };
 
   return (
@@ -95,7 +71,6 @@ export default function Chats() {
         <Pressable
           style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.5 }]}
           onPress={onNewChat}
-          disabled={creating}
           hitSlop={8}
           accessibilityLabel="New chat"
         >

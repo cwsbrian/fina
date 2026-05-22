@@ -1,11 +1,10 @@
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import { signIn } from "../../src/auth/client";
 import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
-import { Wordmark } from "../../src/design/Wordmark";
 import { colors, type } from "../../src/design/tokens";
 
 export default function SignInScreen() {
@@ -47,7 +46,12 @@ export default function SignInScreen() {
   return (
     <AuthScaffold centered hideBack>
       <View style={styles.brand}>
-        <Wordmark size={56} />
+        <Image
+          source={require("../../assets/logo-dark.png")}
+          style={styles.logo}
+          accessibilityLabel="Fina"
+          resizeMode="contain"
+        />
       </View>
       <View style={styles.head}>
         <Text style={styles.title}>Welcome back.</Text>
@@ -115,9 +119,10 @@ export default function SignInScreen() {
 
 const styles = StyleSheet.create({
   brand: { alignItems: "center", marginBottom: 12 },
+  logo: { height: 56, aspectRatio: 2172 / 724 },
   head: { marginTop: 12 },
   title: { ...type.authTitle, color: colors.ink, textAlign: "center"},
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center"},
   form: { gap: 10, marginTop: 28 },
   helperRow: {
     flexDirection: "row",

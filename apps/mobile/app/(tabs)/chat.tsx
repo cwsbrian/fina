@@ -1,90 +1,35 @@
-import { useCallback, useEffect, useState } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  Pressable,
-  ActivityIndicator,
-  Alert,
-} from "react-native";
+import { useEffect, useState } from "react";
+import { View, Text, StyleSheet, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
-import type { ChatThreadDTO } from "@fina/shared";
-import { apiFetch } from "../../src/api/client";
 import { ThreadView } from "../../src/chat/ThreadView";
-import { findOrCreateEmptyThread } from "../../src/chat/find-or-create-empty";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 
-// Chat tab opens directly into the most-recent thread (the morning
-// ritual conversation). The history list is a drill-in opened from
-// the header — `app/chats.tsx`.
+// Tapping the Chat tab always lands on a fresh, pending thread (no DB
+// row). The thread is created lazily on the user's first send — until
+// then nothing persists. Historical conversations live in /chats.
 export default function ChatTab() {
   const params = useLocalSearchParams<{ thread?: string }>();
   const tabBarHeight = useBottomTabBarHeight();
+  // null = pending; a real id appears only when /chats explicitly
+  // routes the user back to a specific thread via ?thread=<id>.
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
-  const [empty, setEmpty] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
+  // Force ThreadView to fully reset (new keyed instance) when the
+  // pencil is hit while already on the pending state.
+  const [resetKey, setResetKey] = useState(0);
 
-  // Other screens can deep-link to a specific thread via ?thread=<id>
-  // (used by /chats new-chat). Consumed once and cleared so future
-  // focuses of the tab fall back to "latest" again.
   useEffect(() => {
     if (params.thread) {
       setCurrentThreadId(params.thread);
-      setEmpty(false);
-      setErr(null);
       router.setParams({ thread: undefined } as never);
     }
   }, [params.thread]);
 
-  const loadCurrent = useCallback(async () => {
-    try {
-      // Most-recent first (lastMessageAt desc — backend default).
-      const data = await apiFetch<{ threads: ChatThreadDTO[] }>(
-        "/chat/threads?limit=1",
-      );
-      if (data.threads.length === 0) {
-        setEmpty(true);
-        setCurrentThreadId(null);
-      } else {
-        setEmpty(false);
-        setCurrentThreadId(data.threads[0]!.id);
-      }
-      setErr(null);
-    } catch (e) {
-      setErr((e as { code?: string }).code ?? "load_error");
-    }
-  }, []);
-
-  useFocusEffect(
-    useCallback(() => {
-      // Skip the "latest" lookup when a thread id was just handed to
-      // us via params (e.g. coming back from /chats new-chat).
-      if (!params.thread) loadCurrent();
-    }, [loadCurrent, params.thread]),
-  );
-
-  const onNewChat = async () => {
-    if (creating) return;
-    setCreating(true);
-    try {
-      // Reuse an existing empty thread if there is one — clicking
-      // "new chat" while already looking at one of those would
-      // otherwise spam the user's history with ghost rows.
-      const id = await findOrCreateEmptyThread();
-      setCurrentThreadId(id);
-      setEmpty(false);
-    } catch (e) {
-      Alert.alert(
-        "Could not start chat",
-        (e as { code?: string }).code ?? "Try again in a moment.",
-      );
-    } finally {
-      setCreating(false);
-    }
+  const onNewChat = () => {
+    setCurrentThreadId(null);
+    setResetKey((k) => k + 1);
   };
 
   return (
@@ -102,7 +47,6 @@ export default function ChatTab() {
         <Pressable
           style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.5 }]}
           onPress={onNewChat}
-          disabled={creating}
           hitSlop={8}
           accessibilityLabel="New chat"
         >
@@ -110,51 +54,11 @@ export default function ChatTab() {
         </Pressable>
       </View>
 
-      {err && (
-        <View style={styles.fallback}>
-          <Text style={styles.errTitle}>Couldn't load chat</Text>
-          <Text style={styles.errBody}>{err}</Text>
-          <Pressable style={styles.cta} onPress={loadCurrent}>
-            <Text style={styles.ctaText}>Try again</Text>
-          </Pressable>
-        </View>
-      )}
-
-      {!err && !currentThreadId && !empty && (
-        <View style={styles.fallback}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
-      )}
-
-      {!err && empty && (
-        <View style={styles.fallback}>
-          <View style={styles.iconWrap}>
-            <Ionicons
-              name="chatbubble-ellipses-outline"
-              size={36}
-              color={colors.muted}
-            />
-          </View>
-          <Text style={styles.emptyTitle}>Your morning brief lives here</Text>
-          <Text style={styles.emptyBody}>
-            Each morning Fina prepares a short brief — confirm categories,
-            review anomalies, and ask questions.
-          </Text>
-          <Pressable
-            style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
-            onPress={onNewChat}
-            disabled={creating}
-          >
-            <Text style={styles.ctaText}>
-              {creating ? "Starting…" : "Start a chat"}
-            </Text>
-          </Pressable>
-        </View>
-      )}
-
-      {!err && currentThreadId && (
-        <ThreadView threadId={currentThreadId} bottomInset={tabBarHeight} />
-      )}
+      <ThreadView
+        key={`${currentThreadId ?? "pending"}-${resetKey}`}
+        threadId={currentThreadId}
+        bottomInset={tabBarHeight}
+      />
     </SafeAreaView>
   );
 }
@@ -171,28 +75,10 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   headerBtn: {
-    width: 40, height: 40,
-    alignItems: "center", justifyContent: "center",
+    width: 40,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
   },
   headerTitle: { ...type$.titleSm, color: colors.ink },
-  fallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
-  iconWrap: {
-    width: 72, height: 72, borderRadius: 999,
-    backgroundColor: colors.surfaceSoft,
-    alignItems: "center", justifyContent: "center",
-    marginBottom: space.base,
-  },
-  emptyTitle: { ...type$.titleMd, color: colors.ink, marginBottom: 6, textAlign: "center" },
-  emptyBody: {
-    ...type$.bodyMd, color: colors.body, textAlign: "center",
-    maxWidth: 320, marginBottom: space.lg,
-  },
-  errTitle: { ...type$.titleMd, color: colors.down, marginBottom: 4, textAlign: "center" },
-  errBody: { ...type$.bodyMd, color: colors.body, marginBottom: space.base, textAlign: "center" },
-  cta: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: space.xl, paddingVertical: 14,
-    borderRadius: 999,
-  },
-  ctaText: { ...type$.button, color: colors.onPrimary },
 });

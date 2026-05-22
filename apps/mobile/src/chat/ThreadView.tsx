@@ -23,25 +23,48 @@ import { PresentationBlock } from "./PresentationBlock";
 import { colors, space, type as type$ } from "../design/tokens";
 
 type Props = {
-  threadId: string;
+  /** `null` means "fresh / pending thread" — no DB row exists yet. The
+   *  thread is created lazily on the user's first send. Pass an actual
+   *  id (from /chats history) to view an existing conversation. */
+  threadId: string | null;
   /** Pixels at the bottom of the parent screen that the keyboard
    *  already covers — typically the tab bar's height when embedded
    *  in the Chat tab. The composer raises by
    *  `keyboardHeight - bottomInset` so it sits flush against the
    *  keyboard. Default 0 (drill-in: nothing below the view). */
   bottomInset?: number;
+  /** Fires when a previously-pending thread is promoted to a real
+   *  DB row by the first send. The parent (Chat tab) keeps a copy of
+   *  the new id so subsequent renders pass it back down. */
+  onThreadCreated?: (newId: string) => void;
 };
 
 type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
 type PostMessageResp = { messages: ChatMessageDTO[] };
 
-export function ThreadView({ threadId, bottomInset = 0 }: Props) {
+export function ThreadView({ threadId, bottomInset = 0, onThreadCreated }: Props) {
+  // Local thread id mirrors the prop for switching, but on first send
+  // we promote a null prop to a real id WITHOUT waiting for the parent
+  // to re-render with the new value (avoids a reload flash).
+  const [localId, setLocalId] = useState<string | null>(threadId);
   const [thread, setThread] = useState<ChatThreadDTO | null>(null);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
+
+  // Sync when the parent switches us to a different thread (e.g. tapping
+  // a row in /chats). Reset all local state so the new thread loads cleanly.
+  useEffect(() => {
+    if (threadId !== localId) {
+      setLocalId(threadId);
+      setThread(null);
+      setMessages([]);
+      setErr(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threadId]);
 
   // Direct keyboard-driven padding — no animation. The view extends
   // to `bottomInset` above the screen edge (tab bar height in the
@@ -72,11 +95,13 @@ export function ThreadView({ threadId, bottomInset = 0 }: Props) {
   }, []);
 
   useEffect(() => {
-    if (!threadId) return;
+    // Pending thread: nothing to load. Composer is shown over an empty
+    // message list — the user's first send creates the DB row.
+    if (!localId) return;
     let cancelled = false;
     (async () => {
       try {
-        const data = await apiFetch<GetThreadResp>(`/chat/threads/${threadId}`);
+        const data = await apiFetch<GetThreadResp>(`/chat/threads/${localId}`);
         if (cancelled) return;
         setThread(data.thread);
         setMessages(data.messages);
@@ -88,11 +113,11 @@ export function ThreadView({ threadId, bottomInset = 0 }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [threadId, scrollToBottom]);
+  }, [localId, scrollToBottom]);
 
   const onSend = async () => {
     const body = draft.trim();
-    if (!body || sending || !threadId) return;
+    if (!body || sending) return;
     setSending(true);
     setDraft("");
     const tempId = `tmp-${Date.now()}`;
@@ -111,8 +136,24 @@ export function ThreadView({ threadId, bottomInset = 0 }: Props) {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
+
+      // Lazy-create the DB thread on the very first send so empty
+      // chats never get persisted. Once it exists, reuse for the rest
+      // of the conversation.
+      let id = localId;
+      if (!id) {
+        const created = await apiFetch<{ thread: ChatThreadDTO }>(
+          "/chat/threads",
+          { method: "POST", body: JSON.stringify({}) },
+        );
+        id = created.thread.id;
+        setLocalId(id);
+        setThread(created.thread);
+        onThreadCreated?.(id);
+      }
+
       const resp = await apiFetch<PostMessageResp>(
-        `/chat/threads/${threadId}/messages`,
+        `/chat/threads/${id}/messages`,
         {
           method: "POST",
           body: JSON.stringify({ text: body, workspaceId: wsId }),
@@ -144,7 +185,10 @@ export function ThreadView({ threadId, bottomInset = 0 }: Props) {
     );
   }
 
-  if (!thread) {
+  // Pending (no DB row yet) renders the empty/composer state directly.
+  // For real threads, wait until the GET resolves before rendering so
+  // older messages don't flash a blank list first.
+  if (localId && !thread) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={colors.primary} />
