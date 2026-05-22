@@ -132,7 +132,12 @@ export function ThreadView({ threadId, embedded = false }: Props) {
     <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
-      keyboardVerticalOffset={Platform.OS === "ios" ? (embedded ? 64 : 0) : 24}
+      // 0 in both modes: in the tab-embedded case the view already ends
+      // above the tab bar (Expo Router's screen container is sized
+      // accordingly), so KAV's natural keyboard-overlap calculation is
+      // correct. An offset here would ADD a gap equal to its value —
+      // exactly the bug this comment was written to prevent.
+      keyboardVerticalOffset={0}
     >
       <FlatList
         ref={listRef}
