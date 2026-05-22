@@ -22,8 +22,8 @@ After a daily brief is generated in 2B, send a push notification to each of the 
 | API | POST `/devices` route (upsert push token) |
 | API | `expo-server-sdk` dependency + `sendBriefPush()` module |
 | API | `markdownToPlainPreview()` utility (brief MD → push body) |
-| API | Daily-brief cron (2B): trigger `sendBriefPush` after `$transaction` commit |
-| API | `EXPO_ACCESS_TOKEN` env (optional, recommended for production) |
+| API | Daily-brief cron (2B): extract brief text via `briefBlocksToText(blocks)` after `$transaction` commit, then call `sendBriefPush(userId, briefText)` |
+| API | `EXPO_ACCESS_TOKEN` env in `apps/api/src/env.ts` (z.string().optional()) + `.env.example` docs (free tier sends without it; recommended for production rate limits + future receipt polling) |
 | Mobile | `registerForPushNotifications()` helper using `expo-notifications` |
 | Mobile | Root layout wires register + tap listener |
 | Tests | Integration: POST /devices, push send mocked Expo, stale-token cleanup, cron → push triggered |
@@ -78,7 +78,7 @@ export type LogContext = {
   deviceCount?: number;
   pushSent?: number;
   pushFailed?: number;
-  removedDevice?: string;
+  removedDeviceId?: string;
 };
 ```
 
@@ -110,7 +110,7 @@ model UserDevice {
 }
 ```
 
-`User.devices UserDevice[]` back-reference also added.
+**Paired change in same migration**: add `devices UserDevice[]` back-reference inside the existing `model User { ... }` (alongside `briefs Brief[]` and `sessions Session[]`). Prisma validation fails if relation only exists on one side, so Task 2 must touch both sides in the same `schema.prisma` diff.
 
 Migration backfill: not needed. Existing users have 0 devices until first launch post-deploy.
 
@@ -138,14 +138,17 @@ Migration backfill: not needed. Existing users have 0 devices until first launch
     ├─ $transaction: chatMessage.create + brief.create
     │
     └─ AFTER tx commit:
-         sendBriefPush(userId, briefMarkdown)
+         // brief.ts already exports briefBlocksToText(blocks: unknown): string
+         // which strips PresentationBlock[] JSON to plain text for the
+         // anti-repetition window. Reuse it here for the push preview source.
+         sendBriefPush(userId, briefBlocksToText(blocks))
              ↓
          [push/send.ts]
          ├─ devices = prisma.userDevice.findMany({ userId })
          ├─ messages = devices.map(d => ({
          │      to: d.expoPushToken,
          │      title: "Fina ☀️",
-         │      body: markdownToPlainPreview(brief, 120),
+         │      body: markdownToPlainPreview(briefMarkdown, 120),
          │      data: { type: "daily-brief" },
          │      sound: "default",
          │    }))
@@ -222,8 +225,12 @@ for (const chunk of chunks) {
     const t = tickets[i];
     if (t.status === "error" && t.details?.error === "DeviceNotRegistered") {
       // Token is permanently invalid (app uninstalled, etc.). Remove.
-      await prisma.userDevice.delete({ where: { id: chunk[i].__deviceId } });
-      logInfo({ cron, removedDevice: chunk[i].__deviceId }, "stale device removed");
+      // Cast required — Expo's ExpoPushMessage type doesn't include the
+      // __deviceId field. We attach it when building the messages array
+      // (one-off "deviceId carrier" pattern). TS: see Task 4 implementation.
+      const deviceId = (chunk[i] as { __deviceId: string }).__deviceId;
+      await prisma.userDevice.delete({ where: { id: deviceId } });
+      logInfo({ cron, removedDeviceId: deviceId }, "stale device removed");
     } else if (t.status === "error") {
       // Other errors (MessageRateExceeded, InvalidCredentials, etc.) — log
       // and continue. Don't delete the token; it may work next time.
@@ -243,6 +250,7 @@ for (const chunk of chunks) {
 
 ```ts
 import * as Notifications from "expo-notifications";
+import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { apiFetch } from "./client";
 
@@ -256,8 +264,17 @@ export async function registerForPushNotifications(): Promise<string | null> {
   }
   if (finalStatus !== "granted") return null;  // user declined
 
-  // Get Expo token. projectId comes from app config (app.json/expo.config.ts).
-  const tokenResp = await Notifications.getExpoPushTokenAsync();
+  // Get Expo token. Expo SDK 54: projectId MUST come from either explicit
+  // arg OR app.json's `extra.eas.projectId`. We pass it explicitly via
+  // expo-constants to fail loudly if the field is missing in app config.
+  const projectId = Constants.expoConfig?.extra?.eas?.projectId;
+  if (!projectId) {
+    // Missing EAS projectId in app.json — log to dev console (best-effort)
+    // and skip registration. Brief is still visible in chat thread on next
+    // foreground.
+    return null;
+  }
+  const tokenResp = await Notifications.getExpoPushTokenAsync({ projectId });
   const token = tokenResp.data;
   if (!token) return null;
 
@@ -314,12 +331,17 @@ Mobile app config needs:
         "icon": "./assets/notification-icon.png",
         "color": "#000000"
       }]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "<set via `eas init` or paste from expo.dev/accounts/<acct>/projects/<project>>"
+      }
+    }
   }
 }
 ```
 
-(Verify current `app.json` shape; add only missing fields.)
+`extra.eas.projectId` is REQUIRED for `getExpoPushTokenAsync({ projectId })` in Expo SDK 54. Run `eas init` (Expo CLI) on the mobile project once to populate it automatically; or paste the value from the Expo dashboard. Without this field, the mobile helper short-circuits and returns null (no push, but app still works). Verify current `app.json` shape and add only missing fields.
 
 ---
 
