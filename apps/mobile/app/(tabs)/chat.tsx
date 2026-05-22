@@ -10,6 +10,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useLocalSearchParams, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import type { ChatThreadDTO } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
 import { ThreadView } from "../../src/chat/ThreadView";
@@ -21,6 +22,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 // the header — `app/chats.tsx`.
 export default function ChatTab() {
   const params = useLocalSearchParams<{ thread?: string }>();
+  const tabBarHeight = useBottomTabBarHeight();
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [empty, setEmpty] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -151,7 +153,7 @@ export default function ChatTab() {
       )}
 
       {!err && currentThreadId && (
-        <ThreadView threadId={currentThreadId} embedded />
+        <ThreadView threadId={currentThreadId} bottomInset={tabBarHeight} />
       )}
     </SafeAreaView>
   );

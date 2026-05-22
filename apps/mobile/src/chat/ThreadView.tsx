@@ -9,9 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  Animated,
   Keyboard,
-  Easing,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type {
@@ -26,61 +24,46 @@ import { colors, space, type as type$ } from "../design/tokens";
 
 type Props = {
   threadId: string;
-  /** Show inside the chat tab? (Bottom tab bar visible, no bottom safe-
-   *  area edge — that's the tab bar's job.) When false (drill-in /
-   *  history detail), the view manages its own bottom safe area. */
-  embedded?: boolean;
+  /** Pixels at the bottom of the parent screen that the keyboard
+   *  already covers — typically the tab bar's height when embedded
+   *  in the Chat tab. The composer raises by
+   *  `keyboardHeight - bottomInset` so it sits flush against the
+   *  keyboard. Default 0 (drill-in: nothing below the view). */
+  bottomInset?: number;
 };
 
 type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
 type PostMessageResp = { messages: ChatMessageDTO[] };
 
-export function ThreadView({ threadId, embedded = false }: Props) {
+export function ThreadView({ threadId, bottomInset = 0 }: Props) {
   const [thread, setThread] = useState<ChatThreadDTO | null>(null);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
-  // Manual keyboard-driven padding — gives pixel-perfect sync with
-  // the native keyboard animation. KeyboardAvoidingView's default
-  // easing on iOS doesn't always match the keyboard frame timing,
-  // which reads as a "snap" or lag depending on which leads. We
-  // listen to keyboardWillShow/Hide (iOS) or keyboardDidShow/Hide
-  // (Android — only Did fires there) and drive an Animated.Value
-  // with the duration the OS reports for this specific keyboard.
-  const keyboardPad = useRef(new Animated.Value(0)).current;
+
+  // Direct keyboard-driven padding — no animation. The view extends
+  // to `bottomInset` above the screen edge (tab bar height in the
+  // embedded case, 0 in the drill-in case), so the composer needs
+  // raising by exactly `keyboardHeight - bottomInset`.
+  const [keyboardPad, setKeyboardPad] = useState(0);
 
   useEffect(() => {
     const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
     const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
     const show = Keyboard.addListener(showEvt, (e) => {
-      // On embedded (Chat tab) mode, the screen container already
-      // sits above the tab bar (height ≈ 56 + safeBottom). The
-      // keyboard covers that strip too, so we only need to add the
-      // *extra* keyboard height beyond what the tab bar was occupying.
-      const tabBarSlack = embedded ? 56 : 0;
-      const target = Math.max(0, e.endCoordinates.height - tabBarSlack);
-      Animated.timing(keyboardPad, {
-        toValue: target,
-        duration: e.duration ?? 250,
-        easing: Easing.bezier(0.17, 0.59, 0.4, 0.77),
-        useNativeDriver: false,
-      }).start();
+      const target = Math.max(0, e.endCoordinates.height - bottomInset);
+      setKeyboardPad(target);
     });
-    const hide = Keyboard.addListener(hideEvt, (e) => {
-      Animated.timing(keyboardPad, {
-        toValue: 0,
-        duration: e.duration ?? 250,
-        easing: Easing.bezier(0.17, 0.59, 0.4, 0.77),
-        useNativeDriver: false,
-      }).start();
+    const hide = Keyboard.addListener(hideEvt, () => {
+      setKeyboardPad(0);
     });
     return () => {
       show.remove();
       hide.remove();
     };
-  }, [embedded, keyboardPad]);
+  }, [bottomInset]);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -170,7 +153,7 @@ export function ThreadView({ threadId, embedded = false }: Props) {
   }
 
   return (
-    <Animated.View style={{ flex: 1, paddingBottom: keyboardPad }}>
+    <View style={{ flex: 1, paddingBottom: keyboardPad }}>
       <FlatList
         ref={listRef}
         data={messages}
@@ -216,9 +199,10 @@ export function ThreadView({ threadId, embedded = false }: Props) {
           )}
         </Pressable>
       </View>
-    </Animated.View>
+    </View>
   );
 }
+
 
 function MessageBubble({ message }: { message: ChatMessageDTO }) {
   const blocks = Array.isArray(message.blocks)
