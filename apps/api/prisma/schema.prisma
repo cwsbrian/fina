@@ -30,6 +30,13 @@ model User {
   trialConsumed    Boolean   @default(false)
   stripeCustomerId String?   @unique // Billing — set on first Stripe checkout
 
+  // Plan 2B daily brief settings.
+  // morningTime: validated by PatchMeBody zod (API is sole writer).
+  // No DB-level CHECK constraint.
+  morningTime  String    @default("08:00")
+  snoozeUntil  DateTime?
+  pauseEnabled Boolean   @default(false)
+
   // Better Auth relations
   sessions Session[]
   accounts Account[]
@@ -42,6 +49,7 @@ model User {
   actionIntents   ActionIntent[]
   chatThreads     ChatThread[]
   subscriptions   Subscription[]
+  briefs          Brief[]
 
   @@map("users")
 }
@@ -521,6 +529,7 @@ model ChatMessage {
   createdAt DateTime        @default(now())
 
   thread ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  brief  Brief?
 
   @@index([threadId, createdAt])
   @@map("chat_messages")
@@ -590,4 +599,32 @@ model WebhookEvent {
 
   @@index([source, type])
   @@map("webhook_events")
+}
+
+enum BriefType {
+  daily
+  weekly
+  monthly
+}
+
+/// Daily-brief idempotency record. One per (userId, date) in user's tz.
+/// Created atomically with the ChatMessage that holds the brief content
+/// (see apps/api/src/cron/jobs/daily-brief.ts).
+model Brief {
+  id        String    @id @default(cuid())
+  userId    String
+  type      BriefType
+  /// ISO date "YYYY-MM-DD" in user's tz at generation time. Text not
+  /// DateTime so date-portion comparisons are tz-stable even if user.tz
+  /// changes between briefs. Lexical sort = chronological.
+  date      String
+  messageId String    @unique
+  createdAt DateTime  @default(now())
+
+  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, type, date])
+  @@map("briefs")
 }
