@@ -14,6 +14,7 @@ import { useFocusEffect, router, Stack } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { ChatThreadDTO } from "@fina/shared";
 import { apiFetch } from "../src/api/client";
+import { findOrCreateEmptyThread } from "../src/chat/find-or-create-empty";
 import { colors, space, type as type$ } from "../src/design/tokens";
 
 type ThreadRow = ChatThreadDTO & {
@@ -55,19 +56,19 @@ export default function Chats() {
     if (creating) return;
     setCreating(true);
     try {
-      const created = await apiFetch<{ thread: ChatThreadDTO }>("/chat/threads", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
+      // Reuse an existing empty thread if there is one — otherwise
+      // the user accumulates ghost rows every time they hit the new-
+      // chat button. Falls back to POST when no empty thread exists.
+      const id = await findOrCreateEmptyThread();
       // Send the user back to the Chat TAB (so the bottom nav stays
-      // visible) with the new thread id as a param. The tab consumes
-      // the param and renders that thread instead of the "latest by
-      // lastMessageAt" default — important because a brand-new thread
-      // has lastMessageAt=null and so wouldn't otherwise win the
-      // latest-thread query.
+      // visible) with the resolved thread id as a param. The tab
+      // consumes the param and renders that thread instead of the
+      // "latest by lastMessageAt" default — important because an
+      // empty thread has lastMessageAt=null and so wouldn't otherwise
+      // win the latest-thread query.
       router.replace({
         pathname: "/(tabs)/chat",
-        params: { thread: created.thread.id },
+        params: { thread: id },
       } as never);
     } catch (e) {
       Alert.alert(

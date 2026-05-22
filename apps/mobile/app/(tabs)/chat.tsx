@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { ChatThreadDTO } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
 import { ThreadView } from "../../src/chat/ThreadView";
+import { findOrCreateEmptyThread } from "../../src/chat/find-or-create-empty";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 
 // Chat tab opens directly into the most-recent thread (the morning
@@ -68,11 +69,11 @@ export default function ChatTab() {
     if (creating) return;
     setCreating(true);
     try {
-      const created = await apiFetch<{ thread: ChatThreadDTO }>("/chat/threads", {
-        method: "POST",
-        body: JSON.stringify({}),
-      });
-      setCurrentThreadId(created.thread.id);
+      // Reuse an existing empty thread if there is one — clicking
+      // "new chat" while already looking at one of those would
+      // otherwise spam the user's history with ghost rows.
+      const id = await findOrCreateEmptyThread();
+      setCurrentThreadId(id);
       setEmpty(false);
     } catch (e) {
       Alert.alert(
