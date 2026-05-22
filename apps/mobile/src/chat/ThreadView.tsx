@@ -40,7 +40,11 @@ type Props = {
 };
 
 type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
-type PostMessageResp = { messages: ChatMessageDTO[] };
+type PostMessageResp = {
+  threadId: string;
+  userMessage: ChatMessageDTO;
+  assistantMessage: ChatMessageDTO;
+};
 
 export function ThreadView({ threadId, bottomInset = 0, onThreadCreated }: Props) {
   // Local thread id mirrors the prop for switching, but on first send
@@ -159,9 +163,12 @@ export function ThreadView({ threadId, bottomInset = 0, onThreadCreated }: Props
           body: JSON.stringify({ text: body, workspaceId: wsId }),
         },
       );
+      // Server returns the canonical user+assistant pair. Swap our
+      // optimistic temp row for the server's record (so the id lines
+      // up for any future updates), then append the assistant reply.
       setMessages((prev) => {
         const withoutTemp = prev.filter((m) => m.id !== tempId);
-        return [...withoutTemp, ...resp.messages];
+        return [...withoutTemp, resp.userMessage, resp.assistantMessage];
       });
       scrollToBottom();
     } catch (e) {
