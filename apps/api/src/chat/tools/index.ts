@@ -26,6 +26,7 @@ import { listScheduledSpends } from "./list-scheduled-spends.js";
 import { listUnresolvedSchedules } from "./list-unresolved-schedules.js";
 import { dismissScheduledSpend } from "./dismiss-scheduled-spend.js";
 import { removeScheduledSpend } from "./remove-scheduled-spend.js";
+import { pauseDailyBrief } from "./pause-daily-brief.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -55,4 +56,5 @@ export const REGISTRY: ToolDef[] = [
   listUnresolvedSchedules as ToolDef,
   dismissScheduledSpend as ToolDef,
   removeScheduledSpend as ToolDef,
+  pauseDailyBrief as ToolDef,
 ];

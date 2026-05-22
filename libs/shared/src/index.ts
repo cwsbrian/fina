@@ -29,14 +29,15 @@ export * from "./validation/password.js";
 export * from "./format/identity.js";
 
 // Zod request schemas
-export * from "./schemas/chat.js";
+export * from "./schemas/billing.js";
 export * from "./schemas/budgets.js";
+export * from "./schemas/categories.js";
+export * from "./schemas/chat.js";
+export * from "./schemas/invites.js";
+export * from "./schemas/me.js";
 export * from "./schemas/recurring.js";
 export * from "./schemas/schedules.js";
-export * from "./schemas/categories.js";
-export * from "./schemas/invites.js";
 export * from "./schemas/workspaces.js";
-export * from "./schemas/billing.js";
 
 // HTTP client factory
 export * from "./http/api-client.js";

@@ -5,6 +5,7 @@ import { runDailyRefresh } from "./jobs/daily-refresh.js";
 import { runRetryUnprocessed } from "./jobs/retry-unprocessed.js";
 import { runCleanupEvents } from "./jobs/cleanup-events.js";
 import { runScheduledSpendMatch } from "./jobs/scheduled-spend-match.js";
+import { runDailyBrief } from "./jobs/daily-brief.js";
 
 let jobs: Cron[] = [];
 
@@ -34,6 +35,7 @@ export function startScheduler(env: Env): void {
   if (!env.CRON_ENABLED) return;
 
   jobs = [
+    makeCron("* * * * *",    "daily-brief",           () => runDailyBrief(env)),
     makeCron("0 9 * * *",    "daily-refresh",         () => runDailyRefresh(env)),
     makeCron("*/10 * * * *", "retry-unprocessed",     () => runRetryUnprocessed(env)),
     makeCron("0 3 * * *",    "cleanup-events",        () => runCleanupEvents(env)),

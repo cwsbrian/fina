@@ -9,6 +9,10 @@ export type MeDTO = {
     name: string | null;
     tz: string;
     locale: string;
+    /** Daily brief settings (Plan 2B). */
+    morningTime: string;          // "HH:mm" 24h format
+    snoozeUntil: string | null;   // ISO date string "YYYY-MM-DD" or null
+    pauseEnabled: boolean;
   };
   tier: Tier;
   trial: {
