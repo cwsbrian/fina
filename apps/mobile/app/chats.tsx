@@ -59,9 +59,16 @@ export default function Chats() {
         method: "POST",
         body: JSON.stringify({}),
       });
-      // Replace this history screen with the new thread so back from
-      // detail returns to the Chat tab, not an empty history view.
-      router.replace(`/chat/${created.thread.id}` as never);
+      // Send the user back to the Chat TAB (so the bottom nav stays
+      // visible) with the new thread id as a param. The tab consumes
+      // the param and renders that thread instead of the "latest by
+      // lastMessageAt" default — important because a brand-new thread
+      // has lastMessageAt=null and so wouldn't otherwise win the
+      // latest-thread query.
+      router.replace({
+        pathname: "/(tabs)/chat",
+        params: { thread: created.thread.id },
+      } as never);
     } catch (e) {
       Alert.alert(
         "Could not start chat",

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useFocusEffect, router } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { ChatThreadDTO } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
@@ -19,10 +19,23 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 // ritual conversation). The history list is a drill-in opened from
 // the header — `app/chats.tsx`.
 export default function ChatTab() {
+  const params = useLocalSearchParams<{ thread?: string }>();
   const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
   const [empty, setEmpty] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+
+  // Other screens can deep-link to a specific thread via ?thread=<id>
+  // (used by /chats new-chat). Consumed once and cleared so future
+  // focuses of the tab fall back to "latest" again.
+  useEffect(() => {
+    if (params.thread) {
+      setCurrentThreadId(params.thread);
+      setEmpty(false);
+      setErr(null);
+      router.setParams({ thread: undefined } as never);
+    }
+  }, [params.thread]);
 
   const loadCurrent = useCallback(async () => {
     try {
@@ -45,8 +58,10 @@ export default function ChatTab() {
 
   useFocusEffect(
     useCallback(() => {
-      loadCurrent();
-    }, [loadCurrent]),
+      // Skip the "latest" lookup when a thread id was just handed to
+      // us via params (e.g. coming back from /chats new-chat).
+      if (!params.thread) loadCurrent();
+    }, [loadCurrent, params.thread]),
   );
 
   const onNewChat = async () => {
