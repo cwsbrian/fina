@@ -7,6 +7,7 @@ import {
   SectionList,
   ActivityIndicator,
   RefreshControl,
+  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
@@ -17,6 +18,9 @@ import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { formatMoney, dateBucket } from "../../src/format/money";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
+import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+
+const HEADER_HEIGHT = 58;
 
 type TxListResp = {
   transactions: TransactionDTO[];
@@ -54,6 +58,7 @@ export default function Activity() {
   const [wsId, setWsId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const header = useCollapsingHeader(HEADER_HEIGHT);
 
   const load = useCallback(async () => {
     try {
@@ -146,14 +151,20 @@ export default function Activity() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ActivityHeader />
       <SectionList
         sections={sections}
         keyExtractor={(t) => t.id}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingTop: HEADER_HEIGHT }]}
         stickySectionHeadersEnabled={false}
+        onScroll={header.onScroll}
+        scrollEventThrottle={header.scrollEventThrottle}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={colors.primary}
+            progressViewOffset={HEADER_HEIGHT}
+          />
         }
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHead}>
@@ -167,6 +178,9 @@ export default function Activity() {
           <TxRow tx={item} categories={categories} />
         )}
       />
+      <Animated.View style={[styles.headerOverlay, header.headerStyle]}>
+        <ActivityHeader />
+      </Animated.View>
     </SafeAreaView>
   );
 }
@@ -243,13 +257,22 @@ function TxRow({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
+  headerOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    backgroundColor: colors.canvas,
+  },
   head: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: space.lg,
     paddingTop: space.sm,
-    paddingBottom: space.xs,
+    paddingBottom: space.sm,
+    height: HEADER_HEIGHT,
   },
   title: { ...type$.titleLg, color: colors.ink },
   headActions: { flexDirection: "row", alignItems: "center", gap: 6 },

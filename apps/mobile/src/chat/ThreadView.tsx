@@ -37,6 +37,13 @@ type Props = {
    *  DB row by the first send. The parent (Chat tab) keeps a copy of
    *  the new id so subsequent renders pass it back down. */
   onThreadCreated?: (newId: string) => void;
+  /** Forwarded to the messages FlatList — used for collapsing header. */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  onScroll?: (e: any) => void;
+  scrollEventThrottle?: number;
+  /** Top padding added to the messages list — usually the header height
+   *  when the parent renders an absolute-positioned collapsing header. */
+  listTopInset?: number;
 };
 
 type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
@@ -46,7 +53,14 @@ type PostMessageResp = {
   assistantMessage: ChatMessageDTO;
 };
 
-export function ThreadView({ threadId, bottomInset = 0, onThreadCreated }: Props) {
+export function ThreadView({
+  threadId,
+  bottomInset = 0,
+  onThreadCreated,
+  onScroll,
+  scrollEventThrottle,
+  listTopInset = 0,
+}: Props) {
   // Local thread id mirrors the prop for switching, but on first send
   // we promote a null prop to a real id WITHOUT waiting for the parent
   // to re-render with the new value (avoids a reload flash).
@@ -209,8 +223,10 @@ export function ThreadView({ threadId, bottomInset = 0, onThreadCreated }: Props
         ref={listRef}
         data={messages}
         keyExtractor={(m) => m.id}
-        contentContainerStyle={styles.listContent}
+        contentContainerStyle={[styles.listContent, { paddingTop: space.lg + listTopInset }]}
         onContentSizeChange={scrollToBottom}
+        onScroll={onScroll}
+        scrollEventThrottle={scrollEventThrottle}
         ListEmptyComponent={
           <View style={styles.startCard}>
             <Text style={styles.startCardTitle}>Say hi</Text>

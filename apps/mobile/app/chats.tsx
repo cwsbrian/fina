@@ -8,6 +8,7 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
+  Animated,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, router, Stack } from "expo-router";
@@ -16,6 +17,9 @@ import type { ChatThreadDTO } from "@fina/shared";
 import { apiFetch } from "../src/api/client";
 import { colors, space, type as type$ } from "../src/design/tokens";
 import { HeaderIconButton } from "../src/design/HeaderIconButton";
+import { useCollapsingHeader } from "../src/design/useCollapsingHeader";
+
+const HEADER_HEIGHT = 58;
 
 type ThreadRow = ChatThreadDTO & {
   messageCount: number;
@@ -28,6 +32,7 @@ export default function Chats() {
   const [threads, setThreads] = useState<ThreadRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const header = useCollapsingHeader(HEADER_HEIGHT);
 
   const load = useCallback(async () => {
     try {
@@ -60,19 +65,21 @@ export default function Chats() {
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <View style={styles.header}>
-        <HeaderIconButton
-          icon="chevron-back"
-          accessibilityLabel="Back"
-          onPress={() => router.back()}
-        />
-        <Text style={styles.headerTitle}>Chat history</Text>
-        <HeaderIconButton
-          icon="create-outline"
-          accessibilityLabel="New chat"
-          onPress={onNewChat}
-        />
-      </View>
+      <Animated.View style={[styles.headerOverlay, header.headerStyle]}>
+        <View style={styles.header}>
+          <HeaderIconButton
+            icon="chevron-back"
+            accessibilityLabel="Back"
+            onPress={() => router.back()}
+          />
+          <Text style={styles.headerTitle}>Chat history</Text>
+          <HeaderIconButton
+            icon="create-outline"
+            accessibilityLabel="New chat"
+            onPress={onNewChat}
+          />
+        </View>
+      </Animated.View>
 
       {threads === null && !err && (
         <View style={styles.loading}>
@@ -103,12 +110,15 @@ export default function Chats() {
         <FlatList
           data={threads}
           keyExtractor={(t) => t.id}
-          contentContainerStyle={{ paddingHorizontal: space.lg, paddingBottom: space.xxl }}
+          contentContainerStyle={{ paddingHorizontal: space.lg, paddingTop: HEADER_HEIGHT, paddingBottom: space.xxl }}
+          onScroll={header.onScroll}
+          scrollEventThrottle={header.scrollEventThrottle}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
               tintColor={colors.primary}
+              progressViewOffset={HEADER_HEIGHT}
             />
           }
           renderItem={({ item }) => (
@@ -156,12 +166,21 @@ export default function Chats() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
+  headerOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    backgroundColor: colors.canvas,
+  },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: space.base,
     paddingVertical: space.sm,
+    height: HEADER_HEIGHT,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
