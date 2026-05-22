@@ -13,7 +13,9 @@
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "assetBundlePatterns": ["**/*"],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "app.fina.dev",
@@ -35,16 +37,23 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      ["expo-notifications", {
-        "icon": "./assets/icon.png",
-        "color": "#000000"
-      }]
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/icon.png",
+          "color": "#000000"
+        }
+      ]
     ],
-    "experiments": { "typedRoutes": true },
+    "experiments": {
+      "typedRoutes": true
+    },
     "extra": {
+      "router": {},
       "eas": {
-        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+        "projectId": "bdfb302d-2a78-422b-bcd4-5e69ba0a7b03"
       }
-    }
+    },
+    "owner": "cwsbrian"
   }
 }
