@@ -233,6 +233,24 @@ export default function PlanPage() {
         </button>
       );
     }
+    // Tier change (Lite ↔ Pro) flows through Stripe Customer Portal so
+    // Stripe handles proration + immediate switch on an existing
+    // subscription. Checkout (creating a new sub) is only correct when
+    // the user has no active subscription yet.
+    if (sub !== null) {
+      const label = tier === "lite" ? "Lite" : "Pro";
+      const isDown = sub.tier === "pro" && tier === "lite";
+      return (
+        <button
+          type="button"
+          className={`${styles.btn} ${isDown ? styles.btnOutline : styles.btnPrimary}`}
+          onClick={onManage}
+          disabled={busy !== null}
+        >
+          {busy === "portal" ? "Opening…" : `Switch to ${label}`}
+        </button>
+      );
+    }
     return (
       <button
         type="button"
