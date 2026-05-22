@@ -282,6 +282,15 @@ RN 클라이언트는 각 block type 에 대응하는 컴포넌트 렌더러 보
 - `morning_time`, `timezone`, `snooze_until`
 - Settings UI 또는 chat 으로 변경 (`pauseDailyBrief({ until })` tool)
 
+### 2026-05-21 — Implementation note (Plan 2B)
+
+The implementation in [Plan 2B-daily-brief](2026-05-21-plan-2b-daily-brief-design.md) deviates from §6 in two ways:
+
+1. **Always emit a message** (no "별 거 없으면 skip" rule). LLM cost is ~$0.0006 per user per day; ritual value of a consistent daily message outweighs the noise risk.
+2. **Three brief types** (daily / weekly / monthly), highest cadence wins on collision days. The single "daily ritual" expanded into a cadence-aware system that adjusts context window and tone per type.
+
+See the 2B spec §11 for the full rationale.
+
 ---
 
 ## 7. Conversation Context 관리
