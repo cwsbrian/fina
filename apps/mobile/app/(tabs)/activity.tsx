@@ -219,7 +219,10 @@ function TxRow({
     : firstAllocCat?.name ?? "Uncategorized";
   const uncategorized = !isSplit && !firstAllocCat?.id;
   return (
-    <View style={styles.row}>
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
+      onPress={() => router.push(`/transactions/${tx.id}` as never)}
+    >
       <View style={styles.rowGlyph}>
         <Ionicons
           name={money.isIncome ? "trending-up" : "card-outline"}
@@ -254,7 +257,7 @@ function TxRow({
         </Text>
         <Text style={styles.rowTime}>{formatTime(tx.occurredAt)}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 

@@ -188,6 +188,61 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.get<{ Params: { id: string; txId: string } }>(
+    "/workspaces/:id/transactions/:txId",
+    async (req, reply) => {
+      try {
+        const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });
+        if (req.params.id !== ctx.membership.workspaceId) {
+          return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const [workspace, t] = await Promise.all([
+          prisma.workspace.findUniqueOrThrow({
+            where: { id: ctx.membership.workspaceId },
+            select: { currency: true },
+          }),
+          prisma.transaction.findFirst({
+            where: { id: req.params.txId, workspaceId: ctx.membership.workspaceId },
+            include: {
+              allocations: {
+                select: { id: true, categoryId: true, amount: true, source: true },
+                orderBy: { createdAt: "asc" },
+              },
+            },
+          }),
+        ]);
+        if (!t) return reply.code(404).send({ error: "not_found" });
+        return reply.code(200).send({
+          transaction: {
+            id: t.id,
+            accountId: t.accountId,
+            plaidTransactionId: t.plaidTransactionId,
+            amount: t.amount.toString(),
+            currency: workspace.currency,
+            merchantRaw: t.merchantRaw,
+            merchantNormalized: t.merchantNormalized,
+            occurredAt: t.occurredAt.toISOString(),
+            postedAt: t.postedAt?.toISOString() ?? null,
+            pending: t.pending,
+            source: t.source,
+            note: t.note,
+            removedAt: t.removedAt?.toISOString() ?? null,
+            needsReclassification: t.needsReclassification,
+            allocations: t.allocations.map((a) => ({
+              id: a.id,
+              categoryId: a.categoryId,
+              amount: a.amount.toString(),
+              source: a.source,
+            })),
+          },
+        });
+      } catch (err) {
+        if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.code });
+        throw err;
+      }
+    },
+  );
+
   const CategorizeBody = z.object({ categoryName: z.string().trim().min(1).max(80) });
 
   app.post("/workspaces/:id/transactions/:txId/categorize", async (req, reply) => {
