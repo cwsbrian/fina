@@ -1,4 +1,4 @@
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type RouteHandler } from "fastify";
 import helmet from "@fastify/helmet";
 import sensible from "@fastify/sensible";
 import cors from "@fastify/cors";
@@ -25,6 +25,47 @@ import { chatRoutes } from "./routes/chat.js";
 import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 
 export type AppCtx = { env: Env; auth: FinaAuth };
+
+/**
+ * Bridge Fastify request → Web Fetch handler that Better Auth expects.
+ * Extracted as a factory so multiple route registrations (sign-in/*,
+ * sign-up/*, catch-all) can share the same handler. The set-cookie
+ * forwarding workaround below is load-bearing: forEach combines multiple
+ * set-cookie values into a comma-joined string which browsers misparse;
+ * getSetCookie() returns the per-spec string[] which Fastify emits as
+ * one Set-Cookie header per entry.
+ */
+function makeBetterAuthHandler(auth: FinaAuth, env: Env): RouteHandler {
+  return async (req, reply) => {
+    const url = new URL(req.url, env.BETTER_AUTH_URL);
+    const headers = new Headers();
+    for (const [k, v] of Object.entries(req.headers)) {
+      if (typeof v === "string") headers.set(k, v);
+      else if (Array.isArray(v)) headers.set(k, v.join(", "));
+    }
+    const body =
+      req.method === "GET" || req.method === "HEAD"
+        ? undefined
+        : typeof req.body === "string"
+          ? req.body
+          : JSON.stringify(req.body ?? {});
+    const init: RequestInit =
+      body === undefined
+        ? { method: req.method, headers }
+        : { method: req.method, headers, body };
+    const response = await auth.handler(new Request(url, init));
+
+    reply.code(response.status);
+    response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === "set-cookie") return;
+      reply.header(key, value);
+    });
+    const setCookies = response.headers.getSetCookie();
+    if (setCookies.length > 0) reply.header("set-cookie", setCookies);
+    const buf = Buffer.from(await response.arrayBuffer());
+    return reply.send(buf);
+  };
+}
 
 declare module "fastify" {
   interface FastifyInstance {
@@ -85,41 +126,16 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
     allowedHeaders: ["content-type", "x-workspace-id", "cookie"],
   });
 
-  // Bridge Fastify request → Web Fetch handler that Better Auth expects.
-  app.all("/api/auth/*", { config: withRateLimit("auth") }, async (req, reply) => {
-    const url = new URL(req.url, env.BETTER_AUTH_URL);
-    const headers = new Headers();
-    for (const [k, v] of Object.entries(req.headers)) {
-      if (typeof v === "string") headers.set(k, v);
-      else if (Array.isArray(v)) headers.set(k, v.join(", "));
-    }
-    const body =
-      req.method === "GET" || req.method === "HEAD"
-        ? undefined
-        : typeof req.body === "string"
-          ? req.body
-          : JSON.stringify(req.body ?? {});
-    const init: RequestInit =
-      body === undefined
-        ? { method: req.method, headers }
-        : { method: req.method, headers, body };
-    const response = await auth.handler(new Request(url, init));
+  const betterAuthHandler = makeBetterAuthHandler(auth, env);
 
-    reply.code(response.status);
-    // Forward all headers EXCEPT set-cookie via forEach (forEach combines
-    // multiple set-cookie values into a comma-joined string, which browsers
-    // misparse as a single broken cookie). Use getSetCookie() — which returns
-    // a string[] per spec — and pass that array to reply.header so Fastify
-    // emits one Set-Cookie per entry.
-    response.headers.forEach((value, key) => {
-      if (key.toLowerCase() === "set-cookie") return;
-      reply.header(key, value);
-    });
-    const setCookies = response.headers.getSetCookie();
-    if (setCookies.length > 0) reply.header("set-cookie", setCookies);
-    const buf = Buffer.from(await response.arrayBuffer());
-    return reply.send(buf);
-  });
+  // Order matters for Fastify route matching: more-specific patterns must
+  // register first so /api/auth/sign-in/* and /api/auth/sign-up/* take
+  // precedence over the catch-all /api/auth/*. sign-in/up get the strict
+  // 5/min/IP bucket (credential-stuffing protection); the catch-all keeps
+  // the lenient 30/min/IP bucket to accommodate get-session polling.
+  app.all("/api/auth/sign-in/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
+  app.all("/api/auth/sign-up/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
+  app.all("/api/auth/*",         { config: withRateLimit("auth")       }, betterAuthHandler);
 
   await app.register(healthRoutes);
   await app.register(meRoutes);

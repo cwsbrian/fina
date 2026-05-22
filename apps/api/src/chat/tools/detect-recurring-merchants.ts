@@ -95,13 +95,7 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
     // First day of the calendar month that begins the lookback window, in the user's timezone,
     // converted to a UTC instant. The shared helper resolves User.tz (with America/Toronto
     // fallback for missing/invalid values) and handles DST.
-    const [lookbackStart, workspace] = await Promise.all([
-      lookbackMonthStart(ctx.userId, lookbackMonths),
-      prisma.workspace.findUniqueOrThrow({
-        where: { id: ctx.workspaceId },
-        select: { currency: true },
-      }),
-    ]);
+    const lookbackStart = await lookbackMonthStart(ctx.userId, lookbackMonths);
 
     const rows = await prisma.transaction.findMany({
       where: {
@@ -116,6 +110,7 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
         merchantRaw: true,
         merchantNormalized: true,
         occurredAt: true,
+        account: { select: { currency: true } },
       },
       orderBy: { occurredAt: "asc" },
     });
@@ -123,6 +118,7 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
     type Group = {
       key: string;
       merchantKey: string;
+      currency: string;
       displayName: string;
       latestDisplayTs: number;
       transactionIds: string[];
@@ -134,12 +130,14 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
     for (const r of rows) {
       const merchantKey = (r.merchantNormalized ?? normalizeMerchant(r.merchantRaw)).trim();
       if (!merchantKey) continue;
-      const key = merchantKey;
+      const currency = r.account.currency;
+      const key = `${merchantKey}|${currency}`;
       let g = groups.get(key);
       if (!g) {
         g = {
           key,
           merchantKey,
+          currency,
           displayName: r.merchantRaw,
           latestDisplayTs: r.occurredAt.getTime(),
           transactionIds: [],
@@ -201,7 +199,7 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
         lastSeenAt: new Date(lastTs).toISOString(),
         medianAmount: medianAmt.toFixed(2),
         latestAmount: latestAmount.toFixed(2),
-        currency: workspace.currency,
+        currency: g.currency,
         cadence,
         confidence: Math.round(confidence * 100) / 100,
         transactionIds: g.transactionIds,

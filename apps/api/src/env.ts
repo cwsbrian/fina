@@ -50,6 +50,9 @@ const Schema = z.object({
   ),
   // TTL for plaid_webhook_events rows in days. Default 30 applied at use site with ?? 30.
   CRON_EVENT_TTL_DAYS: z.coerce.number().int().positive().optional(),
+  // TTL for resolved ScheduledSpend rows in days. Default 90 applied at use
+  // site with ?? 90. "Resolved" = dismissedAt set OR matchedTxId set.
+  SCHEDULED_SPEND_TTL_DAYS: z.coerce.number().int().positive().optional(),
   // Chat — all .optional() (test-env friendly); use-site applies defaults via `?? N`.
   CHAT_MODEL: z.string().optional(),
   CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().optional(),
@@ -58,12 +61,14 @@ const Schema = z.object({
   // Prisma connection pool size. Default 10 covers cron + webhook + a
   // few request handlers without pool starvation under singleFork tests.
   PRISMA_CONNECTION_LIMIT: z.coerce.number().int().min(1).default(10),
-  // Set to "true"/"1" behind a load balancer or CDN so req.ip honours
-  // X-Forwarded-For. Default false in dev, derived from NODE_ENV in
-  // the .transform below.
+  // Strict opt-in (Plan 1J Task 2): no default — production deployments
+  // must explicitly state whether they're behind a CDN/LB that strips
+  // client-set X-Forwarded-For. Setting true without that infrastructure
+  // lets attackers spoof X-Forwarded-For to rotate rate-limit buckets and
+  // pollute audit IPs.
   TRUST_PROXY: z.preprocess(
-    (v) => (v === "true" || v === "1" ? true : v === "false" ? false : v),
-    z.boolean().optional(),
+    (v) => (v === "true" || v === "1" ? true : v === "false" || v === "0" ? false : v),
+    z.boolean(),
   ),
   // Opt-in for rate-limit integration tests. When NODE_ENV=test and
   // this is unset, the rate-limit plugin skips registration entirely.
@@ -77,10 +82,7 @@ const ParsedSchema = Schema.refine(
     return e.RESEND_API_KEY.startsWith("re_") && e.RESEND_API_KEY.length >= 24;
   },
   { message: "RESEND_API_KEY must be a real Resend key in production", path: ["RESEND_API_KEY"] },
-).transform((e) => ({
-  ...e,
-  TRUST_PROXY: e.TRUST_PROXY ?? e.NODE_ENV === "production",
-}));
+);
 
 export type Env = z.infer<typeof ParsedSchema>;
 
