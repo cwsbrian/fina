@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fina Mobile — Activity Analysis entry</title>
+
+<link rel="stylesheet" href="system/colors_and_type.css" />
+<link rel="stylesheet" href="styles/fina-mobile.css" />
+
+<style>
+  html, body { margin: 0; background: #f0eee9; height: 100%; }
+  body { font-family: var(--font-sans); }
+
+  /* (B) Filter bar with Analysis link pill on the right */
+  .fm-filter-bar-split { padding-right: 14px; }
+  .fm-analysis-link-pill {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 6px 10px 6px 12px;
+    border-radius: 999px;
+    background: var(--color-ink);
+    color: #fff;
+    border: 0;
+    font: 12.5px var(--font-sans);
+    font-weight: 600;
+    letter-spacing: -0.1px;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  /* (C) Summary card at top of list */
+  .fm-activity-summary {
+    width: calc(100% - 32px);
+    margin: 4px 16px 12px;
+    padding: 14px 16px;
+    background: var(--color-canvas);
+    border: 1px solid var(--color-hairline);
+    border-radius: 14px;
+    display: flex; flex-direction: column;
+    gap: 10px;
+    text-align: left;
+    cursor: pointer;
+    font: inherit;
+    color: inherit;
+  }
+  .fm-activity-summary-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .fm-activity-summary-row .lbl {
+    font: 11.5px var(--font-sans);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--color-muted);
+  }
+  .fm-activity-summary-row .link {
+    display: inline-flex; align-items: center; gap: 3px;
+    color: var(--color-primary);
+    font: 13px var(--font-sans);
+    font-weight: 600;
+  }
+  .fm-activity-summary-bottom {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 12px;
+  }
+  .fm-activity-summary-bottom .amt {
+    font: 500 26px/1 var(--font-sans);
+    letter-spacing: -0.8px;
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+  .fm-activity-summary-bottom .dec { color: var(--color-muted); }
+  .fm-activity-summary-bottom .ctx {
+    font: 12.5px var(--font-sans);
+    color: var(--color-muted);
+    margin-left: 4px;
+    letter-spacing: 0;
+    font-weight: 400;
+  }
+  .fm-activity-summary-bottom .pct {
+    font: 12px var(--font-mono);
+    color: var(--color-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* (E) Floating pill bottom-right above tab bar */
+  .fm-analysis-floating-pill {
+    position: absolute;
+    bottom: 96px; right: 16px;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 10px 16px 10px 12px;
+    border-radius: 999px;
+    background: var(--color-ink);
+    color: #fff;
+    border: 0;
+    font: 13.5px var(--font-sans);
+    font-weight: 600;
+    letter-spacing: -0.1px;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08);
+    z-index: 25;
+  }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="ios-frame.jsx"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel" src="components/icons.jsx"></script>
+  <script type="text/babel" src="components/shell.jsx"></script>
+  <script type="text/babel" src="components/chat-blocks.jsx"></script>
+  <script type="text/babel" src="components/screens.jsx"></script>
+  <script type="text/babel" src="components/home-analysis.jsx"></script>
+  <script type="text/babel" src="components/activity-analysis-entry.jsx"></script>
+
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{ "mode": "light" }/*EDITMODE-END*/;
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const dark = t.mode === 'dark';
+      return (
+        <>
+          <DesignCanvas>
+            <DCSection
+              id="entry-options"
+              title="Activity → Analysis entry · 4 options"
+              subtitle="Tap-to-open Analysis as a sub-screen, not a tab. Header keeps cal / search / + (calendar is needed for free-date filter). Where does the Analysis affordance live?"
+            >
+              <DCArtboard id="opt-b" label="B · Filter bar end (dark pill)" width={402} height={874}>
+                <ActivityB dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="opt-c" label="C · Summary card on top" width={402} height={874}>
+                <ActivityC dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="opt-d" label="D · Header swap (search → chart)" width={402} height={874}>
+                <ActivityD dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="opt-e" label="E · Floating pill (bottom-right)" width={402} height={874}>
+                <ActivityE dark={dark} />
+              </DCArtboard>
+            </DCSection>
+          </DesignCanvas>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection title="Theme">
+              <TweakRadio
+                label="Mode"
+                value={t.mode}
+                onChange={v => setTweak('mode', v)}
+                options={[
+                  { value: 'light', label: 'Light' },
+                  { value: 'dark', label: 'Dark' },
+                ]}
+              />
+            </TweakSection>
+          </TweaksPanel>
+        </>
+      );
+    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

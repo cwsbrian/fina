@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fina Mobile — Design Canvas</title>
+
+<link rel="stylesheet" href="system/colors_and_type.css" />
+<link rel="stylesheet" href="styles/fina-mobile.css" />
+
+<style>
+  html, body { margin: 0; background: #f0eee9; height: 100%; }
+  body { font-family: var(--font-sans); }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="ios-frame.jsx"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel" src="components/icons.jsx"></script>
+  <script type="text/babel" src="components/shell.jsx"></script>
+  <script type="text/babel" src="components/chat-blocks.jsx"></script>
+  <script type="text/babel" src="components/screens.jsx"></script>
+  <script type="text/babel" src="components/home-analysis.jsx"></script>
+  <script type="text/babel" src="components/schedules.jsx"></script>
+
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "mode": "light",
+      "tier": "lite",
+      "themeColor": "#3eb38b",
+      "canvasColor": "#fbfcfb"
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const dark = t.mode === 'dark';
+      const tier = t.tier;
+      const themeStyle = {
+        '--color-primary': t.themeColor,
+        '--color-canvas': t.canvasColor,
+      };
+
+      return (
+        <div style={themeStyle}>
+          <DesignCanvas>
+            <DCSection
+              id="home"
+              title="Home — main tab"
+              subtitle="The new landing surface. Big month-spend hero, AI morning brief card (Chat deep-link), glance stats, top categories, recent activity."
+            >
+              <DCArtboard id="home-main" label="Home · with morning brief" width={402} height={874}>
+                <Home dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="analysis" label="Analysis tab" width={402} height={874}>
+                <Analysis dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="chat-hero"
+              title="Chat — morning brief drill-in (from Home)"
+              subtitle="Reached by tapping the morning brief card on Home, or by push notification. Stacked over the tab bar."
+            >
+              <DCArtboard id="hero-fresh" label="Fresh morning brief" width={402} height={874}>
+                <ChatMorningHero dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="hero-mid" label="Mid-ritual + confirm" width={402} height={874}>
+                <ChatMidRitual dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="hero-done" label="All caught up" width={402} height={874}>
+                <ChatDone dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="upgrade" label="Upgrade prompt (Free)" width={402} height={874}>
+                <UpgradePrompt dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="chat-blocks"
+              title="Chat — Phase 2 blocks (schedule · budget · plan)"
+              subtitle="Same chat surface, three new AI moments: schedule a recurring bill (schedule_form), nudge an unrealistic budget (budget_edit), and reason about a savings goal (plan_card)."
+            >
+              <DCArtboard id="chat-schedule" label="schedule_form · recurring bill" width={402} height={874}>
+                <ChatSchedule dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="chat-budget" label="budget_edit · over budget" width={402} height={874}>
+                <ChatBudget dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="chat-plan" label="plan_card · can we afford it" width={402} height={874}>
+                <ChatPlan dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="tx"
+              title="Activity (Transactions)"
+              subtitle="Tab 2 — the catalog. List · detail · category picker sheet · add-tx single form (amount hero + rows + keypad sheet). Available to Free tier."
+            >
+              <DCArtboard id="tx-list" label="Activity · list" width={402} height={874}>
+                <TransactionsList dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-daterange-preset" label="Date range · presets" width={402} height={874}>
+                <DateRangePicker dark={dark} mode="preset" />
+              </DCArtboard>
+              <DCArtboard id="tx-daterange-custom" label="Date range · custom calendar" width={402} height={874}>
+                <DateRangePicker dark={dark} mode="custom" />
+              </DCArtboard>
+              <DCArtboard id="tx-list-split" label="Activity · with split tx" width={402} height={874}>
+                <TransactionsListSplit dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-detail-split" label="Transaction detail · split tx" width={402} height={874}>
+                <TransactionDetailSplit dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-detail-single-split-cta" label="Tx detail · single · split CTA" width={402} height={874}>
+                <TransactionDetailSingle dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="split-editor" label="Split editor · balanced" width={402} height={874}>
+                <SplitEditor dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="split-editor-imbalanced" label="Split editor · imbalanced" width={402} height={874}>
+                <SplitEditorImbalanced dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="split-editor-overflow" label="Split editor · overflow" width={402} height={874}>
+                <SplitEditorOverflow dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-cat-picker" label="Category picker · sheet" width={402} height={874}>
+                <CategoryPicker dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-add-empty" label="Add · empty" width={402} height={874}>
+                <AddTransaction dark={dark} mode="amount" empty />
+              </DCArtboard>
+              <DCArtboard id="tx-add-expense" label="Add · expense $24" width={402} height={874}>
+                <AddTransaction dark={dark} mode="amount" kind="expense" amount="24" cents="00" />
+              </DCArtboard>
+              <DCArtboard id="tx-add-income" label="Add · income $2,840" width={402} height={874}>
+                <AddTransaction dark={dark} mode="amount" kind="income" amount="2,840" cents="00" merchant="Acme Co. payroll" />
+              </DCArtboard>
+              <DCArtboard id="tx-add-details" label="Add · note focused" width={402} height={874}>
+                <AddTransaction dark={dark} mode="detail" kind="expense" focusedField="note" />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="schedules"
+              title="Schedules &amp; Subscriptions"
+              subtitle="Two standalone screens (Schedule + Subscriptions). Schedule holds future planned items used by budget. Subscriptions list manages recurring contracts (with monthly amortization)."
+            >
+              <DCArtboard id="sched-only" label="Schedule · screen" width={402} height={874}>
+                <ScheduleScreen dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="subs-only" label="Subscriptions · screen" width={402} height={874}>
+                <SubscriptionsScreen dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="activity-sched-a" label="Activity · upcoming card (Variant A)" width={402} height={874}>
+                <ActivityWithSchedulesA dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="activity-sched-a-mini" label="Activity · upcoming banner (Variant A · mini)" width={402} height={874}>
+                <ActivityWithSchedulesAMini dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="activity-sched-b" label="Activity · inline by date (Variant B)" width={402} height={874}>
+                <ActivityWithSchedulesB dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="settings"
+              title="Settings + drill-ins"
+              subtitle="Settings root has a single Banks entry-point row (the dedicated Banks tab opens the same screen). Drill-ins: Profile · Delete account · Banks · Workspace + invite + switcher. Banks page surfaces reconnect sheet and error toasts as overlays."
+            >
+              <DCArtboard id="settings" label="Settings · root" width={402} height={874}>
+                <Settings dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="profile-edit" label="Edit profile · drill-in" width={402} height={874}>
+                <ProfileEdit dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="delete-account" label="Delete account · drill-in" width={402} height={874}>
+                <DeleteAccount dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="banks-detail" label="Banks · drill-in" width={402} height={874}>
+                <Banks dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="bank-reconnect" label="Banks · reconnect sheet" width={402} height={874}>
+                <BankReconnect dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="plaid-toast-already" label="Banks · error toast (already connected)" width={402} height={874}>
+                <PlaidErrorToast dark={dark} variant="already" />
+              </DCArtboard>
+              <DCArtboard id="plaid-toast-down" label="Banks · error toast (institution down)" width={402} height={874}>
+                <PlaidErrorToast dark={dark} variant="down" />
+              </DCArtboard>
+              <DCArtboard id="ws-settings" label="Workspace · settings + members" width={402} height={874}>
+                <WorkspaceSettings dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="ws-invite" label="Workspace · invite sheet" width={402} height={874}>
+                <MemberInvite dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="ws-switcher" label="Workspace · switcher sheet" width={402} height={874}>
+                <WorkspaceSwitcher dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="subscription"
+              title="Subscription & billing"
+              subtitle="Manage screen across four states (trial active / 3 days left / expired / Pro subscribed) plus the day-of expiry lock modal."
+            >
+              <DCArtboard id="sub-trial-active" label="Sub · Pro Trial (27 days left)" width={402} height={874}>
+                <SubscriptionManage dark={dark} state="trial-active" />
+              </DCArtboard>
+              <DCArtboard id="sub-trial-expiring" label="Sub · trial expiring (3 days)" width={402} height={874}>
+                <SubscriptionManage dark={dark} state="trial-expiring" />
+              </DCArtboard>
+              <DCArtboard id="sub-trial-expired" label="Sub · trial expired" width={402} height={874}>
+                <SubscriptionManage dark={dark} state="trial-expired" />
+              </DCArtboard>
+              <DCArtboard id="sub-pro-active" label="Sub · Pro subscribed" width={402} height={874}>
+                <SubscriptionManage dark={dark} state="pro-active" />
+              </DCArtboard>
+              <DCArtboard id="trial-lock-modal" label="Trial expired · lock modal" width={402} height={874}>
+                <TrialExpiredLock dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="notifications"
+              title="Phase 2 · Notifications, brief settings & inline banners"
+              subtitle="Thread list (multiple briefs) · lock-screen push variants · trial-expiring banner on Home · brief settings · permission pre-prompt · export sheet · in-chat budget context · transactions bank-error banner."
+            >
+              <DCArtboard id="thread-list" label="Chats · tab landing" width={402} height={874}>
+                <ChatThreadList dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="push-lockscreen" label="Push · lock-screen notifications" width={402} height={874}>
+                <PushNotificationsLockScreen />
+              </DCArtboard>
+              <DCArtboard id="home-trial-expiring" label="Home · trial-expiring banner" width={402} height={874}>
+                <HomeTrialExpiring dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="activity-trial-expiring" label="Activity · trial-expiring banner" width={402} height={874}>
+                <ActivityTrialExpiring dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="chat-trial-expiring" label="Chat · trial-expiring banner" width={402} height={874}>
+                <ChatTrialExpiring dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="banks-trial-expiring" label="Banks · trial-expiring banner" width={402} height={874}>
+                <BanksTrialExpiring dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="sign-out-confirm" label="Sign out · confirm sheet" width={402} height={874}>
+                <SignOutConfirm dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="goals-locked-free" label="Goals · locked (Free)" width={402} height={874}>
+                <GoalsLocked dark={dark} tier="free" />
+              </DCArtboard>
+              <DCArtboard id="goals-locked-lite" label="Goals · locked (Lite)" width={402} height={874}>
+                <GoalsLocked dark={dark} tier="lite" />
+              </DCArtboard>
+              <DCArtboard id="banks-lite-limit" label="Banks · Lite at limit" width={402} height={874}>
+                <BanksLiteAtLimit dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="notification-settings" label="Notification settings" width={402} height={874}>
+                <NotificationSettings dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="brief-settings" label="Morning brief · settings drill-in" width={402} height={874}>
+                <MorningBriefSettings dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="push-permission" label="Push permission · pre-prompt" width={402} height={874}>
+                <PushPermissionPrompt dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="data-export" label="Data export · sheet" width={402} height={874}>
+                <DataExportSheet dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="chat-context-banner" label="Chat · with budget context banner" width={402} height={874}>
+                <ChatWithBudgetContext dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="tx-bank-error" label="Transactions · with bank-error banner" width={402} height={874}>
+                <TransactionsWithBankError dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="phase3-goals"
+              title="Phase 3 · Goals (Pro)"
+              subtitle="Save the goal that AI sketches in chat. Linear list sorted by due date. Path strategy + collapsible AI reasoning + milestones."
+            >
+              <DCArtboard id="home-with-goals" label="Home · with Goals glance" width={402} height={874}>
+                <HomeWithGoals dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="goals-list" label="Goals · list" width={402} height={874}>
+                <GoalsList dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="goal-create" label="Goal · create + AI hint" width={402} height={874}>
+                <GoalCreate dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="goal-detail" label="Goal · detail + reasoning" width={402} height={874}>
+                <GoalDetail dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="chat-goal-save" label="Chat · plan with Save CTA" width={402} height={874}>
+                <ChatPlanWithSave dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="phase3-receipt"
+              title="Phase 3 · Receipt OCR (Pro)"
+              subtitle="Camera capture → OCR processing → confirm extracted data → saved. Entered from Add Transaction or via chat ('send me a receipt'). Auto-matches against pending Plaid charges."
+            >
+              <DCArtboard id="receipt-capture" label="Capture · viewfinder" width={402} height={874}>
+                <ReceiptCapture dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="receipt-processing" label="Processing · OCR scan" width={402} height={874}>
+                <ReceiptProcessing dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="receipt-parsed" label="Parsed · confirm details" width={402} height={874}>
+                <ReceiptParsed dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="receipt-saved" label="Saved · success" width={402} height={874}>
+                <ReceiptSaved dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="phase3-anomaly"
+              title="Phase 3 · Anomaly alerts"
+              subtitle="AI flags unusual spend — 3 surfaces. Chat surface (review in conversation), focused detail screen (from push notification), and a flagged-filter view of the Activity tab."
+            >
+              <DCArtboard id="chat-anomaly" label="Chat · anomaly alert" width={402} height={874}>
+                <ChatAnomaly dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="anomaly-detail" label="Anomaly · focused review" width={402} height={874}>
+                <AnomalyDetail dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-flagged" label="Activity · flagged filter" width={402} height={874}>
+                <TransactionsFlagged dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="empty-states"
+              title="Empty / first-run states"
+              subtitle="First-time user surfaces before there's any data. One per main tab — covers the no-tx, no-bank, no-chat, no-data, no-analysis cases."
+            >
+              <DCArtboard id="home-empty" label="Home · first-run checklist" width={402} height={874}>
+                <HomeEmpty dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-empty" label="Activity · zero transactions" width={402} height={874}>
+                <TransactionsEmpty dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="banks-empty" label="Banks · no connection" width={402} height={874}>
+                <BanksEmpty dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="chats-empty" label="Chats · before first ritual" width={402} height={874}>
+                <ChatsEmpty dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="analysis-empty" label="Analysis · not enough data" width={402} height={874}>
+                <AnalysisEmpty dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            <DCSection
+              id="auth"
+              title="Auth & Onboarding"
+              subtitle="First-run entry. Splash → onboarding (welcome / talk / share) → sign up or sign in → email verify."
+            >
+              <DCArtboard id="splash" label="Splash" width={402} height={874}>
+                <Splash dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="onb-1" label="Onboarding · 1 · Welcome" width={402} height={874}>
+                <Onboarding dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="onb-2" label="Onboarding · 2 · Talk it over" width={402} height={874}>
+                <OnboardingTalk dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="onb-3" label="Onboarding · 3 · Together" width={402} height={874}>
+                <OnboardingShare dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="sign-up" label="Sign up" width={402} height={874}>
+                <SignUp dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="email-verify" label="Email verify · OTP" width={402} height={874}>
+                <EmailVerify dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="forgot-password" label="Forgot password · email" width={402} height={874}>
+                <ForgotPassword dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="reset-link-sent" label="Reset link sent · check email" width={402} height={874}>
+                <ResetLinkSent dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="reset-password" label="Reset password · new password" width={402} height={874}>
+                <ResetPassword dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="reset-done" label="Reset done · signed in" width={402} height={874}>
+                <PasswordResetDone dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="sign-in" label="Sign in" width={402} height={874}>
+                <SignIn dark={dark} />
+              </DCArtboard>
+            </DCSection>
+          </DesignCanvas>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection title="Theme">
+              <TweakRadio
+                label="Mode"
+                value={t.mode}
+                onChange={v => setTweak('mode', v)}
+                options={[
+                  { value: 'light', label: 'Light' },
+                  { value: 'dark', label: 'Dark' },
+                ]}
+              />
+              <TweakColor
+                label="App color"
+                value={t.themeColor}
+                onChange={v => setTweak('themeColor', v)}
+                options={['#3eb38b', '#7dd8b8', '#1c2f45', '#8fb8e8', '#e6b85c', '#15201e']}
+              />
+              <TweakColor
+                label="Canvas"
+                value={t.canvasColor}
+                onChange={v => setTweak('canvasColor', v)}
+                options={['#fbfcfb', '#ffffff', '#f4f7f5', '#f8f4ec', '#f2f5f3', '#eef2ee']}
+              />
+            </TweakSection>
+            <TweakSection title="Tier simulation" subtitle="Affects Chat input bar + Settings tier pill.">
+              <TweakRadio
+                label="Plan"
+                value={t.tier}
+                onChange={v => setTweak('tier', v)}
+                options={[
+                  { value: 'free', label: 'Free' },
+                  { value: 'lite', label: 'Lite' },
+                  { value: 'pro', label: 'Pro' },
+                ]}
+              />
+            </TweakSection>
+          </TweaksPanel>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

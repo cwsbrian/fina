@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=1440" />
+<title>Fina — Web app</title>
+
+<link rel="stylesheet" href="system/colors_and_type.css" />
+<link rel="stylesheet" href="styles/fina-web.css" />
+
+<style>
+  /* Tiny tweaks specific to this prototype host */
+  body { background: var(--color-canvas); min-height: 100vh; }
+  #root { min-height: 100vh; }
+</style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<!-- React + Babel (pinned, integrity-hashed) -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+
+<!-- Tweaks panel (shared) -->
+<script type="text/babel" src="tweaks-panel.jsx"></script>
+
+<script type="text/babel">
+  // Tweak defaults — persist to disk via host EDITMODE protocol.
+  window.WEB_TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+    "themeColor": "#3eb38b",
+    "canvasColor": "#fbfcfb"
+  }/*EDITMODE-END*/;
+</script>
+
+<!-- Web app components — order matters: icons + modals first, then pages, then shell, then app -->
+<script type="text/babel" src="web/web-icons.jsx"></script>
+<script type="text/babel" src="web/modals.jsx"></script>
+<script type="text/babel" src="web/auth-pages.jsx"></script>
+<script type="text/babel" src="web/app-pages.jsx"></script>
+<script type="text/babel" src="web/settings-pages.jsx"></script>
+<script type="text/babel" src="web/billing-page.jsx"></script>
+<script type="text/babel" src="web/shell.jsx"></script>
+<script type="text/babel" src="web/app.jsx"></script>
+
+</body>
+</html>

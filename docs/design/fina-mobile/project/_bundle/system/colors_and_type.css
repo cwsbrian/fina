@@ -1,0 +1,141 @@
+/* ============================================================
+   Fina Design System — Foundations
+   ------------------------------------------------------------
+   Tokens for color, type, spacing, radius, and elevation.
+   Reference these — never inline hex values.
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  /* ---------- COLORS · brand & accent ---------- */
+  --color-primary: #3eb38b;            /* Deeper Fina mint — readable w/ white text */
+  --color-primary-active: #2e9577;     /* Pressed primary */
+  --color-primary-disabled: #b8e0cd;   /* Disabled primary */
+  --color-mint: #7dd8b8;               /* Bright mint — accent fills, illustration */
+  --color-navy: #1c2f45;               /* Deep navy — secondary trust signal */
+  --color-soft-blue: #8fb8e8;          /* AI / chat / technology tint */
+  --color-accent-yellow: #e6b85c;      /* Warm gold — coin/money hint, sparingly */
+
+  /* ---------- COLORS · surface ---------- */
+  --color-canvas: #fbfcfb;             /* Near-white w/ a hint of mint warmth */
+  --color-surface-soft: #f3f5f3;
+  --color-surface-strong: #e7ebe7;
+  --color-surface-dark: #15201e;       /* Green-charcoal ink */
+  --color-surface-dark-elevated: #1f2c2a;
+
+  /* ---------- COLORS · hairlines ---------- */
+  --color-hairline: #dfe4df;
+  --color-hairline-soft: #ecefec;
+
+  /* ---------- COLORS · text ---------- */
+  --color-ink: #15201e;
+  --color-body: #4f5853;
+  --color-body-strong: #15201e;
+  --color-muted: #6f7a76;
+  --color-muted-soft: #a0a9a4;
+  --color-on-primary: #ffffff;         /* White text on deeper mint */
+  --color-on-dark: #ffffff;
+  --color-on-dark-soft: #a8b0aa;
+
+  /* ---------- COLORS · trading semantics ---------- */
+  --color-up: #1f8a5b;     /* Text only — never a background fill */
+  --color-down: #cf202f;   /* Text only — never a background fill */
+
+  /* ---------- TYPE · families ---------- */
+  /* CoinbaseDisplay/Sans are licensed Fina typefaces; Inter substitutes here.
+     Numbers no longer use a mono face — we use Inter with tabular + lining
+     figures (the Mercury / Robinhood / modern-Coinbase approach). The legacy
+     --font-mono token is kept as an alias so existing call-sites keep working;
+     numerics render in Inter, with tabular-nums inherited from html. */
+  --font-display: "Inter", -apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-sans:    "Inter", -apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono:    "Inter", -apple-system, system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+
+  /* ---------- TYPE · scale (size / weight / line / track) ---------- */
+  --type-display-mega: 80px / 1.0 var(--font-display); /* tracking -2px   */
+  --type-display-xl:   64px / 1.0 var(--font-display); /* tracking -1.6px */
+  --type-display-lg:   52px / 1.0 var(--font-display); /* tracking -1.3px */
+  --type-display-md:   44px / 1.09 var(--font-display);
+  --type-display-sm:   36px / 1.11 var(--font-sans);
+  --type-title-lg:     32px / 1.13 var(--font-sans);
+  --type-title-md:     18px / 1.33 var(--font-sans);
+  --type-title-sm:     16px / 1.25 var(--font-sans);
+  --type-body-md:      16px / 1.5 var(--font-sans);
+  --type-body-sm:      14px / 1.5 var(--font-sans);
+  --type-caption:      13px / 1.5 var(--font-sans);
+  --type-caption-strong: 12px / 1.5 var(--font-sans);
+  --type-button:       16px / 1.15 var(--font-sans);
+  --type-nav-link:     14px / 1.4 var(--font-sans);
+  --type-number:       18px / 1.4 var(--font-sans);
+
+  /* ---------- SPACING · 4px base ---------- */
+  --space-xxs: 4px;
+  --space-xs: 8px;
+  --space-sm: 12px;
+  --space-base: 16px;
+  --space-md: 20px;
+  --space-lg: 24px;
+  --space-xl: 32px;
+  --space-xxl: 48px;
+  --space-section: 96px;
+
+  /* ---------- RADII ---------- */
+  --radius-none: 0;
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 100px;
+  --radius-full: 9999px;
+
+  /* ---------- ELEVATION (single tier) ---------- */
+  --shadow-soft: 0 4px 12px rgba(0, 0, 0, 0.04);
+
+  /* ---------- LAYOUT ---------- */
+  --container-max: 1200px;
+  --nav-height: 64px;
+}
+
+/* ============================================================
+   Semantic primitives
+   Keep markup simple — these classes apply the tokens above.
+   ============================================================ */
+
+html, body {
+  margin: 0;
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font: var(--type-body-md);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Inter ss01 → single-storey a; cv11 → straight-sided digits.
+     tnum + lnum keep amounts column-aligned without needing a mono face. */
+  font-feature-settings: "tnum" 1, "lnum" 1, "ss01" 1, "cv11" 1;
+}
+
+/* Display headlines — weight 400, negative tracking on display only */
+h1, .h1 { font: var(--type-display-mega); font-weight: 400; letter-spacing: -2px; color: var(--color-ink); margin: 0; }
+h2, .h2 { font: var(--type-display-lg);   font-weight: 400; letter-spacing: -1.3px; color: var(--color-ink); margin: 0; }
+h3, .h3 { font: var(--type-display-md);   font-weight: 400; letter-spacing: -1px; color: var(--color-ink); margin: 0; }
+h4, .h4 { font: var(--type-display-sm);   font-weight: 400; letter-spacing: -0.5px; color: var(--color-ink); margin: 0; }
+h5, .h5 { font: var(--type-title-lg);     font-weight: 400; letter-spacing: -0.4px; color: var(--color-ink); margin: 0; }
+h6, .h6 { font: var(--type-title-md);     font-weight: 600; color: var(--color-ink); margin: 0; }
+
+p   { font: var(--type-body-md); color: var(--color-body); margin: 0; }
+small, .caption { font: var(--type-caption); color: var(--color-muted); }
+.body-sm   { font: var(--type-body-sm); color: var(--color-body); }
+.body-strong { font: var(--type-body-md); font-weight: 700; color: var(--color-body-strong); }
+.muted     { color: var(--color-muted); }
+.num       { font: var(--type-number); font-weight: 500; font-variant-numeric: tabular-nums lining-nums; letter-spacing: -0.01em; }
+.up        { color: var(--color-up); }
+.down      { color: var(--color-down); }
+
+a { color: var(--color-primary); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* Dark surface helpers */
+.surface-dark { background: var(--color-surface-dark); color: var(--color-on-dark); }
+.surface-dark h1, .surface-dark h2, .surface-dark h3, .surface-dark h4, .surface-dark h5, .surface-dark h6 { color: var(--color-on-dark); }
+.surface-dark p { color: var(--color-on-dark-soft); }

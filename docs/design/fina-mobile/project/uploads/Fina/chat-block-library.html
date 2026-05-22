@@ -1,0 +1,466 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fina Mobile — Chat block library</title>
+
+<link rel="stylesheet" href="system/colors_and_type.css" />
+<link rel="stylesheet" href="styles/fina-mobile.css" />
+
+<style>
+  html, body { margin: 0; background: #f0eee9; height: 100%; }
+  body { font-family: var(--font-sans); }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="ios-frame.jsx"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel" src="components/icons.jsx"></script>
+  <script type="text/babel" src="components/shell.jsx"></script>
+  <script type="text/babel" src="components/chat-blocks.jsx"></script>
+  <script type="text/babel" src="components/screens.jsx"></script>
+  <script type="text/babel" src="components/home-analysis.jsx"></script>
+
+  <script type="text/babel">
+    // ──────────────────────────────────────────────────────────
+    // LibThread — a tiny chat-context wrapper that frames one block
+    // with a setup AI line, the block itself, and optional follow-up
+    // quick replies. Mimics the real chat thread chrome.
+    // ──────────────────────────────────────────────────────────
+    const LibThread = ({ dark, when = 'Today · 8:14 AM', setup, block, replies, followup }) => (
+      <Phone dark={dark}>
+        <div className="fm-content" style={{ paddingBottom: 180, paddingTop: 8 }}>
+          <div className="fm-chat-list" style={{ paddingTop: 24 }}>
+            <div className="fm-chat-day">{when}</div>
+            {setup && <Bubble role="ai">{setup}</Bubble>}
+            {block}
+            {followup && <Bubble role="ai" tag={false}>{followup}</Bubble>}
+            {replies && <QuickReplies options={replies} />}
+          </div>
+        </div>
+        <InputBar />
+        <TabBar active="chat" />
+      </Phone>
+    );
+
+    function App() {
+      const dark = false;
+      const AB_W = 402, AB_H = 874;
+
+      return (
+        <>
+          <DesignCanvas>
+
+            {/* =================================================
+                1. CORE — message bubbles + bare text/markdown
+                ================================================= */}
+            <DCSection
+              id="core"
+              title="Core — bubbles & text"
+              subtitle="The two bubble roles (AI · user) and how markdown text reads inside one. Foundation for everything else."
+            >
+              <DCArtboard id="bubble-ai" label="AI bubble · markdown text" width={AB_W} height={AB_H}>
+                <Phone dark={dark}>
+                  <div className="fm-content" style={{ paddingBottom: 180, paddingTop: 8 }}>
+                    <div className="fm-chat-list" style={{ paddingTop: 24 }}>
+                      <div className="fm-chat-day">Today · 8:00 AM</div>
+                      <Bubble role="ai">
+                        Quick scan of yesterday — <strong>$127.40 across 6 transactions</strong>. Three things stood out:
+                        <ul style={{ margin: '8px 0 0 18px', padding: 0 }}>
+                          <li>Loblaws was 3× your usual — worth a glance.</li>
+                          <li>Netflix charged again, same week as last month.</li>
+                          <li>Costco run looks mixed — groceries + wine + fuel.</li>
+                        </ul>
+                      </Bubble>
+                    </div>
+                  </div>
+                  <InputBar />
+                  <TabBar active="chat" />
+                </Phone>
+              </DCArtboard>
+
+              <DCArtboard id="bubble-user" label="User bubble · question" width={AB_W} height={AB_H}>
+                <Phone dark={dark}>
+                  <div className="fm-content" style={{ paddingBottom: 180, paddingTop: 8 }}>
+                    <div className="fm-chat-list" style={{ paddingTop: 24 }}>
+                      <div className="fm-chat-day">Today · 7:42 PM</div>
+                      <div className="fm-msg user">
+                        <div className="fm-bubble">Can we afford Japan in November?</div>
+                      </div>
+                      <Bubble role="ai">
+                        Almost — you'd be <strong>$420 short</strong> at the current pace.
+                      </Bubble>
+                    </div>
+                  </div>
+                  <InputBar />
+                  <TabBar active="chat" />
+                </Phone>
+              </DCArtboard>
+            </DCSection>
+
+            {/* =================================================
+                2. CATEGORIZE — 4 variants of the daily ritual card
+                ================================================= */}
+            <DCSection
+              id="categorize"
+              title="Categorize card — 4 layouts"
+              subtitle="The single most-used block. Same data, four layouts for different chat moments: default (the standard), compact (rapid-fire), split (suggestion emphasized), confirmed (after tap)."
+            >
+              <DCArtboard id="cat-default" label="categorize · default" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:14 AM"
+                  setup={<>I caught <strong>3 transactions</strong> from yesterday that don't have categories yet. Let's clear them in a minute.</>}
+                  block={<CategorizeCard
+                    merchant="Blue Bottle Coffee"
+                    amount="−$8.40"
+                    when="Yesterday · 10:24 AM"
+                    suggestion="Coffee & dining"
+                    glyph="coffee"
+                  />}
+                  replies={['Skip all', 'Confirm all 3']}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="cat-compact" label="categorize · compact" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:14 AM"
+                  setup={<>Quick one — same merchant as last week.</>}
+                  block={<CategorizeCard
+                    merchant="Whole Foods"
+                    amount="−$23.10"
+                    when="Yesterday · 6:08 PM"
+                    suggestion="Groceries"
+                    layout="compact"
+                  />}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="cat-split" label="categorize · split" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:14 AM"
+                  setup={<>This one's worth a second look — Costco runs are often mixed.</>}
+                  block={<CategorizeCard
+                    merchant="Costco Wholesale"
+                    amount="−$87.43"
+                    when="Yesterday · 9:01 PM"
+                    suggestion="Groceries"
+                    layout="split"
+                  />}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="cat-confirmed" label="categorize · confirmed" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:14 AM"
+                  setup={<>Locked in. Nice.</>}
+                  block={<CategorizeCard
+                    merchant="Tim Hortons"
+                    amount="−$6.50"
+                    when="Yesterday · 10:11 AM"
+                    category="Coffee & dining"
+                    glyph="coffee"
+                    confirmed
+                  />}
+                  followup={<>2 more to go.</>}
+                />
+              </DCArtboard>
+            </DCSection>
+
+            {/* =================================================
+                3. CONFIRM + ALERT — yes/no decisions
+                ================================================= */}
+            <DCSection
+              id="confirm"
+              title="Confirm + alert — yes / no decisions"
+              subtitle="Two patterns for bringing a question to the user: bulk confirmation (apply N changes) and anomaly alert (worth a second glance)."
+            >
+              <DCArtboard id="confirm-bulk" label="confirm_card · bulk action" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 11:08 AM"
+                  setup={<>I noticed your last 23 Walmart trips are filed under <em>Shopping</em>, but most of the cart is groceries. Want me to re-file them?</>}
+                  block={<ConfirmCard
+                    question={<>Move <strong>23 Walmart transactions</strong> from Shopping to Groceries? They sum to <strong>$1,847</strong>.</>}
+                    acceptLabel="Yes, re-file"
+                    rejectLabel="Leave it"
+                  />}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="anomaly" label="anomaly_alert · 3× usual" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:00 AM"
+                  setup={<>One thing from yesterday that's worth a beat.</>}
+                  block={<AnomalyAlertBlock
+                    merchant="Loblaws"
+                    when="Yesterday · 6:42 PM"
+                    amount="−$342.18"
+                    usual="$94.50"
+                    multiple="3.6× higher"
+                  />}
+                />
+              </DCArtboard>
+            </DCSection>
+
+            {/* =================================================
+                4. FORMS — collect/edit data inline
+                ================================================= */}
+            <DCSection
+              id="forms"
+              title="Forms — collect & edit inline"
+              subtitle="Mini-forms Fina embeds when the conversation calls for structured input. Defaults filled by AI — user mostly just confirms."
+            >
+              <DCArtboard id="schedule-active" label="schedule_form · proposed" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:14 AM"
+                  setup={<>Your rent to <strong>Acme Properties</strong> is due in <strong>3 weeks</strong>. Same amount as the last 6 months. Want me to put it on the schedule?</>}
+                  block={<ScheduleFormBlock
+                    title="Schedule June rent?"
+                    sub="Acme Properties · paid on the 1st for 6 months straight."
+                    when="Jun 1 · Sunday"
+                    amount="$1,800.00"
+                    category="Housing"
+                    account="BMO Chequing"
+                  />}
+                  replies={['Yes, every month', 'Just this once', 'Different amount']}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="schedule-done" label="schedule_form · done state" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:14 AM"
+                  setup={<>Got it.</>}
+                  block={<ScheduleFormBlock
+                    when="Jun 1 · Sunday"
+                    amount="$1,800.00"
+                    category="Housing"
+                    done
+                  />}
+                  followup={<>I'll ping you on the 30th.</>}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="budget-edit" label="budget_edit · over budget" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:00 AM"
+                  setup={<>You went <strong>$62 over</strong> on Coffee &amp; dining this month — same the month before. The budget might be unrealistic.</>}
+                  block={<BudgetEditBlock
+                    category="Coffee & dining"
+                    current="$250"
+                    spent="$312"
+                    newAmount="320"
+                    overBy="25%"
+                  />}
+                  followup={<>Or — if you want to <em>actually</em> cut back, I can flag every coffee over $5 for you.</>}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="recurring" label="recurring_detected · 4 charges" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 9:14 AM"
+                  setup={<>Saw something with a rhythm.</>}
+                  block={<RecurringDetectedBlock
+                    merchant="Netflix"
+                    amount="$22.99"
+                    cadence="Monthly · 12th"
+                    nextDate="Jun 12"
+                    history={['Feb 12', 'Mar 12', 'Apr 12', 'May 12']}
+                  />}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="rename" label="merchant_rename · clean up Plaid" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 10:02 AM"
+                  setup={<>Plaid sends some pretty ugly names. Let me clean one up — your call.</>}
+                  block={<MerchantRenameBlock
+                    raw="AMZN MKTPL*S94X81"
+                    proposed="Amazon"
+                    affected={14}
+                  />}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="split" label="split_transaction · 3-way" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 8:14 AM"
+                  setup={<>This Costco run looks mixed — there's wine and fuel in the line items.</>}
+                  block={<SplitTransactionBlock
+                    merchant="Costco Wholesale"
+                    amount="$237.84"
+                  />}
+                />
+              </DCArtboard>
+            </DCSection>
+
+            {/* =================================================
+                5. STATS & CARDS — read-only summaries
+                ================================================= */}
+            <DCSection
+              id="cards"
+              title="Stats & cards — read-only summaries"
+              subtitle="Quiet cards Fina drops in. No required action — they're status updates the user can scroll past, save, or follow up on."
+            >
+              <DCArtboard id="plan" label="plan_card · savings goal" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 7:42 PM"
+                  setup={<>Almost — you'd be <strong>$420 short</strong> at the current pace. Trim <strong>$80/mo</strong> on dining and you're there by <strong>Nov 12</strong>.</>}
+                  block={<PlanCard
+                    title="Japan trip · plan"
+                    meta="Target $2,400 · 6 months"
+                    status="On track"
+                    progress={62}
+                    saved="$1,488 saved"
+                  />}
+                  replies={['Set the cap', 'Show me where I overspend', 'Not yet']}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="safe" label="safe_to_spend · weekly runway" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Sunday · 8:00 PM"
+                  setup={<>New week. Here's what's actually yours.</>}
+                  block={<SafeToSpendBlock
+                    amount="$284"
+                    period="free until next Sunday"
+                    billsAmount="$910"
+                    savedAmount="$330"
+                    freeAmount="$284"
+                  />}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="recap" label="weekly_recap · Sunday digest" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Sunday · 9:00 PM"
+                  setup={<>Quick recap from the week.</>}
+                  block={<WeeklyRecapBlock />}
+                />
+              </DCArtboard>
+
+              <DCArtboard id="audit" label="subscription_audit · 3 found" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 11:14 AM"
+                  setup={<>Ran a quick check on what's been auto-billing you.</>}
+                  block={<SubscriptionAuditBlock />}
+                />
+              </DCArtboard>
+            </DCSection>
+
+            {/* =================================================
+                6. INCOME — payday moment, distinct visual posture
+                ================================================= */}
+            <DCSection
+              id="income"
+              title="Income — payday moment"
+              subtitle="Distinct enough from expenses to deserve its own posture: green hero, 4-up allocation grid. The only block where the action is splitting one number, not categorizing many."
+            >
+              <DCArtboard id="payday" label="income_detected · payroll hit" width={AB_W} height={AB_H}>
+                <LibThread
+                  dark={dark}
+                  when="Today · 9:02 AM"
+                  setup={<>Good morning — money landed.</>}
+                  block={<IncomeDetectedBlock
+                    source="Acme Co. payroll"
+                    when="Today · 9:02 AM"
+                    amount="+$2,840.00"
+                    account="BMO Chequing"
+                  />}
+                />
+              </DCArtboard>
+            </DCSection>
+
+            {/* =================================================
+                7. INPUT BAR + QUICK REPLIES — the conversational chrome
+                ================================================= */}
+            <DCSection
+              id="input"
+              title="Conversation chrome — input bar & quick replies"
+              subtitle="What lives below the scroll and at the bottom of each AI message. Tier-gated lock state for Free / Lite, free-form for Pro."
+            >
+              <DCArtboard id="quick-replies" label="quick_replies · choice chips" width={AB_W} height={AB_H}>
+                <Phone dark={dark}>
+                  <div className="fm-content" style={{ paddingBottom: 180, paddingTop: 8 }}>
+                    <div className="fm-chat-list" style={{ paddingTop: 24 }}>
+                      <div className="fm-chat-day">Today · 8:00 AM</div>
+                      <Bubble role="ai">
+                        Anything you want me to look into this week?
+                      </Bubble>
+                      <QuickReplies options={[
+                        'How am I doing on Coffee?',
+                        'Show me my biggest categories',
+                        'Why is rent showing twice?',
+                        'Nothing, just check in tomorrow',
+                      ]} />
+                    </div>
+                  </div>
+                  <InputBar />
+                  <TabBar active="chat" />
+                </Phone>
+              </DCArtboard>
+
+              <DCArtboard id="input-locked-free" label="input_bar · locked (Free)" width={AB_W} height={AB_H}>
+                <Phone dark={dark}>
+                  <div className="fm-content" style={{ paddingBottom: 180, paddingTop: 8 }}>
+                    <div className="fm-chat-list" style={{ paddingTop: 24 }}>
+                      <div className="fm-chat-day">Today · 8:14 AM</div>
+                      <Bubble role="ai">
+                        You're on the free plan, so I can still send the morning brief — but free-form chat is a Lite/Pro feature.
+                      </Bubble>
+                    </div>
+                  </div>
+                  <InputBar locked lockMessage="Upgrade to chat with Fina" />
+                  <TabBar active="chat" />
+                </Phone>
+              </DCArtboard>
+
+              <DCArtboard id="input-active-pro" label="input_bar · active (Pro)" width={AB_W} height={AB_H}>
+                <Phone dark={dark}>
+                  <div className="fm-content" style={{ paddingBottom: 180, paddingTop: 8 }}>
+                    <div className="fm-chat-list" style={{ paddingTop: 24 }}>
+                      <div className="fm-chat-day">Today · 8:14 AM</div>
+                      <Bubble role="ai">
+                        Ask me anything.
+                      </Bubble>
+                    </div>
+                  </div>
+                  <InputBar value="How much did I spend on coffee this month?" />
+                  <TabBar active="chat" />
+                </Phone>
+              </DCArtboard>
+            </DCSection>
+
+          </DesignCanvas>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

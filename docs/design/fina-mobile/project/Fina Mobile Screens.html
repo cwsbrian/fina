@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fina Mobile — Screens</title>
+
+<link rel="stylesheet" href="system/colors_and_type.css" />
+<link rel="stylesheet" href="styles/fina-mobile.css" />
+
+<style>
+  html, body { margin: 0; background: #f0eee9; height: 100%; }
+  body { font-family: var(--font-sans); }
+</style>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" src="ios-frame.jsx"></script>
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+
+  <script type="text/babel" src="components/icons.jsx"></script>
+  <script type="text/babel" src="components/shell.jsx"></script>
+  <script type="text/babel" src="components/chat-blocks.jsx"></script>
+  <script type="text/babel" src="components/screens.jsx"></script>
+  <script type="text/babel" src="components/home-analysis.jsx"></script>
+  <script type="text/babel" src="components/schedules.jsx"></script>
+
+  <script type="text/babel">
+    const TWEAK_DEFAULTS = /*EDITMODE-BEGIN*/{
+      "mode": "light",
+      "tier": "pro"
+    }/*EDITMODE-END*/;
+
+    function App() {
+      const [t, setTweak] = useTweaks(TWEAK_DEFAULTS);
+      const dark = t.mode === 'dark';
+      const tier = t.tier;
+
+      const AB_W = 402;
+      const AB_H = 874;
+
+      return (
+        <>
+          <DesignCanvas>
+
+            {/* ─────────────────────────────────────────────────────────
+                ENTRY · auth + onboarding
+                ───────────────────────────────────────────────────────── */}
+            <DCSection
+              id="entry"
+              title="Entry · auth + onboarding"
+              subtitle="First-run flow plus the three auth screens. Forgot-password is a sub-flow under Sign in."
+            >
+              <DCArtboard id="splash" label="Splash" width={AB_W} height={AB_H}>
+                <Splash dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="onboarding" label="Onboarding (slide 1 of 3)" width={AB_W} height={AB_H}>
+                <Onboarding dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="onboarding-talk" label="Onboarding (slide 2 of 3)" width={AB_W} height={AB_H}>
+                <OnboardingTalk dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="onboarding-share" label="Onboarding (slide 3 of 3)" width={AB_W} height={AB_H}>
+                <OnboardingShare dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="sign-up" label="Sign up" width={AB_W} height={AB_H}>
+                <SignUp dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="sign-in" label="Sign in" width={AB_W} height={AB_H}>
+                <SignIn dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="email-verify" label="Email verify · OTP" width={AB_W} height={AB_H}>
+                <EmailVerify dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="forgot-password" label="Forgot password" width={AB_W} height={AB_H}>
+                <ForgotPassword dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="reset-link-sent" label="Reset link sent" width={AB_W} height={AB_H}>
+                <ResetLinkSent dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="reset-password" label="Reset password · new password" width={AB_W} height={AB_H}>
+                <ResetPassword dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="reset-done" label="Password reset · done" width={AB_W} height={AB_H}>
+                <PasswordResetDone dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            {/* ─────────────────────────────────────────────────────────
+                TABS · the five bottom-nav landing screens
+                ───────────────────────────────────────────────────────── */}
+            <DCSection
+              id="tabs"
+              title="Tabs · five bottom-nav landings"
+              subtitle="Home · Activity · Chat (center FAB) · Goals · Analysis. More lives in Home header ⋯."
+            >
+              <DCArtboard id="tab-home" label="Home" width={AB_W} height={AB_H}>
+                <Home dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="tab-activity" label="Activity" width={AB_W} height={AB_H}>
+                <TransactionsListSplit dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tab-chat" label="Chat · morning brief (main)" width={AB_W} height={AB_H}>
+                <ChatMorningHero dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="chat-history" label="Chat history (drill-in from clock)" width={AB_W} height={AB_H}>
+                <ChatThreadList dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="tab-goals" label="Goals" width={AB_W} height={AB_H}>
+                <GoalsList dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tab-analysis" label="Analysis" width={AB_W} height={AB_H}>
+                <Analysis dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            {/* ─────────────────────────────────────────────────────────
+                DRILL-INS · screens reached from the tabs
+                ───────────────────────────────────────────────────────── */}
+            <DCSection
+              id="drill-ins"
+              title="Drill-ins · screens reached from the tabs"
+              subtitle="One canonical representative per screen. State variants live in the main Designs file."
+            >
+              <DCArtboard id="tx-detail" label="Transaction detail" width={AB_W} height={AB_H}>
+                <TransactionDetailSplit dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="account-detail" label="Account detail" width={AB_W} height={AB_H}>
+                <AccountDetail dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="banks" label="Banks · list" width={AB_W} height={AB_H}>
+                <Banks dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="goal-detail" label="Goal detail" width={AB_W} height={AB_H}>
+                <GoalDetail dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="goal-create" label="Goal · new" width={AB_W} height={AB_H}>
+                <GoalCreate dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="more" label="More" width={AB_W} height={AB_H}>
+                <Settings dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="profile-edit" label="Profile · edit" width={AB_W} height={AB_H}>
+                <ProfileEdit dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="workspace-settings" label="Workspace · settings" width={AB_W} height={AB_H}>
+                <WorkspaceSettings dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="subscription" label="Subscription" width={AB_W} height={AB_H}>
+                <SubscriptionManage dark={dark} state="trial-active" />
+              </DCArtboard>
+              <DCArtboard id="morning-brief-settings" label="Morning brief · settings" width={AB_W} height={AB_H}>
+                <MorningBriefSettings dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="notification-settings" label="Notification settings" width={AB_W} height={AB_H}>
+                <NotificationSettings dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="delete-account" label="Delete account" width={AB_W} height={AB_H}>
+                <DeleteAccount dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="analysis-category" label="Analysis · category history" width={AB_W} height={AB_H}>
+                <AnalysisCategory dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="anomaly-detail" label="Anomaly detail" width={AB_W} height={AB_H}>
+                <AnomalyDetail dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="goals-locked" label="Goals · locked (Free / Lite)" width={AB_W} height={AB_H}>
+                <GoalsLocked dark={dark} tier="lite" />
+              </DCArtboard>
+              <DCArtboard id="schedule" label="Schedule" width={AB_W} height={AB_H}>
+                <ScheduleScreen dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="subscriptions" label="Subscriptions" width={AB_W} height={AB_H}>
+                <SubscriptionsScreen dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            {/* ─────────────────────────────────────────────────────────
+                EMPTY STATES · first-run, zero-data
+                ───────────────────────────────────────────────────────── */}
+            <DCSection
+              id="empty-states"
+              title="Empty states · first-run"
+              subtitle="What each tab looks like before there's any data — one per main surface."
+            >
+              <DCArtboard id="home-empty" label="Home · first-run checklist" width={AB_W} height={AB_H}>
+                <HomeEmpty dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="tx-empty" label="Activity · zero transactions" width={AB_W} height={AB_H}>
+                <TransactionsEmpty dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="banks-empty" label="Banks · no connection" width={AB_W} height={AB_H}>
+                <BanksEmpty dark={dark} tier={tier} />
+              </DCArtboard>
+              <DCArtboard id="chats-empty" label="Chats · before first ritual" width={AB_W} height={AB_H}>
+                <ChatsEmpty dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="analysis-empty" label="Analysis · not enough data" width={AB_W} height={AB_H}>
+                <AnalysisEmpty dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            {/* ─────────────────────────────────────────────────────────
+                SHEETS · bottom sheets + modals
+                ───────────────────────────────────────────────────────── */}
+            <DCSection
+              id="sheets"
+              title="Sheets · bottom sheets + modals"
+              subtitle="Overlay surfaces that sit on top of an existing screen."
+            >
+              <DCArtboard id="add-tx" label="Add transaction" width={AB_W} height={AB_H}>
+                <AddTransaction dark={dark} mode="amount" kind="expense" amount="24" cents="00" />
+              </DCArtboard>
+              <DCArtboard id="cat-picker" label="Category picker" width={AB_W} height={AB_H}>
+                <CategoryPicker dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="split-editor" label="Split transaction · editor" width={AB_W} height={AB_H}>
+                <SplitEditor dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="date-range" label="Date range" width={AB_W} height={AB_H}>
+                <DateRangePicker dark={dark} mode="preset" />
+              </DCArtboard>
+              <DCArtboard id="ws-switcher" label="Workspace · switcher" width={AB_W} height={AB_H}>
+                <WorkspaceSwitcher dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="member-invite" label="Workspace · invite" width={AB_W} height={AB_H}>
+                <MemberInvite dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="bank-reconnect" label="Bank · reconnect" width={AB_W} height={AB_H}>
+                <BankReconnect dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="data-export" label="Data export" width={AB_W} height={AB_H}>
+                <DataExportSheet dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="upgrade-prompt" label="Upgrade prompt" width={AB_W} height={AB_H}>
+                <UpgradePrompt dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="sign-out" label="Sign out · confirm" width={AB_W} height={AB_H}>
+                <SignOutConfirm dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="push-permission" label="Push permission · pre-prompt" width={AB_W} height={AB_H}>
+                <PushPermissionPrompt dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="trial-lock" label="Trial expired · lock modal" width={AB_W} height={AB_H}>
+                <TrialExpiredLock dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            {/* ─────────────────────────────────────────────────────────
+                FLOWS · multi-step sequences
+                ───────────────────────────────────────────────────────── */}
+            <DCSection
+              id="flows"
+              title="Flows · multi-step sequences"
+              subtitle="Receipt OCR · capture → process → confirm → saved."
+            >
+              <DCArtboard id="receipt-capture" label="Receipt · capture" width={AB_W} height={AB_H}>
+                <ReceiptCapture dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="receipt-processing" label="Receipt · processing" width={AB_W} height={AB_H}>
+                <ReceiptProcessing dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="receipt-parsed" label="Receipt · confirm" width={AB_W} height={AB_H}>
+                <ReceiptParsed dark={dark} />
+              </DCArtboard>
+              <DCArtboard id="receipt-saved" label="Receipt · saved" width={AB_W} height={AB_H}>
+                <ReceiptSaved dark={dark} />
+              </DCArtboard>
+            </DCSection>
+
+            {/* ─────────────────────────────────────────────────────────
+                SYSTEM · outside the app
+                ───────────────────────────────────────────────────────── */}
+            <DCSection
+              id="system"
+              title="System · outside the app"
+              subtitle="Lock-screen push notifications."
+            >
+              <DCArtboard id="push-lock" label="Push notifications · lock screen" width={AB_W} height={AB_H}>
+                <PushNotificationsLockScreen />
+              </DCArtboard>
+            </DCSection>
+          </DesignCanvas>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection title="Theme">
+              <TweakRadio
+                label="Mode"
+                value={t.mode}
+                onChange={v => setTweak('mode', v)}
+                options={[
+                  { value: 'light', label: 'Light' },
+                  { value: 'dark', label: 'Dark' },
+                ]}
+              />
+            </TweakSection>
+            <TweakSection title="Tier" subtitle="Affects Chat input bar + More tier pill.">
+              <TweakRadio
+                label="Plan"
+                value={t.tier}
+                onChange={v => setTweak('tier', v)}
+                options={[
+                  { value: 'free', label: 'Free' },
+                  { value: 'lite', label: 'Lite' },
+                  { value: 'pro', label: 'Pro' },
+                ]}
+              />
+            </TweakSection>
+          </TweaksPanel>
+        </>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>

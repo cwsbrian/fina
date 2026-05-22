@@ -1,0 +1,413 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Fina — Join the waitlist</title>
+
+<link rel="stylesheet" href="system/colors_and_type.css" />
+
+<style>
+  :root {
+    --lp-bg: var(--color-surface-dark);
+    --lp-paper: var(--color-canvas);
+    --lp-fg: var(--color-on-dark);
+    --lp-muted: var(--color-muted);
+    --lp-muted-soft: rgba(255, 255, 255, 0.45);
+    --lp-line: rgba(255, 255, 255, 0.12);
+    --lp-accent: var(--color-primary);
+    --lp-primary: var(--color-primary);
+  }
+
+  html, body {
+    margin: 0;
+    background: var(--lp-bg);
+    color: var(--lp-fg);
+    font-family: var(--font-sans);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  * { box-sizing: border-box; }
+  button, input { font-family: inherit; }
+
+  /* ─────────────────────────────────────────
+     Page layout — asymmetric split
+     ───────────────────────────────────────── */
+  .lp-page {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  }
+
+  /* LEFT — primary content */
+  .lp-left {
+    padding: 44px 56px 44px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .lp-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-bottom: 44px;
+  }
+  .lp-logo {
+    font-family: var(--font-display);
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: -0.5px;
+    color: var(--lp-fg);
+  }
+  .lp-issue {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font: 11px var(--font-sans);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--lp-muted-soft);
+  }
+  .lp-issue::before {
+    content: '';
+    display: inline-block;
+    width: 24px; height: 1px;
+    background: var(--lp-muted-soft);
+  }
+
+  /* Big editorial headline */
+  .lp-hero {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-width: 720px;
+    padding-bottom: 24px;
+  }
+  .lp-headline {
+    font: 92px/0.98 var(--font-display);
+    font-weight: 500;
+    letter-spacing: -3.6px;
+    color: var(--lp-fg);
+    margin: 0 0 32px;
+    text-wrap: balance;
+  }
+  .lp-headline .em {
+    font-style: italic;
+    color: var(--lp-accent);
+    font-weight: 500;
+  }
+  .lp-headline .line {
+    display: block;
+  }
+  .lp-sub {
+    font: 18px/1.55 var(--font-sans);
+    color: var(--lp-muted);
+    margin: 0 0 44px;
+    max-width: 30em;
+    text-wrap: pretty;
+  }
+
+  /* Form */
+  .lp-form {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    max-width: 520px;
+    border-bottom: 1px solid var(--lp-fg);
+    padding-bottom: 6px;
+  }
+  .lp-form input {
+    flex: 1;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--lp-fg);
+    font: 22px var(--font-sans);
+    font-weight: 400;
+    padding: 14px 0;
+    letter-spacing: -0.3px;
+  }
+  .lp-form input::placeholder {
+    color: var(--lp-muted-soft);
+  }
+  .lp-form button {
+    flex-shrink: 0;
+    padding: 0 4px 0 24px;
+    background: transparent;
+    border: 0;
+    color: var(--lp-fg);
+    font: 14px var(--font-sans);
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    transition: color .14s;
+  }
+  .lp-form button:hover { color: var(--lp-accent); }
+  .lp-form button svg { transition: transform .14s; }
+  .lp-form button:hover svg { transform: translateX(3px); }
+
+  .lp-form-meta {
+    margin-top: 18px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    font: 13px var(--font-sans);
+    color: var(--lp-muted);
+  }
+  .lp-form-meta-count {
+    font-weight: 600;
+    color: var(--lp-fg);
+    font-variant-numeric: tabular-nums lining-nums;
+  }
+  .lp-form-meta-sep {
+    width: 3px; height: 3px;
+    border-radius: 999px;
+    background: var(--lp-muted-soft);
+  }
+
+  /* Bottom of left column */
+  .lp-foot {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font: 12px var(--font-sans);
+    color: var(--lp-muted-soft);
+    letter-spacing: 0.2px;
+  }
+  .lp-foot a {
+    color: var(--lp-muted-soft);
+    text-decoration: none;
+    margin-left: 22px;
+  }
+  .lp-foot a:hover { color: var(--lp-fg); }
+
+  /* ─────────────────────────────────────────
+     RIGHT — quiet editorial column
+     ───────────────────────────────────────── */
+  .lp-right {
+    background: var(--lp-paper);
+    color: var(--color-ink);
+    padding: 44px 56px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+  }
+  .lp-right-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding-bottom: 44px;
+  }
+  .lp-right-label {
+    font: 11px var(--font-sans);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--color-muted);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .lp-right-label::before {
+    content: '';
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 999px;
+    background: var(--lp-accent);
+  }
+  .lp-right-page {
+    font: 11px var(--font-sans);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--color-muted-soft);
+  }
+
+  /* Right column body — pull-quote / brand statement */
+  .lp-right-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    max-width: 460px;
+  }
+  .lp-pullquote-mark {
+    font: 220px/0.6 var(--font-display);
+    color: var(--lp-accent);
+    font-weight: 500;
+    margin: 0 0 -20px;
+    letter-spacing: -10px;
+    opacity: 0.4;
+  }
+  .lp-pullquote-text {
+    font: 28px/1.32 var(--font-sans);
+    font-weight: 400;
+    color: var(--color-ink);
+    letter-spacing: -0.4px;
+    margin: 0 0 32px;
+    text-wrap: balance;
+  }
+  .lp-pullquote-text strong { font-weight: 600; }
+  .lp-pullquote-attr {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font: 13px var(--font-sans);
+    color: var(--color-muted);
+  }
+  .lp-pullquote-attr-glyph {
+    width: 28px; height: 28px;
+    border-radius: 9px;
+    background: rgba(217,119,67,0.16);
+    color: var(--lp-accent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .lp-pullquote-attr-name {
+    font-weight: 600;
+    color: var(--color-ink);
+  }
+
+  /* Right column bottom — three quiet stats */
+  .lp-right-stats {
+    border-top: 1px solid var(--color-hairline);
+    padding-top: 28px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+  .lp-right-stat .num {
+    font: 36px/1 var(--font-sans);
+    font-weight: 500;
+    letter-spacing: -1.2px;
+    color: var(--color-ink);
+    font-variant-numeric: tabular-nums lining-nums;
+    margin-bottom: 6px;
+  }
+  .lp-right-stat .lbl {
+    font: 11px var(--font-sans);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--color-muted);
+  }
+
+  /* Responsive */
+  @media (max-width: 880px) {
+    .lp-page { grid-template-columns: 1fr; }
+    .lp-left { padding: 28px 24px 36px; }
+    .lp-right { padding: 36px 24px; }
+    .lp-headline { font-size: 52px; letter-spacing: -2px; }
+    .lp-sub { font-size: 16px; }
+    .lp-form input { font-size: 18px; }
+    .lp-pullquote-mark { font-size: 140px; letter-spacing: -6px; }
+    .lp-pullquote-text { font-size: 22px; }
+    .lp-right-stats { padding-top: 20px; }
+    .lp-right-stat .num { font-size: 28px; letter-spacing: -0.8px; }
+  }
+</style>
+
+</head>
+<body>
+
+  <div class="lp-page">
+
+    <!-- LEFT — primary content -->
+    <div class="lp-left">
+      <div class="lp-top">
+        <div class="lp-logo">Fina</div>
+        <div class="lp-issue">2026 · No. 01</div>
+      </div>
+
+      <div class="lp-hero">
+        <h1 class="lp-headline">
+          <span class="line">Every morning,</span>
+          <span class="line"><span class="em">before</span> you</span>
+          <span class="line">open your wallet.</span>
+        </h1>
+
+        <p class="lp-sub">
+          An AI financial copilot for households. We're opening the waitlist in small batches — drop your email and we'll send a seat when the next one lands.
+        </p>
+
+        <form class="lp-form" onsubmit="event.preventDefault(); const b=this.querySelector('button'); b.innerHTML='You're in &nbsp;✓'; b.style.color='var(--lp-accent)';">
+          <input type="email" placeholder="you@email.com" required />
+          <button type="submit">
+            Join
+            <svg width="14" height="10" viewBox="0 0 14 10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1 5h12M9 1l4 4-4 4"/>
+            </svg>
+          </button>
+        </form>
+
+        <div class="lp-form-meta">
+          <span class="lp-form-meta-count">2,847</span>
+          <span>on the list</span>
+          <span class="lp-form-meta-sep"></span>
+          <span>Opening summer 2026</span>
+        </div>
+      </div>
+
+      <div class="lp-foot">
+        <span>© 2026 Fina, Inc.</span>
+        <div>
+          <a href="#">Privacy</a>
+          <a href="#">Terms</a>
+          <a href="mailto:hi@fina.app">Contact</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT — quiet editorial column -->
+    <div class="lp-right">
+      <div class="lp-right-top">
+        <span class="lp-right-label">A morning with Fina</span>
+        <span class="lp-right-page">Sample</span>
+      </div>
+
+      <div class="lp-right-body">
+        <div class="lp-pullquote-mark">"</div>
+        <p class="lp-pullquote-text">
+          Morning, Brian — yesterday came to <strong>$214.83</strong> across 5 transactions. Two need a category. Netflix bills tomorrow.
+        </p>
+        <div class="lp-pullquote-attr">
+          <span class="lp-pullquote-attr-glyph">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 2l1.5 5.5L19 9l-5.5 1.5L12 16l-1.5-5.5L5 9l5.5-1.5L12 2z"/>
+            </svg>
+          </span>
+          <div>
+            <div class="lp-pullquote-attr-name">Fina</div>
+            <div>8:00 AM · Tuesday</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="lp-right-stats">
+        <div class="lp-right-stat">
+          <div class="num">30s</div>
+          <div class="lbl">Daily ritual</div>
+        </div>
+        <div class="lp-right-stat">
+          <div class="num">1 tap</div>
+          <div class="lbl">To categorize</div>
+        </div>
+        <div class="lp-right-stat">
+          <div class="num">$0</div>
+          <div class="lbl">For family</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</body>
+</html>
