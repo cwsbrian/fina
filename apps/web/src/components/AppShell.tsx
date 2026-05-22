@@ -112,9 +112,9 @@ export function AppShell({ children }: { children: ReactNode }) {
             type="button"
             className={styles.brand}
             onClick={() => navigate("/home")}
+            aria-label="Fina home"
           >
-            <span className={styles.brandMark}>F</span>
-            <span className={styles.brandWord}>Fina</span>
+            <img src="/images/logo-dark.png" alt="Fina" className={styles.brandLogo} />
           </button>
 
           <div className={styles.links}>

@@ -17,7 +17,11 @@ export default function Landing() {
   return (
     <main className={styles.page}>
       <div className={styles.top}>
-        <div className={styles.logo}>Fina</div>
+        <img
+          src="/images/logo-dark.png"
+          alt="Fina"
+          className={styles.logo}
+        />
         <div className={styles.topMeta}>Opening summer 2026</div>
       </div>
 
