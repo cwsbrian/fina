@@ -71,12 +71,18 @@ export type MeDTO = {
 ```ts
 import { z } from "zod";
 
+const VALID_TZS = new Set(Intl.supportedValuesOf("timeZone"));
+
 export const PatchMeBody = z.object({
-  // Existing fields stay; add three optional partial-update fields:
+  // Existing fields stay; add four optional partial-update fields:
   morningTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/).optional(),
+  // Date-only string ("YYYY-MM-DD"). PATCH /me handler converts to a UTC
+  // Date at noon-in-user-tz before writing to User.snoozeUntil DateTime?.
   snoozeUntil: z.string().date().nullable().optional(),
   pauseEnabled: z.boolean().optional(),
-  tz: z.string().optional(),  // device tz auto-sync (also new — Task 4)
+  // device tz auto-sync (also new — Task 4). Validated against IANA list
+  // so bad clients can't poison cron's dateInTz calls.
+  tz: z.string().refine((v) => VALID_TZS.has(v), { message: "invalid IANA tz" }).optional(),
 }).strict();
 export type PatchMeBody = z.infer<typeof PatchMeBody>;
 ```
@@ -85,9 +91,13 @@ If `me.ts` schema file doesn't exist yet, create it; otherwise extend.
 
 **No new** error codes, DTOs, constants. Brief-related collisions (snoozed user, duplicate same-day) are internal to cron — logged but not exposed to consumers.
 
-### Presentation block extension (existing — not new)
+### Presentation blocks — scope decision
 
-The `categorize_card` presentation block ships its `workspaceId` so the user's tap routes to the correct workspace. Verify the existing `categorize_card` type in `libs/shared/src/dto/chat.ts` already has a `workspaceId` field; if not, add it as a Task 1 sub-step (single field, no breaking change because existing chat is single-workspace).
+Today's `PresentationBlock` union (`libs/shared/src/dto/chat.ts:30-39`) only has `text` and `confirm_card`. Master spec §6 examples use `categorize_card`, `schedule_summary`, `quick_replies` — none of which exist yet.
+
+**Plan 2B uses `text` blocks only.** The brief is one or more `text` markdown blocks per workspace section. Action-rich blocks (`categorize_card` with `workspaceId` routing, etc.) are deferred to **Plan 2D-brief-ui** which adds the mobile rendering for them — adding the type before the renderer exists is dead weight.
+
+Concretely: if the LLM wants the user to categorize a transaction, the brief says "Personal: Costco 87불 분류 필요해 — 답장으로 카테고리 알려줘". User replies via standard chat flow (which IS in 2B because the brief lands in an unbound thread that lazy-binds on reply per Plan 2-chat-user-scope). No new presentation types needed for v1 brief.
 
 ---
 
@@ -221,15 +231,22 @@ type BriefContext = {
 ## 6. Data flow (cron tick)
 
 ```
-matchUsers = SELECT u, u.tz, u.morningTime
+// SQL filter (DB-side, fast):
+candidates = SELECT u.id, u.tz, u.morningTime
              FROM users u
              WHERE NOT u.pauseEnabled
                AND (u.snoozeUntil IS NULL OR u.snoozeUntil < NOW())
-               AND timeMatchesNowInTz(u.morningTime, u.tz)
-               AND NOT EXISTS (
-                 SELECT 1 FROM briefs b
-                 WHERE b.userId = u.id AND b.date = dateInTz(NOW(), u.tz)
-               )
+
+// App-side filter (Node, per-user tz math):
+matchUsers = candidates.filter((u) => {
+  const localNow = partsInTz(new Date(), u.tz);  // existing helper from periods.ts
+  const localHHmm = `${pad2(localNow.hour)}:${pad2(localNow.minute)}`;
+  if (localHHmm !== u.morningTime) return false;
+  const localDate = `${localNow.year}-${pad2(localNow.month)}-${pad2(localNow.day)}`;
+  // Idempotency check (separate query batched per candidate, OR pre-fetched all
+  // today-briefs for candidates in one round-trip):
+  return !alreadyBriefedToday(u.id, localDate);
+});
 
 for each user in matchUsers (sequential, awaited inside safe() wrapper):
   briefType = determineBriefType(dateInTz(NOW(), u.tz))
@@ -269,12 +286,12 @@ If an unbound thread exists, append to it (Plan 2-chat-user-scope rule). The thr
 |---|---|---|
 | 1 | `@fina/shared` extension (MeDTO + PatchMeBody + categorize_card.workspaceId) | `libs/shared/src/dto/me.ts`, `schemas/me.ts`, `dto/chat.ts` |
 | 2 | Prisma migration (User + Brief + BriefType) | `apps/api/prisma/schema.prisma`, `prisma/migrations/...` |
-| 3 | PATCH /me handler — accept morningTime / snoozeUntil / pauseEnabled / tz | `apps/api/src/routes/me.ts` |
-| 4 | Device tz auto-sync on app launch | `apps/mobile/src/api/auth.ts`, `apps/web/src/lib/auth.ts` |
+| 3 | **Create** PATCH /me handler (no PATCH route exists today; only GET) — parses `PatchMeBody`, calls `requireSession`, applies allowed updates, returns updated `MeDTO` | `apps/api/src/routes/me.ts` |
+| 4 | Device tz auto-sync — call `PATCH /me { tz }` only when device tz from `Intl.DateTimeFormat().resolvedOptions().timeZone` differs from cached value (AsyncStorage on mobile, localStorage on web). Throttle to one call per 6h via stored timestamp. Triggers on app foreground / sign-in. | `apps/mobile/src/api/auth.ts`, `apps/web/src/lib/auth.ts` (or wherever sign-in flow lives) |
 | 5 | `brief-context.ts` — multi-workspace context builder | `apps/api/src/chat/brief-context.ts` |
-| 6 | `brief.ts` — LLM call (reuses turn.ts helpers; no tool calls) | `apps/api/src/chat/brief.ts` |
+| 6 | `brief.ts` — LLM call (no tool calls). Reuses from `turn.ts`: (a) `streamLLMResponse` or equivalent Gemini-call wrapper, (b) `buildSystemMessage` / `formatPresentationBlocks` if exposed, (c) tokenization / prompt assembly helpers. Bespoke: brief-specific system prompt, anti-repetition injection, `mode: "brief"` flag preventing tool advertisement to LLM. If `turn.ts` doesn't expose the helpers separately, factor them out as part of Task 6 (small refactor noted in commit). | `apps/api/src/chat/brief.ts` |
 | 7 | `daily-brief.ts` — cron job (every minute) | `apps/api/src/cron/jobs/daily-brief.ts`, register in `scheduler.ts` |
-| 8 | `pauseDailyBrief` chat tool | `apps/api/src/chat/tools/pause-daily-brief.ts`, register in `chat/tools/index.ts` |
+| 8 | `pauseDailyBrief` chat tool — **callable from bound threads only** (workspaceId already set by user's first reply). Reads `ctx.userId`, ignores `ctx.workspaceId`. Updates `User.snoozeUntil` or `User.pauseEnabled`. | `apps/api/src/chat/tools/pause-daily-brief.ts`, register in `chat/tools/index.ts` |
 | 9 | Integration tests (per-type, snooze, pause, collision day, multi-workspace) | `apps/api/tests/cron.daily-brief.test.ts`, `chat.brief.test.ts`, `routes.me.test.ts` |
 | 10 | E2E smoke — real cron tick → brief in thread | `apps/api/tests/cron.daily-brief.e2e.test.ts` |
 
@@ -286,12 +303,15 @@ Implementation order: 1 (shared) → 2 (schema) → 3 (PATCH route) → 4 (clien
 
 - **Cron double-fire**: `briefs UNIQUE(userId, date)` — second INSERT throws; cron catches + logs (no duplicate message).
 - **LLM failure**: `safe()` catches; this user's brief is missed today, next day retries.
-- **Invalid `User.tz`**: `resolveUserTz` (1J) falls back to `America/Toronto`.
+- **Invalid `User.tz`**: `resolveUserTz` (1J) falls back to `America/Toronto`. `PatchMeBody.tz` validates against `Intl.supportedValuesOf("timeZone")` so bad input rejects at boundary.
 - **`PATCH /me { tz }` race with cron**: if user lands in new tz mid-day and the new tz makes their morningTime already-past, the cron's `timeMatchesNowInTz` check is exact-minute — they don't double-receive; tomorrow's brief uses the new tz cleanly.
+- **DST spring-forward / fall-back**: `timeMatchesNowInTz("02:30", "America/Toronto")` on spring-forward Sunday — the local minute 02:30 doesn't exist. User loses that day's brief. Acceptable degradation; spec does not retry on a non-existent local time. Users whose morningTime falls in the DST gap (02:00-03:00 in most US/CA zones) should set a different morningTime.
 - **User with 0 active memberships**: no workspaces means no financial context. Brief becomes pure encouragement ("아직 workspace 없어 - 가족 초대해봐"). Acceptable degraded mode.
 - **User reply mid-brief-generation**: thread binds during cron's INSERT. The brief is still emitted to the (now bound) thread. Next day's brief creates a new unbound thread. Acceptable.
 - **`snoozeUntil` in the past at cron time**: treated as "not snoozed" (SQL `< NOW()` excludes the row from the snooze filter).
-- **`categorize_card` workspaceId routing**: the LLM may emit cards from multiple workspaces in one brief. Each card carries its `workspaceId`. Frontend (Plan 2D) routes the tap to the correct workspace.
+- **`findOrCreateUnboundThread` race**: two near-simultaneous cron ticks for the same user (cron restart overlap, manual trigger) → each `findFirst` returns null → both `create`. `briefs UNIQUE(userId, date)` prevents the duplicate brief but the second thread becomes an orphan. Acceptable cosmetic leak (max one extra empty thread per race occurrence). A partial unique index `(userId) WHERE workspaceId IS NULL AND archivedAt IS NULL` could prevent this — deferred unless dogfooding reports orphan accumulation.
+- **`pauseDailyBrief` tool called in unbound thread**: not possible — tools require ctx.workspaceId (non-nullable in existing ToolContext). User must reply first (binding the thread), then call the tool in the bound thread. Tool itself ignores ctx.workspaceId and writes to User.snoozeUntil / pauseEnabled. UX impact: minor — first reply binds the thread regardless of message content.
+- **Anti-repetition text extraction**: `ChatMessage.blocks: PresentationBlock[]` is JSON. To produce the "last N brief texts" string for LLM injection, extract all `text` blocks and concat their `markdown` fields with newlines, skipping `confirm_card` (which is structured input). Truncate to 1000 chars per brief if it exceeds.
 
 ---
 
@@ -321,6 +341,8 @@ Goal: 100% spec coverage. No `vi.spyOn(prisma, ...)` patterns (memory rule).
 | Every-minute cron load | Low | Filter SELECT has `WHERE NOT pauseEnabled AND NOT EXISTS (briefs)`. Indexed. Returns 0 rows ~99% of the minute. |
 | LLM cost | Low | ~$0.0006 / user / day = $1.80 / 100 users / month at Gemini Flash-Lite. |
 | Multi-workspace context bloat (5+ memberships) | Low | v1 dogfooding users have 1-2. v1.5 may add "top N" cap. |
+| N+1 DB queries in context builder (per workspace × per data domain) | Low | For 1-2 workspaces × 5 domains = 5-10 round-trips per brief. Acceptable v1 cost. v1.5 can bulk-load via `IN (workspaceIds)` filters if dogfooding reports slowness. |
+| `findOrCreateUnboundThread` race produces orphan empty thread | Low | Documented in §8 edge cases. Acceptable cosmetic leak in v1. Partial unique index deferred. |
 | Device tz drift (traveling user, app not opened yet) | Low | First app launch after travel triggers `PATCH /me { tz }`. Worst case: 1 brief in old tz. |
 | Anti-repetition injecting stale tone | Low | LLM-judgment. If tone gets repetitive, increase N (3 → 5) in v1.5. |
 | Empty-financial-context brief feels hollow | Medium | LLM prompt explicitly handles "no new activity" — produces encouragement. Dogfooding will validate. |
@@ -336,7 +358,7 @@ Two design decisions during 2B brainstorming deviate from the canonical fina-des
 
 2. **3 brief types (daily / weekly / monthly), highest wins.** Master spec described a single "daily" ritual. We split into 3 cadences because they carry meaningfully different context (last 24h vs last 7 days vs last month). On collision days (Monday × 1st = monthly only), the higher cadence absorbs the lower (LLM context can include "어제" within "last month").
 
-Master spec §6 will be updated in a follow-up doc commit referencing this plan.
+Master spec §6 will be updated in a follow-up doc commit referencing this plan. **Owner**: implementer of 2B's final task or merge commit can include a one-paragraph note pointing to this design. Single-paragraph; no need for a separate plan.
 
 ---
 
