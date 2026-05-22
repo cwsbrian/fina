@@ -87,6 +87,9 @@ const Schema = z.object({
   // Opt-in for rate-limit integration tests. When NODE_ENV=test and
   // this is unset, the rate-limit plugin skips registration entirely.
   RATE_LIMIT_TEST: z.string().optional(),
+  // Plan 2C: optional. Expo Push works without auth on free tier; setting
+  // this raises rate limits and unlocks receipt polling (v1.5+).
+  EXPO_ACCESS_TOKEN: z.string().optional(),
 });
 
 const ParsedSchema = Schema.refine(

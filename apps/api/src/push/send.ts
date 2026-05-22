@@ -27,12 +27,10 @@ export async function sendBriefPush(
     return { sent: 0, failed: 0 };
   }
 
-  // EXPO_ACCESS_TOKEN is wired into env.ts in Task 7; until then we read it
-  // off the env shape with a narrow cast so the typechecker is happy without
-  // expanding T4's commit scope. Omit the property entirely when unset —
-  // exactOptionalPropertyTypes won't accept an undefined value for
-  // accessToken (the Expo client treats "no token" as omission).
-  const accessToken = (env as { EXPO_ACCESS_TOKEN?: string }).EXPO_ACCESS_TOKEN;
+  // Omit the property entirely when unset — exactOptionalPropertyTypes won't
+  // accept an undefined value for accessToken (the Expo client treats "no
+  // token" as omission).
+  const accessToken = env.EXPO_ACCESS_TOKEN;
   const expo = new Expo(accessToken === undefined ? {} : { accessToken });
 
   // Build carrier messages — filter out malformed tokens.
