@@ -16,7 +16,10 @@
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "app.fina.dev"
+      "bundleIdentifier": "app.fina.dev",
+      "infoPlist": {
+        "NSUserNotificationsUsageDescription": "Fina sends a daily morning brief notification."
+      }
     },
     "android": {
       "package": "app.fina.dev",
@@ -29,7 +32,19 @@
       "favicon": "./assets/favicon.png",
       "bundler": "metro"
     },
-    "plugins": ["expo-router", "expo-secure-store"],
-    "experiments": { "typedRoutes": true }
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      ["expo-notifications", {
+        "icon": "./assets/icon.png",
+        "color": "#000000"
+      }]
+    ],
+    "experiments": { "typedRoutes": true },
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_WITH_EAS_PROJECT_ID"
+      }
+    }
   }
 }

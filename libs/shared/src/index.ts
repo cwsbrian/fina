@@ -33,6 +33,7 @@ export * from "./schemas/billing.js";
 export * from "./schemas/budgets.js";
 export * from "./schemas/categories.js";
 export * from "./schemas/chat.js";
+export * from "./schemas/devices.js";
 export * from "./schemas/invites.js";
 export * from "./schemas/me.js";
 export * from "./schemas/recurring.js";

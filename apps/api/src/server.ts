@@ -9,6 +9,7 @@ import { registerSessionDecorator, ipKey } from "./auth/session-decorator.js";
 import { withRateLimit } from "./auth/rate-limit.js";
 import { healthRoutes } from "./routes/health.js";
 import { meRoutes } from "./routes/me.js";
+import { devicesRoutes } from "./routes/devices.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
 import { inviteRoutes } from "./routes/invites.js";
 import { plaidWebhookRoutes } from "./routes/plaid-webhook.js";
@@ -142,6 +143,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
 
   await app.register(healthRoutes);
   await app.register(meRoutes);
+  await app.register(devicesRoutes);
   await app.register(workspacesRoutes);
   await app.register(inviteRoutes);
   await app.register(plaidWebhookRoutes);

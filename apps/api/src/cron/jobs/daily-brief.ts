@@ -5,6 +5,8 @@ import { partsInTz, resolveTz } from "../../chat/tools/periods.js";
 import { buildBriefContext, type BriefType } from "../../chat/brief-context.js";
 import { generateBrief, briefBlocksToText } from "../../chat/brief.js";
 import type { PresentationBlock } from "../../chat/blocks.js";
+import { sendBriefPush } from "../../push/send.js";
+import { markdownToPlainPreview } from "../../push/markdown-preview.js";
 
 const CRON_NAME = "daily-brief";
 const pad2 = (n: number) => String(n).padStart(2, "0");
@@ -105,6 +107,19 @@ export async function runDailyBrief(env: Env): Promise<void> {
           "brief emitted",
         );
       });
+
+      // Push notification (Plan 2C). Best-effort — brief is already in
+      // DB so push failure doesn't lose user data.
+      try {
+        const briefText = briefBlocksToText(blocks);
+        const preview = markdownToPlainPreview(briefText);
+        await sendBriefPush(env, u.id, preview);
+      } catch (err) {
+        logError(
+          { cron: CRON_NAME, userId: u.id, err },
+          "brief push send failed (brief is durable in DB)",
+        );
+      }
     } catch (err) {
       logError({ cron: CRON_NAME, userId: u.id, err }, "brief generation failed");
     }

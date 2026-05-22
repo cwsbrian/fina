@@ -26,4 +26,10 @@ export type LogContext = {
   /** Error context. Pino accepts Error directly (serializes message +
    *  stack); pass other shapes if no Error is available. */
   err?: unknown;
+  /** Push (Plan 2C). */
+  deviceCount?: number;
+  pushSent?: number;
+  pushFailed?: number;
+  /** UserDevice.id removed after Expo returned DeviceNotRegistered. */
+  removedDeviceId?: string;
 };
