@@ -44,6 +44,10 @@ async function buildMeBody(userId: string): Promise<MeDTO> {
         source: primary.source as SubscriptionDTO["source"],
       }
     : null;
+  // snoozeUntil → "YYYY-MM-DD" string for UI display (matches toMeDTO in me.ts).
+  const snoozeUntilStr = user.snoozeUntil
+    ? user.snoozeUntil.toISOString().slice(0, 10)
+    : null;
   return {
     user: {
       id: user.id,
@@ -51,6 +55,9 @@ async function buildMeBody(userId: string): Promise<MeDTO> {
       name: user.name,
       tz: user.tz,
       locale: user.locale,
+      morningTime: user.morningTime,
+      snoozeUntil: snoozeUntilStr,
+      pauseEnabled: user.pauseEnabled,
     },
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
