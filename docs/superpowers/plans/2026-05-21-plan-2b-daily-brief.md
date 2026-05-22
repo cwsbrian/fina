@@ -349,7 +349,7 @@ import { PatchMeBody } from "@fina/shared";  // for schema test, optional
 describe("PATCH /me", () => {
   it("updates morningTime", async () => {
     const app = await buildApp(testEnv());
-    const { cookie, user } = await signUpAndGetCookie(app, { email: "patchme1@t.co" });
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "patchme1@t.co" });
     const res = await app.inject({
       method: "PATCH",
       url: "/me",
@@ -358,7 +358,7 @@ describe("PATCH /me", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().user.morningTime).toBe("09:30");
-    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(fresh.morningTime).toBe("09:30");
     await app.close();
   });
@@ -379,7 +379,7 @@ describe("PATCH /me", () => {
 
   it("snoozeUntil null clears, string sets, undefined leaves alone", async () => {
     const app = await buildApp(testEnv());
-    const { cookie, user } = await signUpAndGetCookie(app, { email: "patchme3@t.co" });
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "patchme3@t.co" });
 
     // Set
     await app.inject({
@@ -388,7 +388,7 @@ describe("PATCH /me", () => {
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ snoozeUntil: "2026-06-15" }),
     });
-    const afterSet = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    const afterSet = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(afterSet.snoozeUntil).not.toBeNull();
 
     // Leave alone (undefined — empty body)
@@ -398,7 +398,7 @@ describe("PATCH /me", () => {
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({}),
     });
-    const afterNoop = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    const afterNoop = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(afterNoop.snoozeUntil?.getTime()).toBe(afterSet.snoozeUntil!.getTime());
 
     // Clear
@@ -408,7 +408,7 @@ describe("PATCH /me", () => {
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ snoozeUntil: null }),
     });
-    const afterClear = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    const afterClear = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(afterClear.snoozeUntil).toBeNull();
 
     await app.close();
@@ -633,26 +633,27 @@ subscription/tier composition logic."
 **Goal:** On app launch / sign-in, the client compares its device tz against the cached value; if different, PATCH /me { tz }. Throttle to one call per 6h via stored timestamp to avoid spamming.
 
 **Files:**
-- Modify: `apps/mobile/src/api/auth.ts` (or `apps/mobile/src/app/_layout.tsx` — wherever sign-in / app-launch effect lives; check both)
-- Modify: `apps/web/src/lib/api.ts` (or the auth context provider — verify location)
+- Create: `apps/mobile/src/api/tz-sync.ts` (new helper)
+- Modify: `apps/mobile/app/_layout.tsx` (Expo Router root — `apps/mobile/app/` not `apps/mobile/src/app/`)
+- Create: `apps/web/src/lib/tz-sync.ts` (new helper)
+- Modify: a web session-aware client component (verify location in Step 4.1; if no obvious site exists, add the call to `apps/web/src/lib/api.ts` exports section and import it from the existing app-shell layout)
 
-Pre-implementation: read both app's existing sign-in flow.
+Pre-implementation: confirm by listing.
 
 - [ ] **Step 4.1: Locate hooks**
 
 ```bash
-grep -rln "signInWithMagicLink\|signOut\|getSession\|onSessionChange" apps/mobile/src/ apps/web/src/ | head -20
+ls apps/mobile/app/ apps/mobile/src/api/
+grep -rln "signInWithMagicLink\|onSessionChange\|getSession" apps/mobile/ apps/web/src/ 2>&1 | head -20
 ```
 
-Identify the file(s) where sign-in succeeds / app launches with a session. Likely:
-- Mobile: `apps/mobile/src/api/client.ts` or `apps/mobile/src/app/_layout.tsx`
-- Web: `apps/web/src/app/(app)/layout.tsx` or a `<SessionProvider>` wrapper
-
-If unsure, ask the user before guessing.
+Confirmed paths (verified at plan time):
+- Mobile: `apps/mobile/app/_layout.tsx` (Expo Router; `app/` at the project root, no `src/app/`). The api client lives at `apps/mobile/src/api/client.ts`.
+- Web: `apps/web/src/lib/api.ts` (from 1J T3 tests confirm this is where `apiFetch` lives). Web app-shell layout depends on how sign-in flow is built — verify which client component to attach the `useEffect` to.
 
 - [ ] **Step 4.2: Create shared helper (mobile)**
 
-In `apps/mobile/src/api/auth.ts` (or wherever the client-side sign-in flow is, based on Step 4.1 findings), add:
+Create new file `apps/mobile/src/api/tz-sync.ts` (next to the existing `client.ts`):
 
 ```ts
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -691,7 +692,7 @@ export async function syncDeviceTz(): Promise<void> {
 
 Then call `syncDeviceTz()` from wherever the user becomes authenticated (e.g., right after `signInWithMagicLink` succeeds, and inside an app-foreground effect like `AppState.addEventListener("change", ...)`).
 
-If the app doesn't have an AppState foreground hook today, add this in `apps/mobile/src/app/_layout.tsx`:
+If the app doesn't have an AppState foreground hook today, add this in `apps/mobile/app/_layout.tsx` (Expo Router root — note `app/` not `src/app/`):
 
 ```tsx
 import { useEffect } from "react";
@@ -709,9 +710,11 @@ useEffect(() => {
 }, []);
 ```
 
+Import: `import { syncDeviceTz } from "../src/api/tz-sync";` (Expo Router resolves `../src/`).
+
 - [ ] **Step 4.3: Create shared helper (web)**
 
-In `apps/web/src/lib/api.ts` (or wherever the apiFetch is constructed), add:
+Create new file `apps/web/src/lib/tz-sync.ts` (alongside `api.ts`):
 
 ```ts
 const TZ_SYNC_KEY = "fina.tz.lastSyncAt";
@@ -898,7 +901,6 @@ async function buildWorkspaceContext(
       id: true,
       amount: true,
       merchantRaw: true,
-      merchantNormalized: true,
       occurredAt: true,
       allocations: { select: { category: { select: { name: true } } } },
     },
@@ -933,10 +935,11 @@ async function buildWorkspaceContext(
     date: s.scheduledDate.toISOString().slice(0, 10),
   }));
 
-  // Budgets — current period progress (this month for daily/weekly; this+last for monthly).
-  // For brevity, fetch all this-month budgets.
+  // Budgets — fetch this-month budgets via periodStart (DateTime @db.Date,
+  // first day of month). Compute first-of-this-month UTC date and match.
+  const firstOfMonthUtc = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   const budgets = await prisma.budget.findMany({
-    where: { workspaceId, period: "this_month" },
+    where: { workspaceId, periodStart: firstOfMonthUtc },
     include: { category: { select: { name: true } } },
     take: 50,
   });
@@ -944,8 +947,8 @@ async function buildWorkspaceContext(
     category: b.category.name,
     budgeted: b.amount.toString(),
     // Spent amount: query allocations for this category in current month.
-    // For v1, we leave spent as placeholder "0" — real computation in Task 9.
-    // The LLM can still produce a useful brief with budgeted alone.
+    // For v1, we leave spent as placeholder "0" — real computation deferred
+    // to v1.5. The LLM can still produce a useful brief with budgeted alone.
     spent: "0",
     percent: 0,
   }));
@@ -954,17 +957,17 @@ async function buildWorkspaceContext(
   const recurring = await prisma.recurringExpense.findMany({
     where: {
       workspaceId,
-      nextDue: { gte: now, lte: scheduleWindowEnd },
+      nextOccurrenceDate: { gte: now, lte: scheduleWindowEnd },
     },
-    select: { merchantRaw: true, amount: true, cadence: true, nextDue: true },
-    orderBy: { nextDue: "asc" },
+    select: { name: true, amount: true, cadence: true, nextOccurrenceDate: true },
+    orderBy: { nextOccurrenceDate: "asc" },
     take: 20,
   });
   const recurringFmt = recurring.map((r) => ({
-    merchant: r.merchantRaw,
+    merchant: r.name,
     amount: r.amount.toString(),
     cadence: r.cadence,
-    nextDate: r.nextDue.toISOString().slice(0, 10),
+    nextDate: r.nextOccurrenceDate.toISOString().slice(0, 10),
   }));
 
   return {
@@ -1567,6 +1570,25 @@ async function makeUser(tz = "America/Toronto", morningTime = "08:00") {
   });
 }
 
+/** Returns the current HH:mm in the given tz. Tests that pre-seed a user
+ *  with morningTime=now should call this immediately before invoking the
+ *  cron, and update the user if the minute has rolled over since seeding,
+ *  to avoid minute-boundary test flakes. */
+async function currentLocalHHmm(tz: string): Promise<string> {
+  const partsInTz = (await import("../src/chat/tools/periods.js")).partsInTz;
+  const p = partsInTz(new Date(), tz);
+  const pad2 = (n: number) => String(n).padStart(2, "0");
+  return `${pad2(p.hour)}:${pad2(p.minute)}`;
+}
+
+/** Re-syncs a user's morningTime to the *current* HH:mm so the cron's
+ *  exact-minute match always succeeds even if minute rolled over between
+ *  seed and cron invocation. */
+async function syncMorningTimeToNow(userId: string, tz: string): Promise<void> {
+  const now = await currentLocalHHmm(tz);
+  await prisma.user.update({ where: { id: userId }, data: { morningTime: now } });
+}
+
 describe("runDailyBrief", () => {
   it("skips when no users match the current minute", async () => {
     // Create a user with morningTime that definitely doesn't match now.
@@ -1585,15 +1607,25 @@ describe("runDailyBrief", () => {
   it("emits a brief atomically (chat message + brief row) when user matches", async () => {
     // Strategy: set the user's morningTime to the current minute in their tz.
     // Use Asia/Seoul so it's deterministic regardless of dev machine tz.
+    // Compute nowHHmm RIGHT BEFORE the runDailyBrief call to minimize the
+    // chance of a minute-boundary flake (otherwise seed → cron could span
+    // two minutes and the cron's HH:mm match would miss).
     const tz = "Asia/Seoul";
     const partsInTz = (await import("../src/chat/tools/periods.js")).partsInTz;
-    const p = partsInTz(new Date(), tz);
     const pad2 = (n: number) => String(n).padStart(2, "0");
-    const nowHHmm = `${pad2(p.hour)}:${pad2(p.minute)}`;
+    const p1 = partsInTz(new Date(), tz);
+    const initialHHmm = `${pad2(p1.hour)}:${pad2(p1.minute)}`;
 
-    const u = await makeUser(tz, nowHHmm);
+    const u = await makeUser(tz, initialHHmm);
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+
+    // Recompute now and update if the minute rolled over during setup.
+    const p2 = partsInTz(new Date(), tz);
+    const nowHHmm = `${pad2(p2.hour)}:${pad2(p2.minute)}`;
+    if (nowHHmm !== initialHHmm) {
+      await prisma.user.update({ where: { id: u.id }, data: { morningTime: nowHHmm } });
+    }
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
@@ -1612,14 +1644,10 @@ describe("runDailyBrief", () => {
 
   it("is idempotent — running twice in the same minute produces only one brief", async () => {
     const tz = "Asia/Seoul";
-    const partsInTz = (await import("../src/chat/tools/periods.js")).partsInTz;
-    const p = partsInTz(new Date(), tz);
-    const pad2 = (n: number) => String(n).padStart(2, "0");
-    const nowHHmm = `${pad2(p.hour)}:${pad2(p.minute)}`;
-
-    const u = await makeUser(tz, nowHHmm);
+    const u = await makeUser(tz, await currentLocalHHmm(tz));
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await syncMorningTimeToNow(u.id, tz);  // re-sync right before cron
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
@@ -1681,15 +1709,11 @@ describe("runDailyBrief", () => {
 
   it("appends to existing unbound thread instead of creating a new one", async () => {
     const tz = "Asia/Seoul";
-    const partsInTz = (await import("../src/chat/tools/periods.js")).partsInTz;
-    const p = partsInTz(new Date(), tz);
-    const pad2 = (n: number) => String(n).padStart(2, "0");
-    const nowHHmm = `${pad2(p.hour)}:${pad2(p.minute)}`;
-
-    const u = await makeUser(tz, nowHHmm);
+    const u = await makeUser(tz, await currentLocalHHmm(tz));
     const existingThread = await prisma.chatThread.create({
       data: { userId: u.id, workspaceId: null },
     });
+    await syncMorningTimeToNow(u.id, tz);
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
@@ -1760,6 +1784,7 @@ Create `apps/api/src/chat/tools/pause-daily-brief.ts`:
 import { z } from "zod";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
+import { localMidnightToUtc } from "./periods.js";
 
 const Args = z.object({
   /** ISO date 'YYYY-MM-DD' to pause until (inclusive). Mutually exclusive with indefinite. */
@@ -1806,7 +1831,6 @@ export const pauseDailyBrief: ToolDef<Args, Result> = {
         where: { id: ctx.userId },
         select: { tz: true },
       });
-      const { localMidnightToUtc } = await import("./periods.js");
       const [y, m, d] = args.until!.split("-").map(Number);
       const midnight = localMidnightToUtc(y!, m!, d!, user.tz);
       const noon = new Date(midnight.getTime() + 12 * 60 * 60 * 1000);
@@ -1998,7 +2022,7 @@ describe("daily-brief integration", () => {
     expect(msgs).toHaveLength(1);
   });
 
-  it("atomicity — when brief.create fails inside transaction, chatMessage is rolled back", async () => {
+  it("post-run state is consistent — exactly 1 brief + 1 chatMessage per successful tick", async () => {
     const u = await makeUserMatchingNow();
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
