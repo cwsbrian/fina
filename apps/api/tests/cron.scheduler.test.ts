@@ -12,27 +12,12 @@ vi.mock("../src/cron/jobs/cleanup-events.js", () => ({ runCleanupEvents: vi.fn()
 vi.mock("../src/cron/jobs/scheduled-spend-match.js", () => ({ runScheduledSpendMatch: vi.fn() }));
 
 import { Cron } from "croner";
-import { startScheduler, stopScheduler } from "../src/cron/scheduler.js";
+import { startScheduler, stopScheduler, safe } from "../src/cron/scheduler.js";
 import { runDailyRefresh } from "../src/cron/jobs/daily-refresh.js";
+import * as loggerMod from "../src/logger.js";
+import { testEnv } from "./helpers/test-env.js";
 
-const env = {
-  NODE_ENV: "test" as const,
-  PORT: 0,
-  DATABASE_URL: "postgresql://x",
-  BETTER_AUTH_SECRET: "x".repeat(48),
-  BETTER_AUTH_URL: "http://localhost:0",
-  EMAIL_FROM: "test@fina.app",
-  WEB_APP_URL: "http://localhost:3000",
-  STRIPE_SECRET_KEY: "sk_test_dummy",
-  STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
-  STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
-  PLAID_CLIENT_ID: "test_client_id",
-  PLAID_SECRET: "test_secret",
-  PLAID_ENV: "sandbox" as const,
-  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test_gemini_key",
-};
+const env = testEnv();
 
 beforeEach(() => {
   vi.mocked(Cron).mockClear();
@@ -74,18 +59,69 @@ describe("scheduler", () => {
     let capturedCallback: (() => Promise<void>) | undefined;
     vi.mocked(Cron).mockImplementationOnce((_expr, _opts, fn) => {
       capturedCallback = fn as () => Promise<void>;
-      return { stop: vi.fn() };
+      return { stop: vi.fn() } as unknown as Cron;
     });
 
     vi.mocked(runDailyRefresh).mockRejectedValueOnce(new Error("job failed"));
     startScheduler({ ...env, CRON_ENABLED: true });
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
     await expect(capturedCallback?.()).resolves.toBeUndefined();
     expect(errorSpy).toHaveBeenCalledWith(
-      "cron job uncaught",
-      expect.objectContaining({ jobName: "daily-refresh" }),
+      expect.objectContaining({ cron: "daily-refresh", event: "fail" }),
+      expect.any(String),
     );
     errorSpy.mockRestore();
+  });
+});
+
+describe("scheduler structured logs", () => {
+  it("emits cron.event=start and cron.event=success on a successful run", async () => {
+    const spyInfo = vi.spyOn(loggerMod, "logInfo").mockImplementation(() => {});
+
+    await safe("daily-refresh", async () => {
+      // no-op success
+    });
+
+    expect(spyInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ cron: "daily-refresh", event: "start" }),
+      expect.any(String),
+    );
+    expect(spyInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cron: "daily-refresh",
+        event: "success",
+        durationMs: expect.any(Number),
+      }),
+      expect.any(String),
+    );
+    spyInfo.mockRestore();
+  });
+
+  it("emits cron.event=fail with durationMs+err when the job throws", async () => {
+    const spyInfo = vi.spyOn(loggerMod, "logInfo").mockImplementation(() => {});
+    const spyError = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
+
+    const boom = new Error("explode");
+    await safe("retry-unprocessed", async () => {
+      throw boom;
+    });
+
+    // start is still emitted before the throw.
+    expect(spyInfo).toHaveBeenCalledWith(
+      expect.objectContaining({ cron: "retry-unprocessed", event: "start" }),
+      expect.any(String),
+    );
+    expect(spyError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cron: "retry-unprocessed",
+        event: "fail",
+        durationMs: expect.any(Number),
+        err: boom,
+      }),
+      expect.any(String),
+    );
+    spyInfo.mockRestore();
+    spyError.mockRestore();
   });
 });

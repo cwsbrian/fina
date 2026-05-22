@@ -25,25 +25,10 @@ import { categorizeNewTransactions } from "../src/categorize/service.js";
 import { checkBackgroundSyncGate } from "../src/cron/tier-gate.js";
 import { runDailyRefresh } from "../src/cron/jobs/daily-refresh.js";
 import { resetPlaidMock } from "./helpers/plaid-mock.js";
+import * as loggerMod from "../src/logger.js";
+import { testEnv } from "./helpers/test-env.js";
 
-const env = {
-  NODE_ENV: "test" as const,
-  PORT: 0,
-  DATABASE_URL: process.env.DATABASE_URL!,
-  BETTER_AUTH_SECRET: "x".repeat(48),
-  BETTER_AUTH_URL: "http://localhost:0",
-  EMAIL_FROM: "test@fina.app",
-  WEB_APP_URL: "http://localhost:3000",
-  STRIPE_SECRET_KEY: "sk_test_dummy",
-  STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
-  STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
-  PLAID_CLIENT_ID: "test_client_id",
-  PLAID_SECRET: "test_secret",
-  PLAID_ENV: "sandbox" as const,
-  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test_gemini_key",
-};
+const env = testEnv();
 
 const syncOk = { added: 1, modified: 0, removed: 0, newTxIds: ["tx-1"] };
 const syncLockHeld = { skipped: "lock_held" as const, added: 0, modified: 0, removed: 0, newTxIds: [] };
@@ -178,15 +163,15 @@ describe("runDailyRefresh", () => {
   it("null connectedBy: skips tier gate, still syncs, warns", async () => {
     await seedActiveItem(null); // connectedBy = null
     vi.mocked(syncTransactions).mockResolvedValue(syncOk);
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(loggerMod, "logWarn").mockImplementation(() => {});
 
     await runDailyRefresh(env);
 
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
     expect(syncTransactions).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ cron: "daily-refresh" }),
       expect.stringContaining("connectedBy null"),
-      expect.any(Object),
     );
     warnSpy.mockRestore();
   });

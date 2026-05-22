@@ -55,17 +55,44 @@ const Schema = z.object({
   ),
   // TTL for plaid_webhook_events rows in days. Default 30 applied at use site with ?? 30.
   CRON_EVENT_TTL_DAYS: z.coerce.number().int().positive().optional(),
+  // TTL for resolved ScheduledSpend rows in days. Default 90 applied at use
+  // site with ?? 90. "Resolved" = dismissedAt set OR matchedTxId set.
+  SCHEDULED_SPEND_TTL_DAYS: z.coerce.number().int().positive().optional(),
   // Chat — all .optional() (test-env friendly); use-site applies defaults via `?? N`.
   CHAT_MODEL: z.string().optional(),
   CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().optional(),
   CHAT_HISTORY_BUDGET_TOKENS: z.coerce.number().int().positive().optional(),
   CHAT_MAX_TOOL_CALLS_PER_TURN: z.coerce.number().int().positive().optional(),
+  // Prisma connection pool size. Default 10 covers cron + webhook + a
+  // few request handlers without pool starvation under singleFork tests.
+  PRISMA_CONNECTION_LIMIT: z.coerce.number().int().min(1).default(10),
+  // Strict opt-in (Plan 1J Task 2): no default — production deployments
+  // must explicitly state whether they're behind a CDN/LB that strips
+  // client-set X-Forwarded-For. Setting true without that infrastructure
+  // lets attackers spoof X-Forwarded-For to rotate rate-limit buckets and
+  // pollute audit IPs.
+  TRUST_PROXY: z.preprocess(
+    (v) => (v === "true" || v === "1" ? true : v === "false" || v === "0" ? false : v),
+    z.boolean(),
+  ),
+  // Opt-in for rate-limit integration tests. When NODE_ENV=test and
+  // this is unset, the rate-limit plugin skips registration entirely.
+  RATE_LIMIT_TEST: z.string().optional(),
 });
 
-export type Env = z.infer<typeof Schema>;
+const ParsedSchema = Schema.refine(
+  (e) => {
+    if (e.NODE_ENV !== "production") return true;
+    if (!e.RESEND_API_KEY) return false;
+    return e.RESEND_API_KEY.startsWith("re_") && e.RESEND_API_KEY.length >= 24;
+  },
+  { message: "RESEND_API_KEY must be a real Resend key in production", path: ["RESEND_API_KEY"] },
+);
+
+export type Env = z.infer<typeof ParsedSchema>;
 
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
-  const parsed = Schema.safeParse(source);
+  const parsed = ParsedSchema.safeParse(source);
   if (!parsed.success) {
     const issues = parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
     throw new Error(`Invalid environment:\n${issues}`);

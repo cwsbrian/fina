@@ -3,8 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Member } from "@fina/shared";
 import { apiFetch, useMe, useActiveWorkspaceId } from "../../../../lib/api";
+import styles from "../settings.module.css";
 import { ConnectBankButton } from "./_components/connect-bank-button";
-import { ConnectedBanksList, type PlaidItemView } from "./_components/connected-banks-list";
+import {
+  ConnectedBanksList,
+  type PlaidItemView,
+} from "./_components/connected-banks-list";
 
 export default function BanksPage() {
   const wsId = useActiveWorkspaceId();
@@ -18,7 +22,9 @@ export default function BanksPage() {
     setErr(null);
     try {
       const [itemsRes, membersRes] = await Promise.all([
-        apiFetch<{ plaidItems: PlaidItemView[] }>(`/workspaces/${wsId}/plaid-items`),
+        apiFetch<{ plaidItems: PlaidItemView[] }>(
+          `/workspaces/${wsId}/plaid-items`,
+        ),
         apiFetch<{ members: Member[] }>(`/workspaces/${wsId}/members`),
       ]);
       setItems(itemsRes.plaidItems);
@@ -32,34 +38,85 @@ export default function BanksPage() {
     load();
   }, [load]);
 
-  // Errors first — if /me or /plaid-items or /members fails, `me`/`members`
-  // stays null but `meErr`/`err` is set. A loading-first check would render
-  // "Loading…" forever in that case.
-  if (meErr) return <main style={{ padding: 32 }}>Could not load profile: {meErr}</main>;
-  if (err) return <main style={{ padding: 32 }}>Could not load banks: {err}</main>;
-  if (!wsId || me === null || members === null) return <main style={{ padding: 32 }}>Loading…</main>;
+  // Errors first — if a sub-request fails, members/items stays null but
+  // err is set. A loading-first check would render "Loading…" forever.
+  if (meErr) {
+    return (
+      <div className={styles.container}>
+        <p style={{ color: "var(--color-down)" }}>
+          Could not load profile: {meErr}
+        </p>
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <div className={styles.container}>
+        <p style={{ color: "var(--color-down)" }}>Could not load: {err}</p>
+      </div>
+    );
+  }
+  if (!wsId || me === null || members === null) {
+    return <div className={styles.container}>Loading…</div>;
+  }
 
   const isPro = me.tier === "pro";
-  // Owner-only for ALL Plaid mutations (link / refresh / disconnect).
-  // Server enforces this too; the UI hides the affordances so non-owners
-  // don't get rejected mid-action.
-  const isOwner = members.find((m) => m.userId === me.user.id)?.role === "owner";
+  // Server enforces owner-only on every Plaid mutation; the UI just hides
+  // the affordance so non-owners don't trigger 403s.
+  const isOwner =
+    members.find((m) => m.userId === me.user.id)?.role === "owner";
+  const bankCount = items?.length ?? 0;
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: 32, fontFamily: "system-ui" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 8 }}>Banks</h1>
-      <p style={{ opacity: 0.6, marginBottom: 24 }}>
-        Connect your bank account so Fina can import your transactions automatically.
-      </p>
-      <ConnectedBanksList items={items ?? []} workspaceId={wsId} isOwner={isOwner} onChange={load} />
-      <div style={{ marginTop: 24 }}>
-        <ConnectBankButton workspaceId={wsId} isPro={isPro} isOwner={isOwner} onConnected={load} />
-      </div>
-      {!isOwner && (
-        <p style={{ opacity: 0.6, marginTop: 24, fontSize: 13 }}>
-          Only the workspace owner can connect, refresh, or disconnect a bank.
+    <div className={styles.container}>
+      <div className={styles.head}>
+        <h1 className={styles.title}>Banks</h1>
+        <p className={styles.sub}>
+          Connect your bank so Fina can import your transactions automatically.
         </p>
-      )}
-    </main>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionHead}>
+          <div>
+            <div className={styles.sectionTitle}>Connected banks</div>
+            <div className={styles.sectionSub}>
+              {bankCount === 0
+                ? "No banks connected yet."
+                : `${bankCount} bank${bankCount === 1 ? "" : "s"} feeding Fina.`}
+            </div>
+          </div>
+        </div>
+        <ConnectedBanksList
+          items={items ?? []}
+          workspaceId={wsId}
+          isOwner={isOwner}
+          onChange={load}
+        />
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionHead}>
+          <div>
+            <div className={styles.sectionTitle}>Connect a bank</div>
+            <div className={styles.sectionSub}>
+              {isOwner
+                ? isPro
+                  ? "Plaid securely links your account. Read-only — Fina can't move money."
+                  : "Connecting a bank requires Pro."
+                : "Only the workspace owner can connect or manage banks."}
+            </div>
+          </div>
+        </div>
+        <div className={styles.card}>
+          <ConnectBankButton
+            workspaceId={wsId}
+            isPro={isPro}
+            isOwner={isOwner}
+            onConnected={load}
+          />
+        </div>
+      </div>
+    </div>
   );
 }

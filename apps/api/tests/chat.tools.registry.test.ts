@@ -53,7 +53,8 @@ describe("REGISTRY (plan 1e-search)", () => {
     [
       "findTransactions",
       "Search transactions with filters: merchant text, date range, amount range, category name, account name. " +
-        "Returns up to 50 most recent matches with totalCount and hasMore for follow-up narrowing.",
+        "Returns up to 50 most recent matches with totalCount and hasMore for follow-up narrowing. " +
+        "Date ranges are interpreted in your local timezone.",
     ],
   ] as const;
 

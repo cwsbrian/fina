@@ -1,4 +1,5 @@
 import { prisma } from "../db.js";
+import { logInfo } from "../logger.js";
 
 type ItemBody = {
   webhook_code: string;
@@ -40,6 +41,9 @@ export async function dispatchItemEvent(
       });
       break;
     default:
-      console.info("ITEM webhook ignored", { itemId: item.id, code: body.webhook_code });
+      logInfo(
+        { plaidItemId: item.id, plaidEvent: body.webhook_code },
+        "ITEM webhook ignored",
+      );
   }
 }

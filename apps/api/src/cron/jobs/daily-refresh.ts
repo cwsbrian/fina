@@ -1,10 +1,13 @@
 import { prisma } from "../../db.js";
 import type { Env } from "../../env.js";
+import { logInfo, logWarn, logError } from "../../logger.js";
 import { syncTransactions } from "../../plaid/sync.js";
 import { categorizeNewTransactions } from "../../categorize/service.js";
 import { sanitizePlaidError } from "../../plaid/client.js";
 import { checkBackgroundSyncGate } from "../tier-gate.js";
 import { removeItemForBilling } from "../../plaid/items.js";
+
+const CRON_NAME = "daily-refresh";
 
 export async function runDailyRefresh(env: Env): Promise<void> {
   // ── Step 0: remove active items for expired-trial workspace owners ──────
@@ -31,19 +34,19 @@ export async function runDailyRefresh(env: Env): Promise<void> {
       await removeItemForBilling(env, item.workspaceId, item.id);
       billingRemoved++;
     } catch (e) {
-      console.error("daily-refresh: billing-remove failed", {
-        itemId: item.id,
-        err: sanitizePlaidError(e),
-      });
+      logError(
+        { cron: CRON_NAME, plaidItemId: item.id, err: sanitizePlaidError(e) },
+        "daily-refresh: billing-remove failed",
+      );
       // Non-fatal: cron retries tomorrow. Plaid will return ITEM_NOT_FOUND
       // if the token was already removed, and removeItemForBilling handles that.
     }
   }
   if (expiredItems.length > 0) {
-    console.info("daily-refresh: trial expiry cleanup", {
-      found: expiredItems.length,
-      removed: billingRemoved,
-    });
+    logInfo(
+      { cron: CRON_NAME },
+      `daily-refresh: trial expiry cleanup — found=${expiredItems.length} removed=${billingRemoved}`,
+    );
   }
   // ── existing active-items sync loop (fresh query — Step 0's disconnected
   //    items are excluded by status:'active' filter below) ─────────────────
@@ -61,7 +64,10 @@ export async function runDailyRefresh(env: Env): Promise<void> {
       const gate = await checkBackgroundSyncGate(item.connectedBy);
       if (!gate.ok) { gated++; continue; }
     } else {
-      console.warn("daily-refresh: connectedBy null, skipping tier gate", { itemId: item.id });
+      logWarn(
+        { cron: CRON_NAME, plaidItemId: item.id },
+        "daily-refresh: connectedBy null, skipping tier gate",
+      );
     }
 
     try {
@@ -73,17 +79,23 @@ export async function runDailyRefresh(env: Env): Promise<void> {
       }
       if ("newTxIds" in r && r.newTxIds.length > 0) {
         await categorizeNewTransactions(env, item.workspaceId, r.newTxIds).catch((e) =>
-          console.error("categorize after daily-refresh failed", { itemId: item.id, err: e }),
+          logError(
+            { cron: CRON_NAME, plaidItemId: item.id, err: e },
+            "categorize after daily-refresh failed",
+          ),
         );
       }
     } catch (e) {
       failed++;
-      console.error("daily-refresh sync failed", { itemId: item.id, err: sanitizePlaidError(e) });
+      logError(
+        { cron: CRON_NAME, plaidItemId: item.id, err: sanitizePlaidError(e) },
+        "daily-refresh sync failed",
+      );
     }
   }
 
-  console.info("daily-refresh complete", {
-    durationMs: Date.now() - t0,
-    itemsTotal: items.length, synced, gated, lockHeld, failed,
-  });
+  logInfo(
+    { cron: CRON_NAME, durationMs: Date.now() - t0 },
+    `daily-refresh complete — itemsTotal=${items.length} synced=${synced} gated=${gated} lockHeld=${lockHeld} failed=${failed}`,
+  );
 }

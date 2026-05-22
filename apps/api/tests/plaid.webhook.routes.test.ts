@@ -22,30 +22,16 @@ import {
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
+import * as loggerMod from "../src/logger.js";
 
 vi.mock("../src/plaid/webhook-dispatch.js", async () => {
   return { dispatchWebhookSync: vi.fn().mockResolvedValue(undefined) };
 });
 import { dispatchWebhookSync } from "../src/plaid/webhook-dispatch.js";
+import * as webhookItemMod from "../src/plaid/webhook-item.js";
+import { testEnv } from "./helpers/test-env.js";
 
-const env = {
-  NODE_ENV: "test" as const,
-  PORT: 0,
-  DATABASE_URL: process.env.DATABASE_URL!,
-  BETTER_AUTH_SECRET: "x".repeat(48),
-  BETTER_AUTH_URL: "http://localhost:0",
-  EMAIL_FROM: "test@fina.app",
-  WEB_APP_URL: "http://localhost:3000",
-  STRIPE_SECRET_KEY: "sk_test_dummy",
-  STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
-  STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
-  PLAID_CLIENT_ID: "test_client_id",
-  PLAID_SECRET: "test_secret",
-  PLAID_ENV: "sandbox" as const,
-  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test_gemini_key",
-};
+const env = testEnv();
 
 let keys: WebhookKeyPair;
 
@@ -290,6 +276,38 @@ describe("POST /plaid/webhook", () => {
     await app.close();
   });
 
+  it("ITEM dispatch failure → still returns 200 and calls logError with plaidItemId (smoke: migrated app.log.error)", async () => {
+    const dispatchItemSpy = vi
+      .spyOn(webhookItemMod, "dispatchItemEvent")
+      .mockRejectedValueOnce(new Error("item dispatch boom"));
+    const logErrorSpy = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
+    try {
+      const app = await buildApp(env);
+      const { pi } = await seedItem();
+      const body = {
+        webhook_type: "ITEM",
+        webhook_code: "ERROR",
+        item_id: pi.itemId,
+        error: { error_code: "ITEM_LOGIN_REQUIRED" },
+      };
+      const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+
+      const res = await postWebhook(app, body, jwt);
+
+      expect(res.statusCode).toBe(200);
+      // The fire-and-forget promise settles asynchronously; wait briefly.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ plaidItemId: pi.id, err: expect.anything() }),
+        "ITEM webhook dispatch failed",
+      );
+      await app.close();
+    } finally {
+      dispatchItemSpy.mockRestore();
+      logErrorSpy.mockRestore();
+    }
+  });
+
   it("ITEM/WEBHOOK_UPDATE_ACKNOWLEDGED for known item → 200, event row stored, status unchanged", async () => {
     const app = await buildApp(env);
     const { pi } = await seedItem();
@@ -312,5 +330,40 @@ describe("POST /plaid/webhook", () => {
     const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pi.id } });
     expect(item.status).toBe("active"); // unchanged — ACK is a no-op
     await app.close();
+  });
+
+  it("dispatch failure → still returns 200 and calls logError with context", async () => {
+    vi.mocked(dispatchWebhookSync).mockRejectedValueOnce(new Error("sync boom"));
+    const logErrorSpy = vi.spyOn(loggerMod, "logError").mockImplementation(() => {});
+    // try/finally so the module-scoped spy is restored even if an
+    // expect() throws — otherwise later tests see a stubbed logError.
+    try {
+      const app = await buildApp(env);
+      const { pi } = await seedItem();
+      const body = {
+        webhook_type: "TRANSACTIONS",
+        webhook_code: "SYNC_UPDATES_AVAILABLE",
+        item_id: pi.itemId,
+        environment: "sandbox",
+      };
+      const jwt = await signWebhook(Buffer.from(JSON.stringify(body)), keys.privateKey, keys.kid);
+
+      const res = await postWebhook(app, body, jwt);
+
+      expect(res.statusCode).toBe(200);
+      // The fire-and-forget promise settles asynchronously; wait briefly.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          plaidEvent: "SYNC_UPDATES_AVAILABLE",
+          plaidItemId: expect.any(String),
+          err: expect.anything(),
+        }),
+        expect.stringContaining("dispatch failed"),
+      );
+      await app.close();
+    } finally {
+      logErrorSpy.mockRestore();
+    }
   });
 });

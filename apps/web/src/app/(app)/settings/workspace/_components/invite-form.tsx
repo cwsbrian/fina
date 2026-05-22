@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { apiFetch } from "../../../../../lib/api";
+import styles from "../../settings.module.css";
 
 export function InviteForm({
   workspaceId,
@@ -18,6 +19,7 @@ export function InviteForm({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
     setErr(null);
     setOk(null);
@@ -26,8 +28,8 @@ export function InviteForm({
         method: "POST",
         body: JSON.stringify({ email, role }),
       });
+      setOk(`Invite sent to ${email}.`);
       setEmail("");
-      setOk(`Invite sent to ${email}`);
       onCreated();
     } catch (e) {
       setErr((e as { code?: string }).code ?? "error");
@@ -37,39 +39,41 @@ export function InviteForm({
   }
 
   return (
-    <form onSubmit={submit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <input
-        type="email"
-        required
-        placeholder="email@example.com"
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        style={{ padding: 8, border: "1px solid #ddd", borderRadius: 6, flex: 1 }}
-      />
-      <select
-        value={role}
-        onChange={(e) => setRole(e.target.value as "editor" | "viewer")}
-        style={{ padding: 8, border: "1px solid #ddd", borderRadius: 6 }}
-      >
-        <option value="editor">editor</option>
-        <option value="viewer">viewer</option>
-      </select>
-      <button
-        type="submit"
-        disabled={busy || !email}
-        style={{
-          padding: "8px 16px",
-          background: "#111",
-          color: "#fff",
-          border: "none",
-          borderRadius: 6,
-          cursor: "pointer",
-        }}
-      >
-        {busy ? "..." : "Invite"}
-      </button>
-      {err && <span style={{ color: "#c00", marginLeft: 8 }}>{err}</span>}
-      {ok && <span style={{ color: "#0a7", marginLeft: 8 }}>{ok}</span>}
+    <form onSubmit={submit}>
+      <div className={styles.inlineForm}>
+        <div className={`${styles.field} ${styles.inlineFormEmail}`}>
+          <label className={styles.fieldLabel}>Email</label>
+          <input
+            className={styles.input}
+            type="email"
+            required
+            placeholder="name@example.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="off"
+          />
+        </div>
+        <div className={`${styles.field} ${styles.inlineFormRole}`}>
+          <label className={styles.fieldLabel}>Role</label>
+          <select
+            className={styles.select}
+            value={role}
+            onChange={(e) => setRole(e.target.value as "editor" | "viewer")}
+          >
+            <option value="editor">Editor</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        </div>
+        <button
+          type="submit"
+          className={`${styles.btn} ${styles.btnPrimary}`}
+          disabled={busy || !email}
+        >
+          {busy ? "Sending…" : "Send invite"}
+        </button>
+      </div>
+      {err && <div className={styles.feedbackErr}>Could not invite: {err}</div>}
+      {ok && <div className={styles.feedbackOk}>{ok}</div>}
     </form>
   );
 }

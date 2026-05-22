@@ -1,5 +1,6 @@
 import { Cron } from "croner";
 import type { Env } from "../env.js";
+import { logInfo, logWarn, logError } from "../logger.js";
 import { runDailyRefresh } from "./jobs/daily-refresh.js";
 import { runRetryUnprocessed } from "./jobs/retry-unprocessed.js";
 import { runCleanupEvents } from "./jobs/cleanup-events.js";
@@ -7,17 +8,39 @@ import { runScheduledSpendMatch } from "./jobs/scheduled-spend-match.js";
 
 let jobs: Cron[] = [];
 
+function makeCron(
+  pattern: string,
+  name: string,
+  run: () => Promise<void>,
+): Cron {
+  return new Cron(
+    pattern,
+    {
+      name,
+      // croner's protect callback form: emits a structured warn on skipped
+      // overlapping runs. The boolean form (`protect: true`) silently
+      // skips — invisible in production logs.
+      protect: (job) =>
+        logWarn(
+          { cron: job.name ?? name, event: "protected_skip" },
+          "cron skipped — previous run still in flight",
+        ),
+    },
+    () => safe(name, run),
+  );
+}
+
 export function startScheduler(env: Env): void {
   if (!env.CRON_ENABLED) return;
 
   jobs = [
-    new Cron("0 9 * * *",    { protect: true, name: "daily-refresh" },     () => safe("daily-refresh",     () => runDailyRefresh(env))),
-    new Cron("*/10 * * * *", { protect: true, name: "retry-unprocessed" }, () => safe("retry-unprocessed", () => runRetryUnprocessed(env))),
-    new Cron("0 3 * * *",    { protect: true, name: "cleanup-events" },    () => safe("cleanup-events",    () => runCleanupEvents(env))),
-    new Cron("5 9 * * *",    { protect: true, name: "scheduled-spend-match" }, () => safe("scheduled-spend-match", () => runScheduledSpendMatch(env))),  // 5 min after daily-refresh
+    makeCron("0 9 * * *",    "daily-refresh",         () => runDailyRefresh(env)),
+    makeCron("*/10 * * * *", "retry-unprocessed",     () => runRetryUnprocessed(env)),
+    makeCron("0 3 * * *",    "cleanup-events",        () => runCleanupEvents(env)),
+    makeCron("5 9 * * *",    "scheduled-spend-match", () => runScheduledSpendMatch(env)),
   ];
 
-  console.info("cron scheduler started", { jobs: jobs.map((j) => j.name) });
+  logInfo({}, `cron scheduler started — ${jobs.length} jobs`);
 }
 
 export function stopScheduler(): void {
@@ -25,10 +48,27 @@ export function stopScheduler(): void {
   jobs = [];
 }
 
-async function safe(name: string, fn: () => Promise<void>): Promise<void> {
+/**
+ * Wraps a single cron run with structured start/success/fail logs and
+ * swallows errors so a thrown job doesn't crash the croner timer. Exported
+ * for unit testing the log shape; production callers go through `makeCron`.
+ */
+export async function safe(
+  name: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const startedAt = Date.now();
+  logInfo({ cron: name, event: "start" }, "cron started");
   try {
     await fn();
-  } catch (e) {
-    console.error("cron job uncaught", { jobName: name, err: e });
+    logInfo(
+      { cron: name, event: "success", durationMs: Date.now() - startedAt },
+      "cron ok",
+    );
+  } catch (err) {
+    logError(
+      { cron: name, event: "fail", durationMs: Date.now() - startedAt, err },
+      "cron failed",
+    );
   }
 }

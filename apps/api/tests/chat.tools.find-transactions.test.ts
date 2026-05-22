@@ -228,3 +228,84 @@ describe("findTransactions tool", () => {
     expect(ids).toContain(splitTx.id);
   });
 });
+
+describe("findTransactions tz-aware boundaries", () => {
+  let kstCtx: ToolContext;
+  let kstWsId: string;
+  let kstUserId: string;
+  let kstAcctId: string;
+
+  beforeEach(async () => {
+    // Inline-seed a KST user + workspace + account. Pattern matches the
+    // module's outer beforeEach at lines 14-27.
+    const u = await prisma.user.create({
+      data: {
+        id: `kst-${Date.now()}`,
+        email: `kst-${Date.now()}@t.co`,
+        name: "KST",
+        tz: "Asia/Seoul",
+      },
+    });
+    kstUserId = u.id;
+    const ws = await prisma.workspace.create({ data: { name: "kst-ws" } });
+    kstWsId = ws.id;
+    await prisma.membership.create({ data: { userId: kstUserId, workspaceId: kstWsId, role: "owner" } });
+    kstCtx = { env: {} as never, workspaceId: kstWsId, userId: kstUserId };
+
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: kstWsId, name: "KRW Chequing", type: "depository", currency: "KRW" },
+    });
+    kstAcctId = acct.id;
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: kstWsId } });
+  });
+
+  it("includes a transaction at KST 00:30 on the start_date day", async () => {
+    // occurredAt = 2026-03-31T15:30Z = 2026-04-01T00:30 KST (the user's
+    // notion of April 1 begins here — old UTC-midnight impl missed it).
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: kstWsId,
+        accountId: kstAcctId,
+        plaidTransactionId: "kst-1",
+        amount: "10000",
+        merchantRaw: "Coffee KST",
+        occurredAt: new Date("2026-03-31T15:30:00.000Z"),
+        rawData: {},
+      },
+    });
+
+    const result = await findTransactions.run(kstCtx, {
+      start_date: "2026-04-01",
+      end_date: "2026-04-01",
+    });
+
+    expect(result.transactions.some((t) => t.id === tx.id)).toBe(true);
+  });
+
+  it("excludes a transaction at KST 00:30 on the day AFTER end_date", async () => {
+    // occurredAt = 2026-04-01T15:30Z = 2026-04-02T00:30 KST
+    // OLD UTC impl would include (end-of-day 04-01 UTC = 23:59:59 UTC includes 15:30 UTC)
+    // NEW tz impl excludes (KST day rolled to 04-02 by then)
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: kstWsId,
+        accountId: kstAcctId,
+        plaidTransactionId: "kst-2",
+        amount: "10000",
+        merchantRaw: "Coffee KST next day",
+        occurredAt: new Date("2026-04-01T15:30:00.000Z"),
+        rawData: {},
+      },
+    });
+
+    const result = await findTransactions.run(kstCtx, {
+      start_date: "2026-04-01",
+      end_date: "2026-04-01",
+    });
+
+    expect(result.transactions.some((t) => t.id === tx.id)).toBe(false);
+  });
+});

@@ -3,25 +3,9 @@ import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
+import { testEnv } from "./helpers/test-env.js";
 
-const env = {
-  NODE_ENV: "test" as const,
-  PORT: 0,
-  DATABASE_URL: process.env.DATABASE_URL!,
-  BETTER_AUTH_SECRET: "x".repeat(48),
-  BETTER_AUTH_URL: "http://localhost:0",
-  EMAIL_FROM: "test@fina.app",
-  WEB_APP_URL: "http://localhost:3000",
-  STRIPE_SECRET_KEY: "sk_test_dummy",
-  STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
-  STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
-  PLAID_CLIENT_ID: "test_client_id",
-  PLAID_SECRET: "test_secret",
-  PLAID_ENV: "sandbox" as const,
-  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test_gemini_key",
-};
+const env = testEnv();
 
 describe("members routes", () => {
   beforeEach(async () => {

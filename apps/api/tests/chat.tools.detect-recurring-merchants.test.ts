@@ -98,7 +98,7 @@ describe("detectRecurringMerchants tool", () => {
       await addTx("gym", "20.00", d);
     }
     const res = await detectRecurringMerchants.run(ctx, {});
-    const gym = res.candidates.find((c) => c.key === "gym");
+    const gym = res.candidates.find((c) => c.merchantNormalized === "gym");
     expect(gym).toBeDefined();
     expect(gym?.currency).toBe("CAD");
     expect(gym?.occurrences).toBe(4);
@@ -112,5 +112,70 @@ describe("detectRecurringMerchants tool", () => {
     await addTx("chaotic", "50.00", new Date(base.getFullYear(), base.getMonth(), 17));
     const res = await detectRecurringMerchants.run(ctx, {});
     expect(res.candidates.find((c) => c.merchantNormalized === "chaotic")).toBeUndefined();
+  });
+});
+
+describe("multi-currency grouping", () => {
+  it("returns separate Candidates for the same merchant in different currencies", async () => {
+    const u = await prisma.user.create({
+      data: { id: `mc-${Date.now()}`, email: `mc-${Date.now()}@t.co`, name: "MC" },
+    });
+    const ws = await prisma.workspace.create({ data: { name: "mc-ws" } });
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    const ctx = { env: {} as never, workspaceId: ws.id, userId: u.id };
+
+    const usdAccount = await prisma.bankAccount.create({
+      data: { workspaceId: ws.id, name: "USD Acct", type: "depository", currency: "USD" },
+    });
+    const cadAccount = await prisma.bankAccount.create({
+      data: { workspaceId: ws.id, name: "CAD Acct", type: "depository", currency: "CAD" },
+    });
+
+    // 4 USD transactions, monthly cadence (one per month, Jan-Apr 2026)
+    for (let i = 0; i < 4; i++) {
+      await prisma.transaction.create({
+        data: {
+          workspaceId: ws.id,
+          accountId: usdAccount.id,
+          plaidTransactionId: `mc-usd-${i}`,
+          amount: "9.99",
+          merchantRaw: "Netflix",
+          merchantNormalized: "netflix",
+          occurredAt: new Date(`2026-0${i + 1}-15T00:00:00.000Z`),
+          rawData: {},
+        },
+      });
+    }
+    // 4 CAD transactions, same merchant + cadence
+    for (let i = 0; i < 4; i++) {
+      await prisma.transaction.create({
+        data: {
+          workspaceId: ws.id,
+          accountId: cadAccount.id,
+          plaidTransactionId: `mc-cad-${i}`,
+          amount: "13.99",
+          merchantRaw: "Netflix",
+          merchantNormalized: "netflix",
+          occurredAt: new Date(`2026-0${i + 1}-20T00:00:00.000Z`),
+          rawData: {},
+        },
+      });
+    }
+
+    const result = await detectRecurringMerchants.run(ctx, {
+      lookback_months: 6,
+      min_occurrences: 3,
+    });
+
+    const netflixUsd = result.candidates.find((c) => c.currency === "USD");
+    const netflixCad = result.candidates.find((c) => c.currency === "CAD");
+    expect(netflixUsd).toBeDefined();
+    expect(netflixCad).toBeDefined();
+    expect(netflixUsd?.medianAmount).toBe("9.99");
+    expect(netflixCad?.medianAmount).toBe("13.99");
+    expect(netflixUsd?.transactionIds.length).toBe(4);
+    expect(netflixCad?.transactionIds.length).toBe(4);
+
+    await prisma.workspace.delete({ where: { id: ws.id } });
   });
 });

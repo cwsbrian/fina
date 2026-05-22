@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { makeApiFetch, type MeDTO, type WorkspaceSummary } from "@fina/shared";
+import {
+  isApiError,
+  makeApiFetch,
+  type MeDTO,
+  type WorkspaceSummary,
+} from "@fina/shared";
+import { toast } from "sonner";
 import { env } from "../env";
 import { getActiveWorkspaceId } from "./active-workspace";
 
@@ -8,11 +14,32 @@ import { getActiveWorkspaceId } from "./active-workspace";
 export type Me = MeDTO;
 export type { ApiError } from "@fina/shared";
 
-export const apiFetch = makeApiFetch({
+const rawApiFetch = makeApiFetch({
   baseUrl: env.NEXT_PUBLIC_API_URL,
   getActiveWorkspaceId,
   withCredentials: true,
 });
+
+function parseRetryAfter(msg: string): number | null {
+  const m = msg.match(/Retry in (\d+)s/);
+  return m ? Number(m[1]) : null;
+}
+
+export const apiFetch: typeof rawApiFetch = async (...args) => {
+  try {
+    return await rawApiFetch(...args);
+  } catch (err) {
+    if (isApiError(err) && err.code === "rate_limit_exceeded") {
+      const secs = parseRetryAfter(err.message ?? "");
+      toast.error(
+        secs !== null
+          ? `잠시 후 다시 시도해 주세요 (${secs}초 후)`
+          : "잠시 후 다시 시도해 주세요",
+      );
+    }
+    throw err;
+  }
+};
 
 export async function bootstrapActiveWorkspace(): Promise<string | null> {
   // Always reconcile against the live list — a stored id from a workspace the

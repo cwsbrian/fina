@@ -3,6 +3,11 @@
 import { useState } from "react";
 import type { Invite } from "@fina/shared";
 import { apiFetch } from "../../../../../lib/api";
+import styles from "../../settings.module.css";
+
+function roleLabel(role: Invite["invitedRole"]): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
 
 export function PendingInvites({
   invites,
@@ -19,7 +24,9 @@ export function PendingInvites({
     if (!window.confirm("Revoke this invite?")) return;
     setBusyId(inviteId);
     try {
-      await apiFetch(`/workspaces/${workspaceId}/invites/${inviteId}`, { method: "DELETE" });
+      await apiFetch(`/workspaces/${workspaceId}/invites/${inviteId}`, {
+        method: "DELETE",
+      });
       onChange();
     } finally {
       setBusyId(null);
@@ -27,39 +34,41 @@ export function PendingInvites({
   }
 
   if (invites.length === 0) {
-    return <p style={{ opacity: 0.6, marginTop: 8 }}>No pending invites.</p>;
+    return (
+      <div className={styles.group}>
+        <div className={styles.row}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className={styles.rowMeta}>No pending invites.</div>
+          </div>
+        </div>
+      </div>
+    );
   }
+
   return (
-    <ul style={{ listStyle: "none", padding: 0 }}>
+    <div className={styles.group}>
       {invites.map((i) => (
-        <li
-          key={i.id}
-          style={{
-            padding: 8,
-            borderBottom: "1px solid #f5f5f5",
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <span>
-            {i.invitedEmail} <span style={{ opacity: 0.6 }}>({i.invitedRole})</span>
-          </span>
+        <div key={i.id} className={styles.row}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div className={styles.rowTitle}>
+              {i.invitedEmail}
+              <span className={`${styles.pill} ${styles.pillNeutral}`}>
+                <span className={styles.pillDot} />
+                {roleLabel(i.invitedRole)}
+              </span>
+            </div>
+            <div className={styles.rowMeta}>Awaiting acceptance</div>
+          </div>
           <button
+            type="button"
+            className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`}
             onClick={() => revoke(i.id)}
             disabled={busyId === i.id}
-            style={{
-              padding: "4px 10px",
-              background: "#fff",
-              border: "1px solid #ddd",
-              borderRadius: 6,
-              cursor: "pointer",
-            }}
           >
-            Revoke
+            {busyId === i.id ? "Revoking…" : "Revoke"}
           </button>
-        </li>
+        </div>
       ))}
-    </ul>
+    </div>
   );
 }

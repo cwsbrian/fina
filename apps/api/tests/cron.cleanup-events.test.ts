@@ -2,25 +2,9 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { runCleanupEvents } from "../src/cron/jobs/cleanup-events.js";
+import { testEnv } from "./helpers/test-env.js";
 
-const env = {
-  NODE_ENV: "test" as const,
-  PORT: 0,
-  DATABASE_URL: process.env.DATABASE_URL!,
-  BETTER_AUTH_SECRET: "x".repeat(48),
-  BETTER_AUTH_URL: "http://localhost:0",
-  EMAIL_FROM: "test@fina.app",
-  WEB_APP_URL: "http://localhost:3000",
-  STRIPE_SECRET_KEY: "sk_test_dummy",
-  STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
-  STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
-  PLAID_CLIENT_ID: "test_client_id",
-  PLAID_SECRET: "test_secret",
-  PLAID_ENV: "sandbox" as const,
-  ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test_gemini_key",
-};
+const env = testEnv();
 
 beforeEach(async () => { await truncateAll(); });
 afterAll(async () => { await disconnect(); });
@@ -79,5 +63,73 @@ describe("runCleanupEvents", () => {
     await runCleanupEvents({ ...env, CRON_EVENT_TTL_DAYS: 30 });
 
     expect(await prisma.plaidWebhookEvent.findMany()).toHaveLength(0);
+  });
+});
+
+describe("cleanup-events ScheduledSpend pass", () => {
+  it("deletes resolved ScheduledSpends older than the TTL (default 90 days)", async () => {
+    const ws = await prisma.workspace.create({ data: { name: "ss-cleanup-ws" } });
+    const cat = await prisma.category.create({ data: { workspaceId: ws.id, name: "Bills" } });
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: ws.id, name: "Chequing", type: "depository" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: ws.id,
+        accountId: acct.id,
+        plaidTransactionId: "ss-tx-1",
+        amount: "30.00",
+        merchantRaw: "Rent",
+        occurredAt: new Date("2026-04-01T12:00:00Z"),
+        rawData: {},
+      },
+    });
+
+    // Resolved + old (dismissedAt set, updatedAt 91 days ago) → should DELETE
+    const oldDismissed = await prisma.scheduledSpend.create({
+      data: {
+        workspaceId: ws.id,
+        categoryId: cat.id,
+        amount: "20.00",
+        scheduledDate: new Date("2025-12-01"),
+        dismissedAt: new Date("2026-01-01"),
+      },
+    });
+    await prisma.$executeRawUnsafe(
+      `UPDATE scheduled_spends SET "updatedAt" = NOW() - INTERVAL '91 days' WHERE id = '${oldDismissed.id}'`,
+    );
+
+    // Resolved + recent (matchedTxId set, updatedAt 30 days ago) → should NOT delete
+    const recentMatched = await prisma.scheduledSpend.create({
+      data: {
+        workspaceId: ws.id,
+        categoryId: cat.id,
+        amount: "30.00",
+        scheduledDate: new Date("2026-04-01"),
+        matchedTxId: tx.id,
+      },
+    });
+    await prisma.$executeRawUnsafe(
+      `UPDATE scheduled_spends SET "updatedAt" = NOW() - INTERVAL '30 days' WHERE id = '${recentMatched.id}'`,
+    );
+
+    // Unresolved + old (neither set, updatedAt 120 days ago) → should NOT delete
+    const oldUnresolved = await prisma.scheduledSpend.create({
+      data: {
+        workspaceId: ws.id,
+        categoryId: cat.id,
+        amount: "40.00",
+        scheduledDate: new Date("2025-12-15"),
+      },
+    });
+    await prisma.$executeRawUnsafe(
+      `UPDATE scheduled_spends SET "updatedAt" = NOW() - INTERVAL '120 days' WHERE id = '${oldUnresolved.id}'`,
+    );
+
+    await runCleanupEvents(env);
+
+    expect(await prisma.scheduledSpend.findUnique({ where: { id: oldDismissed.id } })).toBeNull();
+    expect(await prisma.scheduledSpend.findUnique({ where: { id: recentMatched.id } })).not.toBeNull();
+    expect(await prisma.scheduledSpend.findUnique({ where: { id: oldUnresolved.id } })).not.toBeNull();
   });
 });

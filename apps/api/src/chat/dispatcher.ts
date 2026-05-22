@@ -1,4 +1,5 @@
 import type { ToolContext, ToolDef } from "./tools/types.js";
+import { logError } from "../logger.js";
 
 export type DispatchResult =
   | { ok: true; result: unknown }
@@ -21,7 +22,7 @@ export async function dispatchTool(
     return { ok: true, result };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("chat tool failed", { toolName, err: e });
+    logError({ tool: toolName, err: e }, "chat tool failed");
     return { ok: false, error: msg.slice(0, 500) };
   }
 }

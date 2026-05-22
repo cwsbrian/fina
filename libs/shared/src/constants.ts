@@ -16,3 +16,29 @@ export const DEFAULT_CURRENCY = "CAD";
 
 /** Default user timezone. Mirrors `User.tz` Prisma default. */
 export const DEFAULT_TZ = "America/Toronto";
+
+/** Per-route rate-limit policies. Keys map 1:1 to logical buckets;
+ * the API's `withRateLimit(key)` helper translates these into the
+ * @fastify/rate-limit plugin config. Frontend may import for
+ * client-side "X requests remaining" UI later. */
+export const RATE_LIMITS = {
+  /** Default for any route without an explicit override. Keyed by IP. */
+  globalDefault: { max: 60, windowMs: 60_000 },
+  /** Heaviest cost — guards LLM token spend. Keyed by user id. */
+  chatMessages: { max: 30, windowMs: 60_000 },
+  /** Credential-stuffing protection — sign-in / sign-up only. 5 attempts per
+   *  minute per IP is realistic for humans and slows automated guessing to
+   *  near-zero throughput. Wired by server.ts onto /api/auth/sign-in/* and
+   *  /api/auth/sign-up/* (Plan 1J Task 8). */
+  authStrict: { max: 5, windowMs: 60_000 },
+  /** All other /api/auth/* paths (get-session, list-sessions, sign-out, etc.).
+   *  30/min/IP accommodates Better Auth's get-session polling fired on every
+   *  page load by the web client. 5/min was too tight — a logged-in user
+   *  would hit 429 after ~5 page navigations. (Was 5/min in plan 1H; raised
+   *  to 30 in hotfix 4108020 and reaffirmed here as the long-term value.) */
+  auth: { max: 30, windowMs: 60_000 },
+  /** Plaid Link callback / re-exchange. Keyed by user id. */
+  plaidExchange: { max: 5, windowMs: 60_000 },
+} as const;
+
+export type RateLimitKey = keyof typeof RATE_LIMITS;

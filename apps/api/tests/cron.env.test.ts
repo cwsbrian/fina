@@ -18,6 +18,7 @@ const base = {
   PLAID_ENV: "sandbox",
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
   GEMINI_API_KEY: "test_gemini_key",
+  TRUST_PROXY: "false",
 };
 
 describe("CRON env vars", () => {

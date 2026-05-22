@@ -16,6 +16,7 @@ const BASE = {
   PLAID_SECRET: "x",
   ENCRYPTION_KEY: Buffer.alloc(32).toString("base64"),
   GEMINI_API_KEY: "x",
+  TRUST_PROXY: "false",
 };
 
 describe("chat env keys", () => {

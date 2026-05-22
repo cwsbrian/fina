@@ -73,6 +73,9 @@ export const API_ERROR_CODES = [
   "chat_provider_error",
   "not_member",
 
+  // Rate limiting
+  "rate_limit_exceeded",
+
   // Billing
   "payment_required",
   "checkout_failed",
