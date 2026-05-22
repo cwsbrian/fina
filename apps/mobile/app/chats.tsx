@@ -7,6 +7,7 @@ import {
   FlatList,
   RefreshControl,
   ActivityIndicator,
+  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, router, Stack } from "expo-router";
@@ -26,6 +27,7 @@ export default function Chats() {
   const [threads, setThreads] = useState<ThreadRow[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -49,6 +51,27 @@ export default function Chats() {
     setRefreshing(false);
   };
 
+  const onNewChat = async () => {
+    if (creating) return;
+    setCreating(true);
+    try {
+      const created = await apiFetch<{ thread: ChatThreadDTO }>("/chat/threads", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      // Replace this history screen with the new thread so back from
+      // detail returns to the Chat tab, not an empty history view.
+      router.replace(`/chat/${created.thread.id}` as never);
+    } catch (e) {
+      Alert.alert(
+        "Could not start chat",
+        (e as { code?: string }).code ?? "Try again in a moment.",
+      );
+    } finally {
+      setCreating(false);
+    }
+  };
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -61,7 +84,15 @@ export default function Chats() {
           <Ionicons name="chevron-back" size={22} color={colors.ink} />
         </Pressable>
         <Text style={styles.headerTitle}>Chat history</Text>
-        <View style={styles.headerBtn} />
+        <Pressable
+          style={({ pressed }) => [styles.headerBtn, pressed && { opacity: 0.5 }]}
+          onPress={onNewChat}
+          disabled={creating}
+          hitSlop={8}
+          accessibilityLabel="New chat"
+        >
+          <Ionicons name="create-outline" size={22} color={colors.ink} />
+        </Pressable>
       </View>
 
       {threads === null && !err && (
