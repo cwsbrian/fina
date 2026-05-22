@@ -133,7 +133,7 @@ export default function PlanPage() {
             <div className={styles.planCurrentStatus}>
               {days != null ? `${days} day${days === 1 ? "" : "s"} left.` : ""}{" "}
               {hasSchedule
-                ? `Switches to ${upcomingLabel} on ${at} — ${upcomingPrice} will be charged.`
+                ? `Switches to ${upcomingLabel} on ${at}. ${upcomingPrice} will be charged.`
                 : `${upcomingPrice} will be charged on ${at}.`}
             </div>
           </div>
@@ -210,7 +210,7 @@ export default function PlanPage() {
             <div className={styles.planCurrentLabel}>Current plan</div>
             <div className={styles.planCurrentName}>{currentLabel}</div>
             <div className={styles.planCurrentStatus}>
-              Switches to {nextLabel} on {at} — {PRICING[sub.pendingTier].displayPrice} will be charged.
+              Switches to {nextLabel} on {at}. {PRICING[sub.pendingTier].displayPrice} will be charged.
             </div>
           </div>
           <div className={styles.planCurrentActions}>
