@@ -6,10 +6,12 @@ import {
   Pressable,
   TextInput,
   FlatList,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
   Alert,
+  Animated,
+  Keyboard,
+  Easing,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type {
@@ -40,6 +42,45 @@ export function ThreadView({ threadId, embedded = false }: Props) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
+  // Manual keyboard-driven padding — gives pixel-perfect sync with
+  // the native keyboard animation. KeyboardAvoidingView's default
+  // easing on iOS doesn't always match the keyboard frame timing,
+  // which reads as a "snap" or lag depending on which leads. We
+  // listen to keyboardWillShow/Hide (iOS) or keyboardDidShow/Hide
+  // (Android — only Did fires there) and drive an Animated.Value
+  // with the duration the OS reports for this specific keyboard.
+  const keyboardPad = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const show = Keyboard.addListener(showEvt, (e) => {
+      // On embedded (Chat tab) mode, the screen container already
+      // sits above the tab bar (height ≈ 56 + safeBottom). The
+      // keyboard covers that strip too, so we only need to add the
+      // *extra* keyboard height beyond what the tab bar was occupying.
+      const tabBarSlack = embedded ? 56 : 0;
+      const target = Math.max(0, e.endCoordinates.height - tabBarSlack);
+      Animated.timing(keyboardPad, {
+        toValue: target,
+        duration: e.duration ?? 250,
+        easing: Easing.bezier(0.17, 0.59, 0.4, 0.77),
+        useNativeDriver: false,
+      }).start();
+    });
+    const hide = Keyboard.addListener(hideEvt, (e) => {
+      Animated.timing(keyboardPad, {
+        toValue: 0,
+        duration: e.duration ?? 250,
+        easing: Easing.bezier(0.17, 0.59, 0.4, 0.77),
+        useNativeDriver: false,
+      }).start();
+    });
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, [embedded, keyboardPad]);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -129,16 +170,7 @@ export function ThreadView({ threadId, embedded = false }: Props) {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={{ flex: 1 }}
-      behavior={Platform.OS === "ios" ? "padding" : undefined}
-      // 0 in both modes: in the tab-embedded case the view already ends
-      // above the tab bar (Expo Router's screen container is sized
-      // accordingly), so KAV's natural keyboard-overlap calculation is
-      // correct. An offset here would ADD a gap equal to its value —
-      // exactly the bug this comment was written to prevent.
-      keyboardVerticalOffset={0}
-    >
+    <Animated.View style={{ flex: 1, paddingBottom: keyboardPad }}>
       <FlatList
         ref={listRef}
         data={messages}
@@ -184,7 +216,7 @@ export function ThreadView({ threadId, embedded = false }: Props) {
           )}
         </Pressable>
       </View>
-    </KeyboardAvoidingView>
+    </Animated.View>
   );
 }
 
