@@ -40,7 +40,12 @@ describe("parseOccurredAt", () => {
   it("rejects 2026-13-01", () => expect(() => parseOccurredAt("2026-13-01")).toThrow(TxValidationError));
   it("rejects 2026-02-30 (impossible)", () => expect(() => parseOccurredAt("2026-02-30")).toThrow(TxValidationError));
   it("rejects empty", () => expect(() => parseOccurredAt("")).toThrow(TxValidationError));
-  it("rejects ISO datetime", () => expect(() => parseOccurredAt("2026-05-19T00:00:00Z")).toThrow(TxValidationError));
+  it("accepts ISO datetime with timezone", () => {
+    const d = parseOccurredAt("2026-05-19T15:30:00.000Z");
+    expect(d.toISOString()).toBe("2026-05-19T15:30:00.000Z");
+  });
+  it("rejects ISO without timezone", () =>
+    expect(() => parseOccurredAt("2026-05-19T00:00:00")).toThrow(TxValidationError));
   it("error code is invalid_date", () => {
     expect.assertions(1);
     try { parseOccurredAt("bad"); }

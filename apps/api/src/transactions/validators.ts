@@ -1,4 +1,4 @@
-import { MAX_AMOUNT, AMOUNT_RE, DATE_RE } from "@fina/shared";
+import { MAX_AMOUNT, AMOUNT_RE, DATE_RE, ISO_INSTANT_RE } from "@fina/shared";
 
 export type TxValidationCode =
   | "invalid_amount"
@@ -25,12 +25,22 @@ export function validateAmount(amount: number): void {
 }
 
 export function parseOccurredAt(s: string): Date {
-  if (!DATE_RE.test(s)) throw new TxValidationError("invalid_date");
-  const d = new Date(s + "T12:00:00Z");
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
-    throw new TxValidationError("invalid_date");
+  // Accept either YYYY-MM-DD (legacy) or full ISO 8601 with tz so
+  // manual transactions can carry the user-chosen time. Mirrors shared
+  // validation/dates.parseOccurredAt.
+  if (DATE_RE.test(s)) {
+    const d = new Date(s + "T12:00:00Z");
+    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
+      throw new TxValidationError("invalid_date");
+    }
+    return d;
   }
-  return d;
+  if (ISO_INSTANT_RE.test(s)) {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) throw new TxValidationError("invalid_date");
+    return d;
+  }
+  throw new TxValidationError("invalid_date");
 }
 
 export function validateMerchantRaw(raw: string): string {

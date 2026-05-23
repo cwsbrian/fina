@@ -108,16 +108,18 @@ describe("createManualTransactionService", () => {
     ).rejects.toMatchObject({ code: "account_not_found" });
   });
 
-  it("rejects amount <= 0", async () => {
+  it("rejects amount === 0 or |amount| out of range", async () => {
     const { wsId, userId } = await setupEditor("mtam@t.co");
     await expect(
       createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 0, occurredAt: "2026-05-17" }),
     ).rejects.toMatchObject({ code: "invalid_amount" });
-    await expect(
-      createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: -1, occurredAt: "2026-05-17" }),
-    ).rejects.toMatchObject({ code: "invalid_amount" });
+    // Negative amounts are valid now — manual tx accepts signed amounts
+    // so the user can record income (Plaid convention: amount < 0 = credit).
     await expect(
       createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: 1_000_000_000, occurredAt: "2026-05-17" }),
+    ).rejects.toMatchObject({ code: "invalid_amount" });
+    await expect(
+      createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "X", amount: -1_000_000_000, occurredAt: "2026-05-17" }),
     ).rejects.toMatchObject({ code: "invalid_amount" });
     // Fractional-cent values would round to 0.00 in Decimal(14,2)
     for (const bad of [0.004, 1.234, 0.000000001, 0.009999999999]) {
