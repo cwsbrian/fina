@@ -143,6 +143,8 @@ export function CategoryPickerSheet({
     <BottomSheetModal
       ref={ref}
       snapPoints={snapPoints}
+      enableDynamicSizing={false}
+      index={0}
       backdropComponent={renderBackdrop}
       onDismiss={onClose}
       handleIndicatorStyle={styles.grabber}
