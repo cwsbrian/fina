@@ -37,9 +37,10 @@ export default function NewTransaction() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      // Expense → negative; Income → positive. Backend stores signed
-      // decimals; the activity row formatter flips the sign for display.
-      const signed = kind === "expense" ? -Math.abs(num) : Math.abs(num);
+      // Plaid convention: amount positive = spend (expense), negative =
+      // credit (income). The activity formatter reads the sign to color
+      // and prefix the row.
+      const signed = kind === "income" ? -Math.abs(num) : Math.abs(num);
       await apiFetch(`/workspaces/${wsId}/transactions/manual`, {
         method: "POST",
         body: JSON.stringify({

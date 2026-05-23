@@ -1,10 +1,10 @@
 import { Prisma } from "@prisma/client";
+import { MAX_AMOUNT, AMOUNT_RE } from "@fina/shared";
 import { normalizeMerchant } from "../categorize/normalize.js";
 import { dateKeyInTz, resolveUserTz } from "../chat/tools/periods.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import {
   TxValidationError,
-  validateAmount as validateAmountShared,
   validateMerchantRaw as validateMerchantRawShared,
   validateNote as validateNoteShared,
   parseOccurredAt as parseOccurredAtShared,
@@ -74,8 +74,16 @@ function rethrow<T>(fn: () => T): T {
 function validateMerchantRaw(raw: string): string {
   return rethrow(() => validateMerchantRawShared(raw));
 }
+// Manual transactions can be either spend (positive) or income (negative),
+// mirroring Plaid's signed amount convention. The shared validator is
+// positive-only, so we apply an absolute check here.
 function validateAmount(amount: number): void {
-  rethrow(() => validateAmountShared(amount));
+  if (!Number.isFinite(amount) || amount === 0 || Math.abs(amount) > MAX_AMOUNT) {
+    throw new CreateManualTxError("invalid_amount");
+  }
+  if (!AMOUNT_RE.test(String(Math.abs(amount)))) {
+    throw new CreateManualTxError("invalid_amount");
+  }
 }
 function validateNote(note: string | undefined): string | null {
   return rethrow(() => validateNoteShared(note));
