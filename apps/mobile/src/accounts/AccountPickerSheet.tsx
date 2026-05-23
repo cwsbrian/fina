@@ -12,8 +12,12 @@ import BottomSheet, {
   BottomSheetFlatList,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
+import { Swipeable } from "react-native-gesture-handler";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+
+// Same pastel pair as the category picker's swipe action.
+const SWIPE_DELETE_FG = "#b54550";
 import type { BankAccountDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
@@ -37,16 +41,6 @@ function label(a: BankAccountDTO): string {
   return a.mask ? `${name} ··${a.mask}` : name;
 }
 
-function iconForType(type: string): keyof typeof Ionicons.glyphMap {
-  // Map common Plaid + our manual types to a glyph that hints at the
-  // account kind. Manual types we suggest in the create form: depository
-  // (cash / checking), credit (credit card), loan, investment.
-  if (type === "credit") return "card-outline";
-  if (type === "loan") return "document-text-outline";
-  if (type === "investment") return "trending-up-outline";
-  return "cash-outline"; // depository / default
-}
-
 export function AccountPickerSheet({
   visible,
   txId,
@@ -55,6 +49,7 @@ export function AccountPickerSheet({
   onChange,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
+  const swipeRefs = useRef<Map<string, Swipeable | null>>(new Map());
   const [accts, setAccts] = useState<BankAccountDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -115,9 +110,43 @@ export function AccountPickerSheet({
   };
 
   const startCreate = useCallback(() => {
-    ref.current?.close();
+    // Don't close the sheet — the new-account screen pops back into a
+    // still-open picker so Cancel + Save both land the user where they
+    // expected. useFocusEffect refreshes the list on return.
     router.push(`/transactions/${txId}/new-account` as never);
   }, [txId]);
+
+  const confirmArchive = useCallback((a: BankAccountDTO) => {
+    Alert.alert(
+      `Delete "${a.name}"?`,
+      "Existing transactions assigned to this account keep their link.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const wsId = await getActiveWorkspaceId();
+              if (!wsId) throw new Error("no_workspace");
+              await apiFetch(`/workspaces/${wsId}/accounts/${a.id}`, {
+                method: "PATCH",
+                body: JSON.stringify({ archived: true }),
+              });
+              setAccts((prev) =>
+                prev ? prev.filter((x) => x.id !== a.id) : prev,
+              );
+            } catch (e) {
+              Alert.alert(
+                "Couldn't delete account",
+                (e as { code?: string }).code ?? "Try again.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  }, []);
 
   const items: Item[] = useMemo(() => {
     if (!accts) return [];
@@ -147,7 +176,10 @@ export function AccountPickerSheet({
       enableDynamicSizing={false}
       index={visible ? 0 : -1}
       backdropComponent={renderBackdrop}
-      onClose={onClose}
+      onClose={() => {
+        swipeRefs.current.forEach((s) => s?.close());
+        onClose();
+      }}
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
@@ -228,34 +260,59 @@ export function AccountPickerSheet({
             const isSel = a.id === selectedId;
             const isSaving = saving === a.id;
             return (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.row,
-                  pressed && { backgroundColor: colors.surfaceSoft },
-                ]}
-                disabled={!!saving}
-                onPress={() => pick(a)}
-              >
-                <View style={styles.glyph}>
-                  <Ionicons
-                    name={iconForType(a.type)}
-                    size={16}
-                    color={colors.muted}
-                  />
-                </View>
-                <Text style={styles.name}>{label(a)}</Text>
-                {isSaving ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : isSel ? (
-                  <View style={styles.selectedMark}>
-                    <Ionicons
-                      name="checkmark"
-                      size={14}
-                      color={colors.onPrimary}
-                    />
+              <Swipeable
+                ref={(r) => {
+                  if (r) swipeRefs.current.set(a.id, r);
+                  else swipeRefs.current.delete(a.id);
+                }}
+                friction={2}
+                rightThreshold={40}
+                overshootRight={false}
+                renderRightActions={() => (
+                  <View style={styles.swipeActions}>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.swipeBtn,
+                        styles.deleteBtn,
+                        pressed && { opacity: 0.6 },
+                      ]}
+                      onPress={() => confirmArchive(a)}
+                    >
+                      <Ionicons
+                        name="trash-outline"
+                        size={20}
+                        color={SWIPE_DELETE_FG}
+                      />
+                      <Text style={[styles.swipeBtnText, { color: SWIPE_DELETE_FG }]}>
+                        Delete
+                      </Text>
+                    </Pressable>
                   </View>
-                ) : null}
-              </Pressable>
+                )}
+              >
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.row,
+                    { backgroundColor: colors.canvas },
+                    pressed && { backgroundColor: colors.surfaceSoft },
+                  ]}
+                  disabled={!!saving}
+                  onPress={() => pick(a)}
+                >
+                  <Text style={styles.name}>{label(a)}</Text>
+                  {isSaving ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : isSel ? (
+                    <View style={styles.selectedMark}>
+                      <Ionicons
+                        name="checkmark"
+                        size={14}
+                        color={colors.onPrimary}
+                      />
+                    </View>
+                  ) : null}
+                </Pressable>
+              </Swipeable>
             );
           }}
         />
@@ -314,8 +371,17 @@ const styles = StyleSheet.create({
   sep: {
     height: 1,
     backgroundColor: colors.hairlineSoft,
-    marginLeft: 24 + 34 + 12,
+    marginLeft: 24,
   },
+  swipeActions: { flexDirection: "row" },
+  swipeBtn: {
+    width: 78,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  swipeBtnText: { ...type$.bodySm, fontWeight: "600" },
+  deleteBtn: { backgroundColor: "#fde6e7" },
   selectedMark: {
     width: 22,
     height: 22,

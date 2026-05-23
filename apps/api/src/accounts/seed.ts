@@ -20,14 +20,25 @@ export async function seedDefaultAccounts(
   workspaceId: string,
   currency: string,
 ): Promise<void> {
+  // There's no unique constraint on (workspaceId, name) so createMany's
+  // skipDuplicates can't help. Read existing names first and only insert
+  // the missing ones — keeps re-seed/backfill idempotent.
+  const existing = await tx.bankAccount.findMany({
+    where: { workspaceId },
+    select: { name: true },
+  });
+  const taken = new Set(existing.map((e) => e.name.toLowerCase()));
+  const fresh = DEFAULT_ACCOUNTS.filter(
+    (a) => !taken.has(a.name.toLowerCase()),
+  );
+  if (fresh.length === 0) return;
   await tx.bankAccount.createMany({
-    data: DEFAULT_ACCOUNTS.map((a) => ({
+    data: fresh.map((a) => ({
       workspaceId,
       name: a.name,
       type: a.type,
       currency,
       status: "active",
     })),
-    skipDuplicates: true,
   });
 }

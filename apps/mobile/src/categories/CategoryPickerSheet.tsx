@@ -150,7 +150,8 @@ export function CategoryPickerSheet({
   const startCreate = useCallback(() => {
     // Only meaningful in patch mode — select mode hides the row.
     if (!txId) return;
-    ref.current?.close();
+    // Keep the sheet open so Cancel on the new-category screen lands
+    // back on the same picker; useFocusEffect refreshes on return.
     router.push(`/transactions/${txId}/new-category` as never);
   }, [txId]);
 
