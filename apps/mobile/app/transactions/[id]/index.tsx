@@ -24,7 +24,6 @@ import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
 import { DatePickerSheet } from "../../../src/datetime/DatePickerSheet";
-import { AmountEditorSheet } from "../../../src/transactions/AmountEditorSheet";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -38,7 +37,6 @@ export default function TransactionDetail() {
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const [amountEditorOpen, setAmountEditorOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -177,7 +175,9 @@ export default function TransactionDetail() {
                 styles.row,
                 pressed && { backgroundColor: colors.surfaceSoft },
               ]}
-              onPress={() => setAmountEditorOpen(true)}
+              onPress={() =>
+                router.push(`/transactions/${tx.id}/edit-amount` as never)
+              }
             >
               <Text style={styles.rowLabel}>Amount</Text>
               <View style={styles.rowValueWrap}>
@@ -400,17 +400,6 @@ export default function TransactionDetail() {
           </Pressable>
         </View>
       </ScrollView>
-
-      <AmountEditorSheet
-        visible={amountEditorOpen}
-        txId={tx.id}
-        initial={tx.amount}
-        onClose={() => setAmountEditorOpen(false)}
-        onSaved={(next) => {
-          setTx({ ...tx, amount: next });
-          setAmountEditorOpen(false);
-        }}
-      />
 
       <DatePickerSheet
         visible={datePickerOpen}
