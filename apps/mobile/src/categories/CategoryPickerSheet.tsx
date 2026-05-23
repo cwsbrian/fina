@@ -192,6 +192,7 @@ export function CategoryPickerSheet({
 
       {cats && (
         <BottomSheetFlatList
+          style={{ flex: 1 }}
           data={items}
           keyExtractor={(item) =>
             item.kind === "cat" ? item.cat.id : item.kind
