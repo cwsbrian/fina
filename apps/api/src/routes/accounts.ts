@@ -10,6 +10,45 @@ const AccountsQuerySchema = z.object({
   includeArchived: z.enum(["true", "false"]).transform((v) => v === "true").optional().default("false"),
 });
 
+const CreateAccountBody = z.object({
+  name: z.string().trim().min(1).max(80),
+  type: z.string().max(40).optional(),
+});
+
+function dto(a: {
+  id: string;
+  plaidItemId: string | null;
+  plaidAccountId: string | null;
+  name: string;
+  officialName: string | null;
+  mask: string | null;
+  type: string;
+  subtype: string | null;
+  currency: string;
+  status: string;
+  balanceCurrent: { toString: () => string } | null;
+  balanceAvailable: { toString: () => string } | null;
+  balanceLimit: { toString: () => string } | null;
+  archivedAt: Date | null;
+}): unknown {
+  return {
+    id: a.id,
+    plaidItemId: a.plaidItemId,
+    plaidAccountId: a.plaidAccountId,
+    name: a.name,
+    officialName: a.officialName,
+    mask: a.mask,
+    type: a.type,
+    subtype: a.subtype,
+    currency: a.currency,
+    status: a.status,
+    balanceCurrent: a.balanceCurrent?.toString() ?? null,
+    balanceAvailable: a.balanceAvailable?.toString() ?? null,
+    balanceLimit: a.balanceLimit?.toString() ?? null,
+    archivedAt: a.archivedAt?.toISOString() ?? null,
+  };
+}
+
 export async function accountsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/workspaces/:id/accounts", async (req, reply) => {
     const params = req.params as { id: string };
@@ -28,24 +67,36 @@ export async function accountsRoutes(app: FastifyInstance): Promise<void> {
         },
         orderBy: { createdAt: "desc" },
       });
-      return {
-        accounts: rows.map((a) => ({
-          id: a.id,
-          plaidItemId: a.plaidItemId,
-          plaidAccountId: a.plaidAccountId,
-          name: a.name,
-          officialName: a.officialName,
-          mask: a.mask,
-          type: a.type,
-          subtype: a.subtype,
-          currency: a.currency,
-          status: a.status,
-          balanceCurrent: a.balanceCurrent?.toString() ?? null,
-          balanceAvailable: a.balanceAvailable?.toString() ?? null,
-          balanceLimit: a.balanceLimit?.toString() ?? null,
-          archivedAt: a.archivedAt?.toISOString() ?? null,
-        })),
-      };
+      return { accounts: rows.map(dto) };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.post("/workspaces/:id/accounts", async (req, reply) => {
+    const params = req.params as { id: string };
+    const parsed = CreateAccountBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const workspace = await prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.membership.workspaceId },
+        select: { currency: true },
+      });
+      const created = await prisma.bankAccount.create({
+        data: {
+          workspaceId: ctx.membership.workspaceId,
+          name: parsed.data.name.trim(),
+          type: parsed.data.type ?? "depository",
+          currency: workspace.currency,
+          status: "active",
+        },
+      });
+      return reply.code(201).send({ account: dto(created) });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;

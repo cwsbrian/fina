@@ -24,6 +24,7 @@ import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
 import { DatePickerSheet } from "../../../src/datetime/DatePickerSheet";
+import { AccountPickerSheet } from "../../../src/accounts/AccountPickerSheet";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -37,6 +38,7 @@ export default function TransactionDetail() {
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [accountPickerOpen, setAccountPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -196,9 +198,7 @@ export default function TransactionDetail() {
           <DetailRow
             label="Account"
             editable={tx.source === "manual"}
-            onPress={() =>
-              router.push(`/transactions/${tx.id}/edit-account` as never)
-            }
+            onPress={() => setAccountPickerOpen(true)}
           >
             <Text style={styles.rowValue}>{accountLabel(account)}</Text>
           </DetailRow>
@@ -399,6 +399,17 @@ export default function TransactionDetail() {
               (e as { code?: string }).code ?? "Try again.",
             );
           }
+        }}
+      />
+
+      <AccountPickerSheet
+        visible={accountPickerOpen}
+        txId={tx.id}
+        selectedId={tx.accountId}
+        onClose={() => setAccountPickerOpen(false)}
+        onChange={() => {
+          setAccountPickerOpen(false);
+          load();
         }}
       />
 
