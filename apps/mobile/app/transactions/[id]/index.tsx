@@ -418,7 +418,7 @@ const styles = StyleSheet.create({
   hero: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xl },
   heroTop: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     gap: space.sm + 2,
     marginBottom: space.base,
   },
