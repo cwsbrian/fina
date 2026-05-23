@@ -42,7 +42,7 @@ export function NoteEditorSheet({
   const [draft, setDraft] = useState(initialNote ?? "");
   const [saving, setSaving] = useState(false);
 
-  const snapPoints = useMemo(() => ["50%"], []);
+  const snapPoints = useMemo(() => ["90%"], []);
 
   useEffect(() => {
     if (visible) {
@@ -96,7 +96,7 @@ export function NoteEditorSheet({
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
-      keyboardBehavior="extend"
+      keyboardBehavior="fillParent"
       keyboardBlurBehavior="restore"
       android_keyboardInputMode="adjustResize"
     >
