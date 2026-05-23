@@ -285,15 +285,29 @@ export default function Activity() {
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
 
-      <DateRangeSheet
-        visible={rangeOpen}
-        value={range}
-        onClose={() => setRangeOpen(false)}
-        onConfirm={(next) => {
-          setRange(next);
-          setRangeOpen(false);
-        }}
-      />
+      {/* Wrap the sheet in a high-zIndex pass-through layer so its backdrop
+          dims the Activity header + status bar background too. pointerEvents:
+          box-none keeps the wrapper itself non-blocking when the sheet is
+          closed (index=-1). */}
+      <View
+        pointerEvents="box-none"
+        style={StyleSheet.absoluteFill as never}
+      >
+        <View
+          pointerEvents="box-none"
+          style={{ flex: 1, zIndex: 20 }}
+        >
+          <DateRangeSheet
+            visible={rangeOpen}
+            value={range}
+            onClose={() => setRangeOpen(false)}
+            onConfirm={(next) => {
+              setRange(next);
+              setRangeOpen(false);
+            }}
+          />
+        </View>
+      </View>
     </View>
   );
 }
