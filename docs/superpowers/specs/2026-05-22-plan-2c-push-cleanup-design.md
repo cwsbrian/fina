@@ -31,7 +31,7 @@ export const UnregisterDeviceBody = z.object({
 export type UnregisterDeviceBody = z.infer<typeof UnregisterDeviceBody>;
 ```
 
-**`libs/shared/src/index.ts`** — 변경 없음. `schemas/devices.js`는 이미 re-export 중.
+**`libs/shared/src/index.ts`** — 변경 없음. `schemas/devices.js`는 이미 re-export 중 (`export * from "./schemas/devices.js";`이라 새 export 자동 노출). T1 implementer가 `grep "schemas/devices" libs/shared/src/index.ts`로 1줄 확인 권장.
 
 **`libs/shared/src/logging.ts`** — 1개 필드 추가:
 
@@ -128,13 +128,13 @@ export async function unregisterForPushNotifications(): Promise<void> {
 `registerForPushNotifications` 함수와 동일한 패턴:
 - 같은 projectId 추출 / placeholder guard / token 재취득
 - 모든 실패 path silent
-- `apiFetch("/devices", { method: "DELETE", body: ... })` 패턴은 이미 web에서 사용 중 (`banks-list`, `pending-invites` 등 3곳). RN 0.71+의 `fetch`도 DELETE body 지원.
+- `apiFetch("/devices", { method: "DELETE", body: ... })` — DELETE-with-body는 RN 0.71+의 `fetch`가 지원하고 `makeApiFetch` factory가 body 있을 때 `content-type` 자동 설정. **단 in-repo 기존 DELETE callsites는 모두 path param 사용 (no body)** — 본 plan이 첫 사례이니 implementer가 mobile에서 한 번 manual smoke 권장 (curl 또는 mobile 실기기).
 
 ### Sign-out callsites
 
-**File:** `apps/mobile/app/(tabs)/more.tsx` — 두 callsite 모두 `signOut()` 직전에 `await unregisterForPushNotifications()` 추가:
+**File:** `apps/mobile/app/(tabs)/more.tsx` — 두 callsite 모두 `signOut()` 직전에 `await unregisterForPushNotifications()` 추가 (코드 컨텍스트 anchor, 라인 번호는 본 plan의 import 추가로 drift 발생 가능):
 
-1. Regular sign-out button (`more.tsx:81`):
+1. **Regular sign-out button** (Alert dialog의 "Sign out" destructive option, `onPress: async () =>` 안):
 ```ts
 onPress: async () => {
   await unregisterForPushNotifications();
@@ -143,7 +143,7 @@ onPress: async () => {
 },
 ```
 
-2. Dev sign-out button (`more.tsx:150`):
+2. **Dev-only sign-out button** (`__DEV__` 분기, dev cleanup 직전):
 ```ts
 onPress: async () => {
   await unregisterForPushNotifications();
@@ -175,12 +175,15 @@ describe("DELETE /devices", () => {
   it("deletes the matching UserDevice row (204)", async () => { ... });
   it("idempotent — returns 204 even when row already absent", async () => { ... });
   it("rejects empty token (400 invalid_body)", async () => { ... });
-  it("only deletes the caller's row, never another user's", async () => {
-    // User A registers token T. User B registers a DIFFERENT token T'.
-    // User A DELETE /devices with token T → A's row gone, B's row intact.
+  it("only deletes the caller's row, never another user's (same-token scope)", async () => {
+    // User A and User B BOTH have token T (multi-account device, 2C T3 scenario).
+    // User A DELETE /devices with token T → only A's row deleted, B's row intact.
+    // This is the actual userId-scoping test.
   });
-  it("multi-account same-token cleanup — A and B both have token T; A's DELETE only removes A's row", async () => {
-    // T2's multi-account scenario: confirm DELETE is scoped to userId.
+  it("delete with a token nobody else owns is a no-op for others", async () => {
+    // User A has token T. User B has a different token T'.
+    // User A DELETE /devices with token T → A's row gone, B's row intact (untouched
+    // because the WHERE clause requires userId=A AND token=T).
   });
 });
 ```
