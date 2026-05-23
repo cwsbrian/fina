@@ -54,7 +54,36 @@ export function pickRandomCategoryColor(): string {
   return NEW_CATEGORY_PALETTE[i]!;
 }
 
-function withAlpha(hex: string, alpha: number): string {
+/** Color choices users see when creating / editing a category. */
+export const CATEGORY_COLOR_CHOICES: ReadonlyArray<string> = NEW_CATEGORY_PALETTE;
+
+/** Icon choices users see when creating / editing a category. Mix of
+ *  spend, food, transit, home, hobby, etc. — covers ~most real-world
+ *  category needs without picking favorites. */
+export const CATEGORY_ICON_CHOICES: ReadonlyArray<IoniconName> = [
+  "pricetag-outline",
+  "cart-outline",
+  "cafe-outline",
+  "restaurant-outline",
+  "car-outline",
+  "home-outline",
+  "flash-outline",
+  "heart-outline",
+  "bag-handle-outline",
+  "film-outline",
+  "trending-up",
+  "airplane-outline",
+  "gift-outline",
+  "fitness-outline",
+  "school-outline",
+  "paw-outline",
+  "briefcase-outline",
+  "book-outline",
+  "musical-notes-outline",
+  "construct-outline",
+];
+
+export function withAlpha(hex: string, alpha: number): string {
   const m = hex.replace("#", "");
   const r = parseInt(m.slice(0, 2), 16);
   const g = parseInt(m.slice(2, 4), 16);

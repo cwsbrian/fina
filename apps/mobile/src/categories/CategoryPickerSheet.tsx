@@ -7,6 +7,7 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
+  ScrollView,
 } from "react-native";
 import BottomSheet, {
   BottomSheetView,
@@ -23,6 +24,9 @@ import {
   categoryMeta,
   pickRandomCategoryColor,
   DEFAULT_NEW_CATEGORY_ICON,
+  CATEGORY_COLOR_CHOICES,
+  CATEGORY_ICON_CHOICES,
+  withAlpha,
 } from "./meta";
 
 type Props = {
@@ -64,6 +68,8 @@ export function CategoryPickerSheet({
   const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState("");
+  const [newIcon, setNewIcon] = useState(DEFAULT_NEW_CATEGORY_ICON);
+  const [newColor, setNewColor] = useState(CATEGORY_COLOR_CHOICES[0]!);
   const [createError, setCreateError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -100,6 +106,15 @@ export function CategoryPickerSheet({
     }
   }, [visible, load]);
 
+  const startCreate = useCallback(() => {
+    setCreating(true);
+    setNewName("");
+    setNewIcon(DEFAULT_NEW_CATEGORY_ICON);
+    setNewColor(pickRandomCategoryColor());
+    setCreateError(null);
+    requestAnimationFrame(() => newInputRef.current?.focus());
+  }, []);
+
   const cancelCreate = useCallback(() => {
     setCreating(false);
     setNewName("");
@@ -118,15 +133,12 @@ export function CategoryPickerSheet({
         `/workspaces/${wsId}/categories`,
         {
           method: "POST",
-          body: JSON.stringify({
-            name,
-            icon: DEFAULT_NEW_CATEGORY_ICON,
-            color: pickRandomCategoryColor(),
-          }),
+          body: JSON.stringify({ name, icon: newIcon, color: newColor }),
         },
       );
-      // Insert the new cat into local state alphabetically — saves a round
-      // trip and the picker stays mounted so the user can pick it next.
+      // Insert into local state alphabetically — the picker stays mounted
+      // through the create→assign flow, so we want the new cat visible
+      // immediately. Then PATCH the tx to use it (auto-select) and close.
       setCats((prev) =>
         prev
           ? [...prev, resp.category].sort((a, b) =>
@@ -134,7 +146,13 @@ export function CategoryPickerSheet({
             )
           : [resp.category],
       );
+      await apiFetch(`/workspaces/${wsId}/transactions/${txId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ categoryId: resp.category.id }),
+      });
       cancelCreate();
+      ref.current?.close();
+      onChange();
     } catch (e) {
       const code = (e as { code?: string }).code ?? "create_failed";
       setCreateError(
@@ -147,7 +165,7 @@ export function CategoryPickerSheet({
     } finally {
       setSubmitting(false);
     }
-  }, [newName, submitting, cancelCreate]);
+  }, [newName, newIcon, newColor, submitting, txId, onChange, cancelCreate]);
 
   const pick = async (cat: CategoryDTO | null) => {
     setSaving(cat?.id ?? "__none");
@@ -226,12 +244,9 @@ export function CategoryPickerSheet({
 
       {cats && creating && (
         <BottomSheetView style={styles.createForm}>
-          <View style={styles.head}>
+          <View style={styles.formHead}>
             <Pressable
-              style={({ pressed }) => [
-                styles.formAction,
-                pressed && { opacity: 0.6 },
-              ]}
+              style={({ pressed }) => [pressed && { opacity: 0.6 }]}
               onPress={cancelCreate}
               disabled={submitting}
               hitSlop={8}
@@ -241,7 +256,6 @@ export function CategoryPickerSheet({
             <Text style={styles.title}>Add category</Text>
             <Pressable
               style={({ pressed }) => [
-                styles.formAction,
                 (pressed || submitting || newName.trim().length === 0) && {
                   opacity: 0.5,
                 },
@@ -258,24 +272,99 @@ export function CategoryPickerSheet({
             </Pressable>
           </View>
 
-          <TextInput
-            ref={newInputRef}
-            style={styles.createInput}
-            value={newName}
-            onChangeText={(v) => {
-              setNewName(v);
-              if (createError) setCreateError(null);
-            }}
-            placeholder="Category name"
-            placeholderTextColor={colors.mutedSoft}
-            autoFocus
-            editable={!submitting}
-            returnKeyType="done"
-            onSubmitEditing={submitCreate}
-            maxLength={40}
-          />
+          <View style={styles.formBody}>
+            <View style={styles.previewRow}>
+              <View
+                style={[
+                  styles.previewGlyph,
+                  { backgroundColor: withAlpha(newColor, 0.14) },
+                ]}
+              >
+                <Ionicons name={newIcon} size={22} color={newColor} />
+              </View>
+              <Text
+                style={[
+                  styles.previewName,
+                  !newName.trim() && { color: colors.mutedSoft },
+                ]}
+                numberOfLines={1}
+              >
+                {newName.trim() || "Category name"}
+              </Text>
+            </View>
 
-          {createError && <Text style={styles.createError}>{createError}</Text>}
+            <TextInput
+              ref={newInputRef}
+              style={styles.createInput}
+              value={newName}
+              onChangeText={(v) => {
+                setNewName(v);
+                if (createError) setCreateError(null);
+              }}
+              placeholder="Name"
+              placeholderTextColor={colors.mutedSoft}
+              autoFocus
+              editable={!submitting}
+              returnKeyType="done"
+              onSubmitEditing={submitCreate}
+              maxLength={40}
+            />
+
+            <Text style={styles.pickerLabel}>Icon</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipRow}
+            >
+              {CATEGORY_ICON_CHOICES.map((icon) => {
+                const isSel = icon === newIcon;
+                return (
+                  <Pressable
+                    key={icon}
+                    onPress={() => setNewIcon(icon)}
+                    style={[
+                      styles.iconChip,
+                      isSel && { borderColor: newColor },
+                    ]}
+                  >
+                    <Ionicons
+                      name={icon}
+                      size={20}
+                      color={isSel ? newColor : colors.muted}
+                    />
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={styles.pickerLabel}>Color</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.chipRow}
+            >
+              {CATEGORY_COLOR_CHOICES.map((c) => {
+                const isSel = c === newColor;
+                return (
+                  <Pressable
+                    key={c}
+                    onPress={() => setNewColor(c)}
+                    style={[
+                      styles.colorChip,
+                      { backgroundColor: c },
+                      isSel && styles.colorChipActive,
+                    ]}
+                  >
+                    {isSel && (
+                      <Ionicons name="checkmark" size={16} color="#fff" />
+                    )}
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            {createError && <Text style={styles.createError}>{createError}</Text>}
+          </View>
         </BottomSheetView>
       )}
 
@@ -370,12 +459,7 @@ export function CategoryPickerSheet({
                     styles.createRow,
                     pressed && { opacity: 0.6 },
                   ]}
-                  onPress={() => {
-                    setCreating(true);
-                    setNewName("");
-                    setCreateError(null);
-                    requestAnimationFrame(() => newInputRef.current?.focus());
-                  }}
+                  onPress={startCreate}
                 >
                   <View
                     style={[
@@ -440,10 +524,32 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
   },
   stickyHeader: { backgroundColor: colors.canvas, paddingBottom: 4 },
-  createForm: { flex: 1, paddingHorizontal: space.lg },
-  formAction: { minWidth: 60, alignItems: "center", justifyContent: "center" },
+  createForm: { flex: 1 },
+  formHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.lg,
+    paddingTop: space.xs,
+    paddingBottom: space.sm,
+  },
+  formBody: { paddingHorizontal: space.lg, paddingTop: space.sm },
   cancelText: { ...type$.bodyMd, color: colors.muted },
   saveText: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
+  previewRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + 2,
+    marginBottom: space.base,
+  },
+  previewGlyph: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  previewName: { ...type$.titleMd, color: colors.ink, flex: 1, flexShrink: 1 },
   createInput: {
     ...type$.bodyMd,
     color: colors.ink,
@@ -451,9 +557,42 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: space.base,
     paddingVertical: 12,
+    marginBottom: space.lg,
+  },
+  pickerLabel: {
+    ...type$.bodySm,
+    color: colors.muted,
+    fontWeight: "600",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    marginBottom: space.xs,
+  },
+  chipRow: { gap: 10, paddingVertical: 4, paddingRight: space.base },
+  iconChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  colorChip: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: "transparent",
+  },
+  colorChipActive: { borderColor: colors.ink },
+  createError: {
+    ...type$.bodySm,
+    color: colors.down,
     marginTop: space.sm,
   },
-  createError: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
   grabber: {
     backgroundColor: colors.mutedSoft,
     width: 36,
