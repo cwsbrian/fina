@@ -12,32 +12,14 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useLocalSearchParams } from "expo-router";
-import { Ionicons } from "@expo/vector-icons";
 import type { BankAccountDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../src/api/client";
 import { getActiveWorkspaceId } from "../../../src/workspace/active";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
 
-// Friendly type presets the user picks from. Each maps to a Plaid-ish
-// `type` string we persist on the BankAccount row (server already
-// defaults to "depository" when omitted).
-const TYPE_PRESETS: ReadonlyArray<{
-  label: string;
-  type: string;
-  icon: keyof typeof Ionicons.glyphMap;
-}> = [
-  { label: "Cash",     type: "depository", icon: "cash-outline" },
-  { label: "Debit",    type: "depository", icon: "card-outline" },
-  { label: "Checking", type: "depository", icon: "wallet-outline" },
-  { label: "Credit",   type: "credit",     icon: "card-outline" },
-  { label: "Loan",     type: "loan",       icon: "document-text-outline" },
-  { label: "Other",    type: "depository", icon: "ellipsis-horizontal" },
-];
-
 export default function NewAccount() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [name, setName] = useState("");
-  const [presetIdx, setPresetIdx] = useState(0);
   const [err, setErr] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -51,12 +33,11 @@ export default function NewAccount() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const preset = TYPE_PRESETS[presetIdx]!;
       const resp = await apiFetch<{ account: BankAccountDTO }>(
         `/workspaces/${wsId}/accounts`,
         {
           method: "POST",
-          body: JSON.stringify({ name: trimmed, type: preset.type }),
+          body: JSON.stringify({ name: trimmed }),
         },
       );
       // Auto-assign the new account to the current tx so the user
@@ -72,7 +53,7 @@ export default function NewAccount() {
       setErr(`Couldn't save: ${code}${status ? ` (HTTP ${status})` : ""}`);
       setSubmitting(false);
     }
-  }, [id, name, presetIdx, submitting]);
+  }, [id, name, submitting]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -115,25 +96,6 @@ export default function NewAccount() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.body}
         >
-          <View style={styles.previewRow}>
-            <View style={styles.previewGlyph}>
-              <Ionicons
-                name={TYPE_PRESETS[presetIdx]!.icon}
-                size={22}
-                color={colors.muted}
-              />
-            </View>
-            <Text
-              style={[
-                styles.previewName,
-                !name.trim() && { color: colors.mutedSoft },
-              ]}
-              numberOfLines={1}
-            >
-              {name.trim() || "Account name"}
-            </Text>
-          </View>
-
           <TextInput
             style={styles.input}
             value={name}
@@ -149,34 +111,6 @@ export default function NewAccount() {
             onSubmitEditing={submit}
             maxLength={80}
           />
-
-          <Text style={styles.pickerLabel}>Type</Text>
-          <View style={styles.typeGrid}>
-            {TYPE_PRESETS.map((p, i) => {
-              const isSel = i === presetIdx;
-              return (
-                <Pressable
-                  key={p.label}
-                  onPress={() => setPresetIdx(i)}
-                  style={[styles.typeChip, isSel && styles.typeChipActive]}
-                >
-                  <Ionicons
-                    name={p.icon}
-                    size={16}
-                    color={isSel ? colors.onPrimary : colors.muted}
-                  />
-                  <Text
-                    style={[
-                      styles.typeChipText,
-                      isSel && { color: colors.onPrimary },
-                    ]}
-                  >
-                    {p.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
 
           {err && <Text style={styles.error}>{err}</Text>}
         </ScrollView>
@@ -200,57 +134,13 @@ const styles = StyleSheet.create({
   cancel: { ...type$.bodyMd, color: colors.muted },
   save: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
   body: { padding: space.lg, paddingBottom: space.xl },
-  previewRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm + 2,
-    marginBottom: space.lg,
-  },
-  previewGlyph: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.surfaceSoft,
-  },
-  previewName: { ...type$.titleMd, color: colors.ink, flex: 1, flexShrink: 1 },
   input: {
     ...type$.bodyMd,
     color: colors.ink,
     backgroundColor: colors.surfaceSoft,
     borderRadius: 12,
     paddingHorizontal: space.base,
-    paddingVertical: 12,
-    marginBottom: space.lg,
-  },
-  pickerLabel: {
-    ...type$.bodySm,
-    color: colors.muted,
-    fontWeight: "600",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-    marginBottom: space.xs,
-  },
-  typeGrid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 8,
-  },
-  typeChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: space.base,
-    paddingVertical: 10,
-    backgroundColor: colors.surfaceSoft,
-    borderRadius: 999,
-  },
-  typeChipActive: { backgroundColor: colors.primary },
-  typeChipText: {
-    ...type$.bodySm,
-    color: colors.ink,
-    fontWeight: "600",
+    paddingVertical: 14,
   },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
 });
