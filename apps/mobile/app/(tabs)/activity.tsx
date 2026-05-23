@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -63,56 +63,57 @@ export default function Activity() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  // Mirror query into a ref so load() can always read the latest value
+  // without needing query in its closure (keeps useFocusEffect stable).
+  const queryRef = useRef("");
+  queryRef.current = query;
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
   const header = useCollapsingHeader(HEADER_HEIGHT);
 
-  const load = useCallback(
-    async (q?: string) => {
-      try {
-        const id = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
-        if (!id) {
-          setErr("no_workspace");
-          return;
-        }
-        setWsId(id);
-        const trimmed = (q ?? "").trim();
-        const qs = trimmed
-          ? `?limit=100&q=${encodeURIComponent(trimmed)}`
-          : "?limit=100";
-        const [txResp, catResp] = await Promise.all([
-          apiFetch<TxListResp>(`/workspaces/${id}/transactions${qs}`),
-          apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
-        ]);
-        setTxs(txResp.transactions);
-        setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
-        setErr(null);
-      } catch (e) {
-        setErr((e as { code?: string }).code ?? "load_error");
+  const load = useCallback(async () => {
+    try {
+      const id = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      if (!id) {
+        setErr("no_workspace");
+        return;
       }
-    },
-    [],
-  );
+      setWsId(id);
+      const trimmed = queryRef.current.trim();
+      const qs = trimmed
+        ? `?limit=100&q=${encodeURIComponent(trimmed)}`
+        : "?limit=100";
+      const [txResp, catResp] = await Promise.all([
+        apiFetch<TxListResp>(`/workspaces/${id}/transactions${qs}`),
+        apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
+      ]);
+      setTxs(txResp.transactions);
+      setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
+      setErr(null);
+    } catch (e) {
+      setErr((e as { code?: string }).code ?? "load_error");
+    }
+  }, []);
 
-  // Reload every focus so a transaction edited elsewhere shows fresh.
+  // Reload every focus so deletions / edits on detail show fresh.
   useFocusEffect(
     useCallback(() => {
-      load(query);
-    }, [load, query]),
+      load();
+    }, [load]),
   );
 
   // Debounced refetch on query change. 200ms is short enough to feel
   // live and long enough to skip mid-word fetches.
   useEffect(() => {
     const t = setTimeout(() => {
-      load(query);
+      load();
     }, 200);
     return () => clearTimeout(t);
   }, [query, load]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await load(query);
+    await load();
     setRefreshing(false);
   };
 
@@ -123,7 +124,7 @@ export default function Activity() {
         <View style={styles.empty}>
           <Text style={styles.errTitle}>Couldn't load activity</Text>
           <Text style={styles.errBody}>{err}</Text>
-          <Pressable style={styles.cta} onPress={() => load(query)}>
+          <Pressable style={styles.cta} onPress={() => load()}>
             <Text style={styles.ctaText}>Try again</Text>
           </Pressable>
         </View>
