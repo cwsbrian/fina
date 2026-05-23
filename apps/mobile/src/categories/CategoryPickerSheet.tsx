@@ -198,9 +198,6 @@ export function CategoryPickerSheet({
           }
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.list}
-          ListHeaderComponent={
-            <Text style={styles.groupLabel}>All categories</Text>
-          }
           ItemSeparatorComponent={() => <View style={styles.sep} />}
           renderItem={({ item }) => {
             if (item.kind === "none") {
