@@ -23,6 +23,7 @@ import { formatMoney } from "../../../src/format/money";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
+import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -36,6 +37,7 @@ export default function TransactionDetail() {
   const [noteDraft, setNoteDraft] = useState("");
   const [noteEditing, setNoteEditing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -227,9 +229,7 @@ export default function TransactionDetail() {
                   styles.catRow,
                   pressed && { opacity: 0.6 },
                 ]}
-                onPress={() =>
-                  router.push(`/transactions/${tx.id}/categorize` as never)
-                }
+                onPress={() => setPickerOpen(true)}
               >
                 <View style={[styles.catGlyph, { backgroundColor: heroMeta.bg }]}>
                   <Ionicons name={heroMeta.icon} size={16} color={heroMeta.fg} />
@@ -385,6 +385,17 @@ export default function TransactionDetail() {
           </Pressable>
         </View>
       </ScrollView>
+
+      <CategoryPickerSheet
+        visible={pickerOpen}
+        txId={tx.id}
+        selectedId={firstAlloc?.categoryId ?? null}
+        onClose={() => setPickerOpen(false)}
+        onChange={() => {
+          setPickerOpen(false);
+          load();
+        }}
+      />
     </SafeAreaView>
   );
 }
