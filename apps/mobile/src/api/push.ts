@@ -57,3 +57,28 @@ export async function registerForPushNotifications(): Promise<string | null> {
   }
   return token;
 }
+
+/** Best-effort: re-fetches the current Expo push token + DELETE /devices.
+ *  Called from sign-out flow BEFORE `signOut()` so the session cookie is
+ *  still valid for the API call. Resolves the EAS projectId from
+ *  Constants.expoConfig (falling back to legacy easConfig) and short-
+ *  circuits if missing or still the REPLACE_WITH_EAS_PROJECT_ID
+ *  placeholder. Failures swallowed: sign-out continues regardless; stale
+ *  rows are eventually reaped by the next push's DeviceNotRegistered. */
+export async function unregisterForPushNotifications(): Promise<void> {
+  try {
+    const projectId =
+      Constants.expoConfig?.extra?.eas?.projectId ??
+      (Constants as { easConfig?: { projectId?: string } }).easConfig?.projectId;
+    if (!projectId || projectId === EAS_PROJECT_ID_PLACEHOLDER) return;
+
+    const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
+    await apiFetch("/devices", {
+      method: "DELETE",
+      body: JSON.stringify({ expoPushToken: token }),
+    });
+  } catch {
+    // Best-effort — sign-out continues. Stale row falls back to lazy
+    // DeviceNotRegistered cleanup on next push attempt.
+  }
+}
