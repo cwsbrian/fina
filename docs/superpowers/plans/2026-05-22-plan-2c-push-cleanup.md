@@ -420,7 +420,7 @@ import { unregisterForPushNotifications } from "../../src/api/push";
 
 - [ ] **Step 4.3: Wire callsite 1 (regular sign-out)**
 
-Find the Alert dialog's destructive `onPress`. Add `await unregisterForPushNotifications()` as the FIRST line inside the async arrow:
+Find the `const onSignOut = () => { Alert.alert(...) }` function (`more.tsx` ~line 74). Inside the Alert's buttons array, locate the destructive option (`{ text: "Sign out", style: "destructive", onPress: async () => { ... } }`). Add `await unregisterForPushNotifications()` as the FIRST line inside the async arrow:
 
 ```ts
 onPress: async () => {
