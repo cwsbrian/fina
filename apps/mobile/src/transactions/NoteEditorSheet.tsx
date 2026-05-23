@@ -117,7 +117,10 @@ export function NoteEditorSheet({
       enableDynamicSizing={false}
       index={visible ? 0 : -1}
       backdropComponent={renderBackdrop}
-      onClose={onClose}
+      onClose={() => {
+        Keyboard.dismiss();
+        onClose();
+      }}
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
