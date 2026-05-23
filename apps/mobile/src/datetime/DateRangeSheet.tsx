@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
-import BottomSheet, {
+import {
   BottomSheetBackdrop,
+  BottomSheetModal,
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
@@ -92,16 +93,21 @@ export function DateRangeSheet({
   onClose,
   onConfirm,
 }: Props) {
-  const ref = useRef<BottomSheet>(null);
+  const ref = useRef<BottomSheetModal>(null);
   const [draft, setDraft] = useState<DateRange>(value);
   const [picking, setPicking] = useState<"from" | "to" | null>(null);
 
   const snapPoints = useMemo(() => ["80%"], []);
 
+  // BottomSheetModal portals to the root via BottomSheetModalProvider so
+  // its backdrop covers the tab bar + Activity header in one go.
   useEffect(() => {
     if (visible) {
       setDraft(value);
       setPicking(null);
+      ref.current?.present();
+    } else {
+      ref.current?.dismiss();
     }
   }, [visible, value]);
 
@@ -128,26 +134,26 @@ export function DateRangeSheet({
   );
 
   return (
-    <BottomSheet
+    <BottomSheetModal
       ref={ref}
       snapPoints={snapPoints}
       enableDynamicSizing={false}
-      index={visible ? 0 : -1}
+      index={0}
       backdropComponent={renderBackdrop}
-      onClose={onClose}
+      onDismiss={onClose}
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
     >
       <BottomSheetView style={styles.body}>
         <View style={styles.head}>
-          <Pressable onPress={() => ref.current?.close()} hitSlop={8}>
+          <Pressable onPress={() => ref.current?.dismiss()} hitSlop={8}>
             <Text style={styles.cancel}>Cancel</Text>
           </Pressable>
           <Text style={styles.title}>Date range</Text>
           <Pressable
             onPress={() => {
-              ref.current?.close();
+              ref.current?.dismiss();
               onConfirm(draft);
             }}
             hitSlop={8}
@@ -234,7 +240,7 @@ export function DateRangeSheet({
           />
         )}
       </BottomSheetView>
-    </BottomSheet>
+    </BottomSheetModal>
   );
 }
 
