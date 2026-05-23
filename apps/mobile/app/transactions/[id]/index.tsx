@@ -23,6 +23,7 @@ import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
+import { DatePickerSheet } from "../../../src/datetime/DatePickerSheet";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -35,6 +36,7 @@ export default function TransactionDetail() {
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -150,7 +152,19 @@ export default function TransactionDetail() {
             {money.display}
           </Text>
           <View style={styles.heroMetaRow}>
-            <Text style={styles.heroMeta}>{formatDateTime(tx.occurredAt)}</Text>
+            {tx.source === "manual" ? (
+              <Pressable
+                onPress={() => setDatePickerOpen(true)}
+                hitSlop={6}
+                style={({ pressed }) => pressed && { opacity: 0.6 }}
+              >
+                <Text style={[styles.heroMeta, styles.heroMetaEditable]}>
+                  {formatDateTime(tx.occurredAt)}
+                </Text>
+              </Pressable>
+            ) : (
+              <Text style={styles.heroMeta}>{formatDateTime(tx.occurredAt)}</Text>
+            )}
             {isSplit && (
               <>
                 <View style={styles.heroDot} />
@@ -349,6 +363,30 @@ export default function TransactionDetail() {
         </View>
       </ScrollView>
 
+      <DatePickerSheet
+        visible={datePickerOpen}
+        value={new Date(tx.occurredAt)}
+        mode="datetime"
+        onClose={() => setDatePickerOpen(false)}
+        onConfirm={async (next) => {
+          setDatePickerOpen(false);
+          try {
+            const wsId = await getActiveWorkspaceId();
+            if (!wsId) throw new Error("no_workspace");
+            await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}`, {
+              method: "PATCH",
+              body: JSON.stringify({ occurredAt: next.toISOString() }),
+            });
+            setTx({ ...tx, occurredAt: next.toISOString() });
+          } catch (e) {
+            Alert.alert(
+              "Couldn't update date",
+              (e as { code?: string }).code ?? "Try again.",
+            );
+          }
+        }}
+      />
+
       <CategoryPickerSheet
         visible={pickerOpen}
         txId={tx.id}
@@ -441,6 +479,7 @@ const styles = StyleSheet.create({
   },
   heroMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 6, gap: 6 },
   heroMeta: { ...type$.bodySm, color: colors.muted },
+  heroMetaEditable: { color: colors.primary },
   heroDot: { width: 3, height: 3, borderRadius: 999, backgroundColor: colors.mutedSoft },
   splitPill: {
     paddingHorizontal: 8,
