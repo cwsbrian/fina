@@ -9,6 +9,7 @@ import {
   TextInput,
 } from "react-native";
 import { router } from "expo-router";
+import { Swipeable } from "react-native-gesture-handler";
 import BottomSheet, {
   BottomSheetView,
   BottomSheetFlatList,
@@ -88,6 +89,41 @@ export function CategoryPickerSheet({
       setSaving(null);
     }
   }, [visible, load]);
+
+  const confirmArchive = useCallback(
+    (cat: CategoryDTO) => {
+      Alert.alert(
+        `Delete "${cat.name}"?`,
+        "It will be hidden from this picker. Existing transactions keep their allocation.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                const wsId = await getActiveWorkspaceId();
+                if (!wsId) throw new Error("no_workspace");
+                await apiFetch(`/workspaces/${wsId}/categories/${cat.id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ archived: true }),
+                });
+                setCats((prev) =>
+                  prev ? prev.filter((x) => x.id !== cat.id) : prev,
+                );
+              } catch (e) {
+                Alert.alert(
+                  "Couldn't delete category",
+                  (e as { code?: string }).code ?? "Try again.",
+                );
+              }
+            },
+          },
+        ],
+      );
+    },
+    [],
+  );
 
   const startCreate = useCallback(() => {
     // Close the picker first so the new screen sits cleanly on top of
@@ -288,24 +324,68 @@ export function CategoryPickerSheet({
             const isSel = c.id === selectedId;
             const isSaving = saving === c.id;
             return (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.row,
-                  pressed && { backgroundColor: colors.surfaceSoft },
-                ]}
-                disabled={!!saving}
-                onPress={() => pick(c)}
+              <Swipeable
+                friction={2}
+                rightThreshold={40}
+                overshootRight={false}
+                renderRightActions={() => (
+                  <View style={styles.swipeActions}>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.swipeBtn,
+                        styles.editBtn,
+                        pressed && { opacity: 0.6 },
+                      ]}
+                      onPress={() => {
+                        ref.current?.close();
+                        router.push(`/categories/${c.id}/edit` as never);
+                      }}
+                    >
+                      <Ionicons
+                        name="create-outline"
+                        size={20}
+                        color={colors.onPrimary}
+                      />
+                      <Text style={styles.swipeBtnText}>Edit</Text>
+                    </Pressable>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.swipeBtn,
+                        styles.deleteBtn,
+                        pressed && { opacity: 0.6 },
+                      ]}
+                      onPress={() => confirmArchive(c)}
+                    >
+                      <Ionicons
+                        name="trash-outline"
+                        size={20}
+                        color={colors.onPrimary}
+                      />
+                      <Text style={styles.swipeBtnText}>Delete</Text>
+                    </Pressable>
+                  </View>
+                )}
               >
-                <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
-                  <Ionicons name={meta.icon} size={16} color={meta.fg} />
-                </View>
-                <Text style={styles.name}>{c.name}</Text>
-                {isSaving ? (
-                  <ActivityIndicator size="small" color={colors.primary} />
-                ) : isSel ? (
-                  <SelectedMark />
-                ) : null}
-              </Pressable>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.row,
+                    { backgroundColor: colors.canvas },
+                    pressed && { backgroundColor: colors.surfaceSoft },
+                  ]}
+                  disabled={!!saving}
+                  onPress={() => pick(c)}
+                >
+                  <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
+                    <Ionicons name={meta.icon} size={16} color={meta.fg} />
+                  </View>
+                  <Text style={styles.name}>{c.name}</Text>
+                  {isSaving ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : isSel ? (
+                    <SelectedMark />
+                  ) : null}
+                </Pressable>
+              </Swipeable>
             );
           }}
         />
@@ -329,6 +409,16 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
   },
   stickyHeader: { backgroundColor: colors.canvas, paddingBottom: 4 },
+  swipeActions: { flexDirection: "row" },
+  swipeBtn: {
+    width: 78,
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+  },
+  swipeBtnText: { ...type$.bodySm, color: colors.onPrimary, fontWeight: "600" },
+  editBtn: { backgroundColor: colors.primary },
+  deleteBtn: { backgroundColor: colors.down },
   grabber: {
     backgroundColor: colors.mutedSoft,
     width: 36,
