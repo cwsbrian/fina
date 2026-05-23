@@ -62,6 +62,10 @@ const QuerySchema = z.object({
   includeRemoved: BoolFlag,
   uncategorizedOnly: BoolFlag,
   categoryId: z.string().optional(),
+  /** Free-text search across merchantRaw + merchantNormalized
+   *  (case-insensitive substring). 1-character min keeps trivial
+   *  full-table-scan queries out. */
+  q: z.string().trim().min(1).max(120).optional(),
 });
 
 type Cursor = { occurredAtMs: number; id: string };
@@ -123,6 +127,14 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return {};
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
+        ...(q.q
+          ? {
+              OR: [
+                { merchantRaw: { contains: q.q, mode: "insensitive" as const } },
+                { merchantNormalized: { contains: q.q, mode: "insensitive" as const } },
+              ],
+            }
+          : {}),
         ...(() => {
           if (q.uncategorizedOnly && q.categoryId) {
             return { allocations: { some: { OR: [{ categoryId: null }, { categoryId: q.categoryId }] } } };

@@ -8,6 +8,8 @@ import {
   ActivityIndicator,
   RefreshControl,
   Animated,
+  TextInput,
+  Keyboard,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
@@ -59,40 +61,58 @@ export default function Activity() {
   const [wsId, setWsId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
   const header = useCollapsingHeader(HEADER_HEIGHT);
 
-  const load = useCallback(async () => {
-    try {
-      const id = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
-      if (!id) {
-        setErr("no_workspace");
-        return;
+  const load = useCallback(
+    async (q?: string) => {
+      try {
+        const id = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+        if (!id) {
+          setErr("no_workspace");
+          return;
+        }
+        setWsId(id);
+        const trimmed = (q ?? "").trim();
+        const qs = trimmed
+          ? `?limit=100&q=${encodeURIComponent(trimmed)}`
+          : "?limit=100";
+        const [txResp, catResp] = await Promise.all([
+          apiFetch<TxListResp>(`/workspaces/${id}/transactions${qs}`),
+          apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
+        ]);
+        setTxs(txResp.transactions);
+        setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
+        setErr(null);
+      } catch (e) {
+        setErr((e as { code?: string }).code ?? "load_error");
       }
-      setWsId(id);
-      const [txResp, catResp] = await Promise.all([
-        apiFetch<TxListResp>(`/workspaces/${id}/transactions?limit=100`),
-        apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
-      ]);
-      setTxs(txResp.transactions);
-      setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
-      setErr(null);
-    } catch (e) {
-      setErr((e as { code?: string }).code ?? "load_error");
-    }
-  }, []);
+    },
+    [],
+  );
 
   // Reload every focus so a transaction edited elsewhere shows fresh.
   useFocusEffect(
     useCallback(() => {
-      load();
-    }, [load]),
+      load(query);
+    }, [load, query]),
   );
+
+  // Debounced refetch on query change. 200ms is short enough to feel
+  // live and long enough to skip mid-word fetches.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      load(query);
+    }, 200);
+    return () => clearTimeout(t);
+  }, [query, load]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await load();
+    await load(query);
     setRefreshing(false);
   };
 
@@ -103,7 +123,7 @@ export default function Activity() {
         <View style={styles.empty}>
           <Text style={styles.errTitle}>Couldn't load activity</Text>
           <Text style={styles.errBody}>{err}</Text>
-          <Pressable style={styles.cta} onPress={load}>
+          <Pressable style={styles.cta} onPress={() => load(query)}>
             <Text style={styles.ctaText}>Try again</Text>
           </Pressable>
         </View>
@@ -182,20 +202,66 @@ export default function Activity() {
         )}
       />
       <Animated.View style={[styles.headerOverlay, { top: insets.top, height: HEADER_HEIGHT }, header.headerStyle]}>
-        <ActivityHeader />
+        {searchOpen ? (
+          <View style={styles.head}>
+            <View style={styles.searchWrap}>
+              <Ionicons name="search" size={16} color={colors.muted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search merchants"
+                placeholderTextColor={colors.muted}
+                value={query}
+                onChangeText={setQuery}
+                autoFocus
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="search"
+              />
+              {query.length > 0 && (
+                <Pressable
+                  onPress={() => setQuery("")}
+                  hitSlop={8}
+                  style={({ pressed }) => pressed && { opacity: 0.6 }}
+                >
+                  <Ionicons
+                    name="close-circle"
+                    size={18}
+                    color={colors.mutedSoft}
+                  />
+                </Pressable>
+              )}
+            </View>
+            <Pressable
+              onPress={() => {
+                setSearchOpen(false);
+                setQuery("");
+                Keyboard.dismiss();
+              }}
+              hitSlop={8}
+            >
+              <Text style={styles.searchCancel}>Cancel</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <ActivityHeader onSearch={() => setSearchOpen(true)} />
+        )}
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
     </View>
   );
 }
 
-function ActivityHeader() {
+function ActivityHeader({ onSearch }: { onSearch?: () => void } = {}) {
   return (
     <View style={styles.head}>
       <Text style={styles.title}>Activity</Text>
       <View style={styles.headActions}>
         <HeaderIconButton icon="calendar-outline" accessibilityLabel="Date range" />
-        <HeaderIconButton icon="search-outline" accessibilityLabel="Search" />
+        <HeaderIconButton
+          icon="search-outline"
+          accessibilityLabel="Search"
+          {...(onSearch ? { onPress: onSearch } : {})}
+        />
         <HeaderIconButton
           icon="add"
           size={22}
@@ -292,6 +358,24 @@ const styles = StyleSheet.create({
   },
   title: { ...type$.titleLg, color: colors.ink },
   headActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  searchWrap: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingHorizontal: space.base,
+    height: 38,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceSoft,
+    marginRight: space.sm,
+  },
+  searchInput: {
+    flex: 1,
+    ...type$.bodyMd,
+    color: colors.ink,
+    paddingVertical: 0,
+  },
+  searchCancel: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
   iconWrap: {
