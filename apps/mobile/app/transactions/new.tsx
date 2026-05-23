@@ -161,22 +161,30 @@ export default function NewTransaction() {
             >
               $
             </Text>
-            <TextInput
-              style={[
-                styles.amountInput,
-                kind === "income" && { color: colors.up },
-              ]}
-              value={amount}
-              onChangeText={(v) => {
-                // Allow digits + a single decimal point with up to 2 dp.
-                if (/^\d*\.?\d{0,2}$/.test(v)) setAmount(v);
-              }}
-              placeholder="0"
-              placeholderTextColor={colors.mutedSoft}
-              keyboardType="decimal-pad"
-              editable={!submitting}
-              autoFocus
-            />
+            <View style={styles.amountInputWrap}>
+              <TextInput
+                style={[
+                  styles.amountInput,
+                  kind === "income" && { color: colors.up },
+                ]}
+                value={amount}
+                onChangeText={(v) => {
+                  // Allow digits + a single decimal point with up to 2 dp.
+                  if (/^\d*\.?\d{0,2}$/.test(v)) setAmount(v);
+                }}
+                keyboardType="decimal-pad"
+                editable={!submitting}
+                autoFocus
+              />
+              {!amount && (
+                <Text
+                  pointerEvents="none"
+                  style={[styles.amountInput, styles.amountPlaceholder]}
+                >
+                  0
+                </Text>
+              )}
+            </View>
           </View>
 
           {/* Merchant */}
@@ -353,6 +361,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: colors.ink,
   },
+  amountInputWrap: { position: "relative", justifyContent: "center" },
   amountInput: {
     fontSize: 56,
     fontWeight: "500",
@@ -361,6 +370,12 @@ const styles = StyleSheet.create({
     minWidth: 80,
     paddingTop: 8,
     paddingBottom: 4,
+  },
+  amountPlaceholder: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    color: colors.mutedSoft,
   },
 
   label: {
