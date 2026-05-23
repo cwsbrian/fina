@@ -32,4 +32,7 @@ export type LogContext = {
   pushFailed?: number;
   /** UserDevice.id removed after Expo returned DeviceNotRegistered. */
   removedDeviceId?: string;
+  /** Sign-out cleanup (Plan 2C-push-cleanup). deleteMany count
+   *  (보통 0 또는 1; 0이어도 audit trail로 로깅). */
+  removedDeviceCount?: number;
 };
