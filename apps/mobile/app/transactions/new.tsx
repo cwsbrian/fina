@@ -50,10 +50,11 @@ export default function NewTransaction() {
       router.back();
     } catch (e) {
       const code = (e as { code?: string }).code ?? "create_failed";
+      const status = (e as { status?: number }).status;
       setErr(
         code === "no_account"
           ? "Add an account before logging manual transactions."
-          : "Couldn't save. Try again.",
+          : `Couldn't save: ${code}${status ? ` (HTTP ${status})` : ""}`,
       );
       setSubmitting(false);
     }
@@ -130,13 +131,21 @@ export default function NewTransaction() {
           <View style={styles.amountRow}>
             <Text
               style={[
-                styles.amountSign,
+                styles.amountAdornment,
                 kind === "income" && { color: colors.up },
               ]}
             >
               {kind === "income" ? "+" : "−"}
             </Text>
-            <Text style={styles.amountCurrency}>$</Text>
+            <Text
+              style={[
+                styles.amountAdornment,
+                kind === "income" && { color: colors.up },
+                { marginRight: 2 },
+              ]}
+            >
+              $
+            </Text>
             <TextInput
               style={[
                 styles.amountInput,
@@ -225,18 +234,10 @@ const styles = StyleSheet.create({
     paddingVertical: space.lg,
     marginBottom: space.lg,
   },
-  amountSign: {
-    fontSize: 56,
+  amountAdornment: {
+    fontSize: 30,
     fontWeight: "500",
-    letterSpacing: -1.6,
     color: colors.ink,
-  },
-  amountCurrency: {
-    fontSize: 56,
-    fontWeight: "500",
-    letterSpacing: -1.6,
-    color: colors.ink,
-    marginRight: 2,
   },
   amountInput: {
     fontSize: 56,
