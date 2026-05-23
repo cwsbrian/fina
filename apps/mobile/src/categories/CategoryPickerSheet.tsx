@@ -8,8 +8,7 @@ import {
   Alert,
   TextInput,
 } from "react-native";
-import {
-  BottomSheetModal,
+import BottomSheet, {
   BottomSheetView,
   BottomSheetFlatList,
   BottomSheetBackdrop,
@@ -52,7 +51,7 @@ export function CategoryPickerSheet({
   onClose,
   onChange,
 }: Props) {
-  const ref = useRef<BottomSheetModal>(null);
+  const ref = useRef<BottomSheet>(null);
   const [cats, setCats] = useState<CategoryDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -60,13 +59,6 @@ export function CategoryPickerSheet({
 
   const snapPoints = useMemo(() => ["90%"], []);
 
-  // Present / dismiss imperatively. Parent owns `visible`; we sync the
-  // sheet ref to match. onDismiss (fired by drag-down or backdrop) bubbles
-  // back to clear the parent's `visible` so reopens work.
-  useEffect(() => {
-    if (visible) ref.current?.present();
-    else ref.current?.dismiss();
-  }, [visible]);
 
   const load = useCallback(async () => {
     try {
@@ -104,7 +96,7 @@ export function CategoryPickerSheet({
         method: "PATCH",
         body: JSON.stringify({ categoryId: cat?.id ?? null }),
       });
-      ref.current?.dismiss();
+      ref.current?.close();
       onChange();
     } catch (e) {
       setSaving(null);
@@ -140,13 +132,13 @@ export function CategoryPickerSheet({
   );
 
   return (
-    <BottomSheetModal
+    <BottomSheet
       ref={ref}
       snapPoints={snapPoints}
       enableDynamicSizing={false}
-      index={0}
+      index={visible ? 0 : -1}
       backdropComponent={renderBackdrop}
-      onDismiss={onClose}
+      onClose={onClose}
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
@@ -160,7 +152,7 @@ export function CategoryPickerSheet({
             styles.closeBtn,
             pressed && { opacity: 0.6 },
           ]}
-          onPress={() => ref.current?.dismiss()}
+          onPress={() => ref.current?.close()}
           accessibilityLabel="Close"
           hitSlop={8}
         >
@@ -310,7 +302,7 @@ export function CategoryPickerSheet({
           }}
         />
       )}
-    </BottomSheetModal>
+    </BottomSheet>
   );
 }
 
