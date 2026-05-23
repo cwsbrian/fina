@@ -1,16 +1,20 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
   StyleSheet,
   Pressable,
-  FlatList,
   ActivityIndicator,
   Alert,
   TextInput,
-  Modal,
 } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  BottomSheetModal,
+  BottomSheetView,
+  BottomSheetFlatList,
+  BottomSheetBackdrop,
+  type BottomSheetBackdropProps,
+} from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import type { CategoryDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
@@ -24,9 +28,11 @@ type Props = {
   /** Currently selected category id (highlighted in the list). null
    *  means the tx is uncategorised. */
   selectedId?: string | null;
-  /** Closes the sheet without applying anything (× button, backdrop tap). */
+  /** Fires when the sheet dismisses for any reason (drag-down, backdrop
+   *  tap, × button). Parent should clear its `visible` state. */
   onClose: () => void;
-  /** Fires after a successful PATCH so the parent can refresh and close. */
+  /** Fires after a successful PATCH so the parent can refresh. The sheet
+   *  dismisses itself; parent should NOT call onClose in response. */
   onChange: () => void;
 };
 
@@ -37,9 +43,8 @@ type Item =
   | { kind: "cat"; cat: CategoryDTO }
   | { kind: "create" };
 
-/** Bottom-sheet category picker. Renders as a transparent Modal so the
- *  detail screen stays visible (dimmed) behind it — matches the design's
- *  "Choose category" sheet. */
+/** Bottom sheet category picker, backed by @gorhom/bottom-sheet for proper
+ *  drag-to-dismiss + backdrop gestures. Single 90% snap point. */
 export function CategoryPickerSheet({
   visible,
   txId,
@@ -47,11 +52,21 @@ export function CategoryPickerSheet({
   onClose,
   onChange,
 }: Props) {
-  const insets = useSafeAreaInsets();
+  const ref = useRef<BottomSheetModal>(null);
   const [cats, setCats] = useState<CategoryDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+
+  const snapPoints = useMemo(() => ["90%"], []);
+
+  // Present / dismiss imperatively. Parent owns `visible`; we sync the
+  // sheet ref to match. onDismiss (fired by drag-down or backdrop) bubbles
+  // back to clear the parent's `visible` so reopens work.
+  useEffect(() => {
+    if (visible) ref.current?.present();
+    else ref.current?.dismiss();
+  }, [visible]);
 
   const load = useCallback(async () => {
     try {
@@ -72,16 +87,12 @@ export function CategoryPickerSheet({
     }
   }, []);
 
-  // Fetch every time the sheet opens — categories may have changed
-  // (e.g., user created a new one in another screen). Reset transient
-  // state on close so reopening starts clean.
   useEffect(() => {
-    if (!visible) {
+    if (visible) load();
+    else {
       setQuery("");
       setSaving(null);
-      return;
     }
-    load();
   }, [visible, load]);
 
   const pick = async (cat: CategoryDTO | null) => {
@@ -93,6 +104,7 @@ export function CategoryPickerSheet({
         method: "PATCH",
         body: JSON.stringify({ categoryId: cat?.id ?? null }),
       });
+      ref.current?.dismiss();
       onChange();
     } catch (e) {
       setSaving(null);
@@ -114,180 +126,189 @@ export function CategoryPickerSheet({
     return rows;
   }, [cats, query]);
 
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        opacity={0.35}
+        pressBehavior="close"
+      />
+    ),
+    [],
+  );
+
   return (
-    <Modal
-      visible={visible}
-      transparent
-      animationType="slide"
-      statusBarTranslucent
-      onRequestClose={onClose}
+    <BottomSheetModal
+      ref={ref}
+      snapPoints={snapPoints}
+      backdropComponent={renderBackdrop}
+      onDismiss={onClose}
+      handleIndicatorStyle={styles.grabber}
+      backgroundStyle={styles.background}
+      enablePanDownToClose
+      keyboardBehavior="interactive"
+      keyboardBlurBehavior="restore"
     >
-      <View style={styles.root}>
+      <BottomSheetView style={styles.head}>
+        <Text style={styles.title}>Choose category</Text>
         <Pressable
-          style={StyleSheet.absoluteFill}
-          onPress={onClose}
-          accessibilityLabel="Close category picker"
+          style={({ pressed }) => [
+            styles.closeBtn,
+            pressed && { opacity: 0.6 },
+          ]}
+          onPress={() => ref.current?.dismiss()}
+          accessibilityLabel="Close"
+          hitSlop={8}
+        >
+          <Ionicons name="close" size={22} color={colors.muted} />
+        </Pressable>
+      </BottomSheetView>
+
+      <BottomSheetView style={styles.search}>
+        <Ionicons name="search" size={16} color={colors.muted} />
+        <TextInput
+          style={styles.searchInput}
+          placeholder="Search categories"
+          placeholderTextColor={colors.muted}
+          value={query}
+          onChangeText={setQuery}
+          autoCorrect={false}
+          autoCapitalize="none"
+          returnKeyType="search"
         />
-        <View style={styles.sheet}>
-          <View style={styles.grabber} />
-          <View style={styles.head}>
-            <Text style={styles.title}>Choose category</Text>
-            <Pressable
-              style={({ pressed }) => [
-                styles.closeBtn,
-                pressed && { opacity: 0.6 },
-              ]}
-              onPress={onClose}
-              accessibilityLabel="Close"
-              hitSlop={8}
-            >
-              <Ionicons name="close" size={22} color={colors.muted} />
-            </Pressable>
-          </View>
+      </BottomSheetView>
 
-          <View style={styles.search}>
-            <Ionicons name="search" size={16} color={colors.muted} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Search categories"
-              placeholderTextColor={colors.muted}
-              value={query}
-              onChangeText={setQuery}
-              autoCorrect={false}
-              autoCapitalize="none"
-              returnKeyType="search"
-            />
-          </View>
+      {!cats && !err && (
+        <BottomSheetView style={styles.fallback}>
+          <ActivityIndicator color={colors.primary} />
+        </BottomSheetView>
+      )}
 
-          {!cats && !err && (
-            <View style={styles.fallback}>
-              <ActivityIndicator color={colors.primary} />
-            </View>
-          )}
+      {err && (
+        <BottomSheetView style={styles.fallback}>
+          <Text style={styles.errTitle}>Couldn't load categories</Text>
+          <Text style={styles.errBody}>{err}</Text>
+          <Pressable style={styles.cta} onPress={load}>
+            <Text style={styles.ctaText}>Try again</Text>
+          </Pressable>
+        </BottomSheetView>
+      )}
 
-          {err && (
-            <View style={styles.fallback}>
-              <Text style={styles.errTitle}>Couldn't load categories</Text>
-              <Text style={styles.errBody}>{err}</Text>
-              <Pressable style={styles.cta} onPress={load}>
-                <Text style={styles.ctaText}>Try again</Text>
-              </Pressable>
-            </View>
-          )}
-
-          {cats && (
-            <FlatList
-              style={{ flex: 1 }}
-              data={items}
-              keyExtractor={(item) =>
-                item.kind === "cat" ? item.cat.id : item.kind
-              }
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={[
-                styles.list,
-                { paddingBottom: insets.bottom + space.lg },
-              ]}
-              renderItem={({ item }) => {
-                if (item.kind === "none") {
-                  const isSel = selectedId == null;
-                  const isSaving = saving === "__none";
-                  return (
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.row,
-                        pressed && { backgroundColor: colors.surfaceSoft },
-                      ]}
-                      disabled={!!saving}
-                      onPress={() => pick(null)}
-                    >
-                      <View
-                        style={[styles.glyph, { backgroundColor: colors.surfaceSoft }]}
-                      >
-                        <Ionicons
-                          name="help-circle-outline"
-                          size={16}
-                          color={colors.muted}
-                        />
-                      </View>
-                      <Text style={[styles.name, { color: colors.muted }]}>
-                        Uncategorized
-                      </Text>
-                      {isSaving ? (
-                        <ActivityIndicator size="small" color={colors.primary} />
-                      ) : isSel ? (
-                        <SelectedMark />
-                      ) : null}
-                    </Pressable>
-                  );
-                }
-                if (item.kind === "create") {
-                  return (
-                    <Pressable
-                      style={({ pressed }) => [
-                        styles.row,
-                        styles.createRow,
-                        pressed && { opacity: 0.6 },
-                      ]}
-                      onPress={() =>
-                        Alert.alert(
-                          "Coming soon",
-                          "Creating new categories is on the way.",
-                        )
-                      }
-                    >
-                      <View
-                        style={[styles.glyph, { backgroundColor: colors.surfaceSoft }]}
-                      >
-                        <Ionicons name="add" size={18} color={colors.ink} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.name}>Create new category</Text>
-                        <Text style={styles.sub}>
-                          Adds to your workspace for everyone.
-                        </Text>
-                      </View>
-                      <Ionicons
-                        name="chevron-forward"
-                        size={16}
-                        color={colors.mutedSoft}
-                      />
-                    </Pressable>
-                  );
-                }
-                const c = item.cat;
-                const meta = categoryMeta(c);
-                const isSel = c.id === selectedId;
-                const isSaving = saving === c.id;
-                return (
-                  <Pressable
-                    style={({ pressed }) => [
-                      styles.row,
-                      pressed && { backgroundColor: colors.surfaceSoft },
+      {cats && (
+        <BottomSheetFlatList
+          data={items}
+          keyExtractor={(item) =>
+            item.kind === "cat" ? item.cat.id : item.kind
+          }
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.list}
+          ListHeaderComponent={
+            <Text style={styles.groupLabel}>All categories</Text>
+          }
+          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          renderItem={({ item }) => {
+            if (item.kind === "none") {
+              const isSel = selectedId == null;
+              const isSaving = saving === "__none";
+              return (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.row,
+                    pressed && { backgroundColor: colors.surfaceSoft },
+                  ]}
+                  disabled={!!saving}
+                  onPress={() => pick(null)}
+                >
+                  <View
+                    style={[
+                      styles.glyph,
+                      { backgroundColor: colors.surfaceSoft },
                     ]}
-                    disabled={!!saving}
-                    onPress={() => pick(c)}
                   >
-                    <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
-                      <Ionicons name={meta.icon} size={16} color={meta.fg} />
-                    </View>
-                    <Text style={styles.name}>{c.name}</Text>
-                    {isSaving ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : isSel ? (
-                      <SelectedMark />
-                    ) : null}
-                  </Pressable>
-                );
-              }}
-              ItemSeparatorComponent={() => <View style={styles.sep} />}
-              ListHeaderComponent={
-                <Text style={styles.groupLabel}>All categories</Text>
-              }
-            />
-          )}
-        </View>
-      </View>
-    </Modal>
+                    <Ionicons
+                      name="help-circle-outline"
+                      size={16}
+                      color={colors.muted}
+                    />
+                  </View>
+                  <Text style={[styles.name, { color: colors.muted }]}>
+                    Uncategorized
+                  </Text>
+                  {isSaving ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : isSel ? (
+                    <SelectedMark />
+                  ) : null}
+                </Pressable>
+              );
+            }
+            if (item.kind === "create") {
+              return (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.row,
+                    styles.createRow,
+                    pressed && { opacity: 0.6 },
+                  ]}
+                  onPress={() =>
+                    Alert.alert(
+                      "Coming soon",
+                      "Creating new categories is on the way.",
+                    )
+                  }
+                >
+                  <View
+                    style={[
+                      styles.glyph,
+                      { backgroundColor: colors.surfaceSoft },
+                    ]}
+                  >
+                    <Ionicons name="add" size={18} color={colors.ink} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.name}>Create new category</Text>
+                    <Text style={styles.sub}>
+                      Adds to your workspace for everyone.
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={colors.mutedSoft}
+                  />
+                </Pressable>
+              );
+            }
+            const c = item.cat;
+            const meta = categoryMeta(c);
+            const isSel = c.id === selectedId;
+            const isSaving = saving === c.id;
+            return (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.row,
+                  pressed && { backgroundColor: colors.surfaceSoft },
+                ]}
+                disabled={!!saving}
+                onPress={() => pick(c)}
+              >
+                <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
+                  <Ionicons name={meta.icon} size={16} color={meta.fg} />
+                </View>
+                <Text style={styles.name}>{c.name}</Text>
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : isSel ? (
+                  <SelectedMark />
+                ) : null}
+              </Pressable>
+            );
+          }}
+        />
+      )}
+    </BottomSheetModal>
   );
 }
 
@@ -300,22 +321,15 @@ function SelectedMark() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: "rgba(0,0,0,0.35)", justifyContent: "flex-end" },
-  sheet: {
+  background: {
     backgroundColor: colors.canvas,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    height: "90%",
-    overflow: "hidden",
   },
   grabber: {
-    alignSelf: "center",
+    backgroundColor: colors.mutedSoft,
     width: 36,
     height: 4,
-    borderRadius: 999,
-    backgroundColor: colors.mutedSoft,
-    marginTop: 8,
-    marginBottom: 4,
   },
   head: {
     flexDirection: "row",
@@ -326,7 +340,12 @@ const styles = StyleSheet.create({
     paddingBottom: space.sm,
   },
   title: { ...type$.titleMd, color: colors.ink, fontWeight: "600" },
-  closeBtn: { width: 34, height: 34, alignItems: "center", justifyContent: "center" },
+  closeBtn: {
+    width: 34,
+    height: 34,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   search: {
     flexDirection: "row",
     alignItems: "center",
@@ -344,10 +363,19 @@ const styles = StyleSheet.create({
     color: colors.ink,
     paddingVertical: 0,
   },
-  list: { paddingBottom: space.lg },
-  fallback: { alignItems: "center", justifyContent: "center", padding: space.xl },
+  list: { paddingBottom: space.xl },
+  fallback: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: space.xl,
+  },
   errTitle: { ...type$.titleMd, color: colors.down, marginBottom: 4 },
-  errBody: { ...type$.bodyMd, color: colors.body, marginBottom: space.base, textAlign: "center" },
+  errBody: {
+    ...type$.bodyMd,
+    color: colors.body,
+    marginBottom: space.base,
+    textAlign: "center",
+  },
   cta: {
     backgroundColor: colors.primary,
     paddingHorizontal: space.xl,
@@ -382,7 +410,11 @@ const styles = StyleSheet.create({
   },
   name: { ...type$.bodyMd, color: colors.ink, fontWeight: "600", flex: 1 },
   sub: { ...type$.bodySm, color: colors.muted, marginTop: 1 },
-  sep: { height: 1, backgroundColor: colors.hairlineSoft, marginLeft: 24 + 34 + 12 },
+  sep: {
+    height: 1,
+    backgroundColor: colors.hairlineSoft,
+    marginLeft: 24 + 34 + 12,
+  },
   selectedMark: {
     width: 22,
     height: 22,
