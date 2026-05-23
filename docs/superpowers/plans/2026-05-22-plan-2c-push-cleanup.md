@@ -349,8 +349,6 @@ export async function unregisterForPushNotifications(): Promise<void> {
     if (!projectId || projectId === EAS_PROJECT_ID_PLACEHOLDER) return;
 
     const { data: token } = await Notifications.getExpoPushTokenAsync({ projectId });
-    if (!token) return;
-
     await apiFetch("/devices", {
       method: "DELETE",
       body: JSON.stringify({ expoPushToken: token }),
