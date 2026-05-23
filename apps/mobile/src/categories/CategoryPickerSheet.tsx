@@ -160,20 +160,6 @@ export function CategoryPickerSheet({
         </Pressable>
       </BottomSheetView>
 
-      <BottomSheetView style={styles.search}>
-        <Ionicons name="search" size={16} color={colors.muted} />
-        <TextInput
-          style={styles.searchInput}
-          placeholder="Search categories"
-          placeholderTextColor={colors.muted}
-          value={query}
-          onChangeText={setQuery}
-          autoCorrect={false}
-          autoCapitalize="none"
-          returnKeyType="search"
-        />
-      </BottomSheetView>
-
       {!cats && !err && (
         <BottomSheetView style={styles.fallback}>
           <ActivityIndicator color={colors.primary} />
@@ -198,6 +184,21 @@ export function CategoryPickerSheet({
           }
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.list}
+          ListHeaderComponent={
+            <View style={styles.search}>
+              <Ionicons name="search" size={16} color={colors.muted} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search categories"
+                placeholderTextColor={colors.muted}
+                value={query}
+                onChangeText={setQuery}
+                autoCorrect={false}
+                autoCapitalize="none"
+                returnKeyType="search"
+              />
+            </View>
+          }
           ItemSeparatorComponent={() => <View style={styles.sep} />}
           renderItem={({ item }) => {
             if (item.kind === "none") {
