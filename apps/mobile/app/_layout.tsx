@@ -1,4 +1,3 @@
-import "react-native-gesture-handler";
 import { Stack } from "expo-router";
 import { useEffect } from "react";
 import { AppState } from "react-native";
