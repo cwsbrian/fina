@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Platform,
+  useWindowDimensions,
+} from "react-native";
 import BottomSheet, {
   BottomSheetBackdrop,
   BottomSheetView,
@@ -30,6 +37,7 @@ export function DatePickerSheet({
 }: Props) {
   const ref = useRef<BottomSheet>(null);
   const [draft, setDraft] = useState<Date>(value);
+  const { width: screenW } = useWindowDimensions();
 
   // The iOS wheel picker is ~216px tall; header is ~50; safe-area bottom
   // varies. ~38% fits cleanly on most phones without leaving dead space
@@ -87,16 +95,18 @@ export function DatePickerSheet({
           </Pressable>
         </View>
 
-        <DateTimePicker
-          value={draft}
-          mode="date"
-          display={Platform.OS === "ios" ? "spinner" : "default"}
-          maximumDate={maximumDate ?? new Date()}
-          onChange={(_, selected) => {
-            if (selected) setDraft(selected);
-          }}
-          style={{ alignSelf: "stretch" }}
-        />
+        <View style={styles.pickerWrap}>
+          <DateTimePicker
+            value={draft}
+            mode="date"
+            display={Platform.OS === "ios" ? "spinner" : "default"}
+            maximumDate={maximumDate ?? new Date()}
+            onChange={(_, selected) => {
+              if (selected) setDraft(selected);
+            }}
+            style={{ width: screenW, height: 216 }}
+          />
+        </View>
       </BottomSheetView>
     </BottomSheet>
   );
@@ -110,6 +120,11 @@ const styles = StyleSheet.create({
   },
   grabber: { backgroundColor: colors.mutedSoft, width: 36, height: 4 },
   body: { flex: 1 },
+  pickerWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   head: {
     flexDirection: "row",
     alignItems: "center",
