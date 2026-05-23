@@ -51,6 +51,15 @@ export type UnregisterDeviceBody = z.infer<typeof UnregisterDeviceBody>;
 
 **File:** `apps/api/src/routes/devices.ts` (기존 파일에 handler 추가)
 
+**Imports to add at top:**
+```ts
+import { UnregisterDeviceBody } from "@fina/shared";
+import { logInfo } from "../logger.js";
+```
+(`RegisterDeviceBody`, `requireSession`, `HttpError`, `prisma`는 이미 import 됨.)
+
+**Handler — place inside the existing `export async function devicesRoutes(app: FastifyInstance)` body, directly after the POST handler:**
+
 ```ts
 app.delete("/devices", async (req, reply) => {
   try {
@@ -62,6 +71,8 @@ app.delete("/devices", async (req, reply) => {
     const result = await prisma.userDevice.deleteMany({
       where: { userId: session.userId, expoPushToken },
     });
+    // count=0도 로깅 — DELETE가 호출됐다는 audit trail (token rotation / lazy
+    // cleanup 후 호출 등 무해한 케이스 추적용).
     logInfo(
       { userId: session.userId, removedDeviceCount: result.count },
       "device unregistered via sign-out",
@@ -117,6 +128,7 @@ export async function unregisterForPushNotifications(): Promise<void> {
 `registerForPushNotifications` 함수와 동일한 패턴:
 - 같은 projectId 추출 / placeholder guard / token 재취득
 - 모든 실패 path silent
+- `apiFetch("/devices", { method: "DELETE", body: ... })` 패턴은 이미 web에서 사용 중 (`banks-list`, `pending-invites` 등 3곳). RN 0.71+의 `fetch`도 DELETE body 지원.
 
 ### Sign-out callsites
 
@@ -150,7 +162,8 @@ onPress: async () => {
 | User A가 sign-out → 같은 device에서 user B sign-in | A의 row 삭제됨 → B가 POST /devices 호출 → B의 새 row 생성. 정상 분리. |
 | User가 push 권한 거부 상태에서 sign-out | `getExpoPushTokenAsync` 실패 → catch → 진행. Stale row 없음 (애초에 register도 안 됐을 것). |
 | User가 sign-out 후 즉시 sign-in 다시 (계정 변경) | A row 삭제 → 같은 토큰으로 B에 POST → B의 row 신규 생성. UNIQUE(userId, token)이라 conflict 없음. |
-| Mobile이 sign-out 보내기 전에 API가 crash | 다음 push에서 DeviceNotRegistered (token 자체가 valid해서 안 옴) — 그래서 lazy cleanup도 안 됨. **알려진 한계.** 다음 successful sign-in 시 새 row + 기존 stale row 잔존. 다른 user의 push 가지 않음 (UNIQUE는 userId+token이라 새 user는 자기 row만 가짐). 무해. |
+| Mobile이 sign-out 보내기 전에 API가 crash | 토큰 자체는 valid해서 DeviceNotRegistered도 안 옴 → lazy cleanup도 안 됨. **알려진 한계 — v1.5 cron janitor가 lastSeenAt > N일인 row 정리할 때까지 stale row 잔존.** UNIQUE(userId, token)이라 새 user는 자기 row만 가짐, 다른 user의 push 가지 않음 — 무해. |
+| Token rotation (Expo가 OS reset / 재설치 후 새 토큰 발급) → DELETE가 OLD token이 아닌 NEW token으로 호출됨 | DELETE finds no row → 204. OLD token row는 stale 상태로 잔존. **알려진 한계.** 다음 push DeviceNotRegistered로 lazy cleanup. |
 
 ## 6. Testing
 
@@ -174,7 +187,9 @@ describe("DELETE /devices", () => {
 
 총 6개 새 테스트.
 
-**Mobile**: unit test 없음 (Expo APIs는 mock하기 무거움 + helper는 best-effort wrapping). Spec §5의 edge cases는 manual smoke로 검증 — main에 merge 후 실제 sign-out → DB 확인.
+**Mobile**: unit test 없음 (Expo APIs는 mock하기 무거움 + helper는 best-effort wrapping). 단 type-level smoke 1개 — `unregisterForPushNotifications: () => Promise<void>` export가 살아있는지 mobile test 또는 typecheck로 확인 (accidental removal 방지).
+
+Spec §5의 edge cases는 manual smoke로 검증 — main에 merge 후 실제 sign-out → DB 확인.
 
 ## 7. Risks
 
@@ -186,7 +201,7 @@ describe("DELETE /devices", () => {
 
 ## 8. Success criteria
 
-- DELETE /devices route 통과 + 6개 신규 테스트 모두 green.
+- DELETE /devices route 통과 + 6개 신규 테스트 모두 green (devices.routes.test.ts 기존 6개 → 12개로 증가).
 - Mobile sign-out → DB에서 해당 row 즉시 사라짐 (smoke 검증).
 - POST /devices와 동일한 ApiError contract (`invalid_body`, 401).
 - @fina/shared의 `UnregisterDeviceBody` schema가 mobile + api 양쪽에서 import됨 (single source).
