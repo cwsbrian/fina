@@ -8,7 +8,7 @@ import {
   Alert,
   TextInput,
 } from "react-native";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Swipeable } from "react-native-gesture-handler";
 import BottomSheet, {
   BottomSheetView,
@@ -60,6 +60,7 @@ export function CategoryPickerSheet({
   onChange,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
+  const swipeRefs = useRef<Map<string, Swipeable | null>>(new Map());
   const [cats, setCats] = useState<CategoryDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
@@ -94,6 +95,15 @@ export function CategoryPickerSheet({
       setSaving(null);
     }
   }, [visible, load]);
+
+  // Re-fetch when the parent screen regains focus (e.g. user is editing
+  // a category on /categories/[catId]/edit and pops back) so name/icon/
+  // color edits show without closing + reopening the sheet.
+  useFocusEffect(
+    useCallback(() => {
+      if (visible) load();
+    }, [visible, load]),
+  );
 
   const confirmArchive = useCallback(
     (cat: CategoryDTO) => {
@@ -191,7 +201,12 @@ export function CategoryPickerSheet({
       enableDynamicSizing={false}
       index={visible ? 0 : -1}
       backdropComponent={renderBackdrop}
-      onClose={onClose}
+      onClose={() => {
+        // Reset any rows that were swiped open so reopening the sheet
+        // doesn't show them mid-swipe.
+        swipeRefs.current.forEach((s) => s?.close());
+        onClose();
+      }}
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
@@ -330,6 +345,10 @@ export function CategoryPickerSheet({
             const isSaving = saving === c.id;
             return (
               <Swipeable
+                ref={(r) => {
+                  if (r) swipeRefs.current.set(c.id, r);
+                  else swipeRefs.current.delete(c.id);
+                }}
                 friction={2}
                 rightThreshold={40}
                 overshootRight={false}
@@ -342,7 +361,9 @@ export function CategoryPickerSheet({
                         pressed && { opacity: 0.6 },
                       ]}
                       onPress={() => {
-                        ref.current?.close();
+                        // Snap this row closed but keep the sheet open so
+                        // the edit screen pops back into it on save.
+                        swipeRefs.current.get(c.id)?.close();
                         router.push(`/categories/${c.id}/edit` as never);
                       }}
                     >
