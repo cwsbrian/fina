@@ -38,6 +38,7 @@ type Props = {
 type CategoriesResp = { categories: CategoryDTO[] };
 
 type Item =
+  | { kind: "header" }
   | { kind: "none" }
   | { kind: "cat"; cat: CategoryDTO }
   | { kind: "create" };
@@ -112,7 +113,8 @@ export function CategoryPickerSheet({
     const filtered = query
       ? cats.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
       : cats;
-    const rows: Item[] = filtered.map((c) => ({ kind: "cat", cat: c }));
+    const rows: Item[] = [{ kind: "header" }];
+    for (const c of filtered) rows.push({ kind: "cat", cat: c });
     rows.push({ kind: "none" });
     rows.push({ kind: "create" });
     return rows;
@@ -145,62 +147,70 @@ export function CategoryPickerSheet({
       keyboardBehavior="interactive"
       keyboardBlurBehavior="restore"
     >
-      <BottomSheetView style={styles.body}>
-        <View style={styles.head}>
-          <Text style={styles.title}>Choose category</Text>
-          <Pressable
-            style={({ pressed }) => [
-              styles.closeBtn,
-              pressed && { opacity: 0.6 },
-            ]}
-            onPress={() => ref.current?.close()}
-            accessibilityLabel="Close"
-            hitSlop={8}
-          >
-            <Ionicons name="close" size={22} color={colors.muted} />
-          </Pressable>
-        </View>
-        <View style={styles.search}>
-          <Ionicons name="search" size={16} color={colors.muted} />
-          <TextInput
-            style={styles.searchInput}
-            placeholder="Search categories"
-            placeholderTextColor={colors.muted}
-            value={query}
-            onChangeText={setQuery}
-            autoCorrect={false}
-            autoCapitalize="none"
-            returnKeyType="search"
-          />
-        </View>
-
       {!cats && !err && (
-        <View style={styles.fallback}>
+        <BottomSheetView style={styles.fallback}>
           <ActivityIndicator color={colors.primary} />
-        </View>
+        </BottomSheetView>
       )}
 
       {err && (
-        <View style={styles.fallback}>
+        <BottomSheetView style={styles.fallback}>
           <Text style={styles.errTitle}>Couldn't load categories</Text>
           <Text style={styles.errBody}>{err}</Text>
           <Pressable style={styles.cta} onPress={load}>
             <Text style={styles.ctaText}>Try again</Text>
           </Pressable>
-        </View>
+        </BottomSheetView>
       )}
 
       {cats && (
         <BottomSheetFlatList
-          style={{ flex: 1 }}
           data={items}
           keyExtractor={(item) =>
             item.kind === "cat" ? item.cat.id : item.kind
           }
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.list}
-          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          stickyHeaderIndices={[0]}
+          ItemSeparatorComponent={({ leadingItem }) =>
+            leadingItem?.kind === "header" ? null : (
+              <View style={styles.sep} />
+            )
+          }
           renderItem={({ item }) => {
+            if (item.kind === "header") {
+              return (
+                <View style={styles.stickyHeader}>
+                  <View style={styles.head}>
+                    <Text style={styles.title}>Choose category</Text>
+                    <Pressable
+                      style={({ pressed }) => [
+                        styles.closeBtn,
+                        pressed && { opacity: 0.6 },
+                      ]}
+                      onPress={() => ref.current?.close()}
+                      accessibilityLabel="Close"
+                      hitSlop={8}
+                    >
+                      <Ionicons name="close" size={22} color={colors.muted} />
+                    </Pressable>
+                  </View>
+                  <View style={styles.search}>
+                    <Ionicons name="search" size={16} color={colors.muted} />
+                    <TextInput
+                      style={styles.searchInput}
+                      placeholder="Search categories"
+                      placeholderTextColor={colors.muted}
+                      value={query}
+                      onChangeText={setQuery}
+                      autoCorrect={false}
+                      autoCapitalize="none"
+                      returnKeyType="search"
+                    />
+                  </View>
+                </View>
+              );
+            }
             if (item.kind === "none") {
               const isSel = selectedId == null;
               const isSaving = saving === "__none";
@@ -300,7 +310,6 @@ export function CategoryPickerSheet({
           }}
         />
       )}
-      </BottomSheetView>
     </BottomSheet>
   );
 }
@@ -319,7 +328,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
   },
-  body: { flex: 1 },
+  stickyHeader: { backgroundColor: colors.canvas, paddingBottom: 4 },
   grabber: {
     backgroundColor: colors.mutedSoft,
     width: 36,
