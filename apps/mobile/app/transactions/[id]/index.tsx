@@ -180,15 +180,22 @@ export default function TransactionDetail() {
               onPress={() => setAmountEditorOpen(true)}
             >
               <Text style={styles.rowLabel}>Amount</Text>
-              <Text
-                style={[
-                  styles.rowValue,
-                  money.isIncome && { color: colors.up },
-                ]}
-              >
-                {money.isIncome ? "+" : "−"}
-                {money.display}
-              </Text>
+              <View style={styles.rowValueWrap}>
+                <Text
+                  style={[
+                    styles.rowValue,
+                    money.isIncome && { color: colors.up },
+                  ]}
+                >
+                  {money.isIncome ? "+" : "−"}
+                  {money.display}
+                </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={colors.mutedSoft}
+                />
+              </View>
             </Pressable>
           ) : null}
           {tx.source === "manual" ? (
@@ -200,9 +207,16 @@ export default function TransactionDetail() {
               onPress={() => setDatePickerOpen(true)}
             >
               <Text style={styles.rowLabel}>Date</Text>
-              <Text style={styles.rowValue}>
-                {formatDateTime(tx.occurredAt)}
-              </Text>
+              <View style={styles.rowValueWrap}>
+                <Text style={styles.rowValue}>
+                  {formatDateTime(tx.occurredAt)}
+                </Text>
+                <Ionicons
+                  name="chevron-forward"
+                  size={16}
+                  color={colors.mutedSoft}
+                />
+              </View>
             </Pressable>
           ) : null}
           <View style={styles.row}>
@@ -570,6 +584,7 @@ const styles = StyleSheet.create({
   },
   rowLabel: { ...type$.bodyMd, color: colors.ink },
   rowValue: { ...type$.bodyMd, color: colors.muted, flexShrink: 1, marginLeft: space.sm },
+  rowValueWrap: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1 },
   statusValue: { flexDirection: "row", alignItems: "center", gap: 6 },
   statusDot: { width: 6, height: 6, borderRadius: 999 },
 
