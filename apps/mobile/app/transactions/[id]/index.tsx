@@ -23,7 +23,6 @@ import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
-import { NoteEditorSheet } from "../../../src/transactions/NoteEditorSheet";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -36,7 +35,6 @@ export default function TransactionDetail() {
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
-  const [noteOpen, setNoteOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -324,7 +322,7 @@ export default function TransactionDetail() {
               styles.noteRow,
               pressed && { opacity: 0.6 },
             ]}
-            onPress={() => setNoteOpen(true)}
+            onPress={() => router.push(`/transactions/${tx.id}/note` as never)}
           >
             <Text
               style={[
@@ -362,16 +360,6 @@ export default function TransactionDetail() {
         }}
       />
 
-      <NoteEditorSheet
-        visible={noteOpen}
-        txId={tx.id}
-        initialNote={tx.note}
-        onClose={() => setNoteOpen(false)}
-        onSaved={(next) => {
-          setTx({ ...tx, note: next });
-          setNoteOpen(false);
-        }}
-      />
     </SafeAreaView>
   );
 }
