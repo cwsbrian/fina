@@ -35,6 +35,17 @@ async function checkPlaidItemLimit(
 export async function plaidRoutes(app: FastifyInstance): Promise<void> {
   app.post("/workspaces/:id/plaid/link-token", async (req, reply) => {
     const params = req.params as { id: string };
+    // Mobile uses Plaid's Hosted Link (web flow in a system browser) since
+    // Expo Go can't ship the native SDK. Body `{ hosted: true,
+    // completionRedirectUri: "fina://plaid/oauth" }` triggers it; the
+    // response then includes `hostedLinkUrl` which the client opens in a
+    // WebBrowser auth session.
+    const body = (req.body as Record<string, unknown> | null) ?? {};
+    const hosted = body["hosted"] === true;
+    const completionRedirectUri =
+      typeof body["completionRedirectUri"] === "string"
+        ? (body["completionRedirectUri"] as string)
+        : undefined;
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
       if (ctx.membership.workspaceId !== params.id) {
@@ -49,8 +60,24 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         country_codes: PLAID_COUNTRY_CODES,
         language: "en",
         ...(app.fina.env.PLAID_WEBHOOK_URL ? { webhook: app.fina.env.PLAID_WEBHOOK_URL } : {}),
+        ...(hosted
+          ? {
+              hosted_link: {
+                ...(completionRedirectUri
+                  ? { completion_redirect_uri: completionRedirectUri }
+                  : {}),
+                url_lifetime_seconds: 900,
+              },
+            }
+          : {}),
       });
-      return { linkToken: res.data.link_token, expiration: res.data.expiration };
+      return {
+        linkToken: res.data.link_token,
+        expiration: res.data.expiration,
+        ...(res.data.hosted_link_url
+          ? { hostedLinkUrl: res.data.hosted_link_url }
+          : {}),
+      };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       const m = mapPlaidError(e);

@@ -321,8 +321,13 @@ describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
     expect(res.statusCode).toBe(204);
 
     expect(await prisma.plaidItem.findUnique({ where: { id: plaidItemId } })).toBeNull();
-    // Account survives but is archived; plaidItemId becomes NULL via SetNull.
-    const acct = await prisma.bankAccount.findFirstOrThrow({ where: { workspaceId: wsId } });
+    // Plaid-linked account survives but is archived; plaidItemId becomes
+    // NULL via SetNull. Workspace bootstrap also seeds default manual
+    // accounts, so filter by plaidAccountId (only set on Plaid rows) to
+    // pick the right one.
+    const acct = await prisma.bankAccount.findFirstOrThrow({
+      where: { workspaceId: wsId, plaidAccountId: { not: null } },
+    });
     expect(acct.archivedAt).not.toBeNull();
     expect(acct.plaidItemId).toBeNull();
     // Transaction survives.
@@ -494,10 +499,12 @@ describe("GET /workspaces/:id/accounts", () => {
       headers: { cookie: owner.cookie, "x-workspace-id": wsId },
     });
     expect(res.statusCode).toBe(200);
+    // Workspace seed adds 5 default manual accounts (Cash/Debit/Checking/
+    // Savings/Credit). Find the Plaid-linked one by mask.
     const list = res.json().accounts;
-    expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ name: "Checking", type: "depository", mask: "0001" });
-    expect(list[0].archivedAt).toBeNull();
+    const plaid = list.find((a: { mask: string }) => a.mask === "0001");
+    expect(plaid).toMatchObject({ name: "Checking", type: "depository", mask: "0001" });
+    expect(plaid.archivedAt).toBeNull();
     await app.close();
   });
 
@@ -922,7 +929,12 @@ describe("POST /workspaces/:id/plaid/exchange — currency_mismatch", () => {
     });
     // No plaid_items or bank_accounts should have been created.
     expect(await prisma.plaidItem.count({ where: { workspaceId: wsId } })).toBe(0);
-    expect(await prisma.bankAccount.count({ where: { workspaceId: wsId } })).toBe(0);
+    // Only the seeded manual accounts should remain — no Plaid-linked row.
+    expect(
+      await prisma.bankAccount.count({
+        where: { workspaceId: wsId, plaidAccountId: { not: null } },
+      }),
+    ).toBe(0);
     // itemRemove response was consumed (queue is now empty).
     expect(plaidMock.itemRemove.length).toBe(0);
     await app.close();
@@ -964,7 +976,12 @@ describe("POST /workspaces/:id/plaid/exchange — currency_mismatch", () => {
     });
     // No plaid_items or bank_accounts created.
     expect(await prisma.plaidItem.count({ where: { workspaceId: wsId } })).toBe(0);
-    expect(await prisma.bankAccount.count({ where: { workspaceId: wsId } })).toBe(0);
+    // Only the seeded manual accounts should remain — no Plaid-linked row.
+    expect(
+      await prisma.bankAccount.count({
+        where: { workspaceId: wsId, plaidAccountId: { not: null } },
+      }),
+    ).toBe(0);
     // itemRemove response was consumed.
     expect(plaidMock.itemRemove.length).toBe(0);
     await app.close();

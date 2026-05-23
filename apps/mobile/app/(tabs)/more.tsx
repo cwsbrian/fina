@@ -48,7 +48,7 @@ export default function More() {
       icon: "card-outline",
       title: "Banks",
       subtitle: "Connect and manage Plaid links",
-      onPress: () => Alert.alert("Coming soon", "Banks screen lands in Phase 3."),
+      onPress: () => router.push("/banks" as never),
     },
     {
       id: "workspace",

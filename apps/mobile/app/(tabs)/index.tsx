@@ -63,7 +63,7 @@ export default function Home() {
       title: "Connect a bank",
       subtitle: "Plaid securely imports your transactions.",
       cta: "Connect",
-      href: "/(tabs)/more",
+      href: "/banks",
       done: bankCount !== null && bankCount > 0,
     },
     {

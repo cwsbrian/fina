@@ -24,6 +24,7 @@ import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { type DateRange } from "../../src/datetime/DateRangeSheet";
 import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
+import { ConnectBankButton } from "../../src/plaid/ConnectBankButton";
 
 const HEADER_HEIGHT = 58;
 
@@ -219,15 +220,7 @@ export default function Activity() {
                 Connect a bank to import automatically, or add transactions
                 manually.
               </Text>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.cta,
-                  pressed && { opacity: 0.85 },
-                ]}
-                onPress={() => router.push("/(tabs)/more" as never)}
-              >
-                <Text style={styles.ctaText}>Connect a bank</Text>
-              </Pressable>
+              <ConnectBankButton onConnected={() => load()} />
             </View>
           )
         }
