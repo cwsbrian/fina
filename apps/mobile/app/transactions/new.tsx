@@ -255,6 +255,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase",
     marginBottom: space.xs,
+    textAlign: "center",
   },
   input: {
     ...type$.bodyMd,
@@ -263,6 +264,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: space.base,
     paddingVertical: 12,
+    textAlign: "center",
   },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
   helper: {
