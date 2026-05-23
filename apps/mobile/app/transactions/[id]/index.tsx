@@ -24,6 +24,7 @@ import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
 import { DatePickerSheet } from "../../../src/datetime/DatePickerSheet";
+import { AmountEditorSheet } from "../../../src/transactions/AmountEditorSheet";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -37,6 +38,7 @@ export default function TransactionDetail() {
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [amountEditorOpen, setAmountEditorOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -152,19 +154,7 @@ export default function TransactionDetail() {
             {money.display}
           </Text>
           <View style={styles.heroMetaRow}>
-            {tx.source === "manual" ? (
-              <Pressable
-                onPress={() => setDatePickerOpen(true)}
-                hitSlop={6}
-                style={({ pressed }) => pressed && { opacity: 0.6 }}
-              >
-                <Text style={[styles.heroMeta, styles.heroMetaEditable]}>
-                  {formatDateTime(tx.occurredAt)}
-                </Text>
-              </Pressable>
-            ) : (
-              <Text style={styles.heroMeta}>{formatDateTime(tx.occurredAt)}</Text>
-            )}
+            <Text style={styles.heroMeta}>{formatDateTime(tx.occurredAt)}</Text>
             {isSplit && (
               <>
                 <View style={styles.heroDot} />
@@ -181,6 +171,41 @@ export default function TransactionDetail() {
         {/* Details */}
         <Text style={styles.groupLabel}>Details</Text>
         <View style={styles.group}>
+          {tx.source === "manual" ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.row,
+                pressed && { backgroundColor: colors.surfaceSoft },
+              ]}
+              onPress={() => setAmountEditorOpen(true)}
+            >
+              <Text style={styles.rowLabel}>Amount</Text>
+              <Text
+                style={[
+                  styles.rowValue,
+                  styles.rowValueEditable,
+                  money.isIncome && { color: colors.up },
+                ]}
+              >
+                {money.isIncome ? "+" : "−"}
+                {money.display}
+              </Text>
+            </Pressable>
+          ) : null}
+          {tx.source === "manual" ? (
+            <Pressable
+              style={({ pressed }) => [
+                styles.row,
+                pressed && { backgroundColor: colors.surfaceSoft },
+              ]}
+              onPress={() => setDatePickerOpen(true)}
+            >
+              <Text style={styles.rowLabel}>Date</Text>
+              <Text style={[styles.rowValue, styles.rowValueEditable]}>
+                {formatDateTime(tx.occurredAt)}
+              </Text>
+            </Pressable>
+          ) : null}
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Account</Text>
             <Text style={styles.rowValue}>
@@ -363,6 +388,17 @@ export default function TransactionDetail() {
         </View>
       </ScrollView>
 
+      <AmountEditorSheet
+        visible={amountEditorOpen}
+        txId={tx.id}
+        initial={tx.amount}
+        onClose={() => setAmountEditorOpen(false)}
+        onSaved={(next) => {
+          setTx({ ...tx, amount: next });
+          setAmountEditorOpen(false);
+        }}
+      />
+
       <DatePickerSheet
         visible={datePickerOpen}
         value={new Date(tx.occurredAt)}
@@ -479,7 +515,6 @@ const styles = StyleSheet.create({
   },
   heroMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 6, gap: 6 },
   heroMeta: { ...type$.bodySm, color: colors.muted },
-  heroMetaEditable: { color: colors.primary },
   heroDot: { width: 3, height: 3, borderRadius: 999, backgroundColor: colors.mutedSoft },
   splitPill: {
     paddingHorizontal: 8,
@@ -536,6 +571,7 @@ const styles = StyleSheet.create({
   },
   rowLabel: { ...type$.bodyMd, color: colors.ink },
   rowValue: { ...type$.bodyMd, color: colors.muted, flexShrink: 1, marginLeft: space.sm },
+  rowValueEditable: { color: colors.primary, fontWeight: "600" },
   statusValue: { flexDirection: "row", alignItems: "center", gap: 6 },
   statusDot: { width: 6, height: 6, borderRadius: 999 },
 
