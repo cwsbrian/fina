@@ -240,12 +240,12 @@ const styles = StyleSheet.create({
   },
   amountInput: {
     fontSize: 56,
-    lineHeight: 56,
     fontWeight: "500",
     letterSpacing: -1.6,
     color: colors.ink,
     minWidth: 80,
-    padding: 0,
+    paddingTop: 8,
+    paddingBottom: 4,
   },
 
   label: {
