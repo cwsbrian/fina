@@ -23,6 +23,11 @@ import { getActiveWorkspaceId } from "../workspace/active";
 import { colors, space, type as type$ } from "../design/tokens";
 import { categoryMeta } from "./meta";
 
+// Pastel swipe-action palette — soft backgrounds with darker fg so the
+// buttons read as a subtle off-white pair rather than alert chrome.
+const SWIPE_EDIT_FG = "#5a6661";
+const SWIPE_DELETE_FG = "#b54550";
+
 type Props = {
   visible: boolean;
   txId: string;
@@ -344,9 +349,11 @@ export function CategoryPickerSheet({
                       <Ionicons
                         name="create-outline"
                         size={20}
-                        color={colors.onPrimary}
+                        color={SWIPE_EDIT_FG}
                       />
-                      <Text style={styles.swipeBtnText}>Edit</Text>
+                      <Text style={[styles.swipeBtnText, { color: SWIPE_EDIT_FG }]}>
+                        Edit
+                      </Text>
                     </Pressable>
                     <Pressable
                       style={({ pressed }) => [
@@ -359,9 +366,11 @@ export function CategoryPickerSheet({
                       <Ionicons
                         name="trash-outline"
                         size={20}
-                        color={colors.onPrimary}
+                        color={SWIPE_DELETE_FG}
                       />
-                      <Text style={styles.swipeBtnText}>Delete</Text>
+                      <Text style={[styles.swipeBtnText, { color: SWIPE_DELETE_FG }]}>
+                        Delete
+                      </Text>
                     </Pressable>
                   </View>
                 )}
@@ -416,9 +425,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     gap: 4,
   },
-  swipeBtnText: { ...type$.bodySm, color: colors.onPrimary, fontWeight: "600" },
-  editBtn: { backgroundColor: colors.muted },
-  deleteBtn: { backgroundColor: "#b54550" },
+  swipeBtnText: { ...type$.bodySm, fontWeight: "600" },
+  editBtn: { backgroundColor: "#eef0ef" },
+  deleteBtn: { backgroundColor: "#fde6e7" },
   grabber: {
     backgroundColor: colors.mutedSoft,
     width: 36,
