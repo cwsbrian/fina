@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, StyleSheet, Pressable, Platform } from "react-native";
-import {
+import BottomSheet, {
   BottomSheetBackdrop,
-  BottomSheetModal,
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
@@ -93,26 +92,17 @@ export function DateRangeSheet({
   onClose,
   onConfirm,
 }: Props) {
-  const ref = useRef<BottomSheetModal>(null);
+  const ref = useRef<BottomSheet>(null);
   const [draft, setDraft] = useState<DateRange>(value);
   const [picking, setPicking] = useState<"from" | "to" | null>(null);
 
   const snapPoints = useMemo(() => ["80%"], []);
 
-  // BottomSheetModal portals to the root via BottomSheetModalProvider so
-  // its backdrop covers the tab bar + Activity header in one go.
-  // Schedule present()/dismiss() on the next frame: portal registration
-  // can lag the first render and present() called too early no-ops.
   useEffect(() => {
     if (visible) {
       setDraft(value);
       setPicking(null);
-      const t = setTimeout(() => ref.current?.present(), 0);
-      return () => clearTimeout(t);
-    } else {
-      ref.current?.dismiss();
     }
-    return undefined;
   }, [visible, value]);
 
   const activePreset = detectPreset(draft);
@@ -138,26 +128,26 @@ export function DateRangeSheet({
   );
 
   return (
-    <BottomSheetModal
+    <BottomSheet
       ref={ref}
       snapPoints={snapPoints}
       enableDynamicSizing={false}
-      index={0}
+      index={visible ? 0 : -1}
       backdropComponent={renderBackdrop}
-      onDismiss={onClose}
+      onClose={onClose}
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
     >
       <BottomSheetView style={styles.body}>
         <View style={styles.head}>
-          <Pressable onPress={() => ref.current?.dismiss()} hitSlop={8}>
+          <Pressable onPress={() => ref.current?.close()} hitSlop={8}>
             <Text style={styles.cancel}>Cancel</Text>
           </Pressable>
           <Text style={styles.title}>Date range</Text>
           <Pressable
             onPress={() => {
-              ref.current?.dismiss();
+              ref.current?.close();
               onConfirm(draft);
             }}
             hitSlop={8}
@@ -244,7 +234,7 @@ export function DateRangeSheet({
           />
         )}
       </BottomSheetView>
-    </BottomSheetModal>
+    </BottomSheet>
   );
 }
 
