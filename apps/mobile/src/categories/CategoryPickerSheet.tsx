@@ -7,8 +7,8 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
-  ScrollView,
 } from "react-native";
+import { router } from "expo-router";
 import BottomSheet, {
   BottomSheetView,
   BottomSheetFlatList,
@@ -20,14 +20,7 @@ import type { CategoryDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { colors, space, type as type$ } from "../design/tokens";
-import {
-  categoryMeta,
-  pickRandomCategoryColor,
-  DEFAULT_NEW_CATEGORY_ICON,
-  CATEGORY_COLOR_CHOICES,
-  CATEGORY_ICON_CHOICES,
-  withAlpha,
-} from "./meta";
+import { categoryMeta } from "./meta";
 
 type Props = {
   visible: boolean;
@@ -61,17 +54,10 @@ export function CategoryPickerSheet({
   onChange,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
-  const newInputRef = useRef<TextInput>(null);
   const [cats, setCats] = useState<CategoryDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName] = useState("");
-  const [newIcon, setNewIcon] = useState(DEFAULT_NEW_CATEGORY_ICON);
-  const [newColor, setNewColor] = useState(CATEGORY_COLOR_CHOICES[0]!);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
 
   const snapPoints = useMemo(() => ["90%"], []);
 
@@ -100,72 +86,17 @@ export function CategoryPickerSheet({
     else {
       setQuery("");
       setSaving(null);
-      setCreating(false);
-      setNewName("");
-      setCreateError(null);
     }
   }, [visible, load]);
 
   const startCreate = useCallback(() => {
-    setCreating(true);
-    setNewName("");
-    setNewIcon(DEFAULT_NEW_CATEGORY_ICON);
-    setNewColor(pickRandomCategoryColor());
-    setCreateError(null);
-    requestAnimationFrame(() => newInputRef.current?.focus());
-  }, []);
-
-  const cancelCreate = useCallback(() => {
-    setCreating(false);
-    setNewName("");
-    setCreateError(null);
-  }, []);
-
-  const submitCreate = useCallback(async () => {
-    const name = newName.trim();
-    if (!name || submitting) return;
-    setSubmitting(true);
-    setCreateError(null);
-    try {
-      const wsId = await getActiveWorkspaceId();
-      if (!wsId) throw new Error("no_workspace");
-      const resp = await apiFetch<{ category: CategoryDTO }>(
-        `/workspaces/${wsId}/categories`,
-        {
-          method: "POST",
-          body: JSON.stringify({ name, icon: newIcon, color: newColor }),
-        },
-      );
-      // Insert into local state alphabetically — the picker stays mounted
-      // through the create→assign flow, so we want the new cat visible
-      // immediately. Then PATCH the tx to use it (auto-select) and close.
-      setCats((prev) =>
-        prev
-          ? [...prev, resp.category].sort((a, b) =>
-              a.name.localeCompare(b.name),
-            )
-          : [resp.category],
-      );
-      await apiFetch(`/workspaces/${wsId}/transactions/${txId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ categoryId: resp.category.id }),
-      });
-      cancelCreate();
-      ref.current?.close();
-      onChange();
-    } catch (e) {
-      const code = (e as { code?: string }).code ?? "create_failed";
-      setCreateError(
-        code === "duplicate_name"
-          ? "A category with this name already exists."
-          : code === "too_many_categories"
-            ? "You've reached the 30-category limit."
-            : "Couldn't create category. Try again.",
-      );
-    } finally {
-      setSubmitting(false);
-    }
-  }, [newName, newIcon, newColor, submitting, txId, onChange, cancelCreate]);
+    // Close the picker first so the new screen sits cleanly on top of
+    // the detail; on save, the new screen PATCHes the tx and pops, and
+    // the detail's useFocusEffect reloads + the parent re-opens the
+    // picker if needed.
+    ref.current?.close();
+    router.push(`/transactions/${txId}/new-category` as never);
+  }, [txId]);
 
   const pick = async (cat: CategoryDTO | null) => {
     setSaving(cat?.id ?? "__none");
@@ -242,133 +173,7 @@ export function CategoryPickerSheet({
         </BottomSheetView>
       )}
 
-      {cats && creating && (
-        <BottomSheetView style={styles.createForm}>
-          <View style={styles.formHead}>
-            <Pressable
-              style={({ pressed }) => [pressed && { opacity: 0.6 }]}
-              onPress={cancelCreate}
-              disabled={submitting}
-              hitSlop={8}
-            >
-              <Text style={styles.cancelText}>Cancel</Text>
-            </Pressable>
-            <Text style={styles.title}>Add category</Text>
-            <Pressable
-              style={({ pressed }) => [
-                (pressed || submitting || newName.trim().length === 0) && {
-                  opacity: 0.5,
-                },
-              ]}
-              onPress={submitCreate}
-              disabled={submitting || newName.trim().length === 0}
-              hitSlop={8}
-            >
-              {submitting ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <Text style={styles.saveText}>Save</Text>
-              )}
-            </Pressable>
-          </View>
-
-          <View style={styles.formBody}>
-            <View style={styles.previewRow}>
-              <View
-                style={[
-                  styles.previewGlyph,
-                  { backgroundColor: withAlpha(newColor, 0.14) },
-                ]}
-              >
-                <Ionicons name={newIcon} size={22} color={newColor} />
-              </View>
-              <Text
-                style={[
-                  styles.previewName,
-                  !newName.trim() && { color: colors.mutedSoft },
-                ]}
-                numberOfLines={1}
-              >
-                {newName.trim() || "Category name"}
-              </Text>
-            </View>
-
-            <TextInput
-              ref={newInputRef}
-              style={styles.createInput}
-              value={newName}
-              onChangeText={(v) => {
-                setNewName(v);
-                if (createError) setCreateError(null);
-              }}
-              placeholder="Name"
-              placeholderTextColor={colors.mutedSoft}
-              autoFocus
-              editable={!submitting}
-              returnKeyType="done"
-              onSubmitEditing={submitCreate}
-              maxLength={40}
-            />
-
-            <Text style={styles.pickerLabel}>Icon</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chipRow}
-            >
-              {CATEGORY_ICON_CHOICES.map((icon) => {
-                const isSel = icon === newIcon;
-                return (
-                  <Pressable
-                    key={icon}
-                    onPress={() => setNewIcon(icon)}
-                    style={[
-                      styles.iconChip,
-                      isSel && { borderColor: newColor },
-                    ]}
-                  >
-                    <Ionicons
-                      name={icon}
-                      size={20}
-                      color={isSel ? newColor : colors.muted}
-                    />
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            <Text style={styles.pickerLabel}>Color</Text>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.chipRow}
-            >
-              {CATEGORY_COLOR_CHOICES.map((c) => {
-                const isSel = c === newColor;
-                return (
-                  <Pressable
-                    key={c}
-                    onPress={() => setNewColor(c)}
-                    style={[
-                      styles.colorChip,
-                      { backgroundColor: c },
-                      isSel && styles.colorChipActive,
-                    ]}
-                  >
-                    {isSel && (
-                      <Ionicons name="checkmark" size={16} color="#fff" />
-                    )}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-
-            {createError && <Text style={styles.createError}>{createError}</Text>}
-          </View>
-        </BottomSheetView>
-      )}
-
-      {cats && !creating && (
+      {cats && (
         <BottomSheetFlatList
           data={items}
           keyExtractor={(item) =>
@@ -524,75 +329,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
   },
   stickyHeader: { backgroundColor: colors.canvas, paddingBottom: 4 },
-  createForm: { flex: 1 },
-  formHead: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: space.lg,
-    paddingTop: space.xs,
-    paddingBottom: space.sm,
-  },
-  formBody: { paddingHorizontal: space.lg, paddingTop: space.sm },
-  cancelText: { ...type$.bodyMd, color: colors.muted },
-  saveText: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
-  previewRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm + 2,
-    marginBottom: space.base,
-  },
-  previewGlyph: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  previewName: { ...type$.titleMd, color: colors.ink, flex: 1, flexShrink: 1 },
-  createInput: {
-    ...type$.bodyMd,
-    color: colors.ink,
-    backgroundColor: colors.surfaceSoft,
-    borderRadius: 12,
-    paddingHorizontal: space.base,
-    paddingVertical: 12,
-    marginBottom: space.lg,
-  },
-  pickerLabel: {
-    ...type$.bodySm,
-    color: colors.muted,
-    fontWeight: "600",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-    marginBottom: space.xs,
-  },
-  chipRow: { gap: 10, paddingVertical: 4, paddingRight: space.base },
-  iconChip: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: colors.surfaceSoft,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "transparent",
-  },
-  colorChip: {
-    width: 36,
-    height: 36,
-    borderRadius: 999,
-    alignItems: "center",
-    justifyContent: "center",
-    borderWidth: 2,
-    borderColor: "transparent",
-  },
-  colorChipActive: { borderColor: colors.ink },
-  createError: {
-    ...type$.bodySm,
-    color: colors.down,
-    marginTop: space.sm,
-  },
   grabber: {
     backgroundColor: colors.mutedSoft,
     width: 36,
