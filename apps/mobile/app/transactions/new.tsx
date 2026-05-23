@@ -6,16 +6,20 @@ import {
   Pressable,
   TextInput,
   ActivityIndicator,
-  Alert,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { Ionicons } from "@expo/vector-icons";
 import { Stack, router } from "expo-router";
+import type { CategoryDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
+import { categoryMeta } from "../../src/categories/meta";
 
 type Kind = "expense" | "income";
 
@@ -23,6 +27,10 @@ export default function NewTransaction() {
   const [kind, setKind] = useState<Kind>("expense");
   const [amount, setAmount] = useState("");
   const [merchant, setMerchant] = useState("");
+  const [date, setDate] = useState<Date>(() => new Date());
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [category, setCategory] = useState<CategoryDTO | null>(null);
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -41,11 +49,17 @@ export default function NewTransaction() {
       // credit (income). The activity formatter reads the sign to color
       // and prefix the row.
       const signed = kind === "income" ? -Math.abs(num) : Math.abs(num);
+      // Backend expects YYYY-MM-DD (validators.parseOccurredAt).
+      const occurredAt = `${date.getFullYear()}-${String(
+        date.getMonth() + 1,
+      ).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
       await apiFetch(`/workspaces/${wsId}/transactions/manual`, {
         method: "POST",
         body: JSON.stringify({
           merchantRaw: trimmedMerchant,
           amount: signed,
+          occurredAt,
+          ...(category ? { categoryId: category.id } : {}),
         }),
       });
       router.back();
@@ -181,16 +195,111 @@ export default function NewTransaction() {
             maxLength={120}
           />
 
+          {/* Date */}
+          <Pressable
+            style={styles.detailRow}
+            onPress={() => setShowDatePicker(true)}
+            disabled={submitting}
+          >
+            <View style={styles.detailRowIcon}>
+              <Ionicons
+                name="calendar-outline"
+                size={18}
+                color={colors.muted}
+              />
+            </View>
+            <Text style={styles.detailRowLabel}>Date</Text>
+            <Text style={styles.detailRowValue}>{formatDate(date)}</Text>
+          </Pressable>
+
+          {/* Category */}
+          <Pressable
+            style={styles.detailRow}
+            onPress={() => setCategoryPickerOpen(true)}
+            disabled={submitting}
+          >
+            {category ? (
+              <View
+                style={[
+                  styles.detailRowIcon,
+                  { backgroundColor: categoryMeta(category).bg },
+                ]}
+              >
+                <Ionicons
+                  name={categoryMeta(category).icon}
+                  size={16}
+                  color={categoryMeta(category).fg}
+                />
+              </View>
+            ) : (
+              <View style={styles.detailRowIcon}>
+                <Ionicons
+                  name="pricetag-outline"
+                  size={18}
+                  color={colors.muted}
+                />
+              </View>
+            )}
+            <Text style={styles.detailRowLabel}>Category</Text>
+            <Text
+              style={[
+                styles.detailRowValue,
+                !category && { color: colors.mutedSoft },
+              ]}
+            >
+              {category?.name ?? "Choose"}
+            </Text>
+          </Pressable>
+
           {err && <Text style={styles.error}>{err}</Text>}
 
           <Text style={styles.helper}>
-            Category, account, date, and notes can be edited on the transaction
-            after you save.
+            Account and notes can be edited on the transaction after you save.
           </Text>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {showDatePicker && (
+        <DateTimePicker
+          value={date}
+          mode="date"
+          display={Platform.OS === "ios" ? "inline" : "default"}
+          onChange={(_, selected) => {
+            // Android dismisses the picker on each selection; iOS keeps
+            // it open inline. Either way, the user has picked once we
+            // get a non-undefined value — close on iOS via the Done CTA
+            // (we render with `inline` so the user dismisses by tapping
+            // outside / Cancel; here we just record the new value).
+            if (Platform.OS === "android") setShowDatePicker(false);
+            if (selected) setDate(selected);
+          }}
+        />
+      )}
+
+      <CategoryPickerSheet
+        visible={categoryPickerOpen}
+        selectedId={category?.id ?? null}
+        onClose={() => setCategoryPickerOpen(false)}
+        onSelect={(cat) => {
+          setCategory(cat);
+          setCategoryPickerOpen(false);
+        }}
+      />
     </SafeAreaView>
   );
+}
+
+function formatDate(d: Date): string {
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const month = d.toLocaleString(undefined, { month: "short" });
+  const day = d.getDate();
+  return sameDay
+    ? `Today, ${month} ${day}`
+    : `${month} ${day}, ${d.getFullYear()}`;
 }
 
 const styles = StyleSheet.create({
@@ -265,7 +374,26 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: space.base,
     paddingVertical: 12,
+    marginBottom: space.lg,
   },
+  detailRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + 2,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
+  },
+  detailRowIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  detailRowLabel: { ...type$.bodyMd, color: colors.ink, flex: 1 },
+  detailRowValue: { ...type$.bodyMd, color: colors.body },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
   helper: {
     ...type$.bodySm,

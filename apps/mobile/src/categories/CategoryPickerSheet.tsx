@@ -30,16 +30,22 @@ const SWIPE_DELETE_FG = "#b54550";
 
 type Props = {
   visible: boolean;
-  txId: string;
+  /** Set when picking should immediately PATCH a real transaction.
+   *  When omitted, the picker runs in pure "select" mode and just
+   *  reports the choice via onSelect. */
+  txId?: string;
   /** Currently selected category id (highlighted in the list). null
-   *  means the tx is uncategorised. */
+   *  means uncategorised. */
   selectedId?: string | null;
   /** Fires when the sheet dismisses for any reason (drag-down, backdrop
    *  tap, × button). Parent should clear its `visible` state. */
   onClose: () => void;
-  /** Fires after a successful PATCH so the parent can refresh. The sheet
-   *  dismisses itself; parent should NOT call onClose in response. */
-  onChange: () => void;
+  /** Patch mode (txId set): fires after a successful PATCH so the
+   *  parent can refresh. The sheet dismisses itself. */
+  onChange?: () => void;
+  /** Select mode (no txId): fires with the chosen category (or null
+   *  for Uncategorized). The sheet dismisses itself. */
+  onSelect?: (cat: CategoryDTO | null) => void;
 };
 
 type CategoriesResp = { categories: CategoryDTO[] };
@@ -58,6 +64,7 @@ export function CategoryPickerSheet({
   selectedId,
   onClose,
   onChange,
+  onSelect,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
   const swipeRefs = useRef<Map<string, Swipeable | null>>(new Map());
@@ -141,15 +148,19 @@ export function CategoryPickerSheet({
   );
 
   const startCreate = useCallback(() => {
-    // Close the picker first so the new screen sits cleanly on top of
-    // the detail; on save, the new screen PATCHes the tx and pops, and
-    // the detail's useFocusEffect reloads + the parent re-opens the
-    // picker if needed.
+    // Only meaningful in patch mode — select mode hides the row.
+    if (!txId) return;
     ref.current?.close();
     router.push(`/transactions/${txId}/new-category` as never);
   }, [txId]);
 
   const pick = async (cat: CategoryDTO | null) => {
+    if (!txId) {
+      // Select mode — just report the choice up. No backend write.
+      ref.current?.close();
+      onSelect?.(cat);
+      return;
+    }
     setSaving(cat?.id ?? "__none");
     try {
       const wsId = await getActiveWorkspaceId();
@@ -159,7 +170,7 @@ export function CategoryPickerSheet({
         body: JSON.stringify({ categoryId: cat?.id ?? null }),
       });
       ref.current?.close();
-      onChange();
+      onChange?.();
     } catch (e) {
       setSaving(null);
       Alert.alert(
@@ -177,9 +188,9 @@ export function CategoryPickerSheet({
     const rows: Item[] = [{ kind: "header" }];
     for (const c of filtered) rows.push({ kind: "cat", cat: c });
     rows.push({ kind: "none" });
-    rows.push({ kind: "create" });
+    if (txId) rows.push({ kind: "create" });
     return rows;
-  }, [cats, query]);
+  }, [cats, query, txId]);
 
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
