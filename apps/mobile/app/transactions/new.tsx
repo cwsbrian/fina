@@ -9,6 +9,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  Keyboard,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -198,7 +199,10 @@ export default function NewTransaction() {
           {/* Date */}
           <Pressable
             style={styles.detailRow}
-            onPress={() => setShowDatePicker(true)}
+            onPress={() => {
+              Keyboard.dismiss();
+              setShowDatePicker(true);
+            }}
             disabled={submitting}
           >
             <View style={styles.detailRowIcon}>
@@ -215,7 +219,10 @@ export default function NewTransaction() {
           {/* Category */}
           <Pressable
             style={styles.detailRow}
-            onPress={() => setCategoryPickerOpen(true)}
+            onPress={() => {
+              Keyboard.dismiss();
+              setCategoryPickerOpen(true);
+            }}
             disabled={submitting}
           >
             {category ? (

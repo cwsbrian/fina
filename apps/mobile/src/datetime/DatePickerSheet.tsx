@@ -31,7 +31,10 @@ export function DatePickerSheet({
   const ref = useRef<BottomSheet>(null);
   const [draft, setDraft] = useState<Date>(value);
 
-  const snapPoints = useMemo(() => ["50%"], []);
+  // The iOS wheel picker is ~216px tall; header is ~50; safe-area bottom
+  // varies. ~38% fits cleanly on most phones without leaving dead space
+  // below the wheels.
+  const snapPoints = useMemo(() => ["38%"], []);
 
   // Reset the draft whenever the sheet opens — so a Cancel after
   // scrolling doesn't permanently shift the displayed initial date.
