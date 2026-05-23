@@ -143,31 +143,8 @@ export default function Activity() {
     );
   }
 
-  if (txs.length === 0) {
-    return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <ActivityHeader />
-        <View style={styles.empty}>
-          <View style={styles.iconWrap}>
-            <Ionicons name="receipt-outline" size={36} color={colors.muted} />
-          </View>
-          <Text style={styles.emptyTitle}>No transactions yet</Text>
-          <Text style={styles.emptyBody}>
-            Connect a bank to import automatically, or add transactions
-            manually.
-          </Text>
-          <Pressable
-            style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
-            onPress={() => router.push("/(tabs)/more" as never)}
-          >
-            <Text style={styles.ctaText}>Connect a bank</Text>
-          </Pressable>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
   const sections = groupByDate(txs);
+  const isSearching = query.trim().length > 0;
 
   // Pick a currency for section totals — Plaid items live in one
   // workspace and share its currency, so safe to read from first tx.
@@ -201,6 +178,43 @@ export default function Activity() {
         renderItem={({ item }) => (
           <TxRow tx={item} categories={categories} />
         )}
+        ListEmptyComponent={
+          isSearching ? (
+            <View style={styles.empty}>
+              <View style={styles.iconWrap}>
+                <Ionicons name="search" size={32} color={colors.muted} />
+              </View>
+              <Text style={styles.emptyTitle}>No matches</Text>
+              <Text style={styles.emptyBody}>
+                No transactions matched "{query.trim()}".
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.empty}>
+              <View style={styles.iconWrap}>
+                <Ionicons
+                  name="receipt-outline"
+                  size={36}
+                  color={colors.muted}
+                />
+              </View>
+              <Text style={styles.emptyTitle}>No transactions yet</Text>
+              <Text style={styles.emptyBody}>
+                Connect a bank to import automatically, or add transactions
+                manually.
+              </Text>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.cta,
+                  pressed && { opacity: 0.85 },
+                ]}
+                onPress={() => router.push("/(tabs)/more" as never)}
+              >
+                <Text style={styles.ctaText}>Connect a bank</Text>
+              </Pressable>
+            </View>
+          )
+        }
       />
       <Animated.View style={[styles.headerOverlay, { top: insets.top, height: HEADER_HEIGHT }, header.headerStyle]}>
         {searchOpen ? (
