@@ -45,11 +45,12 @@ export function NoteEditorSheet({
   const [saving, setSaving] = useState(false);
   const [kbHeight, setKbHeight] = useState(0);
 
-  // Sheet hugs the keyboard: enough room for the header + a generous
-  // input box on top, then the keyboard fills the rest of the sheet.
-  // When the keyboard is closed, drop to a smaller resting height.
-  const CONTENT_HEIGHT_PX = 260;
-  const CLOSED_HEIGHT_PX = 280;
+  // Sheet hugs the keyboard: handle (~28) + head (~50) + input (~140)
+  // sits exactly above the keyboard. When the keyboard is closed, drop
+  // to a small resting height (which the focus-on-open will quickly
+  // push past once the keyboard animates in).
+  const CONTENT_HEIGHT_PX = 220;
+  const CLOSED_HEIGHT_PX = 240;
   const snapPoints = useMemo(
     () => [kbHeight > 0 ? CONTENT_HEIGHT_PX + kbHeight : CLOSED_HEIGHT_PX],
     [kbHeight],
@@ -177,7 +178,7 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
   },
   grabber: { backgroundColor: colors.mutedSoft, width: 36, height: 4 },
-  body: { flex: 1, paddingHorizontal: space.lg, paddingBottom: space.lg },
+  body: { flex: 1, paddingHorizontal: space.lg, paddingBottom: 0 },
   head: {
     flexDirection: "row",
     alignItems: "center",
