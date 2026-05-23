@@ -108,8 +108,8 @@ export function CategoryPickerSheet({
     const filtered = query
       ? cats.filter((c) => c.name.toLowerCase().includes(query.toLowerCase()))
       : cats;
-    const rows: Item[] = [{ kind: "none" }];
-    for (const c of filtered) rows.push({ kind: "cat", cat: c });
+    const rows: Item[] = filtered.map((c) => ({ kind: "cat", cat: c }));
+    rows.push({ kind: "none" });
     rows.push({ kind: "create" });
     return rows;
   }, [cats, query]);
@@ -301,7 +301,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.canvas,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    maxHeight: "85%",
+    height: "90%",
     overflow: "hidden",
   },
   grabber: {
