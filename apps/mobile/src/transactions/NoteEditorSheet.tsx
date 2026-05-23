@@ -7,6 +7,8 @@ import {
   ActivityIndicator,
   Alert,
   TextInput,
+  Keyboard,
+  Platform,
 } from "react-native";
 import BottomSheet, {
   BottomSheetBackdrop,
@@ -41,8 +43,30 @@ export function NoteEditorSheet({
   const inputRef = useRef<TextInput>(null);
   const [draft, setDraft] = useState(initialNote ?? "");
   const [saving, setSaving] = useState(false);
+  const [kbHeight, setKbHeight] = useState(0);
 
-  const snapPoints = useMemo(() => ["90%"], []);
+  // Sheet hugs the keyboard: enough room for the header + a generous
+  // input box on top, then the keyboard fills the rest of the sheet.
+  // When the keyboard is closed, drop to a smaller resting height.
+  const CONTENT_HEIGHT_PX = 260;
+  const CLOSED_HEIGHT_PX = 280;
+  const snapPoints = useMemo(
+    () => [kbHeight > 0 ? CONTENT_HEIGHT_PX + kbHeight : CLOSED_HEIGHT_PX],
+    [kbHeight],
+  );
+
+  useEffect(() => {
+    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
+    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
+    const show = Keyboard.addListener(showEvt, (e) => {
+      setKbHeight(e.endCoordinates.height);
+    });
+    const hide = Keyboard.addListener(hideEvt, () => setKbHeight(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
 
   useEffect(() => {
     if (visible) {
@@ -96,7 +120,6 @@ export function NoteEditorSheet({
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
-      keyboardBehavior="fillParent"
       keyboardBlurBehavior="restore"
       android_keyboardInputMode="adjustResize"
     >
