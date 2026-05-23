@@ -50,10 +50,9 @@ export default function NewTransaction() {
       // credit (income). The activity formatter reads the sign to color
       // and prefix the row.
       const signed = kind === "income" ? -Math.abs(num) : Math.abs(num);
-      // Backend expects YYYY-MM-DD (validators.parseOccurredAt).
-      const occurredAt = `${date.getFullYear()}-${String(
-        date.getMonth() + 1,
-      ).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+      // ISO instant — backend's parseOccurredAt accepts either YYYY-MM-DD
+      // (legacy) or a full ISO 8601 with tz, which preserves the time.
+      const occurredAt = date.toISOString();
       await apiFetch(`/workspaces/${wsId}/transactions/manual`, {
         method: "POST",
         body: JSON.stringify({
@@ -269,6 +268,7 @@ export default function NewTransaction() {
       <DatePickerSheet
         visible={showDatePicker}
         value={date}
+        mode="datetime"
         onClose={() => setShowDatePicker(false)}
         onConfirm={(next) => {
           setDate(next);
@@ -297,9 +297,13 @@ function formatDate(d: Date): string {
     d.getDate() === now.getDate();
   const month = d.toLocaleString(undefined, { month: "short" });
   const day = d.getDate();
+  const time = d.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
   return sameDay
-    ? `Today, ${month} ${day}`
-    : `${month} ${day}, ${d.getFullYear()}`;
+    ? `Today, ${time}`
+    : `${month} ${day}, ${d.getFullYear()} · ${time}`;
 }
 
 const styles = StyleSheet.create({

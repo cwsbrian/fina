@@ -18,12 +18,15 @@ import { colors, space, type as type$ } from "../design/tokens";
 type Props = {
   visible: boolean;
   value: Date;
-  /** Latest date the user is allowed to pick. Default: today. */
+  /** Picker mode. Defaults to "date" (just the day). Use "datetime"
+   *  for date + time-of-day. */
+  mode?: "date" | "datetime" | "time";
+  /** Latest moment the user is allowed to pick. Default: now. */
   maximumDate?: Date;
   /** Sheet dismiss (Cancel / backdrop / drag-down). Parent should
    *  clear its `visible` state. */
   onClose: () => void;
-  /** Fires when Done is pressed with the chosen date. The sheet
+  /** Fires when Done is pressed with the chosen value. The sheet
    *  dismisses itself; parent should NOT call onClose in response. */
   onConfirm: (next: Date) => void;
 };
@@ -31,6 +34,7 @@ type Props = {
 export function DatePickerSheet({
   visible,
   value,
+  mode = "date",
   maximumDate,
   onClose,
   onConfirm,
@@ -98,7 +102,7 @@ export function DatePickerSheet({
         <View style={styles.pickerWrap}>
           <DateTimePicker
             value={draft}
-            mode="date"
+            mode={mode}
             display={Platform.OS === "ios" ? "spinner" : "default"}
             maximumDate={maximumDate ?? new Date()}
             onChange={(_, selected) => {

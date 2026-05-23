@@ -3,6 +3,11 @@
 
 export const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** ISO 8601 with time + Z suffix (or ±offset). Strict enough to reject
+ *  partial forms like "2026-05-23T12:00" (missing tz). */
+export const ISO_INSTANT_RE =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
+
 export type DateValidationCode = "invalid_date";
 
 export class DateValidationError extends Error {
@@ -14,23 +19,39 @@ export class DateValidationError extends Error {
   }
 }
 
-/** Parses `YYYY-MM-DD` as UTC noon. Throws `DateValidationError` on:
- *  - wrong shape (regex fail)
- *  - non-existent calendar date (e.g. 2026-02-30) — caught by the
- *    round-trip check `d.toISOString().slice(0,10) === s` */
+/** Parses either:
+ *  - `YYYY-MM-DD` → anchored to UTC noon (legacy Plaid policy)
+ *  - Full ISO 8601 instant with tz (e.g. `2026-05-23T19:32:00.000Z`) →
+ *    parsed at that exact moment (manual tx with user-chosen time)
+ *
+ *  Throws `DateValidationError` on wrong shape or non-existent calendar
+ *  date. */
 export function parseOccurredAt(s: string): Date {
-  if (!DATE_RE.test(s)) throw new DateValidationError();
-  const d = new Date(s + "T12:00:00Z");
-  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
-    throw new DateValidationError();
+  if (DATE_RE.test(s)) {
+    const d = new Date(s + "T12:00:00Z");
+    if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== s) {
+      throw new DateValidationError();
+    }
+    return d;
   }
-  return d;
+  if (ISO_INSTANT_RE.test(s)) {
+    const d = new Date(s);
+    if (Number.isNaN(d.getTime())) throw new DateValidationError();
+    return d;
+  }
+  throw new DateValidationError();
 }
 
-/** Boolean variant for UI gating (does NOT throw). */
+/** Boolean variant for UI gating (does NOT throw). Accepts the same two
+ *  formats as `parseOccurredAt`. */
 export function isValidDate(s: unknown): boolean {
   if (typeof s !== "string") return false;
-  if (!DATE_RE.test(s)) return false;
-  const d = new Date(s + "T12:00:00Z");
-  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  if (DATE_RE.test(s)) {
+    const d = new Date(s + "T12:00:00Z");
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }
+  if (ISO_INSTANT_RE.test(s)) {
+    return !Number.isNaN(new Date(s).getTime());
+  }
+  return false;
 }
