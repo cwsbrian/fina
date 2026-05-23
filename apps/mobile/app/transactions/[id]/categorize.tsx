@@ -87,10 +87,8 @@ export default function CategorizePicker() {
   }, [cats, query]);
 
   return (
-    <SafeAreaView style={styles.safe} edges={["bottom"]}>
-      <Stack.Screen
-        options={{ presentation: "modal", headerShown: false, animation: "slide_from_bottom" }}
-      />
+    <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
+      <Stack.Screen options={{ headerShown: false }} />
 
       <View style={styles.grabber} />
       <View style={styles.head}>
