@@ -35,6 +35,25 @@ const FALLBACK: { icon: IoniconName; color: string } = {
   color: colors.muted,
 };
 
+/** Curated palette used when the user creates a new category — we assign
+ *  a random color so user-created categories visually distinguish from
+ *  each other without making the user pick one up front. (Editing the
+ *  color manually is a future PR.) */
+const NEW_CATEGORY_PALETTE: ReadonlyArray<string> = [
+  "#1f8c44", "#c25a25", "#5fc4a1", "#9f6420", "#6a4dba",
+  "#19957f", "#b54590", "#c93c64", "#3a4cd4", "#0f7c3a",
+  "#1d8aab", "#d97757", "#7a8a86", "#a05cd1", "#4a8fbf",
+];
+
+/** Default icon assigned to user-created categories until they edit it.
+ *  Generic enough to fit any topic. */
+export const DEFAULT_NEW_CATEGORY_ICON: IoniconName = "pricetag-outline";
+
+export function pickRandomCategoryColor(): string {
+  const i = Math.floor(Math.random() * NEW_CATEGORY_PALETTE.length);
+  return NEW_CATEGORY_PALETTE[i]!;
+}
+
 function withAlpha(hex: string, alpha: number): string {
   const m = hex.replace("#", "");
   const r = parseInt(m.slice(0, 2), 16);

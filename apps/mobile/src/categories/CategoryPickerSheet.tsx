@@ -19,7 +19,11 @@ import type { CategoryDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { colors, space, type as type$ } from "../design/tokens";
-import { categoryMeta } from "./meta";
+import {
+  categoryMeta,
+  pickRandomCategoryColor,
+  DEFAULT_NEW_CATEGORY_ICON,
+} from "./meta";
 
 type Props = {
   visible: boolean;
@@ -53,10 +57,15 @@ export function CategoryPickerSheet({
   onChange,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
+  const newInputRef = useRef<TextInput>(null);
   const [cats, setCats] = useState<CategoryDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const snapPoints = useMemo(() => ["90%"], []);
 
@@ -85,8 +94,60 @@ export function CategoryPickerSheet({
     else {
       setQuery("");
       setSaving(null);
+      setCreating(false);
+      setNewName("");
+      setCreateError(null);
     }
   }, [visible, load]);
+
+  const cancelCreate = useCallback(() => {
+    setCreating(false);
+    setNewName("");
+    setCreateError(null);
+  }, []);
+
+  const submitCreate = useCallback(async () => {
+    const name = newName.trim();
+    if (!name || submitting) return;
+    setSubmitting(true);
+    setCreateError(null);
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      const resp = await apiFetch<{ category: CategoryDTO }>(
+        `/workspaces/${wsId}/categories`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            name,
+            icon: DEFAULT_NEW_CATEGORY_ICON,
+            color: pickRandomCategoryColor(),
+          }),
+        },
+      );
+      // Insert the new cat into local state alphabetically — saves a round
+      // trip and the picker stays mounted so the user can pick it next.
+      setCats((prev) =>
+        prev
+          ? [...prev, resp.category].sort((a, b) =>
+              a.name.localeCompare(b.name),
+            )
+          : [resp.category],
+      );
+      cancelCreate();
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? "create_failed";
+      setCreateError(
+        code === "duplicate_name"
+          ? "A category with this name already exists."
+          : code === "too_many_categories"
+            ? "You've reached the 30-category limit."
+            : "Couldn't create category. Try again.",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }, [newName, submitting, cancelCreate]);
 
   const pick = async (cat: CategoryDTO | null) => {
     setSaving(cat?.id ?? "__none");
@@ -163,7 +224,62 @@ export function CategoryPickerSheet({
         </BottomSheetView>
       )}
 
-      {cats && (
+      {cats && creating && (
+        <BottomSheetView style={styles.createForm}>
+          <View style={styles.head}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.formAction,
+                pressed && { opacity: 0.6 },
+              ]}
+              onPress={cancelCreate}
+              disabled={submitting}
+              hitSlop={8}
+            >
+              <Text style={styles.cancelText}>Cancel</Text>
+            </Pressable>
+            <Text style={styles.title}>Add category</Text>
+            <Pressable
+              style={({ pressed }) => [
+                styles.formAction,
+                (pressed || submitting || newName.trim().length === 0) && {
+                  opacity: 0.5,
+                },
+              ]}
+              onPress={submitCreate}
+              disabled={submitting || newName.trim().length === 0}
+              hitSlop={8}
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <Text style={styles.saveText}>Save</Text>
+              )}
+            </Pressable>
+          </View>
+
+          <TextInput
+            ref={newInputRef}
+            style={styles.createInput}
+            value={newName}
+            onChangeText={(v) => {
+              setNewName(v);
+              if (createError) setCreateError(null);
+            }}
+            placeholder="Category name"
+            placeholderTextColor={colors.mutedSoft}
+            autoFocus
+            editable={!submitting}
+            returnKeyType="done"
+            onSubmitEditing={submitCreate}
+            maxLength={40}
+          />
+
+          {createError && <Text style={styles.createError}>{createError}</Text>}
+        </BottomSheetView>
+      )}
+
+      {cats && !creating && (
         <BottomSheetFlatList
           data={items}
           keyExtractor={(item) =>
@@ -254,12 +370,12 @@ export function CategoryPickerSheet({
                     styles.createRow,
                     pressed && { opacity: 0.6 },
                   ]}
-                  onPress={() =>
-                    Alert.alert(
-                      "Coming soon",
-                      "Creating new categories is on the way.",
-                    )
-                  }
+                  onPress={() => {
+                    setCreating(true);
+                    setNewName("");
+                    setCreateError(null);
+                    requestAnimationFrame(() => newInputRef.current?.focus());
+                  }}
                 >
                   <View
                     style={[
@@ -275,11 +391,6 @@ export function CategoryPickerSheet({
                       Adds to your workspace for everyone.
                     </Text>
                   </View>
-                  <Ionicons
-                    name="chevron-forward"
-                    size={16}
-                    color={colors.mutedSoft}
-                  />
                 </Pressable>
               );
             }
@@ -329,6 +440,20 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
   },
   stickyHeader: { backgroundColor: colors.canvas, paddingBottom: 4 },
+  createForm: { flex: 1, paddingHorizontal: space.lg },
+  formAction: { minWidth: 60, alignItems: "center", justifyContent: "center" },
+  cancelText: { ...type$.bodyMd, color: colors.muted },
+  saveText: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
+  createInput: {
+    ...type$.bodyMd,
+    color: colors.ink,
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 12,
+    paddingHorizontal: space.base,
+    paddingVertical: 12,
+    marginTop: space.sm,
+  },
+  createError: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
   grabber: {
     backgroundColor: colors.mutedSoft,
     width: 36,

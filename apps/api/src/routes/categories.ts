@@ -41,8 +41,15 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
       const nameTrim = parsed.data.name.trim();
 
       try {
-        const created = await createCategoryService({ workspaceId: wsId, name: nameTrim });
-        return reply.code(201).send({ category: { id: created.id, name: created.name, icon: null, color: null } });
+        const created = await createCategoryService({
+          workspaceId: wsId,
+          name: nameTrim,
+          icon: parsed.data.icon ?? null,
+          color: parsed.data.color ?? null,
+        });
+        return reply.code(201).send({
+          category: { id: created.id, name: created.name, icon: created.icon, color: created.color },
+        });
       } catch (svcErr) {
         if (svcErr instanceof Error) {
           if (svcErr.message === "too_many_categories") {

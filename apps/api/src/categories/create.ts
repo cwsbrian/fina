@@ -8,12 +8,16 @@ export type CreateCategoryInput = {
   workspaceId: string;
   name: string;
   parentId?: string | null;
+  icon?: string | null;
+  color?: string | null;
 };
 
 export type CreateCategoryOutput = {
   id: string;
   name: string;
   parentId: string | null;
+  icon: string | null;
+  color: string | null;
 };
 
 /**
@@ -67,10 +71,18 @@ export async function createCategoryService(
         workspaceId: input.workspaceId,
         name: input.name,
         parentId: input.parentId ?? null,
+        icon: input.icon ?? null,
+        color: input.color ?? null,
       },
-      select: { id: true, name: true, parentId: true },
+      select: { id: true, name: true, parentId: true, icon: true, color: true },
     });
-    return { id: created.id, name: created.name, parentId: created.parentId };
+    return {
+      id: created.id,
+      name: created.name,
+      parentId: created.parentId,
+      icon: created.icon,
+      color: created.color,
+    };
   } catch (e) {
     if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
       // Race against the partial unique index.
