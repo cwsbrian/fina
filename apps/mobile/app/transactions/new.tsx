@@ -11,7 +11,6 @@ import {
   ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, router } from "expo-router";
 import type { CategoryDTO } from "@fina/shared";
@@ -20,6 +19,7 @@ import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
 import { categoryMeta } from "../../src/categories/meta";
+import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
 
 type Kind = "expense" | "income";
 
@@ -198,7 +198,7 @@ export default function NewTransaction() {
           {/* Date */}
           <Pressable
             style={styles.detailRow}
-            onPress={() => setShowDatePicker((v) => !v)}
+            onPress={() => setShowDatePicker(true)}
             disabled={submitting}
           >
             <View style={styles.detailRowIcon}>
@@ -209,28 +209,8 @@ export default function NewTransaction() {
               />
             </View>
             <Text style={styles.detailRowLabel}>Date</Text>
-            <Text
-              style={[
-                styles.detailRowValue,
-                showDatePicker && { color: colors.primary },
-              ]}
-            >
-              {formatDate(date)}
-            </Text>
+            <Text style={styles.detailRowValue}>{formatDate(date)}</Text>
           </Pressable>
-
-          {Platform.OS === "ios" && showDatePicker && (
-            <DateTimePicker
-              value={date}
-              mode="date"
-              display="spinner"
-              maximumDate={new Date()}
-              onChange={(_, selected) => {
-                if (selected) setDate(selected);
-              }}
-              style={{ alignSelf: "stretch" }}
-            />
-          )}
 
           {/* Category */}
           <Pressable
@@ -279,18 +259,15 @@ export default function NewTransaction() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {Platform.OS === "android" && showDatePicker && (
-        <DateTimePicker
-          value={date}
-          mode="date"
-          display="default"
-          maximumDate={new Date()}
-          onChange={(_, selected) => {
-            setShowDatePicker(false);
-            if (selected) setDate(selected);
-          }}
-        />
-      )}
+      <DatePickerSheet
+        visible={showDatePicker}
+        value={date}
+        onClose={() => setShowDatePicker(false)}
+        onConfirm={(next) => {
+          setDate(next);
+          setShowDatePicker(false);
+        }}
+      />
 
       <CategoryPickerSheet
         visible={categoryPickerOpen}
