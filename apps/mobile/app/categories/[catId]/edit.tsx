@@ -22,6 +22,7 @@ import {
   CATEGORY_COLOR_CHOICES,
   CATEGORY_ICON_CHOICES,
   DEFAULT_NEW_CATEGORY_ICON,
+  categoryMeta,
   withAlpha,
 } from "../../../src/categories/meta";
 
@@ -61,8 +62,14 @@ export default function EditCategory() {
           return;
         }
         setName(cat.name);
-        if (cat.icon) setIcon(cat.icon as IoniconName);
-        if (cat.color) setColor(cat.color);
+        // Pre-fill from the effective meta (cat.icon/color when set,
+        // else the name-keyed default from meta.ts) — older seeded
+        // categories have null icon/color in the DB but still render
+        // with a specific glyph in the picker, so the edit form should
+        // start at that same state, not the form's hardcoded defaults.
+        const m = categoryMeta(cat);
+        setIcon(m.icon);
+        setColor(m.fg);
       } catch {
         if (!cancelled) {
           Alert.alert("Couldn't load category");
