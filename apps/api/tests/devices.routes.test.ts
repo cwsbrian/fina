@@ -114,3 +114,115 @@ describe("POST /devices", () => {
     expect(devicesB).toHaveLength(1);
   });
 });
+
+describe("DELETE /devices", () => {
+  it("requires session (401 when no cookie)", async () => {
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/devices",
+      headers: { "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "ExponentPushToken[abc]" }),
+    });
+    expect(res.statusCode).toBe(401);
+  });
+
+  it("deletes the matching UserDevice row (204)", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "del1@t.co" });
+    await app.inject({
+      method: "POST",
+      url: "/devices",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "ExponentPushToken[del1]", platform: "ios" }),
+    });
+    expect(await prisma.userDevice.count({ where: { userId } })).toBe(1);
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/devices",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "ExponentPushToken[del1]" }),
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await prisma.userDevice.count({ where: { userId } })).toBe(0);
+  });
+
+  it("idempotent — returns 204 even when row already absent", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "del2@t.co" });
+    expect(await prisma.userDevice.count({ where: { userId } })).toBe(0);
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/devices",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "ExponentPushToken[never-registered]" }),
+    });
+    expect(res.statusCode).toBe(204);
+  });
+
+  it("rejects empty token (400 invalid_body)", async () => {
+    const { cookie } = await signUpAndGetCookie(app, { email: "del3@t.co" });
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/devices",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_body");
+  });
+
+  it("only deletes the caller's row, never another user's (same-token scope)", async () => {
+    // Multi-account device scenario (2C T3): UserA and UserB BOTH register the
+    // same token T. UserA DELETE → only UserA's row gone, UserB's intact.
+    const userA = await signUpAndGetCookie(app, { email: "del4-a@t.co" });
+    const userB = await signUpAndGetCookie(app, { email: "del4-b@t.co" });
+    const sharedToken = "ExponentPushToken[shared-delete]";
+    for (const u of [userA, userB]) {
+      await app.inject({
+        method: "POST",
+        url: "/devices",
+        headers: { cookie: u.cookie, "content-type": "application/json" },
+        payload: JSON.stringify({ expoPushToken: sharedToken, platform: "ios" }),
+      });
+    }
+    expect(await prisma.userDevice.count()).toBe(2);
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/devices",
+      headers: { cookie: userA.cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: sharedToken }),
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await prisma.userDevice.count({ where: { userId: userA.userId } })).toBe(0);
+    expect(await prisma.userDevice.count({ where: { userId: userB.userId } })).toBe(1);
+  });
+
+  it("delete with a token nobody else owns is a no-op for others", async () => {
+    // UserA has token T. UserB has different token T'. UserA DELETE with T →
+    // UserA gone, UserB untouched (WHERE userId=A AND token=T).
+    const userA = await signUpAndGetCookie(app, { email: "del5-a@t.co" });
+    const userB = await signUpAndGetCookie(app, { email: "del5-b@t.co" });
+    await app.inject({
+      method: "POST",
+      url: "/devices",
+      headers: { cookie: userA.cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "ExponentPushToken[A]", platform: "ios" }),
+    });
+    await app.inject({
+      method: "POST",
+      url: "/devices",
+      headers: { cookie: userB.cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "ExponentPushToken[B]", platform: "android" }),
+    });
+
+    const res = await app.inject({
+      method: "DELETE",
+      url: "/devices",
+      headers: { cookie: userA.cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ expoPushToken: "ExponentPushToken[A]" }),
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await prisma.userDevice.count({ where: { userId: userA.userId } })).toBe(0);
+    expect(await prisma.userDevice.count({ where: { userId: userB.userId } })).toBe(1);
+  });
+});
