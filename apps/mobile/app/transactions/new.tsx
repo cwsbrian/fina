@@ -220,23 +220,23 @@ const styles = StyleSheet.create({
 
   amountRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "center",
     justifyContent: "center",
     paddingVertical: space.lg,
     marginBottom: space.lg,
   },
   amountSign: {
-    fontSize: 38,
+    fontSize: 56,
     fontWeight: "500",
+    letterSpacing: -1.6,
     color: colors.ink,
-    marginBottom: 4,
   },
   amountCurrency: {
-    fontSize: 28,
+    fontSize: 56,
     fontWeight: "500",
+    letterSpacing: -1.6,
     color: colors.ink,
     marginRight: 2,
-    marginBottom: 6,
   },
   amountInput: {
     fontSize: 56,
@@ -255,7 +255,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase",
     marginBottom: space.xs,
-    textAlign: "center",
   },
   input: {
     ...type$.bodyMd,
@@ -264,7 +263,6 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: space.base,
     paddingVertical: 12,
-    textAlign: "center",
   },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
   helper: {
