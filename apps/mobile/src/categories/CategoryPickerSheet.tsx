@@ -145,21 +145,6 @@ export function CategoryPickerSheet({
       keyboardBehavior="interactive"
       keyboardBlurBehavior="restore"
     >
-      <BottomSheetView style={styles.head}>
-        <Text style={styles.title}>Choose category</Text>
-        <Pressable
-          style={({ pressed }) => [
-            styles.closeBtn,
-            pressed && { opacity: 0.6 },
-          ]}
-          onPress={() => ref.current?.close()}
-          accessibilityLabel="Close"
-          hitSlop={8}
-        >
-          <Ionicons name="close" size={22} color={colors.muted} />
-        </Pressable>
-      </BottomSheetView>
-
       {!cats && !err && (
         <BottomSheetView style={styles.fallback}>
           <ActivityIndicator color={colors.primary} />
@@ -185,18 +170,34 @@ export function CategoryPickerSheet({
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.list}
           ListHeaderComponent={
-            <View style={styles.search}>
-              <Ionicons name="search" size={16} color={colors.muted} />
-              <TextInput
-                style={styles.searchInput}
-                placeholder="Search categories"
-                placeholderTextColor={colors.muted}
-                value={query}
-                onChangeText={setQuery}
-                autoCorrect={false}
-                autoCapitalize="none"
-                returnKeyType="search"
-              />
+            <View>
+              <View style={styles.head}>
+                <Text style={styles.title}>Choose category</Text>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.closeBtn,
+                    pressed && { opacity: 0.6 },
+                  ]}
+                  onPress={() => ref.current?.close()}
+                  accessibilityLabel="Close"
+                  hitSlop={8}
+                >
+                  <Ionicons name="close" size={22} color={colors.muted} />
+                </Pressable>
+              </View>
+              <View style={styles.search}>
+                <Ionicons name="search" size={16} color={colors.muted} />
+                <TextInput
+                  style={styles.searchInput}
+                  placeholder="Search categories"
+                  placeholderTextColor={colors.muted}
+                  value={query}
+                  onChangeText={setQuery}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  returnKeyType="search"
+                />
+              </View>
             </View>
           }
           ItemSeparatorComponent={() => <View style={styles.sep} />}
