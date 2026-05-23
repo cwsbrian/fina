@@ -28,7 +28,7 @@ export default function NewTransaction() {
   const [amount, setAmount] = useState("");
   const [merchant, setMerchant] = useState("");
   const [date, setDate] = useState<Date>(() => new Date());
-  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(Platform.OS === "ios");
   const [category, setCategory] = useState<CategoryDTO | null>(null);
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -198,7 +198,7 @@ export default function NewTransaction() {
           {/* Date */}
           <Pressable
             style={styles.detailRow}
-            onPress={() => setShowDatePicker(true)}
+            onPress={() => Platform.OS === "android" && setShowDatePicker(true)}
             disabled={submitting}
           >
             <View style={styles.detailRowIcon}>
@@ -209,7 +209,19 @@ export default function NewTransaction() {
               />
             </View>
             <Text style={styles.detailRowLabel}>Date</Text>
-            <Text style={styles.detailRowValue}>{formatDate(date)}</Text>
+            {Platform.OS === "ios" ? (
+              <DateTimePicker
+                value={date}
+                mode="date"
+                display="compact"
+                maximumDate={new Date()}
+                onChange={(_, selected) => {
+                  if (selected) setDate(selected);
+                }}
+              />
+            ) : (
+              <Text style={styles.detailRowValue}>{formatDate(date)}</Text>
+            )}
           </Pressable>
 
           {/* Category */}
@@ -259,18 +271,14 @@ export default function NewTransaction() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {showDatePicker && (
+      {Platform.OS === "android" && showDatePicker && (
         <DateTimePicker
           value={date}
           mode="date"
-          display={Platform.OS === "ios" ? "inline" : "default"}
+          display="default"
+          maximumDate={new Date()}
           onChange={(_, selected) => {
-            // Android dismisses the picker on each selection; iOS keeps
-            // it open inline. Either way, the user has picked once we
-            // get a non-undefined value — close on iOS via the Done CTA
-            // (we render with `inline` so the user dismisses by tapping
-            // outside / Cancel; here we just record the new value).
-            if (Platform.OS === "android") setShowDatePicker(false);
+            setShowDatePicker(false);
             if (selected) setDate(selected);
           }}
         />
