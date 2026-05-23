@@ -417,8 +417,8 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   swipeBtnText: { ...type$.bodySm, color: colors.onPrimary, fontWeight: "600" },
-  editBtn: { backgroundColor: colors.primary },
-  deleteBtn: { backgroundColor: colors.down },
+  editBtn: { backgroundColor: colors.muted },
+  deleteBtn: { backgroundColor: "#b54550" },
   grabber: {
     backgroundColor: colors.mutedSoft,
     width: 36,
