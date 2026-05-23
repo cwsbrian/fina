@@ -40,9 +40,8 @@ const FALLBACK: { icon: IoniconName; color: string } = {
  *  each other without making the user pick one up front. (Editing the
  *  color manually is a future PR.) */
 const NEW_CATEGORY_PALETTE: ReadonlyArray<string> = [
-  "#1f8c44", "#c25a25", "#5fc4a1", "#9f6420", "#6a4dba",
-  "#19957f", "#b54590", "#c93c64", "#3a4cd4", "#0f7c3a",
-  "#1d8aab", "#d97757", "#7a8a86", "#a05cd1", "#4a8fbf",
+  "#1f8c44", "#c25a25", "#5fc4a1", "#9f6420", "#6a4dba", "#19957f", "#b54590",
+  "#c93c64", "#3a4cd4", "#0f7c3a", "#1d8aab", "#d97757", "#a05cd1", "#4a8fbf",
 ];
 
 /** Default icon assigned to user-created categories until they edit it.

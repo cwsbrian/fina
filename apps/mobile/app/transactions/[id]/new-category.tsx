@@ -148,36 +148,8 @@ export default function NewCategory() {
             maxLength={40}
           />
 
-          <Text style={styles.pickerLabel}>Icon</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipRow}
-          >
-            {CATEGORY_ICON_CHOICES.map((i) => {
-              const isSel = i === icon;
-              return (
-                <Pressable
-                  key={i}
-                  onPress={() => setIcon(i)}
-                  style={[styles.iconChip, isSel && { borderColor: color }]}
-                >
-                  <Ionicons
-                    name={i}
-                    size={20}
-                    color={isSel ? color : colors.muted}
-                  />
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-
           <Text style={styles.pickerLabel}>Color</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipRow}
-          >
+          <View style={styles.grid}>
             {CATEGORY_COLOR_CHOICES.map((c) => {
               const isSel = c === color;
               return (
@@ -196,7 +168,27 @@ export default function NewCategory() {
                 </Pressable>
               );
             })}
-          </ScrollView>
+          </View>
+
+          <Text style={styles.pickerLabel}>Icon</Text>
+          <View style={styles.grid}>
+            {CATEGORY_ICON_CHOICES.map((i) => {
+              const isSel = i === icon;
+              return (
+                <Pressable
+                  key={i}
+                  onPress={() => setIcon(i)}
+                  style={[styles.iconChip, isSel && { borderColor: color }]}
+                >
+                  <Ionicons
+                    name={i}
+                    size={20}
+                    color={isSel ? color : colors.muted}
+                  />
+                </Pressable>
+              );
+            })}
+          </View>
 
           {err && <Text style={styles.error}>{err}</Text>}
         </ScrollView>
@@ -251,25 +243,32 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginBottom: space.xs,
   },
-  chipRow: { gap: 10, paddingVertical: 4, paddingRight: space.base },
+  grid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+    marginBottom: space.base,
+  },
   iconChip: {
-    width: 44,
-    height: 44,
+    width: "18%",
+    aspectRatio: 1,
     borderRadius: 14,
     backgroundColor: colors.surfaceSoft,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
     borderColor: "transparent",
+    marginBottom: 10,
   },
   colorChip: {
-    width: 36,
-    height: 36,
+    width: "13%",
+    aspectRatio: 1,
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
     borderColor: "transparent",
+    marginBottom: 10,
   },
   colorChipActive: { borderColor: colors.ink },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
