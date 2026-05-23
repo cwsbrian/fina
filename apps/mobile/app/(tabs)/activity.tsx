@@ -22,6 +22,10 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { categoryMeta } from "../../src/categories/meta";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+import {
+  DateRangeSheet,
+  type DateRange,
+} from "../../src/datetime/DateRangeSheet";
 
 const HEADER_HEIGHT = 58;
 
@@ -63,10 +67,15 @@ export default function Activity() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
-  // Mirror query into a ref so load() can always read the latest value
-  // without needing query in its closure (keeps useFocusEffect stable).
+  const [range, setRange] = useState<DateRange>({});
+  const [rangeOpen, setRangeOpen] = useState(false);
+  // Mirror query + range into refs so load() can always read the latest
+  // values without putting them in its closure (keeps useFocusEffect
+  // deps stable across renders).
   const queryRef = useRef("");
+  const rangeRef = useRef<DateRange>({});
   queryRef.current = query;
+  rangeRef.current = range;
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
   const header = useCollapsingHeader(HEADER_HEIGHT);
@@ -80,9 +89,12 @@ export default function Activity() {
       }
       setWsId(id);
       const trimmed = queryRef.current.trim();
-      const qs = trimmed
-        ? `?limit=100&q=${encodeURIComponent(trimmed)}`
-        : "?limit=100";
+      const r = rangeRef.current;
+      const params = new URLSearchParams({ limit: "100" });
+      if (trimmed) params.set("q", trimmed);
+      if (r.from) params.set("from", r.from);
+      if (r.to) params.set("to", r.to);
+      const qs = `?${params.toString()}`;
       const [txResp, catResp] = await Promise.all([
         apiFetch<TxListResp>(`/workspaces/${id}/transactions${qs}`),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
@@ -110,6 +122,12 @@ export default function Activity() {
     }, 200);
     return () => clearTimeout(t);
   }, [query, load]);
+
+  // Date-range changes reload immediately (no debounce — preset taps
+  // and Apply are discrete events, not a stream).
+  useEffect(() => {
+    load();
+  }, [range, load]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -258,20 +276,47 @@ export default function Activity() {
             </Pressable>
           </View>
         ) : (
-          <ActivityHeader onSearch={() => setSearchOpen(true)} />
+          <ActivityHeader
+            onSearch={() => setSearchOpen(true)}
+            onRange={() => setRangeOpen(true)}
+            rangeActive={!!(range.from || range.to)}
+          />
         )}
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
+
+      <DateRangeSheet
+        visible={rangeOpen}
+        value={range}
+        onClose={() => setRangeOpen(false)}
+        onConfirm={(next) => {
+          setRange(next);
+          setRangeOpen(false);
+        }}
+      />
     </View>
   );
 }
 
-function ActivityHeader({ onSearch }: { onSearch?: () => void } = {}) {
+function ActivityHeader({
+  onSearch,
+  onRange,
+  rangeActive,
+}: {
+  onSearch?: () => void;
+  onRange?: () => void;
+  rangeActive?: boolean;
+} = {}) {
   return (
     <View style={styles.head}>
       <Text style={styles.title}>Activity</Text>
       <View style={styles.headActions}>
-        <HeaderIconButton icon="calendar-outline" accessibilityLabel="Date range" />
+        <HeaderIconButton
+          icon="calendar-outline"
+          accessibilityLabel="Date range"
+          {...(onRange ? { onPress: onRange } : {})}
+          {...(rangeActive ? { color: colors.primary } : {})}
+        />
         <HeaderIconButton
           icon="search-outline"
           accessibilityLabel="Search"
