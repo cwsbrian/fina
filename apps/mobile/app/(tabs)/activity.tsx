@@ -22,10 +22,8 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { categoryMeta } from "../../src/categories/meta";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
-import {
-  DateRangeSheet,
-  type DateRange,
-} from "../../src/datetime/DateRangeSheet";
+import { type DateRange } from "../../src/datetime/DateRangeSheet";
+import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
 
 const HEADER_HEIGHT = 58;
 
@@ -68,7 +66,7 @@ export default function Activity() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<DateRange>({});
-  const [rangeOpen, setRangeOpen] = useState(false);
+  const dateRangeSheet = useDateRangeSheet();
   // Mirror query + range into refs so load() can always read the latest
   // values without putting them in its closure (keeps useFocusEffect
   // deps stable across renders).
@@ -278,22 +276,13 @@ export default function Activity() {
         ) : (
           <ActivityHeader
             onSearch={() => setSearchOpen(true)}
-            onRange={() => setRangeOpen(true)}
+            onRange={() => dateRangeSheet.open(range, setRange)}
             rangeActive={!!(range.from || range.to)}
           />
         )}
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
 
-      <DateRangeSheet
-        visible={rangeOpen}
-        value={range}
-        onClose={() => setRangeOpen(false)}
-        onConfirm={(next) => {
-          setRange(next);
-          setRangeOpen(false);
-        }}
-      />
     </View>
   );
 }

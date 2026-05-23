@@ -4,6 +4,7 @@ import { AppState } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
+import { DateRangeSheetHost } from "../src/datetime/DateRangeSheetHost";
 import * as Notifications from "expo-notifications";
 import { registerForPushNotifications } from "../src/api/push";
 import { useSession } from "../src/auth/client";
@@ -43,7 +44,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <SafeAreaProvider>
         <BottomSheetModalProvider>
-          <Stack screenOptions={{ headerShown: false }} />
+          <DateRangeSheetHost>
+            <Stack screenOptions={{ headerShown: false }} />
+          </DateRangeSheetHost>
         </BottomSheetModalProvider>
       </SafeAreaProvider>
     </GestureHandlerRootView>
