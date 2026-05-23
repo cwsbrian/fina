@@ -26,6 +26,12 @@ import {
   withAlpha,
 } from "../../../src/categories/meta";
 
+function chunk<T>(arr: ReadonlyArray<T>, size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 export default function NewCategory() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [name, setName] = useState("");
@@ -149,46 +155,50 @@ export default function NewCategory() {
           />
 
           <Text style={styles.pickerLabel}>Color</Text>
-          <View style={styles.grid}>
-            {CATEGORY_COLOR_CHOICES.map((c) => {
-              const isSel = c === color;
-              return (
-                <Pressable
-                  key={c}
-                  onPress={() => setColor(c)}
-                  style={[
-                    styles.colorChip,
-                    { backgroundColor: c },
-                    isSel && styles.colorChipActive,
-                  ]}
-                >
-                  {isSel && (
-                    <Ionicons name="checkmark" size={16} color="#fff" />
-                  )}
-                </Pressable>
-              );
-            })}
-          </View>
+          {chunk(CATEGORY_COLOR_CHOICES, 7).map((row, ri) => (
+            <View key={ri} style={styles.gridRow}>
+              {row.map((c) => {
+                const isSel = c === color;
+                return (
+                  <Pressable
+                    key={c}
+                    onPress={() => setColor(c)}
+                    style={[
+                      styles.colorChip,
+                      { backgroundColor: c },
+                      isSel && styles.colorChipActive,
+                    ]}
+                  >
+                    {isSel && (
+                      <Ionicons name="checkmark" size={16} color="#fff" />
+                    )}
+                  </Pressable>
+                );
+              })}
+            </View>
+          ))}
 
-          <Text style={styles.pickerLabel}>Icon</Text>
-          <View style={styles.grid}>
-            {CATEGORY_ICON_CHOICES.map((i) => {
-              const isSel = i === icon;
-              return (
-                <Pressable
-                  key={i}
-                  onPress={() => setIcon(i)}
-                  style={[styles.iconChip, isSel && { borderColor: color }]}
-                >
-                  <Ionicons
-                    name={i}
-                    size={20}
-                    color={isSel ? color : colors.muted}
-                  />
-                </Pressable>
-              );
-            })}
-          </View>
+          <Text style={[styles.pickerLabel, { marginTop: space.base }]}>Icon</Text>
+          {chunk(CATEGORY_ICON_CHOICES, 5).map((row, ri) => (
+            <View key={ri} style={styles.gridRow}>
+              {row.map((i) => {
+                const isSel = i === icon;
+                return (
+                  <Pressable
+                    key={i}
+                    onPress={() => setIcon(i)}
+                    style={[styles.iconChip, isSel && { borderColor: color }]}
+                  >
+                    <Ionicons
+                      name={i}
+                      size={20}
+                      color={isSel ? color : colors.muted}
+                    />
+                  </Pressable>
+                );
+              })}
+            </View>
+          ))}
 
           {err && <Text style={styles.error}>{err}</Text>}
         </ScrollView>
@@ -243,32 +253,29 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     marginBottom: space.xs,
   },
-  grid: {
+  gridRow: {
     flexDirection: "row",
-    flexWrap: "wrap",
     justifyContent: "space-between",
-    marginBottom: space.base,
+    marginBottom: 10,
   },
   iconChip: {
-    width: "18%",
-    aspectRatio: 1,
+    width: 56,
+    height: 56,
     borderRadius: 14,
     backgroundColor: colors.surfaceSoft,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
     borderColor: "transparent",
-    marginBottom: 10,
   },
   colorChip: {
-    width: "13%",
-    aspectRatio: 1,
+    width: 38,
+    height: 38,
     borderRadius: 999,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 2,
     borderColor: "transparent",
-    marginBottom: 10,
   },
   colorChipActive: { borderColor: colors.ink },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
