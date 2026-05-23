@@ -231,7 +231,6 @@ export function AmountEditorSheet({
             placeholderTextColor={colors.mutedSoft}
             keyboardType="decimal-pad"
             editable={!saving}
-            autoFocus
           />
         </View>
       </BottomSheetView>
