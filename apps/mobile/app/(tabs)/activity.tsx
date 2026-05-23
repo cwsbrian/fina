@@ -196,7 +196,12 @@ function ActivityHeader() {
       <View style={styles.headActions}>
         <HeaderIconButton icon="calendar-outline" accessibilityLabel="Date range" />
         <HeaderIconButton icon="search-outline" accessibilityLabel="Search" />
-        <HeaderIconButton icon="add" size={22} accessibilityLabel="Add" />
+        <HeaderIconButton
+          icon="add"
+          size={22}
+          accessibilityLabel="Add transaction"
+          onPress={() => router.push("/transactions/new" as never)}
+        />
       </View>
     </View>
   );
