@@ -28,7 +28,7 @@ export default function NewTransaction() {
   const [amount, setAmount] = useState("");
   const [merchant, setMerchant] = useState("");
   const [date, setDate] = useState<Date>(() => new Date());
-  const [showDatePicker, setShowDatePicker] = useState(Platform.OS === "ios");
+  const [showDatePicker, setShowDatePicker] = useState(false);
   const [category, setCategory] = useState<CategoryDTO | null>(null);
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -198,7 +198,7 @@ export default function NewTransaction() {
           {/* Date */}
           <Pressable
             style={styles.detailRow}
-            onPress={() => Platform.OS === "android" && setShowDatePicker(true)}
+            onPress={() => setShowDatePicker((v) => !v)}
             disabled={submitting}
           >
             <View style={styles.detailRowIcon}>
@@ -209,20 +209,28 @@ export default function NewTransaction() {
               />
             </View>
             <Text style={styles.detailRowLabel}>Date</Text>
-            {Platform.OS === "ios" ? (
-              <DateTimePicker
-                value={date}
-                mode="date"
-                display="compact"
-                maximumDate={new Date()}
-                onChange={(_, selected) => {
-                  if (selected) setDate(selected);
-                }}
-              />
-            ) : (
-              <Text style={styles.detailRowValue}>{formatDate(date)}</Text>
-            )}
+            <Text
+              style={[
+                styles.detailRowValue,
+                showDatePicker && { color: colors.primary },
+              ]}
+            >
+              {formatDate(date)}
+            </Text>
           </Pressable>
+
+          {Platform.OS === "ios" && showDatePicker && (
+            <DateTimePicker
+              value={date}
+              mode="date"
+              display="spinner"
+              maximumDate={new Date()}
+              onChange={(_, selected) => {
+                if (selected) setDate(selected);
+              }}
+              style={{ alignSelf: "stretch" }}
+            />
+          )}
 
           {/* Category */}
           <Pressable
