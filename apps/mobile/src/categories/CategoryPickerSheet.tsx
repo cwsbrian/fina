@@ -128,7 +128,7 @@ export function CategoryPickerSheet({
           onPress={onClose}
           accessibilityLabel="Close category picker"
         />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + space.sm }]}>
+        <View style={styles.sheet}>
           <View style={styles.grabber} />
           <View style={styles.head}>
             <Text style={styles.title}>Choose category</Text>
@@ -177,12 +177,16 @@ export function CategoryPickerSheet({
 
           {cats && (
             <FlatList
+              style={{ flex: 1 }}
               data={items}
               keyExtractor={(item) =>
                 item.kind === "cat" ? item.cat.id : item.kind
               }
               keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.list}
+              contentContainerStyle={[
+                styles.list,
+                { paddingBottom: insets.bottom + space.lg },
+              ]}
               renderItem={({ item }) => {
                 if (item.kind === "none") {
                   const isSel = selectedId == null;
