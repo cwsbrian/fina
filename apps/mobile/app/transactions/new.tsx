@@ -40,7 +40,7 @@ export default function NewTransaction() {
       // Expense → negative; Income → positive. Backend stores signed
       // decimals; the activity row formatter flips the sign for display.
       const signed = kind === "expense" ? -Math.abs(num) : Math.abs(num);
-      await apiFetch(`/workspaces/${wsId}/transactions`, {
+      await apiFetch(`/workspaces/${wsId}/transactions/manual`, {
         method: "POST",
         body: JSON.stringify({
           merchantRaw: trimmedMerchant,
