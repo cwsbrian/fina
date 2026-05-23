@@ -7,7 +7,6 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -24,6 +23,7 @@ import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
+import { NoteEditorSheet } from "../../../src/transactions/NoteEditorSheet";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -34,10 +34,9 @@ export default function TransactionDetail() {
   const [tx, setTx] = useState<TransactionDTO | null>(null);
   const [account, setAccount] = useState<BankAccountDTO | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
-  const [noteDraft, setNoteDraft] = useState("");
-  const [noteEditing, setNoteEditing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -53,7 +52,6 @@ export default function TransactionDetail() {
       setTx(t.transaction);
       setAccount(a.accounts.find((x) => x.id === t.transaction.accountId) ?? null);
       setCategories(Object.fromEntries(c.categories.map((x) => [x.id, x])));
-      setNoteDraft(t.transaction.note ?? "");
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -67,28 +65,6 @@ export default function TransactionDetail() {
       load();
     }, [load]),
   );
-
-  const saveNote = async () => {
-    if (!tx) return;
-    const trimmed = noteDraft.trim();
-    const next: string | null = trimmed.length === 0 ? null : trimmed;
-    if (next === (tx.note ?? null)) {
-      setNoteEditing(false);
-      return;
-    }
-    try {
-      const wsId = await getActiveWorkspaceId();
-      if (!wsId) throw new Error("no_workspace");
-      await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ note: next }),
-      });
-      setTx({ ...tx, note: next });
-      setNoteEditing(false);
-    } catch (e) {
-      Alert.alert("Couldn't save note", (e as { code?: string }).code ?? "");
-    }
-  };
 
   const onDelete = () => {
     if (!tx) return;
@@ -158,10 +134,14 @@ export default function TransactionDetail() {
       <ScrollView contentContainerStyle={styles.scroll}>
         {/* Hero */}
         <View style={styles.hero}>
-          <View style={[styles.heroGlyph, { backgroundColor: heroMeta.bg }]}>
-            <Ionicons name={heroMeta.icon} size={22} color={heroMeta.fg} />
+          <View style={styles.heroTop}>
+            <View style={[styles.heroGlyph, { backgroundColor: heroMeta.bg }]}>
+              <Ionicons name={heroMeta.icon} size={22} color={heroMeta.fg} />
+            </View>
+            <Text style={styles.heroTitle} numberOfLines={2}>
+              {merchant}
+            </Text>
           </View>
-          <Text style={styles.heroTitle}>{merchant}</Text>
           <Text
             style={[
               styles.heroAmount,
@@ -339,37 +319,22 @@ export default function TransactionDetail() {
         {/* Note */}
         <Text style={styles.groupLabel}>Note</Text>
         <View style={styles.group}>
-          {noteEditing ? (
-            <TextInput
-              style={styles.noteInput}
-              value={noteDraft}
-              onChangeText={setNoteDraft}
-              onBlur={saveNote}
-              placeholder="Add a note"
-              placeholderTextColor={colors.mutedSoft}
-              autoFocus
-              multiline
-              returnKeyType="done"
-              blurOnSubmit
-            />
-          ) : (
-            <Pressable
-              style={({ pressed }) => [
-                styles.noteRow,
-                pressed && { opacity: 0.6 },
+          <Pressable
+            style={({ pressed }) => [
+              styles.noteRow,
+              pressed && { opacity: 0.6 },
+            ]}
+            onPress={() => setNoteOpen(true)}
+          >
+            <Text
+              style={[
+                styles.noteText,
+                !tx.note && { color: colors.mutedSoft },
               ]}
-              onPress={() => setNoteEditing(true)}
             >
-              <Text
-                style={[
-                  styles.noteText,
-                  !tx.note && { color: colors.mutedSoft },
-                ]}
-              >
-                {tx.note ?? "Add a note"}
-              </Text>
-            </Pressable>
-          )}
+              {tx.note ?? "Add a note"}
+            </Text>
+          </Pressable>
         </View>
 
         {/* Delete */}
@@ -394,6 +359,17 @@ export default function TransactionDetail() {
         onChange={() => {
           setPickerOpen(false);
           load();
+        }}
+      />
+
+      <NoteEditorSheet
+        visible={noteOpen}
+        txId={tx.id}
+        initialNote={tx.note}
+        onClose={() => setNoteOpen(false)}
+        onSaved={(next) => {
+          setTx({ ...tx, note: next });
+          setNoteOpen(false);
         }}
       />
     </SafeAreaView>
@@ -452,23 +428,28 @@ const styles = StyleSheet.create({
 
   // Hero
   hero: { paddingHorizontal: space.lg, paddingTop: space.sm, paddingBottom: space.xl },
+  heroTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + 2,
+    marginBottom: space.base,
+  },
   heroGlyph: {
-    width: 52,
-    height: 52,
-    borderRadius: 18,
+    width: 48,
+    height: 48,
+    borderRadius: 16,
     backgroundColor: colors.surfaceSoft,
     alignItems: "center",
     justifyContent: "center",
-    marginBottom: space.sm + 2,
   },
-  heroTitle: { ...type$.titleMd, color: colors.ink },
+  heroTitle: { ...type$.titleMd, color: colors.ink, flex: 1, flexShrink: 1 },
   heroAmount: {
     fontSize: 38,
     lineHeight: 38,
     fontWeight: "500",
     letterSpacing: -1.4,
     color: colors.ink,
-    marginTop: 8,
+    marginTop: 4,
   },
   heroMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 6, gap: 6 },
   heroMeta: { ...type$.bodySm, color: colors.muted },
@@ -584,12 +565,6 @@ const styles = StyleSheet.create({
   // Note
   noteRow: { padding: space.base + 2 },
   noteText: { ...type$.bodyMd, color: colors.body },
-  noteInput: {
-    ...type$.bodyMd,
-    color: colors.ink,
-    padding: space.base + 2,
-    minHeight: 48,
-  },
 
   // Delete
   deleteBtn: {
