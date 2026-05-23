@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -169,62 +169,39 @@ export default function TransactionDetail() {
         {/* Details */}
         <Text style={styles.groupLabel}>Details</Text>
         <View style={styles.group}>
-          {tx.source === "manual" ? (
-            <Pressable
-              style={({ pressed }) => [
-                styles.row,
-                pressed && { backgroundColor: colors.surfaceSoft },
+          <DetailRow
+            label="Amount"
+            editable={tx.source === "manual"}
+            onPress={() =>
+              router.push(`/transactions/${tx.id}/edit-amount` as never)
+            }
+          >
+            <Text
+              style={[
+                styles.rowValue,
+                money.isIncome && { color: colors.up },
               ]}
-              onPress={() =>
-                router.push(`/transactions/${tx.id}/edit-amount` as never)
-              }
             >
-              <Text style={styles.rowLabel}>Amount</Text>
-              <View style={styles.rowValueWrap}>
-                <Text
-                  style={[
-                    styles.rowValue,
-                    money.isIncome && { color: colors.up },
-                  ]}
-                >
-                  {money.isIncome ? "+" : "−"}
-                  {money.display}
-                </Text>
-                <Ionicons
-                  name="chevron-forward"
-                  size={16}
-                  color={colors.mutedSoft}
-                />
-              </View>
-            </Pressable>
-          ) : null}
-          {tx.source === "manual" ? (
-            <Pressable
-              style={({ pressed }) => [
-                styles.row,
-                pressed && { backgroundColor: colors.surfaceSoft },
-              ]}
-              onPress={() => setDatePickerOpen(true)}
-            >
-              <Text style={styles.rowLabel}>Date</Text>
-              <View style={styles.rowValueWrap}>
-                <Text style={styles.rowValue}>
-                  {formatDateTime(tx.occurredAt)}
-                </Text>
-                <Ionicons
-                  name="chevron-forward"
-                  size={16}
-                  color={colors.mutedSoft}
-                />
-              </View>
-            </Pressable>
-          ) : null}
-          <View style={styles.row}>
-            <Text style={styles.rowLabel}>Account</Text>
-            <Text style={styles.rowValue}>
-              {accountLabel(account)}
+              {money.isIncome ? "+" : "−"}
+              {money.display}
             </Text>
-          </View>
+          </DetailRow>
+          <DetailRow
+            label="Date"
+            editable={tx.source === "manual"}
+            onPress={() => setDatePickerOpen(true)}
+          >
+            <Text style={styles.rowValue}>{formatDateTime(tx.occurredAt)}</Text>
+          </DetailRow>
+          <DetailRow
+            label="Account"
+            editable={tx.source === "manual"}
+            onPress={() =>
+              router.push(`/transactions/${tx.id}/edit-account` as never)
+            }
+          >
+            <Text style={styles.rowValue}>{accountLabel(account)}</Text>
+          </DetailRow>
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Status</Text>
             <View style={styles.statusValue}>
@@ -437,6 +414,46 @@ export default function TransactionDetail() {
       />
 
     </SafeAreaView>
+  );
+}
+
+function DetailRow({
+  label,
+  editable,
+  onPress,
+  children,
+}: {
+  label: string;
+  editable: boolean;
+  onPress?: () => void;
+  children: ReactNode;
+}) {
+  if (editable && onPress) {
+    return (
+      <Pressable
+        style={({ pressed }) => [
+          styles.row,
+          pressed && { backgroundColor: colors.surfaceSoft },
+        ]}
+        onPress={onPress}
+      >
+        <Text style={styles.rowLabel}>{label}</Text>
+        <View style={styles.rowValueWrap}>
+          {children}
+          <Ionicons
+            name="chevron-forward"
+            size={16}
+            color={colors.mutedSoft}
+          />
+        </View>
+      </Pressable>
+    );
+  }
+  return (
+    <View style={styles.row}>
+      <Text style={styles.rowLabel}>{label}</Text>
+      {children}
+    </View>
   );
 }
 

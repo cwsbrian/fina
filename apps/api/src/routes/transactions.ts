@@ -40,6 +40,7 @@ const PatchTxBody = z
         amount: z.number(),
       }))
       .optional(),
+    accountId: z.string().optional(),
   })
   .strict();
 
@@ -79,7 +80,11 @@ function encodeCursor(c: Cursor): string {
 }
 
 function editTxErrorStatus(code: EditTxError["code"]): number {
-  if (code === "not_found" || code === "category_not_found") return 404;
+  if (
+    code === "not_found"
+    || code === "category_not_found"
+    || code === "account_not_found"
+  ) return 404;
   return 400; // not_editable | already_removed | cannot_split_pending |
               // conflicting_body | sum_mismatch | empty_allocations | invalid_*
 }
@@ -326,7 +331,11 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
         const flags: EditTxInputFlags = {
           manualOnlyFieldProvided:
-            "amount" in body || "merchantRaw" in body || "occurredAt" in body || "note" in body,
+            "amount" in body
+            || "merchantRaw" in body
+            || "occurredAt" in body
+            || "note" in body
+            || "accountId" in body,
           categoryIdProvided: "categoryId" in body,
           allocationsProvided: "allocations" in body,
         };
@@ -336,6 +345,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         if (d.merchantRaw  !== undefined) input.merchantRaw  = d.merchantRaw;
         if (d.occurredAt   !== undefined) input.occurredAt   = d.occurredAt;
         if (d.note         !== undefined) input.note         = d.note;
+        if (d.accountId    !== undefined) input.accountId    = d.accountId;
         if (flags.categoryIdProvided)     input.categoryId   = d.categoryId ?? null;
         if (flags.allocationsProvided)    input.allocations  = d.allocations ?? [];
         const result = await editTransactionService(

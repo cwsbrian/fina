@@ -20,6 +20,8 @@ export type EditTxInput = {
   categoryId?: string | null;
   // NEW: full allocations replacement.
   allocations?: Array<{ categoryId: string | null; amount: number }>;
+  // NEW: reassign the tx to a different (manual) account.
+  accountId?: string;
 };
 
 // Type signal that the caller used the categoryId field (the route layer
@@ -62,6 +64,7 @@ export type EditTxErrorCode =
   | "already_removed"
   | "cannot_split_pending"
   | "category_not_found"
+  | "account_not_found"
   | "invalid_amount"
   | "invalid_date"
   | "invalid_merchant"
@@ -204,6 +207,22 @@ export async function editTransactionService(
     }
     if (parsedOccurredAt !== undefined) data.occurredAt = parsedOccurredAt;
     if (noteProvided) data.note = normalizedNote;
+    if (input.accountId !== undefined) {
+      // Only manual accounts in this workspace are valid reassign targets —
+      // mirrors create-manual's MANUAL_WHERE rule.
+      const account = await tx.bankAccount.findFirst({
+        where: {
+          id: input.accountId,
+          workspaceId: ctx.workspaceId,
+          plaidItemId: null,
+          plaidAccountId: null,
+          archivedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!account) throw new EditTxError("account_not_found");
+      data.accountId = account.id;
+    }
 
     // Determine effectiveAmount for allocations (new amount if changed, else row amount).
     const effectiveAmount = data.amount instanceof Prisma.Decimal ? data.amount : row.amount;
