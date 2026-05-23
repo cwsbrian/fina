@@ -12,6 +12,7 @@ import {
   type MeDTO as Me,
 } from "@fina/shared";
 import { useSession, signOut } from "../../src/auth/client";
+import { unregisterForPushNotifications } from "../../src/api/push";
 import { apiFetch } from "../../src/api/client";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { clearActiveWorkspaceId } from "../../src/workspace/active";
@@ -78,6 +79,7 @@ export default function More() {
         text: "Sign out",
         style: "destructive",
         onPress: async () => {
+          await unregisterForPushNotifications();
           await signOut();
           router.replace("/" as never);
         },
@@ -147,6 +149,7 @@ export default function More() {
           <Pressable
             style={[styles.signOutBtn, styles.devBtn]}
             onPress={async () => {
+              await unregisterForPushNotifications();
               await signOut();
               await AsyncStorage.removeItem(ONBOARDING_SEEN_KEY);
               await clearActiveWorkspaceId();
