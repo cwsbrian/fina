@@ -72,8 +72,11 @@ export function NoteEditorSheet({
   useEffect(() => {
     if (visible) {
       setDraft(initialNote ?? "");
-      // Focus next frame so the sheet's open animation can land first.
-      requestAnimationFrame(() => inputRef.current?.focus());
+      // Focus synchronously when visible flips so the keyboard slide-up
+      // animation starts on the same frame as the sheet's open animation.
+      // Any rAF/timeout here causes a visible "sheet first, then keyboard"
+      // staircase.
+      inputRef.current?.focus();
     }
   }, [visible, initialNote]);
 
@@ -88,6 +91,9 @@ export function NoteEditorSheet({
         method: "PATCH",
         body: JSON.stringify({ note: next }),
       });
+      // Dismiss keyboard first so its slide-down animation starts in
+      // parallel with the sheet's, not after it.
+      Keyboard.dismiss();
       ref.current?.close();
       onSaved(next);
     } catch (e) {
@@ -117,10 +123,7 @@ export function NoteEditorSheet({
       enableDynamicSizing={false}
       index={visible ? 0 : -1}
       backdropComponent={renderBackdrop}
-      onClose={() => {
-        Keyboard.dismiss();
-        onClose();
-      }}
+      onClose={onClose}
       handleIndicatorStyle={styles.grabber}
       backgroundStyle={styles.background}
       enablePanDownToClose
@@ -134,7 +137,10 @@ export function NoteEditorSheet({
               styles.actionBtn,
               pressed && { opacity: 0.6 },
             ]}
-            onPress={() => ref.current?.close()}
+            onPress={() => {
+              Keyboard.dismiss();
+              ref.current?.close();
+            }}
             disabled={saving}
             hitSlop={8}
           >
