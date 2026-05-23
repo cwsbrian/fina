@@ -183,7 +183,6 @@ export default function TransactionDetail() {
               <Text
                 style={[
                   styles.rowValue,
-                  styles.rowValueEditable,
                   money.isIncome && { color: colors.up },
                 ]}
               >
@@ -201,7 +200,7 @@ export default function TransactionDetail() {
               onPress={() => setDatePickerOpen(true)}
             >
               <Text style={styles.rowLabel}>Date</Text>
-              <Text style={[styles.rowValue, styles.rowValueEditable]}>
+              <Text style={styles.rowValue}>
                 {formatDateTime(tx.occurredAt)}
               </Text>
             </Pressable>
@@ -571,7 +570,6 @@ const styles = StyleSheet.create({
   },
   rowLabel: { ...type$.bodyMd, color: colors.ink },
   rowValue: { ...type$.bodyMd, color: colors.muted, flexShrink: 1, marginLeft: space.sm },
-  rowValueEditable: { color: colors.primary, fontWeight: "600" },
   statusValue: { flexDirection: "row", alignItems: "center", gap: 6 },
   statusDot: { width: 6, height: 6, borderRadius: 999 },
 
