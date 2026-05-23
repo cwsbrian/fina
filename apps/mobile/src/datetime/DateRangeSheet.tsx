@@ -101,14 +101,18 @@ export function DateRangeSheet({
 
   // BottomSheetModal portals to the root via BottomSheetModalProvider so
   // its backdrop covers the tab bar + Activity header in one go.
+  // Schedule present()/dismiss() on the next frame: portal registration
+  // can lag the first render and present() called too early no-ops.
   useEffect(() => {
     if (visible) {
       setDraft(value);
       setPicking(null);
-      ref.current?.present();
+      const t = setTimeout(() => ref.current?.present(), 0);
+      return () => clearTimeout(t);
     } else {
       ref.current?.dismiss();
     }
+    return undefined;
   }, [visible, value]);
 
   const activePreset = detectPreset(draft);
