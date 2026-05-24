@@ -705,8 +705,29 @@ model UserDevice {
   createdAt       DateTime  @default(now())
 
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tickets         PushTicket[]
 
   @@unique([userId, expoPushToken])
   @@index([userId])
   @@map("user_devices")
+}
+
+model PushTicket {
+  id              String       @id @default(cuid())
+  /// Expo가 반환하는 ticket id (e.g., "019e5181-c4e6-7488..."). UNIQUE
+  /// — 같은 ticket을 2번 저장 시도하면 conflict (방어용).
+  expoTicketId    String       @unique
+  userDeviceId    String
+  sentAt          DateTime     @default(now())
+  /// null = 아직 poll 안 함. Polling 성공 시 now(). 7일 후 cleanup-events 정리.
+  polledAt        DateTime?
+  /// null | "ok" | "error". status="error"일 때 errorCode 동반.
+  status          String?
+  /// "DeviceNotRegistered" | "InvalidCredentials" | "MessageTooBig" 등.
+  errorCode       String?
+
+  userDevice      UserDevice   @relation(fields: [userDeviceId], references: [id], onDelete: Cascade)
+
+  @@index([polledAt, sentAt])
+  @@map("push_tickets")
 }
