@@ -73,12 +73,25 @@ export async function sendBriefPush(
 
     for (let i = 0; i < tickets.length; i++) {
       const t = tickets[i]!;
+      const deviceId = (chunk[i] as CarrierMessage).__deviceId;
+
       if (t.status === "ok") {
+        // Persist ok tickets for receipt polling (Plan 2C-push-receipts).
+        // Best-effort: a failure here shouldn't break the whole send.
+        try {
+          await prisma.pushTicket.create({
+            data: { expoTicketId: t.id, userDeviceId: deviceId },
+          });
+        } catch (err) {
+          logWarn(
+            { userId, removedDeviceId: deviceId, err },
+            "ticket persist failed",
+          );
+        }
         sent++;
         continue;
       }
       failed++;
-      const deviceId = (chunk[i] as CarrierMessage).__deviceId;
       const errorCode = t.details?.error;
       if (errorCode === "DeviceNotRegistered") {
         await prisma.userDevice.delete({ where: { id: deviceId } });

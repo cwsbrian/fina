@@ -35,4 +35,10 @@ export type LogContext = {
   /** Sign-out cleanup (Plan 2C-push-cleanup). deleteMany count
    *  (보통 0 또는 1; 0이어도 audit trail로 로깅). */
   removedDeviceCount?: number;
+  /** Receipt polling cron (Plan 2C-push-receipts). */
+  receiptsPolled?: number;
+  receiptsFailed?: number;
+  receiptInvalidCreds?: boolean;
+  receiptErrorCode?: string;
+  deletedPushTickets?: number;
 };

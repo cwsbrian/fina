@@ -154,4 +154,41 @@ describe("cleanup-events ScheduledSpend pass", () => {
 
     expect(await prisma.scheduledSpend.findUnique({ where: { id: dismissedToday.id } })).not.toBeNull();
   });
+
+  it("deletes push_tickets with polledAt > 7d ago; preserves recent rows", async () => {
+    // Helper to make a UserDevice row.
+    const u = await prisma.user.create({
+      data: { id: `ce-${Date.now()}`, email: `ce-${Date.now()}@t.co`, name: "CE" },
+    });
+    const d = await prisma.userDevice.create({
+      data: { userId: u.id, expoPushToken: "ExponentPushToken[ce]", platform: "ios" },
+    });
+
+    // Old ticket — polledAt 10 days ago.
+    await prisma.pushTicket.create({
+      data: {
+        expoTicketId: "ticket_old",
+        userDeviceId: d.id,
+        polledAt: new Date(Date.now() - 10 * 86_400_000),
+        status: "ok",
+      },
+    });
+    // Recent ticket — polledAt 1 day ago.
+    await prisma.pushTicket.create({
+      data: {
+        expoTicketId: "ticket_recent",
+        userDeviceId: d.id,
+        polledAt: new Date(Date.now() - 1 * 86_400_000),
+        status: "ok",
+      },
+    });
+
+    // Note: `runCleanupEvents` is already imported at top of test file
+    // (`import { runCleanupEvents } from "../src/cron/jobs/cleanup-events.js"`).
+    // Do NOT re-import dynamically — TS will flag redeclaration.
+    await runCleanupEvents(env);
+
+    const remaining = await prisma.pushTicket.findMany({ orderBy: { expoTicketId: "asc" } });
+    expect(remaining.map((r) => r.expoTicketId)).toEqual(["ticket_recent"]);
+  });
 });
