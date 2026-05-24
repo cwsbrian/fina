@@ -1,6 +1,7 @@
 import { describe, expect, it, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
+import { testEnv } from "./helpers/test-env.js";
 
 // Hoisted mock — expo-server-sdk must be mocked before push/send.ts loads.
 // IMPORTANT: sendPushNotificationsAsync is a PROTOTYPE method (not a class
@@ -63,6 +64,29 @@ describe("sendBriefPush", () => {
     expect(sendSpy).toHaveBeenCalledTimes(1);
     expect(result.sent).toBe(1);
     expect(result.failed).toBe(0);
+  });
+
+  it("ok ticket → PushTicket row created with matching expoTicketId", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[ok-persists]", platform: "ios" },
+    ]);
+    const sendSpy = vi.fn().mockResolvedValueOnce([
+      { status: "ok", id: "ticket_persist_1" },
+    ]);
+    vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+
+    const { sendBriefPush } = await import("../src/push/send.js");
+    const result = await sendBriefPush(testEnv(), u.id, "morning brief");
+
+    expect(result.sent).toBe(1);
+    const tickets = await prisma.pushTicket.findMany({
+      where: { userDevice: { userId: u.id } },
+    });
+    expect(tickets).toHaveLength(1);
+    expect(tickets[0]!.expoTicketId).toBe("ticket_persist_1");
+    expect(tickets[0]!.polledAt).toBeNull();
+    expect(tickets[0]!.status).toBeNull();
   });
 
   it("DeviceNotRegistered ticket → row deleted", async () => {
