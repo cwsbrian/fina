@@ -14,7 +14,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import type { CategoryDTO, TransactionDTO } from "@fina/shared";
+import type { CategoryDTO, TransactionDTO, Cadence } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { formatMoney, dateBucket } from "../../src/format/money";
@@ -33,7 +33,70 @@ type TxListResp = {
   nextCursor: string | null;
 };
 
+type Schedule = {
+  id: string;
+  amount: string;
+  scheduledDate: string;
+};
+
+type Recurring = {
+  id: string;
+  amount: string;
+  cadence: Cadence;
+  remainingThisMonth: string[];
+};
+
+type UpcomingSummary = { total: number; count: number };
+
 type Section = { title: string; data: TransactionDTO[] };
+
+function parseDateOnly(s: string): Date {
+  const [y, m, d] = s.split("-").map(Number);
+  return new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1));
+}
+
+/** Compute this-month-remaining total + count for the Activity banner.
+ *  Mirrors the /scheduled screen's merge logic but only needs the
+ *  aggregate, not the bucketed rows. */
+function computeUpcomingSummary(
+  schedules: Schedule[],
+  subscriptions: Recurring[],
+): UpcomingSummary {
+  const now = new Date();
+  const today = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+  const year = today.getUTCFullYear();
+  const month = today.getUTCMonth();
+
+  let total = 0;
+  let count = 0;
+  for (const s of schedules) {
+    const d = parseDateOnly(s.scheduledDate);
+    if (
+      d.getUTCFullYear() === year &&
+      d.getUTCMonth() === month &&
+      d >= today
+    ) {
+      total += Number(s.amount);
+      count += 1;
+    }
+  }
+  for (const r of subscriptions) {
+    for (const ymd of r.remainingThisMonth) {
+      const d = parseDateOnly(ymd);
+      if (
+        d.getUTCFullYear() === year &&
+        d.getUTCMonth() === month &&
+        d >= today
+      ) {
+        total += Number(r.amount);
+        count += 1;
+      }
+    }
+  }
+  return { total, count };
+}
 
 function groupByDate(txs: TransactionDTO[]): Section[] {
   const buckets = new Map<string, TransactionDTO[]>();
@@ -61,6 +124,10 @@ function formatTime(iso: string): string {
 export default function Activity() {
   const [txs, setTxs] = useState<TransactionDTO[] | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
+  const [upcoming, setUpcoming] = useState<UpcomingSummary>({
+    total: 0,
+    count: 0,
+  });
   const [wsId, setWsId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -94,12 +161,21 @@ export default function Activity() {
       if (r.from) params.set("from", r.from);
       if (r.to) params.set("to", r.to);
       const qs = `?${params.toString()}`;
-      const [txResp, catResp] = await Promise.all([
+      const [txResp, catResp, schedResp, recurResp] = await Promise.all([
         apiFetch<TxListResp>(`/workspaces/${id}/transactions${qs}`),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
+        apiFetch<{ schedules: Schedule[] }>(
+          `/workspaces/${id}/schedules?status=upcoming`,
+        ).catch(() => ({ schedules: [] as Schedule[] })),
+        apiFetch<{ recurring: Recurring[] }>(
+          `/workspaces/${id}/recurring`,
+        ).catch(() => ({ recurring: [] as Recurring[] })),
       ]);
       setTxs(txResp.transactions);
       setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
+      setUpcoming(
+        computeUpcomingSummary(schedResp.schedules, recurResp.recurring),
+      );
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -183,6 +259,15 @@ export default function Activity() {
             tintColor={colors.primary}
             progressViewOffset={totalHeader}
           />
+        }
+        ListHeaderComponent={
+          upcoming.count > 0 ? (
+            <UpcomingBanner
+              total={upcoming.total}
+              count={upcoming.count}
+              currency={currency}
+            />
+          ) : null
         }
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHead}>
@@ -277,6 +362,41 @@ export default function Activity() {
       <View style={[styles.statusBarBg, { height: insets.top }]} />
 
     </View>
+  );
+}
+
+function UpcomingBanner({
+  total,
+  count,
+  currency,
+}: {
+  total: number;
+  count: number;
+  currency: string;
+}) {
+  const { display } = formatMoney(total.toFixed(2), currency);
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.banner,
+        pressed && { opacity: 0.7 },
+      ]}
+      onPress={() => router.push("/scheduled" as never)}
+    >
+      <View style={styles.bannerGlyph}>
+        <Ionicons name="calendar" size={13} color={colors.primary} />
+      </View>
+      <Text style={styles.bannerLabel} numberOfLines={1}>
+        Upcoming this month
+      </Text>
+      <Text style={styles.bannerAmount}>−{display}</Text>
+      <Text style={styles.bannerCount}>· {count}</Text>
+      <Ionicons
+        name="chevron-forward"
+        size={14}
+        color={colors.mutedSoft}
+      />
+    </Pressable>
   );
 }
 
@@ -443,6 +563,37 @@ const styles = StyleSheet.create({
     maxWidth: 320, marginBottom: space.lg,
   },
   listContent: { padding: space.lg, paddingTop: space.sm },
+  banner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 12,
+    marginTop: space.sm,
+    marginBottom: 4,
+  },
+  bannerGlyph: {
+    width: 24,
+    height: 24,
+    borderRadius: 999,
+    backgroundColor: "rgba(62, 179, 139, 0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  bannerLabel: {
+    ...type$.bodySm,
+    color: colors.body,
+    flex: 1,
+  },
+  bannerAmount: {
+    ...type$.bodySm,
+    color: colors.ink,
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  bannerCount: { ...type$.bodySm, color: colors.muted },
   sectionHead: {
     flexDirection: "row",
     justifyContent: "space-between",
