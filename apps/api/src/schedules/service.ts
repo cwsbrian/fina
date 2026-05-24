@@ -232,6 +232,61 @@ export async function dismissScheduledSpendService(
   });
 }
 
+export type UpdateScheduledSpendInput = {
+  workspaceId: string;
+  id: string;
+  categoryId: string;
+  amount: number;
+  scheduledDate: string;
+  note?: string;
+};
+
+export type UpdateScheduledSpendResult = { schedule: ScheduleDTO };
+
+export async function updateScheduledSpendService(
+  input: UpdateScheduledSpendInput,
+): Promise<UpdateScheduledSpendResult> {
+  rethrowValidation(() => validateAmount(input.amount));
+  const parsedDate = rethrowValidation(() => parseOccurredAt(input.scheduledDate));
+  const normalizedNote = rethrowValidation(() => validateNote(input.note));
+
+  return await withWorkspaceLock(input.workspaceId, async (tx) => {
+    const existing = await tx.scheduledSpend.findFirst({
+      where: { id: input.id, workspaceId: input.workspaceId },
+      select: { id: true, matchedTxId: true, matchedTx: { select: { removedAt: true } } },
+    });
+    if (!existing) throw new ScheduledSpendError("not_found");
+    // Reject edits on an actively matched schedule. User must un-match
+    // (delete + re-create) if they really want to change a matched row.
+    if (
+      existing.matchedTxId &&
+      existing.matchedTx &&
+      existing.matchedTx.removedAt === null
+    ) {
+      throw new ScheduledSpendError("already_matched");
+    }
+
+    const cat = await tx.category.findFirst({
+      where: { id: input.categoryId, workspaceId: input.workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!cat) throw new ScheduledSpendError("category_not_found");
+
+    const row = await tx.scheduledSpend.update({
+      where: { id: input.id },
+      data: {
+        categoryId: input.categoryId,
+        amount: new Prisma.Decimal(input.amount),
+        scheduledDate: parsedDate,
+        note: normalizedNote,
+      },
+      include: { matchedTx: { select: { removedAt: true } } },
+    });
+    const ownerTz = await workspaceOwnerTz(input.workspaceId);
+    return { schedule: toDTO(row, todayDateOnlyInTz(ownerTz)) };
+  });
+}
+
 export type RemoveResult =
   | { removed: true }
   | { removed: false; alreadyRemoved: true };

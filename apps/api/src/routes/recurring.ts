@@ -5,6 +5,7 @@ import {
   addRecurringService,
   listRecurringService,
   removeRecurringByIdService,
+  updateRecurringService,
 } from "../recurring/service.js";
 
 export async function recurringRoutes(app: FastifyInstance): Promise<void> {
@@ -56,6 +57,44 @@ export async function recurringRoutes(app: FastifyInstance): Promise<void> {
       return await listRecurringService({ workspaceId: ctx.membership.workspaceId });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.patch("/workspaces/:id/recurring/:recurringId", async (req, reply) => {
+    const params = req.params as { id: string; recurringId: string };
+    const parsed = PostRecurringBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+
+      const serviceInput: Parameters<typeof updateRecurringService>[1] = {
+        id: params.recurringId,
+        name: parsed.data.name,
+        amount: parsed.data.amount,
+        cadence: parsed.data.cadence,
+        nextOccurrenceDate: parsed.data.nextOccurrenceDate,
+      };
+      if (parsed.data.categoryId !== undefined) serviceInput.categoryId = parsed.data.categoryId;
+      if (parsed.data.merchant !== undefined) serviceInput.merchant = parsed.data.merchant;
+      const result = await updateRecurringService(
+        { workspaceId: ctx.membership.workspaceId },
+        serviceInput,
+      );
+      return reply.code(200).send(result);
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      const msg = (e as Error).message;
+      if (msg === "invalid_amount") return reply.code(400).send({ error: "invalid_amount" });
+      if (msg === "invalid_next_date") return reply.code(400).send({ error: "invalid_next_date" });
+      if (msg === "invalid_merchant") return reply.code(400).send({ error: "invalid_merchant" });
+      if (msg === "invalid_body") return reply.code(400).send({ error: "invalid_body" });
+      if (msg === "category_not_found") return reply.code(404).send({ error: "category_not_found" });
+      if (msg === "name_conflict") return reply.code(409).send({ error: "name_conflict" });
+      if (msg === "not_found") return reply.code(404).send({ error: "not_found" });
       throw e;
     }
   });

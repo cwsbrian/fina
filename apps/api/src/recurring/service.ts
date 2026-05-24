@@ -202,6 +202,80 @@ export async function listRecurringService(
   return { recurring: rows.map((r) => formatRow(r, workspace.currency)) };
 }
 
+export type UpdateRecurringInput = AddRecurringInput & { id: string };
+
+export async function updateRecurringService(
+  ctx: { workspaceId: string },
+  input: UpdateRecurringInput,
+): Promise<AddRecurringOutput> {
+  if (!Number.isFinite(input.amount) || input.amount <= 0 || input.amount > MAX_AMOUNT) {
+    throw new Error("invalid_amount");
+  }
+  if (!isValidDateOnly(input.nextOccurrenceDate)) {
+    throw new Error("invalid_next_date");
+  }
+  const nameNormalized = normalizeName(input.name);
+  if (nameNormalized.length === 0) throw new Error("invalid_body");
+
+  let merchantNormalized: string | null = null;
+  if (input.merchant != null && input.merchant !== "") {
+    const m = normalizeMerchant(input.merchant);
+    if (m.length === 0) throw new Error("invalid_merchant");
+    merchantNormalized = m;
+  }
+
+  if (input.categoryId) {
+    const cat = await prisma.category.findFirst({
+      where: { id: input.categoryId, workspaceId: ctx.workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (!cat) throw new Error("category_not_found");
+  }
+
+  const periodDate = new Date(`${input.nextOccurrenceDate}T12:00:00.000Z`);
+  const row = await withWorkspaceLock(ctx.workspaceId, async (tx) => {
+    const existing = await tx.recurringExpense.findFirst({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+      select: { id: true, nameNormalized: true },
+    });
+    if (!existing) throw new Error("not_found");
+    // Rename collision: if the new normalized name is taken by a
+    // different row, reject — the unique index would 500 the request.
+    if (nameNormalized !== existing.nameNormalized) {
+      const conflict = await tx.recurringExpense.findUnique({
+        where: {
+          workspaceId_nameNormalized: {
+            workspaceId: ctx.workspaceId,
+            nameNormalized,
+          },
+        },
+        select: { id: true },
+      });
+      if (conflict && conflict.id !== input.id) {
+        throw new Error("name_conflict");
+      }
+    }
+    return await tx.recurringExpense.update({
+      where: { id: input.id },
+      data: {
+        name: input.name,
+        nameNormalized,
+        amount: new Prisma.Decimal(input.amount),
+        categoryId: input.categoryId ?? null,
+        merchantNormalized,
+        cadence: input.cadence,
+        nextOccurrenceDate: periodDate,
+      },
+      include: { category: { select: { name: true } } },
+    });
+  });
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: ctx.workspaceId },
+    select: { currency: true },
+  });
+  return { recurring: formatRow(row, workspace.currency) };
+}
+
 export async function removeRecurringByIdService(
   ctx: { workspaceId: string },
   input: { id: string },

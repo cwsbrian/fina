@@ -6,9 +6,11 @@ import {
   listScheduledSpendsService,
   dismissScheduledSpendService,
   removeScheduledSpendService,
+  updateScheduledSpendService,
   ScheduledSpendError,
   type AddScheduledSpendInput,
   type ScheduledSpendStatus,
+  type UpdateScheduledSpendInput,
 } from "../schedules/service.js";
 
 function statusFromCode(code: ScheduledSpendError["code"]): number {
@@ -71,6 +73,37 @@ export async function schedulesRoutes(app: FastifyInstance): Promise<void> {
         return reply.send(result);
       } catch (err) {
         if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.code });
+        throw err;
+      }
+    },
+  );
+
+  // PATCH /workspaces/:id/schedules/:scheduleId — full-replace edit
+  app.patch<{ Params: { id: string; scheduleId: string } }>(
+    "/workspaces/:id/schedules/:scheduleId",
+    async (req, reply) => {
+      try {
+        const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+        if (req.params.id !== ctx.membership.workspaceId) {
+          return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const parsed = PostScheduledSpendBody.safeParse(req.body);
+        if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+
+        const input: UpdateScheduledSpendInput = {
+          workspaceId: ctx.membership.workspaceId,
+          id: req.params.scheduleId,
+          categoryId: parsed.data.categoryId,
+          amount: parsed.data.amount,
+          scheduledDate: parsed.data.scheduledDate,
+        };
+        if (parsed.data.note !== undefined) input.note = parsed.data.note;
+
+        const result = await updateScheduledSpendService(input);
+        return reply.send(result);
+      } catch (err) {
+        if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.code });
+        if (err instanceof ScheduledSpendError) return reply.code(statusFromCode(err.code)).send({ error: err.code });
         throw err;
       }
     },

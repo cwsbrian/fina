@@ -243,6 +243,7 @@ export default function SubscriptionsScreen() {
             key={r.id}
             row={r}
             category={r.categoryId ? categories[r.categoryId] ?? null : null}
+            onPress={() => router.push(`/subscriptions/${r.id}` as never)}
             onLongPress={() => onDelete(r)}
           />
         ))}
@@ -254,10 +255,12 @@ export default function SubscriptionsScreen() {
 function SubscriptionRow({
   row,
   category,
+  onPress,
   onLongPress,
 }: {
   row: RecurringRow;
   category: CategoryDTO | null;
+  onPress: () => void;
   onLongPress: () => void;
 }) {
   const meta = categoryMeta(category);
@@ -269,6 +272,7 @@ function SubscriptionRow({
         styles.subRow,
         pressed && { opacity: 0.7 },
       ]}
+      onPress={onPress}
       onLongPress={onLongPress}
       delayLongPress={400}
     >

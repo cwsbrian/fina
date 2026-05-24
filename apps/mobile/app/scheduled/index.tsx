@@ -50,6 +50,10 @@ type Recurring = {
 type MergedItem = {
   key: string;
   source: "schedule" | "subscription";
+  /** The backing row's id. For schedules: ScheduledSpend.id. For
+   *  subscriptions: RecurringExpense.id (shared across all expanded
+   *  occurrences — they all link to the same subscription detail). */
+  sourceId: string;
   categoryId: string | null;
   categoryName: string | null;
   amount: string;
@@ -131,6 +135,7 @@ function buildMerged(
     out.push({
       key: `s:${s.id}`,
       source: "schedule",
+      sourceId: s.id,
       categoryId: s.categoryId,
       categoryName: null,
       amount: s.amount,
@@ -145,6 +150,7 @@ function buildMerged(
       out.push({
         key: `r:${r.id}:${ymd}`,
         source: "subscription",
+        sourceId: r.id,
         categoryId: r.categoryId,
         categoryName: r.categoryName,
         amount: r.amount,
@@ -332,8 +338,18 @@ function ScheduledRow({
   const catName =
     category?.name ?? item.categoryName ?? "Uncategorized";
   const isSub = item.source === "subscription";
+  const onPress = () => {
+    if (isSub) {
+      router.push(`/subscriptions/${item.sourceId}` as never);
+    } else {
+      router.push(`/scheduled/${item.sourceId}` as never);
+    }
+  };
   return (
-    <View style={styles.row}>
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
+      onPress={onPress}
+    >
       <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
         <Ionicons name={meta.icon} size={16} color={meta.fg} />
       </View>
@@ -356,7 +372,7 @@ function ScheduledRow({
         </Text>
         <Text style={styles.rowDate}>{formatDateLabel(d)}</Text>
       </View>
-    </View>
+    </Pressable>
   );
 }
 
