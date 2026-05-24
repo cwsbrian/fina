@@ -363,7 +363,7 @@ function ScheduledRow({
 function SubBadge() {
   return (
     <View style={styles.subBadge}>
-      <Ionicons name="repeat" size={10} color={colors.muted} />
+      <Ionicons name="repeat" size={10} color={colors.primary} />
     </View>
   );
 }
@@ -524,7 +524,7 @@ const styles = StyleSheet.create({
     width: 18,
     height: 18,
     borderRadius: 999,
-    backgroundColor: colors.surfaceSoft,
+    backgroundColor: "rgba(62, 179, 139, 0.16)",
     alignItems: "center",
     justifyContent: "center",
   },
