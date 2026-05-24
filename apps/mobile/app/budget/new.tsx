@@ -117,39 +117,67 @@ export default function NewBudget() {
     }
   }, [total, suggesting]);
 
-  const submit = useCallback(async () => {
+  const doSubmit = useCallback(
+    async (scope: "default_only" | "default_and_current") => {
+      const totalNum = Number(total);
+      if (!Number.isFinite(totalNum) || totalNum <= 0 || submitting) return;
+      setSubmitting(true);
+      setErr(null);
+      try {
+        const wsId = await getActiveWorkspaceId();
+        if (!wsId) throw new Error("no_workspace");
+        const sanitized = allocs
+          .map((a) => ({
+            categoryId: a.categoryId,
+            amount: Math.max(0, Number(a.amount) || 0),
+          }))
+          .filter((a) => a.amount > 0);
+        await apiFetch<{ plan: Plan }>(
+          `/workspaces/${wsId}/budget-plans/default`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              totalAmount: totalNum,
+              categoryAllocations: sanitized,
+              scope,
+            }),
+          },
+        );
+        router.back();
+      } catch (e) {
+        const code = (e as { code?: string }).code ?? "save_failed";
+        setErr(`Couldn't save: ${code}`);
+        setSubmitting(false);
+      }
+    },
+    [total, allocs, submitting],
+  );
+
+  const submit = useCallback(() => {
     const totalNum = Number(total);
     if (!Number.isFinite(totalNum) || totalNum <= 0 || submitting) return;
-    setSubmitting(true);
-    setErr(null);
-    try {
-      const wsId = await getActiveWorkspaceId();
-      if (!wsId) throw new Error("no_workspace");
-      // Only forward non-zero allocations so the server stores a tight
-      // list (zero rows are noise).
-      const sanitized = allocs
-        .map((a) => ({
-          categoryId: a.categoryId,
-          amount: Math.max(0, Number(a.amount) || 0),
-        }))
-        .filter((a) => a.amount > 0);
-      await apiFetch<{ plan: Plan }>(
-        `/workspaces/${wsId}/budget-plans/default`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            totalAmount: totalNum,
-            categoryAllocations: sanitized,
-          }),
-        },
-      );
-      router.back();
-    } catch (e) {
-      const code = (e as { code?: string }).code ?? "save_failed";
-      setErr(`Couldn't save: ${code}`);
-      setSubmitting(false);
+    // First-time setup: no existing default → just save default + apply
+    // to current month so the user sees their work immediately.
+    if (!existing) {
+      doSubmit("default_and_current");
+      return;
     }
-  }, [total, allocs, submitting]);
+    Alert.alert(
+      "Apply to this month?",
+      "Your default budget is for new months going forward. Want to apply these changes to the current month too?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Only future months",
+          onPress: () => doSubmit("default_only"),
+        },
+        {
+          text: "Apply now",
+          onPress: () => doSubmit("default_and_current"),
+        },
+      ],
+    );
+  }, [total, existing, doSubmit, submitting]);
 
   const setAlloc = (categoryId: string, amount: string) => {
     if (!/^\d*\.?\d{0,2}$/.test(amount)) return;

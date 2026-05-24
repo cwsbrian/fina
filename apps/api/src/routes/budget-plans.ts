@@ -24,6 +24,10 @@ const Allocation = z.object({
 const SetBudgetBody = z.object({
   totalAmount: z.number().positive().max(MAX_TOTAL),
   categoryAllocations: z.array(Allocation).optional(),
+  /** Whether saving the default should also overwrite the current
+   *  month's snapshot. UX-level decision — the user picks at save
+   *  time via an Alert. */
+  scope: z.enum(["default_only", "default_and_current"]).optional(),
 });
 
 const SuggestBody = z.object({
@@ -71,6 +75,17 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
       const plan = await setDefaultBudget(ctx.membership.workspaceId, parsed.data);
+      // When the user opted to push the new default into the current
+      // month too, overwrite that month's snapshot with the same values.
+      if (parsed.data.scope === "default_and_current") {
+        const { year, month } = currentYM();
+        await setMonthBudget(ctx.membership.workspaceId, year, month, {
+          totalAmount: parsed.data.totalAmount,
+          ...(parsed.data.categoryAllocations
+            ? { categoryAllocations: parsed.data.categoryAllocations }
+            : {}),
+        });
+      }
       return reply.code(200).send({ plan });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
