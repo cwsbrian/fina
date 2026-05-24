@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
+import { occurrencesInRange } from "../recurring/occurrences.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
@@ -229,9 +230,60 @@ export async function recentMonthlyAvgSpend(
   return Math.round(total / 3);
 }
 
+function todayUTCMidnight(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+}
+
+/** Sum upcoming subscription occurrences (RecurringExpense) for the
+ *  given month, grouped by category. Includes only occurrences from
+ *  today forward — earlier in the month they've either already
+ *  matched real transactions (counted via actuals) or were missed. */
+async function subscriptionOccurrencesByCategory(
+  workspaceId: string,
+  monthFrom: Date,
+  monthTo: Date,
+): Promise<Map<string, { name: string; spent: number }>> {
+  const today = todayUTCMidnight();
+  const from = today > monthFrom ? today : monthFrom;
+  if (!(monthTo > from)) return new Map();
+
+  const subs = await prisma.recurringExpense.findMany({
+    where: { workspaceId, categoryId: { not: null } },
+    select: {
+      amount: true,
+      cadence: true,
+      nextOccurrenceDate: true,
+      categoryId: true,
+      category: { select: { name: true } },
+    },
+  });
+
+  const sums = new Map<string, { name: string; spent: number }>();
+  for (const s of subs) {
+    if (!s.categoryId || !s.category) continue;
+    const occs = occurrencesInRange(
+      s.nextOccurrenceDate,
+      s.cadence,
+      from,
+      monthTo,
+    );
+    if (occs.length === 0) continue;
+    const amount = Number(s.amount);
+    const cur =
+      sums.get(s.categoryId) ?? { name: s.category.name, spent: 0 };
+    cur.spent += amount * occs.length;
+    sums.set(s.categoryId, cur);
+  }
+  return sums;
+}
+
 /** Sum of upcoming (not yet matched, not dismissed) scheduled spends
- *  in the given month, grouped by category. Used by the budget screen
- *  to show projected spend alongside actuals. */
+ *  + future subscription occurrences in the given month, grouped by
+ *  category. Used by the budget screen to show projected spend
+ *  alongside actuals. */
 export async function monthlyScheduledByCategory(
   workspaceId: string,
   year: number,
@@ -242,21 +294,24 @@ export async function monthlyScheduledByCategory(
     month1to12 === 12 ? year + 1 : year,
     month1to12 === 12 ? 1 : month1to12 + 1,
   );
-  const rows = await prisma.scheduledSpend.findMany({
-    where: {
-      workspaceId,
-      scheduledDate: { gte: from, lt: to },
-      matchedTxId: null,
-      dismissedAt: null,
-    },
-    select: {
-      amount: true,
-      categoryId: true,
-      category: { select: { name: true } },
-    },
-  });
-  const sums = new Map<string, { name: string; spent: number }>();
-  for (const r of rows) {
+  const [scheduled, subs] = await Promise.all([
+    prisma.scheduledSpend.findMany({
+      where: {
+        workspaceId,
+        scheduledDate: { gte: from, lt: to },
+        matchedTxId: null,
+        dismissedAt: null,
+      },
+      select: {
+        amount: true,
+        categoryId: true,
+        category: { select: { name: true } },
+      },
+    }),
+    subscriptionOccurrencesByCategory(workspaceId, from, to),
+  ]);
+  const sums = new Map(subs);
+  for (const r of scheduled) {
     const cur = sums.get(r.categoryId) ?? { name: r.category.name, spent: 0 };
     cur.spent += Number(r.amount);
     sums.set(r.categoryId, cur);
@@ -268,8 +323,8 @@ export async function monthlyScheduledByCategory(
   }));
 }
 
-/** Total upcoming scheduled spend for the month — used for the
- *  "scheduled" sub-line on the budget hero. */
+/** Total upcoming scheduled + subscription spend for the month — used
+ *  for the "scheduled" sub-line on the budget hero. */
 export async function monthlyScheduledTotal(
   workspaceId: string,
   year: number,
@@ -280,16 +335,38 @@ export async function monthlyScheduledTotal(
     month1to12 === 12 ? year + 1 : year,
     month1to12 === 12 ? 1 : month1to12 + 1,
   );
-  const agg = await prisma.scheduledSpend.aggregate({
-    where: {
-      workspaceId,
-      scheduledDate: { gte: from, lt: to },
-      matchedTxId: null,
-      dismissedAt: null,
-    },
-    _sum: { amount: true },
-  });
-  return Number(agg._sum.amount ?? 0);
+  const today = todayUTCMidnight();
+  const subFrom = today > from ? today : from;
+
+  const [agg, subs] = await Promise.all([
+    prisma.scheduledSpend.aggregate({
+      where: {
+        workspaceId,
+        scheduledDate: { gte: from, lt: to },
+        matchedTxId: null,
+        dismissedAt: null,
+      },
+      _sum: { amount: true },
+    }),
+    to > subFrom
+      ? prisma.recurringExpense.findMany({
+          where: { workspaceId },
+          select: { amount: true, cadence: true, nextOccurrenceDate: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  let total = Number(agg._sum.amount ?? 0);
+  for (const s of subs) {
+    const occs = occurrencesInRange(
+      s.nextOccurrenceDate,
+      s.cadence,
+      subFrom,
+      to,
+    );
+    total += Number(s.amount) * occs.length;
+  }
+  return total;
 }
 
 /** Total spend (any category) for the month — used for the "total

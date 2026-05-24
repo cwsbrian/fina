@@ -3,6 +3,7 @@ import { MAX_AMOUNT, type Cadence } from "@fina/shared";
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
+import { occurrencesInRange, monthlyEquivalent } from "./occurrences.js";
 
 export type { Cadence };
 
@@ -23,7 +24,16 @@ export type RecurringRow = {
   cadence: Cadence;
   nextOccurrenceDate: string;
   categoryId: string | null;
+  categoryName: string | null;
   merchantNormalized: string | null;
+  /** Amount amortized to a monthly figure — for the Subscriptions
+   *  hero math. Stringified to two decimals like `amount`. */
+  monthlyEquivalent: string;
+  /** YYYY-MM-DD dates of this subscription's occurrences from today
+   *  through the end of the current month. Used by the Scheduled
+   *  screen + budget projection. */
+  remainingThisMonth: string[];
+  createdAt: string;
 };
 
 export type AddRecurringOutput = { recurring: RecurringRow };
@@ -51,27 +61,61 @@ function isValidDateOnly(s: string): boolean {
   return back === s;
 }
 
+type FormattableRow = {
+  id: string;
+  name: string;
+  amount: Prisma.Decimal;
+  cadence: Cadence;
+  nextOccurrenceDate: Date;
+  categoryId: string | null;
+  category?: { name: string } | null;
+  merchantNormalized: string | null;
+  createdAt: Date;
+};
+
+function todayUTCMidnight(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+}
+
+function endOfThisMonthUTC(): Date {
+  const now = new Date();
+  return new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1),
+  );
+}
+
+function toYMD(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
 function formatRow(
-  row: {
-    id: string;
-    name: string;
-    amount: Prisma.Decimal;
-    cadence: Cadence;
-    nextOccurrenceDate: Date;
-    categoryId: string | null;
-    merchantNormalized: string | null;
-  },
+  row: FormattableRow,
   workspaceCurrency: string,
 ): RecurringRow {
+  const amountNum = Number(row.amount);
+  const monthlyEq = monthlyEquivalent(amountNum, row.cadence);
+  const remaining = occurrencesInRange(
+    row.nextOccurrenceDate,
+    row.cadence,
+    todayUTCMidnight(),
+    endOfThisMonthUTC(),
+  );
   return {
     id: row.id,
     name: row.name,
     amount: row.amount.toFixed(2),
     currency: workspaceCurrency,
     cadence: row.cadence,
-    nextOccurrenceDate: row.nextOccurrenceDate.toISOString().slice(0, 10),
+    nextOccurrenceDate: toYMD(row.nextOccurrenceDate),
     categoryId: row.categoryId,
+    categoryName: row.category?.name ?? null,
     merchantNormalized: row.merchantNormalized,
+    monthlyEquivalent: monthlyEq.toFixed(2),
+    remainingThisMonth: remaining.map(toYMD),
+    createdAt: row.createdAt.toISOString(),
   };
 }
 
@@ -131,6 +175,7 @@ export async function addRecurringService(
         cadence: createData.cadence,
         nextOccurrenceDate: createData.nextOccurrenceDate,
       },
+      include: { category: { select: { name: true } } },
     });
   });
   const workspace = await prisma.workspace.findUniqueOrThrow({
@@ -147,6 +192,7 @@ export async function listRecurringService(
     prisma.recurringExpense.findMany({
       where: { workspaceId: ctx.workspaceId },
       orderBy: [{ nextOccurrenceDate: "asc" }, { name: "asc" }],
+      include: { category: { select: { name: true } } },
     }),
     prisma.workspace.findUniqueOrThrow({
       where: { id: ctx.workspaceId },

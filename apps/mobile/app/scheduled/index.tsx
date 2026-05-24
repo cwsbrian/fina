@@ -11,7 +11,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import type { CategoryDTO } from "@fina/shared";
+import type { CategoryDTO, Cadence } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
@@ -36,16 +36,35 @@ type Schedule = {
   status: ScheduleStatus;
 };
 
-type ListResp = { schedules: Schedule[] };
+type Recurring = {
+  id: string;
+  name: string;
+  amount: string;
+  cadence: Cadence;
+  nextOccurrenceDate: string;
+  categoryId: string | null;
+  categoryName: string | null;
+  remainingThisMonth: string[];
+};
+
+type MergedItem = {
+  key: string;
+  source: "schedule" | "subscription";
+  categoryId: string | null;
+  categoryName: string | null;
+  amount: string;
+  scheduledDate: string;
+  /** For schedules: user note. For subscriptions: subscription name. */
+  note: string | null;
+};
 
 type Bucket = {
   key: "thisWeek" | "thisMonth" | "nextMonth" | "later";
   label: string;
-  rows: Schedule[];
+  rows: MergedItem[];
 };
 
 function parseDateOnly(s: string): Date {
-  // schedule.scheduledDate is YYYY-MM-DD (UTC). Build a midnight-UTC Date.
   const [y, m, d] = s.split("-").map(Number);
   return new Date(Date.UTC(y ?? 0, (m ?? 1) - 1, d ?? 1));
 }
@@ -63,7 +82,7 @@ function formatDateLabel(d: Date): string {
   });
 }
 
-function bucketize(schedules: Schedule[]): Bucket[] {
+function bucketize(items: MergedItem[]): Bucket[] {
   const today = startOfDayUTC(new Date());
   const weekEnd = new Date(today.getTime() + 7 * 86_400_000);
   const thisMonth = today.getUTCMonth();
@@ -77,7 +96,7 @@ function bucketize(schedules: Schedule[]): Bucket[] {
     { key: "later", label: "Later", rows: [] },
   ];
 
-  for (const s of schedules) {
+  for (const s of items) {
     const d = parseDateOnly(s.scheduledDate);
     if (d < weekEnd) {
       buckets[0]!.rows.push(s);
@@ -103,8 +122,46 @@ function monthHeroLabel(): string {
   return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
 }
 
+function buildMerged(
+  schedules: Schedule[],
+  subscriptions: Recurring[],
+): MergedItem[] {
+  const out: MergedItem[] = [];
+  for (const s of schedules) {
+    out.push({
+      key: `s:${s.id}`,
+      source: "schedule",
+      categoryId: s.categoryId,
+      categoryName: null,
+      amount: s.amount,
+      scheduledDate: s.scheduledDate,
+      note: s.note,
+    });
+  }
+  // Subscriptions: expand this-month-remaining dates. Each occurrence
+  // is its own merged row so it sits in the right date bucket.
+  for (const r of subscriptions) {
+    for (const ymd of r.remainingThisMonth) {
+      out.push({
+        key: `r:${r.id}:${ymd}`,
+        source: "subscription",
+        categoryId: r.categoryId,
+        categoryName: r.categoryName,
+        amount: r.amount,
+        scheduledDate: ymd,
+        note: r.name,
+      });
+    }
+  }
+  out.sort((a, b) => a.scheduledDate.localeCompare(b.scheduledDate));
+  return out;
+}
+
 export default function ScheduledScreen() {
-  const [schedules, setSchedules] = useState<Schedule[] | null>(null);
+  const [data, setData] = useState<{
+    schedules: Schedule[];
+    subscriptions: Recurring[];
+  } | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -114,15 +171,18 @@ export default function ScheduledScreen() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const [list, cats] = await Promise.all([
-        apiFetch<ListResp>(
+      const [list, recur, cats] = await Promise.all([
+        apiFetch<{ schedules: Schedule[] }>(
           `/workspaces/${wsId}/schedules?status=upcoming`,
+        ),
+        apiFetch<{ recurring: Recurring[] }>(
+          `/workspaces/${wsId}/recurring`,
         ),
         apiFetch<{ categories: CategoryDTO[] }>(
           `/workspaces/${wsId}/categories`,
         ),
       ]);
-      setSchedules(list.schedules);
+      setData({ schedules: list.schedules, subscriptions: recur.recurring });
       setCategories(
         Object.fromEntries(cats.categories.map((c) => [c.id, c])),
       );
@@ -160,7 +220,7 @@ export default function ScheduledScreen() {
     );
   }
 
-  if (!schedules) {
+  if (!data) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <Stack.Screen options={{ headerShown: false }} />
@@ -172,7 +232,9 @@ export default function ScheduledScreen() {
     );
   }
 
-  if (schedules.length === 0) {
+  const merged = buildMerged(data.schedules, data.subscriptions);
+
+  if (merged.length === 0) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <Stack.Screen options={{ headerShown: false }} />
@@ -193,10 +255,10 @@ export default function ScheduledScreen() {
     );
   }
 
-  // Hero: total of items scheduled in the current calendar month.
+  // Hero: this-month-remaining total + count.
   const today = startOfDayUTC(new Date());
-  const inThisMonth = schedules.filter((s) => {
-    const d = parseDateOnly(s.scheduledDate);
+  const inThisMonth = merged.filter((m) => {
+    const d = parseDateOnly(m.scheduledDate);
     return (
       d.getUTCFullYear() === today.getUTCFullYear() &&
       d.getUTCMonth() === today.getUTCMonth() &&
@@ -204,11 +266,11 @@ export default function ScheduledScreen() {
     );
   });
   const monthTotal = inThisMonth.reduce(
-    (sum, s) => sum + Number(s.amount),
+    (sum, m) => sum + Number(m.amount),
     0,
   );
 
-  const buckets = bucketize(schedules);
+  const buckets = bucketize(merged);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -242,11 +304,13 @@ export default function ScheduledScreen() {
         {buckets.map((b) => (
           <View key={b.key} style={styles.section}>
             <Text style={styles.sectionTitle}>{b.label}</Text>
-            {b.rows.map((s) => (
+            {b.rows.map((m) => (
               <ScheduledRow
-                key={s.id}
-                schedule={s}
-                category={categories[s.categoryId] ?? null}
+                key={m.key}
+                item={m}
+                category={
+                  m.categoryId ? categories[m.categoryId] ?? null : null
+                }
               />
             ))}
           </View>
@@ -257,36 +321,49 @@ export default function ScheduledScreen() {
 }
 
 function ScheduledRow({
-  schedule,
+  item,
   category,
 }: {
-  schedule: Schedule;
+  item: MergedItem;
   category: CategoryDTO | null;
 }) {
   const meta = categoryMeta(category);
-  const d = parseDateOnly(schedule.scheduledDate);
-  const catName = category?.name ?? "Uncategorized";
+  const d = parseDateOnly(item.scheduledDate);
+  const catName =
+    category?.name ?? item.categoryName ?? "Uncategorized";
+  const isSub = item.source === "subscription";
   return (
     <View style={styles.row}>
       <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
         <Ionicons name={meta.icon} size={16} color={meta.fg} />
       </View>
       <View style={styles.rowBody}>
-        <Text style={styles.rowTitle} numberOfLines={1}>
-          {catName}
-        </Text>
-        {schedule.note && (
+        <View style={styles.rowTitleRow}>
+          <Text style={styles.rowTitle} numberOfLines={1}>
+            {catName}
+          </Text>
+          {isSub && <SubBadge />}
+        </View>
+        {item.note && (
           <Text style={styles.rowNote} numberOfLines={1}>
-            {schedule.note}
+            {item.note}
           </Text>
         )}
       </View>
       <View style={styles.rowRight}>
         <Text style={styles.rowAmount}>
-          −{formatMoney(schedule.amount).display}
+          −{formatMoney(item.amount).display}
         </Text>
         <Text style={styles.rowDate}>{formatDateLabel(d)}</Text>
       </View>
+    </View>
+  );
+}
+
+function SubBadge() {
+  return (
+    <View style={styles.subBadge}>
+      <Ionicons name="repeat" size={10} color={colors.muted} />
     </View>
   );
 }
@@ -433,9 +510,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   rowBody: { flex: 1, minWidth: 0 },
+  rowTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   rowTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   rowNote: { ...type$.bodySm, color: colors.muted, marginTop: 1 },
   rowRight: { alignItems: "flex-end" },
   rowAmount: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   rowDate: { ...type$.bodySm, color: colors.muted, marginTop: 1 },
+  subBadge: {
+    width: 18,
+    height: 18,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

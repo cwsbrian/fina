@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { PostRecurringBody } from "@fina/shared";
 import { requireWorkspaceContext, HttpError } from "../auth/context.js";
-import { effectiveTier } from "../auth/tier.js";
 import {
   addRecurringService,
   listRecurringService,
@@ -18,8 +17,6 @@ export async function recurringRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const tier = await effectiveTier(ctx.session.userId);
-      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
 
       // Build the service input WITHOUT the optional keys when their values
       // are undefined — tsconfig.base.json has `exactOptionalPropertyTypes: true`,
@@ -70,8 +67,6 @@ export async function recurringRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const tier = await effectiveTier(ctx.session.userId);
-      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
       const ok = await removeRecurringByIdService(
         { workspaceId: ctx.membership.workspaceId },
         { id: params.recurringId },

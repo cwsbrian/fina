@@ -211,7 +211,7 @@ export default function More() {
             icon="repeat-outline"
             title="Subscriptions"
             subtitle="Monthly recurring services"
-            onPress={comingSoon("Subscriptions")}
+            onPress={() => router.push("/subscriptions" as never)}
           />
           <SettingsRow
             icon="trending-down-outline"
