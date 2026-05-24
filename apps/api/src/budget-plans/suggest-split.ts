@@ -113,16 +113,73 @@ function parseAllocations(
       if (!name || amt === null || amt < 0) continue;
       const id = byName.get(name.toLowerCase());
       if (!id) continue;
+      // Keep the raw (non-integer) amount through normalization so the
+      // proportional scaling later doesn't compound rounding error.
       out.push({
         categoryId: id,
         categoryName: name,
-        amount: Math.round(amt),
+        amount: amt,
       });
     }
     return out;
   } catch {
     return [];
   }
+}
+
+/** Scale Gemini's amounts proportionally so they sum to exactly
+ *  `totalAmount` in whole dollars. The LLM tends to come close but
+ *  rarely lands on the exact total; do the math ourselves. */
+function normalizeToTotal(
+  allocations: SuggestedAllocation[],
+  totalAmount: number,
+): SuggestedAllocation[] {
+  if (allocations.length === 0) return allocations;
+  const rawSum = allocations.reduce((s, a) => s + a.amount, 0);
+  if (rawSum <= 0) return allocations;
+  // Scale proportionally.
+  const scaled = allocations.map((a) => ({
+    ...a,
+    raw: (a.amount / rawSum) * totalAmount,
+  }));
+  // Floor each to int, distribute the remainder dollar-by-dollar to the
+  // categories with the largest fractional remainder (banker-friendly,
+  // sum exactly matches the input total).
+  const totalInt = Math.round(totalAmount);
+  const floored = scaled.map((s) => ({
+    categoryId: s.categoryId,
+    categoryName: s.categoryName,
+    amount: Math.floor(s.raw),
+    frac: s.raw - Math.floor(s.raw),
+  }));
+  let deficit = totalInt - floored.reduce((s, f) => s + f.amount, 0);
+  // Largest fractional remainder gets the next +1 until deficit hits 0.
+  // (deficit can be negative if totalInt < sum-of-floors; symmetric case.)
+  if (deficit !== 0) {
+    const ordered = floored
+      .slice()
+      .sort((a, b) =>
+        deficit > 0 ? b.frac - a.frac : a.frac - b.frac,
+      );
+    for (let i = 0; i < ordered.length && deficit !== 0; i++) {
+      const o = ordered[i];
+      if (!o) break;
+      if (deficit > 0) {
+        o.amount += 1;
+        deficit -= 1;
+      } else {
+        if (o.amount > 0) {
+          o.amount -= 1;
+          deficit += 1;
+        }
+      }
+    }
+  }
+  return floored.map((f) => ({
+    categoryId: f.categoryId,
+    categoryName: f.categoryName,
+    amount: f.amount,
+  }));
 }
 
 export async function suggestBudgetSplit(
