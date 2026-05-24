@@ -1,7 +1,16 @@
-import { useEffect, useState } from "react";
-import { View, Text, StyleSheet, Pressable, ScrollView, Alert } from "react-native";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  ScrollView,
+  Alert,
+  ActivityIndicator,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -9,68 +18,60 @@ import {
   initials,
   tierLabel,
   trialDaysLeft,
+  type BankAccountDTO,
   type MeDTO as Me,
 } from "@fina/shared";
 import { useSession, signOut } from "../../src/auth/client";
 import { unregisterForPushNotifications } from "../../src/api/push";
-import { apiFetch } from "../../src/api/client";
+import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
+import {
+  getActiveWorkspaceId,
+  clearActiveWorkspaceId,
+} from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
-import { clearActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 
-type Row = {
-  id: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  title: string;
-  subtitle?: string;
-  // Placeholder onPress — most drill-ins land in later phases.
-  onPress?: () => void;
+type PlaidItemSummary = {
+  status: string;
+  errorCode: string | null;
 };
 
 export default function More() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
+  const [banks, setBanks] = useState<PlaidItemSummary[] | null>(null);
+  const [openingBilling, setOpeningBilling] = useState(false);
 
-  useEffect(() => {
+  const loadMe = useCallback(() => {
     apiFetch<Me>("/me").then(setMe).catch(() => {});
   }, []);
 
-  const rows: Row[] = [
-    {
-      id: "subscription",
-      icon: "star-outline",
-      title: "Subscription",
-      subtitle: me ? tierLabel(me.tier, me.trial.active) : "—",
-      onPress: () => Alert.alert("Coming soon", "Subscription screen lands in Phase 5."),
-    },
-    {
-      id: "banks",
-      icon: "card-outline",
-      title: "Banks",
-      subtitle: "Connect and manage Plaid links",
-      onPress: () => router.push("/banks" as never),
-    },
-    {
-      id: "workspace",
-      icon: "people-outline",
-      title: "Workspace",
-      subtitle: "Members, invites, role",
-      onPress: () => Alert.alert("Coming soon", "Workspace screen lands in Phase 5."),
-    },
-    {
-      id: "notifications",
-      icon: "notifications-outline",
-      title: "Notifications",
-      subtitle: "Morning brief, anomaly alerts",
-      onPress: () => Alert.alert("Coming soon", "Notifications screen lands in Phase 5."),
-    },
-    {
-      id: "profile",
-      icon: "person-outline",
-      title: "Edit profile",
-      onPress: () => Alert.alert("Coming soon", "Profile screen lands in Phase 5."),
-    },
-  ];
+  const loadBanks = useCallback(async () => {
+    try {
+      const wsId =
+        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      if (!wsId) return;
+      const data = await apiFetch<{ plaidItems: PlaidItemSummary[] }>(
+        `/workspaces/${wsId}/plaid-items`,
+      );
+      setBanks(data.plaidItems);
+    } catch {
+      // Non-fatal — banks subtitle just renders a dash.
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMe();
+    loadBanks();
+  }, [loadMe, loadBanks]);
+
+  // Refresh on focus so a bank disconnected / billing portal change shows fresh.
+  useFocusEffect(
+    useCallback(() => {
+      loadMe();
+      loadBanks();
+    }, [loadMe, loadBanks]),
+  );
 
   const onSignOut = () => {
     Alert.alert("Sign out", "Sign out of Fina?", [
@@ -87,13 +88,47 @@ export default function More() {
     ]);
   };
 
+  const onManageBilling = async () => {
+    if (openingBilling) return;
+    setOpeningBilling(true);
+    try {
+      const resp = await apiFetch<{ url: string }>("/billing/portal", {
+        method: "POST",
+      });
+      await WebBrowser.openBrowserAsync(resp.url);
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? "error";
+      Alert.alert(
+        "Couldn't open billing",
+        code === "portal_failed"
+          ? "Set up a subscription first to manage billing."
+          : `Try again (${code}).`,
+      );
+    } finally {
+      setOpeningBilling(false);
+    }
+  };
+
+  const comingSoon = (label: string) => () =>
+    Alert.alert("Coming soon", `${label} screen is on the way.`);
+
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
+  const bankSubtitle = banks
+    ? banks.length === 0
+      ? "Connect to start importing"
+      : `${banks.length} connected${
+          banks.some((b) => b.status === "error" || b.errorCode)
+            ? " · needs attention"
+            : ""
+        }`
+    : "—";
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <ScrollView contentContainerStyle={styles.scroll}>
         <Text style={styles.title}>More</Text>
 
+        {/* Profile card */}
         {me && (
           <View style={styles.profileCard}>
             <View style={styles.avatar}>
@@ -109,45 +144,181 @@ export default function More() {
               <View style={styles.pill}>
                 <Text style={styles.pillText}>
                   {tierLabel(me.tier, me.trial.active)}
-                  {me.trial.active && days !== null
-                    ? ` · ${days}d`
-                    : ""}
+                  {me.trial.active && days !== null ? ` · ${days}d` : ""}
                 </Text>
               </View>
             </View>
           </View>
         )}
 
-        <View style={styles.group}>
-          {rows.map((r, i) => (
-            <Pressable
-              key={r.id}
-              style={({ pressed }) => [
-                styles.row,
-                i === 0 && { borderTopWidth: 0 },
-                pressed && { backgroundColor: colors.surfaceSoft },
-              ]}
-              onPress={r.onPress}
-            >
-              <View style={styles.rowGlyph}>
-                <Ionicons name={r.icon} size={20} color={colors.body} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.rowTitle}>{r.title}</Text>
-                {r.subtitle && <Text style={styles.rowSub}>{r.subtitle}</Text>}
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.mutedSoft} />
-            </Pressable>
-          ))}
+        {/* Workspace */}
+        <GroupLabel>Workspace</GroupLabel>
+        <Pressable
+          style={({ pressed }) => [
+            styles.wsCard,
+            pressed && { backgroundColor: colors.surfaceSoft },
+          ]}
+          onPress={comingSoon("Workspace")}
+        >
+          <View style={styles.wsMark}>
+            <Text style={styles.wsMarkText}>
+              {me ? initials(me.user.name, me.user.email)[0] : "F"}
+            </Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.wsName}>
+              {me?.user.name
+                ? `${me.user.name}'s workspace`
+                : "Personal workspace"}
+            </Text>
+            <Text style={styles.wsMeta}>Owner</Text>
+          </View>
+          <Ionicons name="chevron-down" size={14} color={colors.muted} />
+        </Pressable>
+        <View style={styles.wsActions}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.wsAction,
+              pressed && { opacity: 0.6 },
+            ]}
+            onPress={comingSoon("Manage members")}
+          >
+            <Ionicons name="person-outline" size={14} color={colors.body} />
+            <Text style={styles.wsActionText}>Manage members</Text>
+          </Pressable>
+          <Pressable
+            style={({ pressed }) => [
+              styles.wsAction,
+              pressed && { opacity: 0.6 },
+            ]}
+            onPress={comingSoon("New workspace")}
+          >
+            <Ionicons name="add" size={16} color={colors.body} />
+            <Text style={styles.wsActionText}>New workspace</Text>
+          </Pressable>
         </View>
 
-        <Pressable style={styles.signOutBtn} onPress={onSignOut}>
-          <Text style={styles.signOutText}>Sign out</Text>
-        </Pressable>
+        {/* Planning */}
+        <GroupLabel>Planning</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="calendar-outline"
+            title="Schedule"
+            subtitle="Recurring + upcoming spends"
+            onPress={comingSoon("Schedule")}
+          />
+          <SettingsRow
+            icon="trending-down-outline"
+            title="Budget"
+            subtitle="Monthly category caps"
+            onPress={comingSoon("Budget")}
+            last
+          />
+        </Group>
+
+        {/* Insights */}
+        <GroupLabel>Insights</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="bar-chart-outline"
+            title="Analysis"
+            subtitle="Patterns, trends, category breakdown"
+            onPress={comingSoon("Analysis")}
+            last
+          />
+        </Group>
+
+        {/* Connections */}
+        <GroupLabel>Connections</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="card-outline"
+            title="Banks"
+            subtitle={bankSubtitle}
+            warn={
+              banks ? banks.some((b) => b.status === "error" || b.errorCode) : false
+            }
+            onPress={() => router.push("/banks" as never)}
+            last
+          />
+        </Group>
+
+        {/* AI */}
+        <GroupLabel>AI</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="sunny-outline"
+            title="Morning brief time"
+            detail="8:00 AM"
+            onPress={comingSoon("Brief time")}
+          />
+          <SettingsRow
+            icon="notifications-outline"
+            title="Notifications"
+            detail="All on"
+            onPress={comingSoon("Notifications")}
+          />
+          <SettingsRow
+            icon="construct-outline"
+            title="Categorization style"
+            detail="Strict"
+            onPress={comingSoon("Categorization style")}
+            last
+          />
+        </Group>
+
+        {/* Subscription */}
+        <GroupLabel>Subscription</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="star-outline"
+            title="Plan"
+            detail={me ? tierLabel(me.tier, me.trial.active) : "—"}
+            onPress={comingSoon("Plan")}
+          />
+          <SettingsRow
+            icon="card-outline"
+            title="Manage billing"
+            detail={
+              openingBilling ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : undefined
+            }
+            onPress={onManageBilling}
+            last
+          />
+        </Group>
+
+        {/* Account */}
+        <GroupLabel>Account</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="person-outline"
+            title="Edit profile"
+            onPress={comingSoon("Profile")}
+          />
+          <SettingsRow
+            icon="download-outline"
+            title="Export data"
+            onPress={comingSoon("Export")}
+          />
+          <SettingsRow
+            icon="log-out-outline"
+            title="Sign out"
+            onPress={onSignOut}
+          />
+          <SettingsRow
+            icon="trash-outline"
+            title="Delete account"
+            danger
+            onPress={comingSoon("Delete account")}
+            last
+          />
+        </Group>
 
         {__DEV__ && (
           <Pressable
-            style={[styles.signOutBtn, styles.devBtn]}
+            style={[styles.devBtn]}
             onPress={async () => {
               await unregisterForPushNotifications();
               await signOut();
@@ -156,13 +327,88 @@ export default function More() {
               router.replace("/" as never);
             }}
           >
-            <Text style={[styles.signOutText, styles.devBtnText]}>
+            <Text style={styles.devBtnText}>
               DEV · Reset (clear onboarding + sign out)
             </Text>
           </Pressable>
         )}
+
+        {session?.user?.id && (
+          <Text style={styles.versionLine}>
+            Signed in as {session.user.email}
+          </Text>
+        )}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function GroupLabel({ children }: { children: ReactNode }) {
+  return <Text style={styles.groupLabel}>{children}</Text>;
+}
+
+function Group({ children }: { children: ReactNode }) {
+  return <View style={styles.group}>{children}</View>;
+}
+
+function SettingsRow({
+  icon,
+  title,
+  subtitle,
+  detail,
+  warn,
+  danger,
+  last,
+  onPress,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  subtitle?: string;
+  detail?: ReactNode;
+  warn?: boolean;
+  danger?: boolean;
+  last?: boolean;
+  onPress?: () => void;
+}) {
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.row,
+        !last && styles.rowBorder,
+        pressed && { backgroundColor: colors.surfaceSoft },
+      ]}
+      onPress={onPress}
+    >
+      <View style={styles.rowGlyph}>
+        <Ionicons
+          name={icon}
+          size={18}
+          color={danger ? colors.down : colors.body}
+        />
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.rowTitle, danger && { color: colors.down }]}>
+          {title}
+        </Text>
+        {subtitle && (
+          <Text style={[styles.rowSub, warn && { color: colors.down }]}>
+            {subtitle}
+          </Text>
+        )}
+      </View>
+      {detail && (
+        <View style={styles.rowDetail}>
+          {typeof detail === "string" ? (
+            <Text style={styles.rowDetailText}>{detail}</Text>
+          ) : (
+            detail
+          )}
+        </View>
+      )}
+      {onPress && (
+        <Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} />
+      )}
+    </Pressable>
   );
 }
 
@@ -170,6 +416,8 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   scroll: { padding: space.lg, paddingBottom: space.xxl },
   title: { ...type$.titleLg, color: colors.ink, marginBottom: space.lg },
+
+  // Profile card
   profileCard: {
     flexDirection: "row",
     alignItems: "center",
@@ -179,7 +427,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: space.base,
     gap: space.base,
-    marginBottom: space.lg,
+    marginBottom: space.base,
   },
   avatar: {
     width: 56,
@@ -201,45 +449,101 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   pillText: { ...type$.captionStrong, color: colors.body },
+
+  // Section label
+  groupLabel: {
+    ...type$.bodySm,
+    color: colors.muted,
+    fontWeight: "600",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    paddingHorizontal: space.xs,
+    paddingTop: space.base,
+    paddingBottom: space.xs,
+  },
+
+  // Workspace card
+  wsCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    backgroundColor: colors.canvas,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: 16,
+    padding: space.base,
+  },
+  wsMark: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: colors.ink,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  wsMarkText: { ...type$.titleSm, color: colors.onDark },
+  wsName: { ...type$.titleSm, color: colors.ink },
+  wsMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
+  wsActions: {
+    flexDirection: "row",
+    gap: 8,
+    paddingHorizontal: 4,
+    marginTop: 8,
+  },
+  wsAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 999,
+  },
+  wsActionText: { ...type$.bodySm, color: colors.body, fontWeight: "600" },
+
+  // Settings groups
   group: {
     backgroundColor: colors.canvas,
     borderWidth: 1,
     borderColor: colors.hairline,
     borderRadius: 16,
     overflow: "hidden",
-    marginBottom: space.lg,
   },
   row: {
     flexDirection: "row",
     alignItems: "center",
     padding: space.base,
     gap: space.sm,
-    borderTopWidth: 1,
-    borderTopColor: colors.hairlineSoft,
   },
+  rowBorder: { borderBottomWidth: 1, borderBottomColor: colors.hairlineSoft },
   rowGlyph: {
     width: 36,
     height: 36,
-    borderRadius: 12,
+    borderRadius: 10,
     backgroundColor: colors.surfaceSoft,
     alignItems: "center",
     justifyContent: "center",
   },
-  rowTitle: { ...type$.titleSm, color: colors.ink },
+  rowTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   rowSub: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
-  signOutBtn: {
-    alignItems: "center",
-    paddingVertical: 14,
+  rowDetail: { flexDirection: "row", alignItems: "center", gap: 6 },
+  rowDetailText: { ...type$.bodyMd, color: colors.muted },
+
+  // Dev / footer
+  devBtn: {
+    marginTop: space.lg,
+    padding: 12,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.hairline,
-    marginTop: space.sm,
-  },
-  signOutText: { ...type$.button, color: colors.ink },
-  devBtn: {
-    marginTop: space.sm,
     borderColor: colors.accentYellow,
     borderStyle: "dashed",
+    alignItems: "center",
   },
-  devBtnText: { color: colors.body, fontSize: 13 },
+  devBtnText: { ...type$.bodySm, color: colors.body },
+  versionLine: {
+    ...type$.bodySm,
+    color: colors.mutedSoft,
+    textAlign: "center",
+    marginTop: space.lg,
+  },
 });
