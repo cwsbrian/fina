@@ -202,6 +202,7 @@ function GoalCard({ goal, onPress }: { goal: GoalDTO; onPress: () => void }) {
     target,
     due,
     now: new Date(),
+    createdAt: new Date(goal.createdAt),
   });
 
   return (

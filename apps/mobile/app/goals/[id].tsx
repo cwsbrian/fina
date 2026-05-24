@@ -146,7 +146,13 @@ export default function GoalDetail() {
   const accent = goalAccent(goal);
   const icon = goalIcon(goal);
   const due = new Date(goal.dueDate);
-  const status = goalStatus({ saved, target, due, now: new Date() });
+  const status = goalStatus({
+    saved,
+    target,
+    due,
+    now: new Date(),
+    createdAt: new Date(goal.createdAt),
+  });
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -203,6 +209,13 @@ export default function GoalDetail() {
             </View>
           </View>
         </View>
+
+        {/* AI strategy / Path */}
+        <PathSection
+          goal={goal}
+          accent={accent}
+          onRegenerated={(g) => setGoal(g)}
+        />
 
         <Text style={styles.groupLabel}>Progress</Text>
         <View style={styles.group}>
@@ -261,6 +274,127 @@ export default function GoalDetail() {
         </View>
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function PathSection({
+  goal,
+  accent,
+  onRegenerated,
+}: {
+  goal: GoalDTO;
+  accent: string;
+  onRegenerated: (g: GoalDTO) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const strategy = goal.strategy;
+
+  const regenerate = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      const r = await apiFetch<{ goal: GoalDTO }>(
+        `/workspaces/${wsId}/goals/${goal.id}/strategy`,
+        { method: "POST" },
+      );
+      onRegenerated(r.goal);
+    } catch (e) {
+      Alert.alert(
+        "Couldn't regenerate plan",
+        (e as { code?: string }).code ?? "Try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Brand-new goal — strategy is still null. Show a hint that Fina is
+  // preparing it. Don't block; user can keep navigating.
+  if (!strategy) {
+    return (
+      <>
+        <Text style={styles.groupLabel}>Path</Text>
+        <View style={[styles.group, styles.pathHint]}>
+          <View style={[styles.pathHintGlyph, { backgroundColor: withAlpha(accent, 0.12) }]}>
+            <ActivityIndicator color={accent} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.pathHintTitle}>
+              Fina is putting a plan together
+            </Text>
+            <Text style={styles.pathHintBody}>
+              I'll suggest where to trim and reroute spending based on your
+              recent activity. Refresh in a moment.
+            </Text>
+          </View>
+        </View>
+      </>
+    );
+  }
+
+  const totalMo = strategy.items.reduce(
+    (sum, i) => sum + (Number.isFinite(i.monthlyAmount) ? i.monthlyAmount : 0),
+    0,
+  );
+
+  return (
+    <>
+      <View style={styles.pathHead}>
+        <Text style={styles.groupLabel}>
+          {strategy.items.length > 0 ? `Path · $${totalMo}/mo` : "Path"}
+        </Text>
+        <Pressable
+          onPress={regenerate}
+          disabled={busy}
+          hitSlop={8}
+          style={({ pressed }) => [pressed && { opacity: 0.6 }]}
+        >
+          {busy ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.regenText}>Regenerate</Text>
+          )}
+        </Pressable>
+      </View>
+
+      {strategy.items.length === 0 ? (
+        <View style={[styles.group, styles.pathHint]}>
+          <View style={[styles.pathHintGlyph, { backgroundColor: colors.surfaceSoft }]}>
+            <Ionicons name="information-circle-outline" size={20} color={colors.muted} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.pathHintTitle}>No plan yet</Text>
+            <Text style={styles.pathHintBody}>
+              {strategy.notice ??
+                "Add a few transactions and tap Regenerate so Fina has something to work with."}
+            </Text>
+          </View>
+        </View>
+      ) : (
+        <View style={styles.group}>
+          {strategy.items.map((item, idx) => (
+            <View
+              key={`${item.categoryName}-${idx}`}
+              style={[
+                styles.pathRow,
+                idx === strategy.items.length - 1 && { borderBottomWidth: 0 },
+              ]}
+            >
+              <View style={[styles.pathRowGlyph, { backgroundColor: withAlpha(accent, 0.12) }]}>
+                <Ionicons name="trending-down-outline" size={14} color={accent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.pathRowTitle}>{item.categoryName}</Text>
+                <Text style={styles.pathRowMeta}>{item.rationale}</Text>
+              </View>
+              <Text style={styles.pathRowAmt}>+${item.monthlyAmount}</Text>
+            </View>
+          ))}
+        </View>
+      )}
+    </>
   );
 }
 
@@ -402,4 +536,48 @@ const styles = StyleSheet.create({
     textAlign: "right",
     paddingVertical: 0,
   },
+
+  // Path / strategy
+  pathHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-end",
+    paddingHorizontal: space.lg,
+    paddingTop: space.lg,
+    paddingBottom: space.xs,
+  },
+  regenText: { ...type$.bodySm, color: colors.primary, fontWeight: "600" },
+  pathHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + 2,
+    padding: space.base,
+  },
+  pathHintGlyph: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pathHintTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
+  pathHintBody: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
+  pathRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + 2,
+    padding: space.base,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
+  },
+  pathRowGlyph: {
+    width: 28,
+    height: 28,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  pathRowTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
+  pathRowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 1 },
+  pathRowAmt: { ...type$.bodyMd, color: colors.up, fontWeight: "600" },
 });

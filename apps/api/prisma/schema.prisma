@@ -438,6 +438,10 @@ model Goal {
   dueDate       DateTime  @db.Date
   icon          String?
   color         String?
+  /// LLM-generated savings plan. Shape: { items: Array<{ categoryName: string,
+  /// monthlyAmount: number, rationale: string }>, generatedAt: ISO string }
+  /// Null until the background generator finishes.
+  strategy      Json?
   archivedAt    DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

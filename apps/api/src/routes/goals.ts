@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { CreateGoalBody, PatchGoalBody } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
+import { generateAndStoreGoalStrategy } from "../goals/generate-strategy.js";
 
 function dto(g: {
   id: string;
@@ -13,6 +14,7 @@ function dto(g: {
   dueDate: Date;
   icon: string | null;
   color: string | null;
+  strategy: Prisma.JsonValue;
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -26,6 +28,7 @@ function dto(g: {
     dueDate: g.dueDate.toISOString().slice(0, 10),
     icon: g.icon,
     color: g.color,
+    strategy: g.strategy,
     archivedAt: g.archivedAt?.toISOString() ?? null,
     createdAt: g.createdAt.toISOString(),
     updatedAt: g.updatedAt.toISOString(),
@@ -106,6 +109,14 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
           color: parsed.data.color ?? null,
         },
       });
+      // Fire-and-forget LLM strategy generation. The user gets an
+      // immediate 201; the detail screen polls / refetches when shown
+      // and picks up the strategy once Gemini returns.
+      void generateAndStoreGoalStrategy(app.fina.env, created.id).catch(
+        () => {
+          // Swallowed inside the helper, but belt-and-suspenders here too.
+        },
+      );
       return reply.code(201).send({ goal: dto(created) });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
@@ -143,6 +154,31 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
           data.archivedAt = d.archived ? new Date() : null;
         }
         const updated = await prisma.goal.update({ where: { id: row.id }, data });
+        return reply.code(200).send({ goal: dto(updated) });
+      } catch (e) {
+        if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+        throw e;
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string; goalId: string } }>(
+    "/workspaces/:id/goals/:goalId/strategy",
+    async (req, reply) => {
+      try {
+        const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+        if (req.params.id !== ctx.membership.workspaceId) {
+          return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const row = await prisma.goal.findFirst({
+          where: { id: req.params.goalId, workspaceId: ctx.membership.workspaceId },
+          select: { id: true },
+        });
+        if (!row) return reply.code(404).send({ error: "not_found" });
+        // Wait for generation to complete here (small + bounded) so the
+        // caller can refresh once and see the new plan, rather than poll.
+        await generateAndStoreGoalStrategy(app.fina.env, row.id);
+        const updated = await prisma.goal.findUniqueOrThrow({ where: { id: row.id } });
         return reply.code(200).send({ goal: dto(updated) });
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

@@ -48,31 +48,31 @@ export function withAlpha(hex: string, alpha: number): string {
 
 export type GoalStatus = "on-track" | "behind" | "done" | "paused";
 
-/** Derive status from progress vs time elapsed. v1 simple heuristic:
+/** Derive status from progress vs time elapsed since the goal was
+ *  created. Heuristic:
  *  - 100% saved → done
  *  - past due unfunded → behind
- *  - pct elapsed > pct saved by >10pp → behind
- *  - otherwise → on-track */
+ *  - more than 10pp behind pace (elapsedPct − savedPct > 0.10) → behind
+ *  - otherwise (including brand-new goals where elapsed is ~0) → on-track */
 export function goalStatus({
   saved,
   target,
   due,
   now,
+  createdAt,
 }: {
   saved: number;
   target: number;
   due: Date;
   now: Date;
+  createdAt: Date;
 }): GoalStatus {
   if (target > 0 && saved >= target) return "done";
-  // Use createdAt as start. We don't have it here; assume a 30-day baseline
-  // so a future goal isn't immediately "behind" on day 1. Caller can pass
-  // explicit start later if needed.
-  const totalMs = Math.max(1, due.getTime() - (now.getTime() - 30 * 86400_000));
-  const elapsedMs = Math.max(0, now.getTime() - (now.getTime() - 30 * 86400_000));
-  const elapsedPct = elapsedMs / totalMs;
+  if (now > due && (target === 0 || saved < target)) return "behind";
+  const totalMs = Math.max(1, due.getTime() - createdAt.getTime());
+  const elapsedMs = Math.max(0, now.getTime() - createdAt.getTime());
+  const elapsedPct = Math.min(1, elapsedMs / totalMs);
   const savedPct = target > 0 ? saved / target : 0;
-  if (now > due && savedPct < 1) return "behind";
   if (elapsedPct - savedPct > 0.1) return "behind";
   return "on-track";
 }
