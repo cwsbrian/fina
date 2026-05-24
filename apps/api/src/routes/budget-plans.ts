@@ -10,6 +10,8 @@ import {
   setMonthBudget,
   monthlySpendByCategory,
   monthlyTotalSpend,
+  monthlyScheduledByCategory,
+  monthlyScheduledTotal,
   recentMonthlyAvgSpend,
   type CategoryAllocation,
 } from "../budget-plans/service.js";
@@ -112,15 +114,20 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
         year,
         month,
       );
-      const [byCategory, totalSpent] = await Promise.all([
-        monthlySpendByCategory(ctx.membership.workspaceId, year, month),
-        monthlyTotalSpend(ctx.membership.workspaceId, year, month),
-      ]);
+      const [byCategory, totalSpent, scheduledByCat, totalScheduled] =
+        await Promise.all([
+          monthlySpendByCategory(ctx.membership.workspaceId, year, month),
+          monthlyTotalSpend(ctx.membership.workspaceId, year, month),
+          monthlyScheduledByCategory(ctx.membership.workspaceId, year, month),
+          monthlyScheduledTotal(ctx.membership.workspaceId, year, month),
+        ]);
       return reply.code(200).send({
         yearMonth: `${year}-${String(month).padStart(2, "0")}`,
         plan,
         spendByCategory: byCategory,
         totalSpent: totalSpent.toFixed(2),
+        scheduledByCategory: scheduledByCat,
+        totalScheduled: totalScheduled.toFixed(2),
       });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

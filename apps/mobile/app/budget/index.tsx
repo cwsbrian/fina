@@ -39,6 +39,8 @@ type CurrentResp = {
   plan: Plan | null;
   spendByCategory: CategorySpend[];
   totalSpent: string;
+  scheduledByCategory?: CategorySpend[];
+  totalScheduled?: string;
 };
 
 type Data = {
@@ -149,9 +151,15 @@ export default function BudgetScreen() {
 
   const total = Number(data.current.plan.totalAmount);
   const spent = Number(data.current.totalSpent);
-  const remaining = total - spent;
+  const scheduled = Number(data.current.totalScheduled ?? "0");
+  const remaining = total - spent - scheduled;
   const pct = total > 0 ? Math.min(100, Math.round((spent / total) * 100)) : 0;
+  const scheduledPct =
+    total > 0
+      ? Math.max(0, Math.min(100 - pct, (scheduled / total) * 100))
+      : 0;
   const over = spent > total;
+  const willExceed = !over && spent + scheduled > total;
 
   // Compare against the default to surface this-month overrides.
   const defaultTotal = data.defaultPlan
@@ -173,22 +181,29 @@ export default function BudgetScreen() {
   const spendByCat = new Map(
     data.current.spendByCategory.map((s) => [s.categoryId, s]),
   );
+  const schedByCat = new Map(
+    (data.current.scheduledByCategory ?? []).map((s) => [s.categoryId, s]),
+  );
   const allCatIds = new Set([
     ...planByCat.keys(),
     ...spendByCat.keys(),
+    ...schedByCat.keys(),
   ]);
   const rows = Array.from(allCatIds, (id) => {
     const budget = planByCat.get(id) ?? 0;
     const defBudget = defaultByCat.get(id) ?? null;
     const sp = spendByCat.get(id);
+    const sc = schedByCat.get(id);
     const cat = categories[id];
     return {
       categoryId: id,
-      categoryName: sp?.categoryName ?? cat?.name ?? "Uncategorized",
+      categoryName:
+        sp?.categoryName ?? sc?.categoryName ?? cat?.name ?? "Uncategorized",
       cat: cat ?? null,
       budget,
       defaultBudget: defBudget,
       spent: sp?.spent ?? 0,
+      scheduled: sc?.spent ?? 0,
     };
   }).sort((a, b) => {
     // Over-budget first, then by spend descending.
@@ -236,29 +251,53 @@ export default function BudgetScreen() {
             </View>
           )}
           <View style={styles.bar}>
-            <View
-              style={[
-                styles.barFill,
-                {
-                  width: `${pct}%`,
-                  backgroundColor: over ? colors.down : colors.primary,
-                },
-              ]}
-            />
+            <View style={styles.barRow}>
+              <View
+                style={[
+                  styles.barSeg,
+                  {
+                    width: `${pct}%`,
+                    backgroundColor: over ? colors.down : colors.primary,
+                  },
+                ]}
+              />
+              {scheduledPct > 0 && (
+                <View
+                  style={[
+                    styles.barSeg,
+                    {
+                      width: `${scheduledPct}%`,
+                      backgroundColor: willExceed
+                        ? colors.down
+                        : colors.primary,
+                      opacity: 0.3,
+                    },
+                  ]}
+                />
+              )}
+            </View>
           </View>
           <View style={styles.heroFoot}>
             <Text style={styles.heroFootText}>{pct}%</Text>
             <Text
               style={[
                 styles.heroFootText,
-                over && { color: colors.down, fontWeight: "600" },
+                (over || willExceed) && {
+                  color: colors.down,
+                  fontWeight: "600",
+                },
               ]}
             >
-              {over
+              {remaining < 0
                 ? `${formatMoney(Math.abs(remaining).toFixed(2)).display} over`
                 : `${formatMoney(remaining.toFixed(2)).display} left`}
             </Text>
           </View>
+          {scheduled > 0 && (
+            <Text style={styles.heroScheduled}>
+              + {formatMoney(scheduled.toFixed(2)).display} scheduled this month
+            </Text>
+          )}
         </View>
 
         {/* Per-category */}
@@ -290,6 +329,7 @@ function CategoryRow({
     budget: number;
     defaultBudget: number | null;
     spent: number;
+    scheduled: number;
   };
 }) {
   const meta = categoryMeta(row.cat);
@@ -297,8 +337,16 @@ function CategoryRow({
   const pct = hasBudget
     ? Math.min(100, Math.round((row.spent / row.budget) * 100))
     : 0;
+  const schedPct =
+    hasBudget && row.scheduled > 0
+      ? Math.max(
+          0,
+          Math.min(100 - pct, (row.scheduled / row.budget) * 100),
+        )
+      : 0;
   const over = hasBudget && row.spent > row.budget;
-  const remaining = row.budget - row.spent;
+  const remaining = row.budget - row.spent - row.scheduled;
+  const willExceed = hasBudget && !over && row.spent + row.scheduled > row.budget;
   const diff =
     row.defaultBudget !== null && row.defaultBudget !== row.budget
       ? row.budget - row.defaultBudget
@@ -331,27 +379,55 @@ function CategoryRow({
       {hasBudget ? (
         <>
           <View style={styles.catBar}>
-            <View
+            <View style={styles.catBarRow}>
+              <View
+                style={[
+                  styles.catBarSeg,
+                  {
+                    width: `${pct}%`,
+                    backgroundColor: over ? colors.down : meta.fg,
+                  },
+                ]}
+              />
+              {schedPct > 0 && (
+                <View
+                  style={[
+                    styles.catBarSeg,
+                    {
+                      width: `${schedPct}%`,
+                      backgroundColor: willExceed ? colors.down : meta.fg,
+                      opacity: 0.35,
+                    },
+                  ]}
+                />
+              )}
+            </View>
+          </View>
+          <View style={styles.catFoot}>
+            <Text
               style={[
-                styles.catBarFill,
-                {
-                  width: `${pct}%`,
-                  backgroundColor: over ? colors.down : meta.fg,
+                styles.catRemaining,
+                (over || willExceed) && {
+                  color: colors.down,
+                  fontWeight: "600",
                 },
               ]}
-            />
+            >
+              {remaining < 0
+                ? `${formatMoney(Math.abs(remaining).toFixed(2)).display} over`
+                : `${formatMoney(remaining.toFixed(2)).display} left`}
+            </Text>
+            {row.scheduled > 0 && (
+              <Text style={styles.catScheduled}>
+                + {formatMoney(row.scheduled.toFixed(2)).display} scheduled
+              </Text>
+            )}
           </View>
-          <Text
-            style={[
-              styles.catRemaining,
-              over && { color: colors.down, fontWeight: "600" },
-            ]}
-          >
-            {over
-              ? `${formatMoney(Math.abs(remaining).toFixed(2)).display} over`
-              : `${formatMoney(remaining.toFixed(2)).display} left`}
-          </Text>
         </>
+      ) : row.scheduled > 0 ? (
+        <Text style={styles.catRemaining}>
+          + {formatMoney(row.scheduled.toFixed(2)).display} scheduled · no cap set
+        </Text>
       ) : (
         <Text style={styles.catRemaining}>No cap set</Text>
       )}
@@ -469,7 +545,8 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     alignSelf: "stretch",
   },
-  barFill: { height: "100%", borderRadius: 999 },
+  barRow: { height: "100%", flexDirection: "row" },
+  barSeg: { height: "100%" },
   heroFoot: {
     alignSelf: "stretch",
     flexDirection: "row",
@@ -477,6 +554,12 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   heroFootText: { ...type$.bodySm, color: colors.muted },
+  heroScheduled: {
+    ...type$.bodySm,
+    color: colors.muted,
+    alignSelf: "flex-end",
+    marginTop: 2,
+  },
 
   // Category list
   list: { paddingHorizontal: space.lg, gap: space.base },
@@ -509,8 +592,15 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     marginBottom: 4,
   },
-  catBarFill: { height: "100%", borderRadius: 999 },
+  catBarRow: { height: "100%", flexDirection: "row" },
+  catBarSeg: { height: "100%" },
+  catFoot: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+  },
   catRemaining: { ...type$.bodySm, color: colors.muted },
+  catScheduled: { ...type$.bodySm, color: colors.muted },
 
   noCats: {
     padding: space.lg,

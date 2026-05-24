@@ -229,6 +229,69 @@ export async function recentMonthlyAvgSpend(
   return Math.round(total / 3);
 }
 
+/** Sum of upcoming (not yet matched, not dismissed) scheduled spends
+ *  in the given month, grouped by category. Used by the budget screen
+ *  to show projected spend alongside actuals. */
+export async function monthlyScheduledByCategory(
+  workspaceId: string,
+  year: number,
+  month1to12: number,
+): Promise<CategorySpend[]> {
+  const from = firstOfMonth(year, month1to12);
+  const to = firstOfMonth(
+    month1to12 === 12 ? year + 1 : year,
+    month1to12 === 12 ? 1 : month1to12 + 1,
+  );
+  const rows = await prisma.scheduledSpend.findMany({
+    where: {
+      workspaceId,
+      scheduledDate: { gte: from, lt: to },
+      matchedTxId: null,
+      dismissedAt: null,
+    },
+    select: {
+      amount: true,
+      categoryId: true,
+      category: { select: { name: true } },
+    },
+  });
+  const sums = new Map<string, { name: string; spent: number }>();
+  for (const r of rows) {
+    const cur = sums.get(r.categoryId) ?? { name: r.category.name, spent: 0 };
+    cur.spent += Number(r.amount);
+    sums.set(r.categoryId, cur);
+  }
+  return Array.from(sums, ([categoryId, v]) => ({
+    categoryId,
+    categoryName: v.name,
+    spent: Math.round(v.spent * 100) / 100,
+  }));
+}
+
+/** Total upcoming scheduled spend for the month — used for the
+ *  "scheduled" sub-line on the budget hero. */
+export async function monthlyScheduledTotal(
+  workspaceId: string,
+  year: number,
+  month1to12: number,
+): Promise<number> {
+  const from = firstOfMonth(year, month1to12);
+  const to = firstOfMonth(
+    month1to12 === 12 ? year + 1 : year,
+    month1to12 === 12 ? 1 : month1to12 + 1,
+  );
+  const agg = await prisma.scheduledSpend.aggregate({
+    where: {
+      workspaceId,
+      scheduledDate: { gte: from, lt: to },
+      matchedTxId: null,
+      dismissedAt: null,
+    },
+    _sum: { amount: true },
+  });
+  return Number(agg._sum.amount ?? 0);
+}
+
 /** Total spend (any category) for the month — used for the "total
  *  spent vs total budget" headline. */
 export async function monthlyTotalSpend(
