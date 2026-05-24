@@ -195,6 +195,21 @@ export async function suggestBudgetSplit(
         "Connect a bank or log a few transactions first so I have something to split against.",
     };
   }
+
+  // Sanity check: if the user's chosen total is way below their recent
+  // monthly average, the split will be unrealistic. Surface a notice up
+  // front so the UI can warn before they save.
+  const recentTotal = spend.reduce((s, c) => s + c.monthlyAvgCAD, 0);
+  let preNotice: string | undefined;
+  if (recentTotal > 0 && totalAmount < recentTotal * 0.6) {
+    // Round to nearest $10 for a friendlier number in the message.
+    const roundedRecent = Math.round(recentTotal / 10) * 10;
+    preNotice =
+      `Your last-90-day spending averages about $${roundedRecent.toLocaleString()}/mo — ` +
+      `the $${totalAmount.toLocaleString()} target you picked is well below that. ` +
+      `Fina will still split it, but expect aggressive cuts; consider raising the total.`;
+  }
+
   const lines: string[] = [];
   lines.push(`Total monthly budget: $${totalAmount.toFixed(2)} CAD`);
   lines.push("");
@@ -221,15 +236,19 @@ export async function suggestBudgetSplit(
       },
     });
     const text = response.text ?? "";
-    const allocations = parseAllocations(text, byName);
-    if (allocations.length === 0) {
+    const raw = parseAllocations(text, byName);
+    if (raw.length === 0) {
       return {
         allocations: [],
         notice:
+          preNotice ??
           "Fina couldn't suggest a split right now — try entering category amounts manually.",
       };
     }
-    return { allocations };
+    return {
+      allocations: normalizeToTotal(raw, totalAmount),
+      ...(preNotice ? { notice: preNotice } : {}),
+    };
   } catch {
     return {
       allocations: [],
