@@ -372,6 +372,12 @@ function ScheduledRow({
         </Text>
         <Text style={styles.rowDate}>{formatDateLabel(d)}</Text>
       </View>
+      <Ionicons
+        name="chevron-forward"
+        size={14}
+        color={colors.mutedSoft}
+        style={styles.chev}
+      />
     </Pressable>
   );
 }
@@ -534,6 +540,7 @@ const styles = StyleSheet.create({
   rowTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   rowNote: { ...type$.bodySm, color: colors.muted, marginTop: 1 },
   rowRight: { alignItems: "flex-end" },
+  chev: { marginLeft: 4 },
   rowAmount: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   rowDate: { ...type$.bodySm, color: colors.muted, marginTop: 1 },
   subBadge: {

@@ -312,6 +312,12 @@ function SubscriptionRow({
           </Text>
         </View>
       </View>
+      <Ionicons
+        name="chevron-forward"
+        size={14}
+        color={colors.mutedSoft}
+        style={styles.chev}
+      />
     </Pressable>
   );
 }
@@ -490,4 +496,5 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: colors.mutedSoft,
   },
+  chev: { marginLeft: 6 },
 });

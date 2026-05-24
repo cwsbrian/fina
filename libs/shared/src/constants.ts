@@ -22,10 +22,14 @@ export const DEFAULT_TZ = "America/Toronto";
  * @fastify/rate-limit plugin config. Frontend may import for
  * client-side "X requests remaining" UI later. */
 export const RATE_LIMITS = {
-  /** Default for any route without an explicit override. Keyed by IP. */
-  globalDefault: { max: 60, windowMs: 60_000 },
+  /** Default for any route without an explicit override. Keyed by IP.
+   *  Bumped from 60 → 600/min — the mobile app fires several parallel
+   *  fetches on every screen focus (transactions + categories +
+   *  schedules + recurring + budget, etc.), and the previous cap
+   *  surfaced spurious 429s during normal navigation. */
+  globalDefault: { max: 600, windowMs: 60_000 },
   /** Heaviest cost — guards LLM token spend. Keyed by user id. */
-  chatMessages: { max: 30, windowMs: 60_000 },
+  chatMessages: { max: 60, windowMs: 60_000 },
   /** Credential-stuffing protection — sign-in / sign-up only. 5 attempts per
    *  minute per IP is realistic for humans and slows automated guessing to
    *  near-zero throughput. Wired by server.ts onto /api/auth/sign-in/* and
