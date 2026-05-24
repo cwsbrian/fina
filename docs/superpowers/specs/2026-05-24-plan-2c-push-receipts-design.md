@@ -27,7 +27,7 @@
 
 ```ts
   /** Receipt polling cron (Plan 2C-push-receipts). */
-  receiptsPolled?: number;       // polling 시도한 ticket 수
+  receiptsPolled?: number;       // Expo가 receipt 반환한 ticket 수 (해당 tick에서)
   receiptsFailed?: number;       // status === "error" 받은 수
   receiptInvalidCreds?: boolean; // APNs/FCM cert 만료 시그널 (critical)
   receiptErrorCode?: string;     // "DeviceNotRegistered" | "MessageTooBig" | etc.
@@ -87,24 +87,41 @@ if (t.status === "ok") {
 }
 ```
 
-변경:
+변경: 기존 `send.ts:74-94` ticket loop에서 `deviceId`는 error 분기 안에서만 추출. ok 분기에서도 필요해지므로 loop 시작에 hoist:
+
 ```ts
-if (t.status === "ok") {
-  // Save ticket for v1.5 receipt polling. Best-effort: persist failure
-  // shouldn't fail the whole send pipeline.
-  try {
-    await prisma.pushTicket.create({
-      data: { expoTicketId: t.id, userDeviceId: deviceId },
-    });
-  } catch (err) {
-    logWarn({ userId, removedDeviceId: deviceId, err }, "ticket persist failed");
+for (let i = 0; i < tickets.length; i++) {
+  const t = tickets[i]!;
+  const deviceId = (chunk[i] as CarrierMessage).__deviceId;  // hoisted to top of loop
+
+  if (t.status === "ok") {
+    // Save ticket for receipt polling (Plan 2C-push-receipts).
+    // Best-effort: persist failure shouldn't fail the whole send pipeline.
+    try {
+      await prisma.pushTicket.create({
+        data: { expoTicketId: t.id, userDeviceId: deviceId },
+      });
+    } catch (err) {
+      logWarn({ userId, removedDeviceId: deviceId, err }, "ticket persist failed");
+    }
+    sent++;
+    continue;
   }
-  sent++;
-  continue;
+
+  // error 분기는 그대로 — deviceId는 위에서 hoisted, error 분기 안의 기존
+  // `const deviceId = ...` 라인은 제거.
+  failed++;
+  const errorCode = t.details?.error;
+  if (errorCode === "DeviceNotRegistered") {
+    await prisma.userDevice.delete({ where: { id: deviceId } });
+    // ... 기존 로깅 그대로
+  } else {
+    // ... 기존 그대로
+  }
 }
 ```
 
-`deviceId`는 이미 같은 loop에서 `__deviceId` carrier에서 추출되므로 별도 작업 불요.
+**구현 메모**: T-implementer는 기존 error 분기 내부의 `const deviceId = ...` 라인을 삭제하고 loop 시작에 hoisted 버전으로 통합해야 함. Spec §4의 변경은 단순 추가가 아니라 small refactor.
 
 Error path들은 그대로 (DeviceNotRegistered → row 삭제, others → log warn). Ticket row 없어도 무해 (cleanup은 polling 의존이 아닌 lazy ticket-time 이미 처리).
 
@@ -127,7 +144,10 @@ export async function runPushReceipts(env: Env): Promise<void> {
   });
   if (pending.length === 0) return;
 
-  // 2. Fetch receipts from Expo (SDK handles chunking).
+  // 2. Fetch receipts from Expo. expo-server-sdk does NOT auto-chunk
+  // getPushNotificationReceiptsAsync — limit is 300 ids per call. Our
+  // `take: 200` keeps us under the limit. If the batch ever grows above
+  // 300, call `expo.chunkPushNotificationReceiptIds(ids)` first.
   const expo = new Expo(
     env.EXPO_ACCESS_TOKEN === undefined
       ? {}
@@ -146,15 +166,22 @@ export async function runPushReceipts(env: Env): Promise<void> {
   let polled = 0;
   let failed = 0;
   let invalidCreds = false;
+  // Same-batch cascade guard: if ticket A's DNR receipt deletes UserDevice X,
+  // any later ticket in this batch with userDeviceId === X has ALREADY been
+  // cascade-deleted from push_tickets — touching it would throw P2025.
+  // Track deletions in-memory and skip subsequent tickets pointing to them.
+  const deletedDeviceIds = new Set<string>();
 
   for (const ticket of pending) {
+    if (deletedDeviceIds.has(ticket.userDeviceId)) continue;  // cascade already removed this ticket row
+
     const r = receipts[ticket.expoTicketId];
     if (!r) {
       // Expo doesn't have the receipt yet — leave polledAt null, next tick retries.
       continue;
     }
 
-    polled++;
+    polled++;  // counts tickets with a receipt this tick (Expo returned data)
     if (r.status === "ok") {
       await prisma.pushTicket.update({
         where: { id: ticket.id },
@@ -169,6 +196,7 @@ export async function runPushReceipts(env: Env): Promise<void> {
     if (errorCode === "DeviceNotRegistered") {
       // Server-side complement to ticket-time DNR cleanup.
       await prisma.userDevice.delete({ where: { id: ticket.userDeviceId } });
+      deletedDeviceIds.add(ticket.userDeviceId);
       // PushTicket row cascades automatically via FK; no explicit ticket update.
       logInfo(
         { cron: CRON_NAME, removedDeviceId: ticket.userDeviceId, receiptErrorCode: errorCode },
@@ -225,7 +253,10 @@ logInfo(
 );
 ```
 
-`subDays`는 `date-fns` (이미 의존성). 또는 inline `new Date(now - 7 * 86400 * 1000)`.
+**Date 처리**: `apps/api`는 `date-fns` 없음 (확인). 기존 `cleanup-events.ts:14` 패턴 그대로 inline 사용:
+```ts
+const cutoff = new Date(Date.now() - 7 * 86_400_000);
+```
 
 ## 7. Testing
 
@@ -275,6 +306,8 @@ Mock pattern: 기존 `vi.mock("expo-server-sdk", ...)` 확장 — `getPushNotifi
 | `expo.getPushNotificationReceiptsAsync` API change in v6.x | expo-server-sdk pinned at `^6.1.0`; major bump 시 receipt API 시그너처 재확인. |
 | Cron이 `0 * * * *`이라 모든 deploy 시점 1시간 끊김 | Cron `protect` callback이 skipped run 로그 출력. Operations 모니터링 가능. |
 | `cleanup-events`에 한 정리 step 추가하면 의존성 ↑ | cleanup-events는 이미 N step iterator 패턴 — 1 step 추가는 well-bounded. |
+| Cron 충돌: `push-receipts`(`0 * * * *`)는 `cleanup-events`(`0 3 * * *`)와 03:00, `daily-refresh`(`0 9 * * *`)와 09:00에 동시 시작 | 각 Cron 인스턴스는 독립적이고 `protect`는 self-overlap만 막음. Prisma는 statement 단위로 atomic이고 in-memory shared state 없음 → 동시 실행 safe. 명시적 lock 불요. |
+| Unauthed Expo getReceipts API rate limit (free tier) | 본 plan은 `EXPO_ACCESS_TOKEN` optional 유지. dogfood 트래픽 OK. Production scale 진입 시 token 세팅 권장 (rate limit 완화 + 본 cron이 안정적). |
 
 ## 10. Success criteria
 
