@@ -34,16 +34,48 @@ type Plan = {
   categoryAllocations: Array<{ categoryId: string; amount: number }>;
 };
 
+type Scope = "month" | "default";
+
+function currentYearMonth(): string {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+type CurrentResp = {
+  yearMonth: string;
+  plan: Plan | null;
+};
+
 export default function NewBudget() {
   const [me, setMe] = useState<Me | null>(null);
   const [categories, setCategories] = useState<CategoryDTO[]>([]);
-  const [existing, setExisting] = useState<Plan | null>(null);
+  const [defaultPlan, setDefaultPlan] = useState<Plan | null>(null);
+  const [monthPlan, setMonthPlan] = useState<Plan | null>(null);
+  const [scope, setScope] = useState<Scope>("month");
   const [total, setTotal] = useState("");
   const [allocs, setAllocs] = useState<Allocation[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [suggestNotice, setSuggestNotice] = useState<string | null>(null);
+
+  // Hydrate the form whenever the scope flips so the user always sees
+  // the values for the scope they're editing.
+  useEffect(() => {
+    const plan = scope === "month" ? monthPlan : defaultPlan;
+    if (plan) {
+      setTotal(Number(plan.totalAmount).toFixed(2));
+      setAllocs(
+        plan.categoryAllocations.map((a) => ({
+          categoryId: a.categoryId,
+          amount: a.amount.toFixed(2),
+        })),
+      );
+    } else {
+      setTotal("");
+      setAllocs([]);
+    }
+  }, [scope, defaultPlan, monthPlan]);
 
   useEffect(() => {
     apiFetch<Me>("/me").then(setMe).catch(() => {});
@@ -52,27 +84,20 @@ export default function NewBudget() {
         const wsId =
           (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
         if (!wsId) return;
-        const [catResp, defResp] = await Promise.all([
+        const [catResp, defResp, curResp] = await Promise.all([
           apiFetch<{ categories: CategoryDTO[] }>(
             `/workspaces/${wsId}/categories`,
           ),
           apiFetch<{ plan: Plan | null }>(
             `/workspaces/${wsId}/budget-plans/default`,
           ),
+          apiFetch<CurrentResp>(`/workspaces/${wsId}/budget-plans/current`),
         ]);
         setCategories(catResp.categories.filter((c) => !c.archivedAt));
-        if (defResp.plan) {
-          setExisting(defResp.plan);
-          setTotal(Number(defResp.plan.totalAmount).toFixed(2));
-          setAllocs(
-            defResp.plan.categoryAllocations.map((a) => ({
-              categoryId: a.categoryId,
-              amount: a.amount.toFixed(2),
-            })),
-          );
-        }
+        setDefaultPlan(defResp.plan);
+        setMonthPlan(curResp.plan);
       } catch {
-        // load failures non-fatal; user just sees a blank form
+        // load failures non-fatal
       }
     })();
   }, []);
@@ -117,67 +142,53 @@ export default function NewBudget() {
     }
   }, [total, suggesting]);
 
-  const doSubmit = useCallback(
-    async (scope: "default_only" | "default_and_current") => {
-      const totalNum = Number(total);
-      if (!Number.isFinite(totalNum) || totalNum <= 0 || submitting) return;
-      setSubmitting(true);
-      setErr(null);
-      try {
-        const wsId = await getActiveWorkspaceId();
-        if (!wsId) throw new Error("no_workspace");
-        const sanitized = allocs
-          .map((a) => ({
-            categoryId: a.categoryId,
-            amount: Math.max(0, Number(a.amount) || 0),
-          }))
-          .filter((a) => a.amount > 0);
+  const submit = useCallback(async () => {
+    const totalNum = Number(total);
+    if (!Number.isFinite(totalNum) || totalNum <= 0 || submitting) return;
+    setSubmitting(true);
+    setErr(null);
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      const sanitized = allocs
+        .map((a) => ({
+          categoryId: a.categoryId,
+          amount: Math.max(0, Number(a.amount) || 0),
+        }))
+        .filter((a) => a.amount > 0);
+      const body = {
+        totalAmount: totalNum,
+        categoryAllocations: sanitized,
+      };
+      // Scope toggle picks the route: month writes a snapshot, default
+      // overwrites the template. First-time setup (no default yet)
+      // forces default scope so the next month already inherits.
+      if (scope === "month" && defaultPlan) {
+        await apiFetch<{ plan: Plan }>(
+          `/workspaces/${wsId}/budget-plans/months/${currentYearMonth()}`,
+          { method: "POST", body: JSON.stringify(body) },
+        );
+      } else {
         await apiFetch<{ plan: Plan }>(
           `/workspaces/${wsId}/budget-plans/default`,
           {
             method: "POST",
             body: JSON.stringify({
-              totalAmount: totalNum,
-              categoryAllocations: sanitized,
-              scope,
+              ...body,
+              // First setup: apply to current month too so the user
+              // sees their work immediately.
+              scope: defaultPlan ? "default_only" : "default_and_current",
             }),
           },
         );
-        router.back();
-      } catch (e) {
-        const code = (e as { code?: string }).code ?? "save_failed";
-        setErr(`Couldn't save: ${code}`);
-        setSubmitting(false);
       }
-    },
-    [total, allocs, submitting],
-  );
-
-  const submit = useCallback(() => {
-    const totalNum = Number(total);
-    if (!Number.isFinite(totalNum) || totalNum <= 0 || submitting) return;
-    // First-time setup: no existing default → just save default + apply
-    // to current month so the user sees their work immediately.
-    if (!existing) {
-      doSubmit("default_and_current");
-      return;
+      router.back();
+    } catch (e) {
+      const code = (e as { code?: string }).code ?? "save_failed";
+      setErr(`Couldn't save: ${code}`);
+      setSubmitting(false);
     }
-    Alert.alert(
-      "Apply to this month?",
-      "Your default budget is for new months going forward. Want to apply these changes to the current month too?",
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Only future months",
-          onPress: () => doSubmit("default_only"),
-        },
-        {
-          text: "Apply now",
-          onPress: () => doSubmit("default_and_current"),
-        },
-      ],
-    );
-  }, [total, existing, doSubmit, submitting]);
+  }, [scope, total, allocs, defaultPlan, submitting]);
 
   const setAlloc = (categoryId: string, amount: string) => {
     if (!/^\d*\.?\d{0,2}$/.test(amount)) return;
@@ -210,7 +221,7 @@ export default function NewBudget() {
           <Text style={styles.cancel}>Cancel</Text>
         </Pressable>
         <Text style={styles.title}>
-          {existing ? "Edit budget" : "New budget"}
+          {defaultPlan ? "Edit budget" : "New budget"}
         </Text>
         <Pressable onPress={submit} disabled={!canSubmit} hitSlop={8}>
           {submitting ? (
@@ -232,6 +243,48 @@ export default function NewBudget() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.body}
         >
+          {/* Scope toggle — only show once a default exists. First-time
+              setup is implicitly "default + current month". */}
+          {defaultPlan && (
+            <>
+              <View style={styles.seg}>
+                <Pressable
+                  style={[styles.segOpt, scope === "month" && styles.segActive]}
+                  onPress={() => setScope("month")}
+                  disabled={submitting}
+                >
+                  <Text
+                    style={[
+                      styles.segText,
+                      scope === "month" && styles.segTextActive,
+                    ]}
+                  >
+                    This month
+                  </Text>
+                </Pressable>
+                <Pressable
+                  style={[styles.segOpt, scope === "default" && styles.segActive]}
+                  onPress={() => setScope("default")}
+                  disabled={submitting}
+                >
+                  <Text
+                    style={[
+                      styles.segText,
+                      scope === "default" && styles.segTextActive,
+                    ]}
+                  >
+                    Default
+                  </Text>
+                </Pressable>
+              </View>
+              <Text style={styles.scopeHelp}>
+                {scope === "month"
+                  ? "Edits apply to the current month only — your default stays as-is for next month."
+                  : "Edits update the default that every new month is copied from. The current month isn't affected unless you flip it above."}
+              </Text>
+            </>
+          )}
+
           <Text style={styles.label}>Monthly total</Text>
           <View style={styles.amountRow}>
             <Text style={styles.amountCurrency}>$</Text>
@@ -350,6 +403,29 @@ const styles = StyleSheet.create({
   cancel: { ...type$.bodyMd, color: colors.muted },
   save: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
   body: { padding: space.lg, paddingBottom: space.xl },
+  seg: {
+    flexDirection: "row",
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 999,
+    padding: 4,
+    marginBottom: 8,
+  },
+  segOpt: {
+    flex: 1,
+    paddingVertical: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 999,
+  },
+  segActive: { backgroundColor: colors.canvas },
+  segText: { ...type$.bodyMd, color: colors.muted, fontWeight: "600" },
+  segTextActive: { color: colors.ink },
+  scopeHelp: {
+    ...type$.bodySm,
+    color: colors.muted,
+    marginBottom: space.lg,
+    paddingHorizontal: 4,
+  },
   label: {
     ...type$.bodySm,
     color: colors.muted,
