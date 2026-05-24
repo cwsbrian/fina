@@ -41,8 +41,19 @@ type CurrentResp = {
   totalSpent: string;
 };
 
+type Data = {
+  current: CurrentResp;
+  defaultPlan: Plan | null;
+};
+
+function formatDelta(amount: number): string {
+  const sign = amount > 0 ? "+" : "−";
+  const abs = Math.abs(amount);
+  return `${sign}${formatMoney(abs.toFixed(2)).display}`;
+}
+
 export default function BudgetScreen() {
-  const [data, setData] = useState<CurrentResp | null>(null);
+  const [data, setData] = useState<Data | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -52,11 +63,14 @@ export default function BudgetScreen() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const [resp, cats] = await Promise.all([
+      const [resp, cats, def] = await Promise.all([
         apiFetch<CurrentResp>(`/workspaces/${wsId}/budget-plans/current`),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${wsId}/categories`),
+        apiFetch<{ plan: Plan | null }>(
+          `/workspaces/${wsId}/budget-plans/default`,
+        ),
       ]);
-      setData(resp);
+      setData({ current: resp, defaultPlan: def.plan });
       setCategories(Object.fromEntries(cats.categories.map((c) => [c.id, c])));
       setErr(null);
     } catch (e) {
@@ -104,7 +118,7 @@ export default function BudgetScreen() {
     );
   }
 
-  if (!data.plan) {
+  if (!data.current.plan) {
     // Empty state — no default budget set yet.
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -133,19 +147,31 @@ export default function BudgetScreen() {
     );
   }
 
-  const total = Number(data.plan.totalAmount);
-  const spent = Number(data.totalSpent);
+  const total = Number(data.current.plan.totalAmount);
+  const spent = Number(data.current.totalSpent);
   const remaining = total - spent;
   const pct = total > 0 ? Math.min(100, Math.round((spent / total) * 100)) : 0;
   const over = spent > total;
 
+  // Compare against the default to surface this-month overrides.
+  const defaultTotal = data.defaultPlan
+    ? Number(data.defaultPlan.totalAmount)
+    : null;
+  const totalDiff =
+    defaultTotal !== null && defaultTotal !== total ? total - defaultTotal : 0;
+
   // Merge plan allocations + spend per category. A category appears if
   // it has either a budget or actual spend.
   const planByCat = new Map(
-    data.plan.categoryAllocations.map((a) => [a.categoryId, a.amount]),
+    data.current.plan.categoryAllocations.map((a) => [a.categoryId, a.amount]),
+  );
+  const defaultByCat = new Map(
+    (data.defaultPlan?.categoryAllocations ?? []).map(
+      (a) => [a.categoryId, a.amount] as const,
+    ),
   );
   const spendByCat = new Map(
-    data.spendByCategory.map((s) => [s.categoryId, s]),
+    data.current.spendByCategory.map((s) => [s.categoryId, s]),
   );
   const allCatIds = new Set([
     ...planByCat.keys(),
@@ -153,6 +179,7 @@ export default function BudgetScreen() {
   ]);
   const rows = Array.from(allCatIds, (id) => {
     const budget = planByCat.get(id) ?? 0;
+    const defBudget = defaultByCat.get(id) ?? null;
     const sp = spendByCat.get(id);
     const cat = categories[id];
     return {
@@ -160,6 +187,7 @@ export default function BudgetScreen() {
       categoryName: sp?.categoryName ?? cat?.name ?? "Uncategorized",
       cat: cat ?? null,
       budget,
+      defaultBudget: defBudget,
       spent: sp?.spent ?? 0,
     };
   }).sort((a, b) => {
@@ -188,13 +216,25 @@ export default function BudgetScreen() {
       >
         {/* Total hero */}
         <View style={styles.hero}>
-          <Text style={styles.heroLabel}>{monthLabel(data.yearMonth)}</Text>
+          <Text style={styles.heroLabel}>{monthLabel(data.current.yearMonth)}</Text>
           <Text style={[styles.heroAmount, over && { color: colors.down }]}>
             {formatMoney(spent.toFixed(2)).display}
           </Text>
           <Text style={styles.heroOf}>
-            of {formatMoney(data.plan.totalAmount).display}
+            of {formatMoney(data.current.plan.totalAmount).display}
           </Text>
+          {totalDiff !== 0 && defaultTotal !== null && (
+            <View style={styles.deltaPill}>
+              <Ionicons
+                name={totalDiff > 0 ? "arrow-up" : "arrow-down"}
+                size={12}
+                color={colors.muted}
+              />
+              <Text style={styles.deltaPillText}>
+                {formatDelta(totalDiff)} vs default ({formatMoney(defaultTotal.toFixed(2)).display})
+              </Text>
+            </View>
+          )}
           <View style={styles.bar}>
             <View
               style={[
@@ -248,6 +288,7 @@ function CategoryRow({
     categoryName: string;
     cat: CategoryDTO | null;
     budget: number;
+    defaultBudget: number | null;
     spent: number;
   };
 }) {
@@ -258,13 +299,26 @@ function CategoryRow({
     : 0;
   const over = hasBudget && row.spent > row.budget;
   const remaining = row.budget - row.spent;
+  const diff =
+    row.defaultBudget !== null && row.defaultBudget !== row.budget
+      ? row.budget - row.defaultBudget
+      : 0;
   return (
     <View style={styles.catRow}>
       <View style={styles.catTop}>
         <View style={[styles.catGlyph, { backgroundColor: meta.bg }]}>
           <Ionicons name={meta.icon} size={16} color={meta.fg} />
         </View>
-        <Text style={styles.catName}>{row.categoryName}</Text>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.catName} numberOfLines={1}>
+            {row.categoryName}
+          </Text>
+          {diff !== 0 && (
+            <Text style={styles.catDelta}>
+              {formatDelta(diff)} vs default
+            </Text>
+          )}
+        </View>
         <Text style={styles.catAmount}>
           {formatMoney(row.spent.toFixed(2)).display}
           {hasBudget && (
@@ -395,7 +449,19 @@ const styles = StyleSheet.create({
     letterSpacing: -1.4,
     color: colors.ink,
   },
-  heroOf: { ...type$.bodyMd, color: colors.muted, marginTop: 4, marginBottom: space.base },
+  heroOf: { ...type$.bodyMd, color: colors.muted, marginTop: 4 },
+  deltaPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    backgroundColor: colors.surfaceSoft,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    marginTop: 8,
+    marginBottom: space.sm,
+  },
+  deltaPillText: { ...type$.bodySm, color: colors.muted },
   bar: {
     height: 10,
     borderRadius: 999,
@@ -432,7 +498,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  catName: { ...type$.bodyMd, color: colors.ink, fontWeight: "600", flex: 1 },
+  catName: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
+  catDelta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   catAmount: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   catAmountOf: { color: colors.muted, fontWeight: "400" },
   catBar: {
