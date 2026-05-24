@@ -98,7 +98,16 @@ export default function Goals() {
       <FlatList
         data={active}
         keyExtractor={(g) => g.id}
-        contentContainerStyle={[styles.list, { paddingTop: totalHeader }]}
+        contentContainerStyle={[
+          styles.list,
+          { paddingTop: totalHeader },
+          // When the list is empty the empty-state should sit dead-center,
+          // not hug the top under the header.
+          active.length === 0 && {
+            flexGrow: 1,
+            justifyContent: "center",
+          },
+        ]}
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
         refreshControl={
