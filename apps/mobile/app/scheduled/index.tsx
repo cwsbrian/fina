@@ -173,6 +173,32 @@ export default function ScheduledScreen() {
     );
   }
 
+  if (schedules.length === 0) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <Header
+          onAdd={() =>
+            Alert.alert(
+              "Schedule something",
+              "Schedule creation from the app is coming soon. For now ask Fina in chat — e.g. \"schedule $50 dentist on May 30\".",
+            )
+          }
+        />
+        <View style={styles.fallback}>
+          <View style={styles.iconWrap}>
+            <Ionicons name="calendar-outline" size={36} color={colors.muted} />
+          </View>
+          <Text style={styles.emptyTitle}>Nothing scheduled</Text>
+          <Text style={styles.emptyBody}>
+            Plan a future spend so it shows up against your budget — ask Fina
+            in chat, e.g. "schedule $50 for the dentist on May 30".
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   // Hero: total of items scheduled in the current calendar month.
   const today = startOfDayUTC(new Date());
   const inThisMonth = schedules.filter((s) => {
@@ -211,48 +237,33 @@ export default function ScheduledScreen() {
           />
         }
       >
-        {schedules.length === 0 ? (
-          <View style={styles.fallback}>
-            <View style={styles.iconWrap}>
-              <Ionicons name="calendar-outline" size={36} color={colors.muted} />
-            </View>
-            <Text style={styles.emptyTitle}>Nothing scheduled</Text>
-            <Text style={styles.emptyBody}>
-              Plan a future spend so it shows up against your budget — ask Fina
-              in chat, e.g. "schedule $50 for the dentist on May 30".
+        <View style={styles.hero}>
+          <Text style={styles.heroLabel}>{monthHeroLabel()}</Text>
+          <Text style={styles.heroAmount}>
+            {formatMoney(monthTotal.toFixed(2)).display}
+          </Text>
+          <View style={styles.heroMeta}>
+            <Text style={styles.heroMetaText}>
+              {inThisMonth.length} scheduled item
+              {inThisMonth.length === 1 ? "" : "s"}
             </Text>
+            <View style={styles.heroDot} />
+            <Text style={styles.heroMetaTextMuted}>Pulls from budget</Text>
           </View>
-        ) : (
-          <>
-            <View style={styles.hero}>
-              <Text style={styles.heroLabel}>{monthHeroLabel()}</Text>
-              <Text style={styles.heroAmount}>
-                {formatMoney(monthTotal.toFixed(2)).display}
-              </Text>
-              <View style={styles.heroMeta}>
-                <Text style={styles.heroMetaText}>
-                  {inThisMonth.length} scheduled item
-                  {inThisMonth.length === 1 ? "" : "s"}
-                </Text>
-                <View style={styles.heroDot} />
-                <Text style={styles.heroMetaTextMuted}>Pulls from budget</Text>
-              </View>
-            </View>
+        </View>
 
-            {buckets.map((b) => (
-              <View key={b.key} style={styles.section}>
-                <Text style={styles.sectionTitle}>{b.label}</Text>
-                {b.rows.map((s) => (
-                  <ScheduledRow
-                    key={s.id}
-                    schedule={s}
-                    category={categories[s.categoryId] ?? null}
-                  />
-                ))}
-              </View>
+        {buckets.map((b) => (
+          <View key={b.key} style={styles.section}>
+            <Text style={styles.sectionTitle}>{b.label}</Text>
+            {b.rows.map((s) => (
+              <ScheduledRow
+                key={s.id}
+                schedule={s}
+                category={categories[s.categoryId] ?? null}
+              />
             ))}
-          </>
-        )}
+          </View>
+        ))}
       </ScrollView>
     </SafeAreaView>
   );
@@ -331,10 +342,10 @@ const styles = StyleSheet.create({
   navTitle: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
   scroll: { paddingBottom: space.xl },
   fallback: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
     padding: space.xl,
-    paddingTop: space.xxl,
   },
   iconWrap: {
     width: 72,
