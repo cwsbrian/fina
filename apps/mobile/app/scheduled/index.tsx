@@ -7,7 +7,6 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
-  Alert,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useFocusEffect } from "expo-router";
@@ -166,7 +165,7 @@ export default function ScheduledScreen() {
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <Stack.Screen options={{ headerShown: false }} />
         <Header />
-        <View style={styles.fallback}>
+        <View style={styles.fallbackLoading}>
           <ActivityIndicator color={colors.primary} />
         </View>
       </SafeAreaView>
@@ -178,12 +177,7 @@ export default function ScheduledScreen() {
       <SafeAreaView style={styles.safe} edges={["top"]}>
         <Stack.Screen options={{ headerShown: false }} />
         <Header
-          onAdd={() =>
-            Alert.alert(
-              "Schedule something",
-              "Schedule creation from the app is coming soon. For now ask Fina in chat — e.g. \"schedule $50 dentist on May 30\".",
-            )
-          }
+          onAdd={() => router.push("/scheduled/new" as never)}
         />
         <View style={styles.fallback}>
           <View style={styles.iconWrap}>
@@ -191,8 +185,8 @@ export default function ScheduledScreen() {
           </View>
           <Text style={styles.emptyTitle}>Nothing scheduled</Text>
           <Text style={styles.emptyBody}>
-            Plan a future spend so it shows up against your budget — ask Fina
-            in chat, e.g. "schedule $50 for the dentist on May 30".
+            Plan a future spend so it shows up against your budget. Tap + to
+            schedule one, or ask Fina in chat.
           </Text>
         </View>
       </SafeAreaView>
@@ -219,14 +213,7 @@ export default function ScheduledScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <Header
-        onAdd={() =>
-          Alert.alert(
-            "Schedule something",
-            "Schedule creation from the app is coming soon. For now ask Fina in chat — e.g. \"schedule $50 dentist on May 30\".",
-          )
-        }
-      />
+      <Header onAdd={() => router.push("/scheduled/new" as never)} />
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={
@@ -342,6 +329,11 @@ const styles = StyleSheet.create({
   navTitle: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
   scroll: { paddingBottom: space.xl },
   fallback: {
+    alignItems: "center",
+    padding: space.xl,
+    paddingTop: space.xxl,
+  },
+  fallbackLoading: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
