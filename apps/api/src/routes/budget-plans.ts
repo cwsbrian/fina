@@ -10,6 +10,7 @@ import {
   setMonthBudget,
   monthlySpendByCategory,
   monthlyTotalSpend,
+  recentMonthlyAvgSpend,
   type CategoryAllocation,
 } from "../budget-plans/service.js";
 import { suggestBudgetSplit } from "../budget-plans/suggest-split.js";
@@ -58,8 +59,11 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
       if ((req.params as { id: string }).id !== ctx.membership.workspaceId) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const plan = await getDefaultBudget(ctx.membership.workspaceId);
-      return { plan };
+      const [plan, recentAvg] = await Promise.all([
+        getDefaultBudget(ctx.membership.workspaceId),
+        recentMonthlyAvgSpend(ctx.membership.workspaceId),
+      ]);
+      return { plan, recentMonthlyAvgSpend: recentAvg };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;

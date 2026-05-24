@@ -207,6 +207,28 @@ export async function monthlySpendByCategory(
   }));
 }
 
+/** Average monthly spend over the last 90 days. Used to sanity-check
+ *  the user's chosen total at save time — if they pick a number that's
+ *  way below this, we surface a warning so they're not budgeting blind. */
+export async function recentMonthlyAvgSpend(
+  workspaceId: string,
+): Promise<number> {
+  const since = new Date(Date.now() - 90 * 86_400_000);
+  const agg = await prisma.transaction.aggregate({
+    where: {
+      workspaceId,
+      removedAt: null,
+      occurredAt: { gte: since },
+      amount: { gt: 0 },
+    },
+    _sum: { amount: true },
+  });
+  // Total over ~3 months → monthly average. Round to whole dollars for
+  // a friendlier comparison number.
+  const total = Number(agg._sum.amount ?? 0);
+  return Math.round(total / 3);
+}
+
 /** Total spend (any category) for the month — used for the "total
  *  spent vs total budget" headline. */
 export async function monthlyTotalSpend(

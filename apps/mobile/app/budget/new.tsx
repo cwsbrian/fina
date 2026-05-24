@@ -51,6 +51,7 @@ export default function NewBudget() {
   const [categories, setCategories] = useState<CategoryDTO[]>([]);
   const [defaultPlan, setDefaultPlan] = useState<Plan | null>(null);
   const [monthPlan, setMonthPlan] = useState<Plan | null>(null);
+  const [recentAvg, setRecentAvg] = useState<number | null>(null);
   const [scope, setScope] = useState<Scope>("month");
   const [total, setTotal] = useState("");
   const [allocs, setAllocs] = useState<Allocation[]>([]);
@@ -88,7 +89,7 @@ export default function NewBudget() {
           apiFetch<{ categories: CategoryDTO[] }>(
             `/workspaces/${wsId}/categories`,
           ),
-          apiFetch<{ plan: Plan | null }>(
+          apiFetch<{ plan: Plan | null; recentMonthlyAvgSpend?: number }>(
             `/workspaces/${wsId}/budget-plans/default`,
           ),
           apiFetch<CurrentResp>(`/workspaces/${wsId}/budget-plans/current`),
@@ -96,6 +97,9 @@ export default function NewBudget() {
         setCategories(catResp.categories.filter((c) => !c.archivedAt));
         setDefaultPlan(defResp.plan);
         setMonthPlan(curResp.plan);
+        if (typeof defResp.recentMonthlyAvgSpend === "number") {
+          setRecentAvg(defResp.recentMonthlyAvgSpend);
+        }
       } catch {
         // load failures non-fatal
       }
@@ -142,53 +146,104 @@ export default function NewBudget() {
     }
   }, [total, suggesting]);
 
-  const submit = useCallback(async () => {
+  const doSave = useCallback(
+    async (target: "month_only" | "default_only" | "both") => {
+      const totalNum = Number(total);
+      if (!Number.isFinite(totalNum) || totalNum <= 0 || submitting) return;
+      setSubmitting(true);
+      setErr(null);
+      try {
+        const wsId = await getActiveWorkspaceId();
+        if (!wsId) throw new Error("no_workspace");
+        const sanitized = allocs
+          .map((a) => ({
+            categoryId: a.categoryId,
+            amount: Math.max(0, Number(a.amount) || 0),
+          }))
+          .filter((a) => a.amount > 0);
+        const body = {
+          totalAmount: totalNum,
+          categoryAllocations: sanitized,
+        };
+        if (target === "month_only") {
+          await apiFetch<{ plan: Plan }>(
+            `/workspaces/${wsId}/budget-plans/months/${currentYearMonth()}`,
+            { method: "POST", body: JSON.stringify(body) },
+          );
+        } else {
+          // Both default + current month, OR default only — both go
+          // through the default endpoint with a scope hint.
+          await apiFetch<{ plan: Plan }>(
+            `/workspaces/${wsId}/budget-plans/default`,
+            {
+              method: "POST",
+              body: JSON.stringify({
+                ...body,
+                scope:
+                  target === "both" ? "default_and_current" : "default_only",
+              }),
+            },
+          );
+        }
+        router.back();
+      } catch (e) {
+        const code = (e as { code?: string }).code ?? "save_failed";
+        setErr(`Couldn't save: ${code}`);
+        setSubmitting(false);
+      }
+    },
+    [total, allocs, submitting],
+  );
+
+  const submit = useCallback(() => {
     const totalNum = Number(total);
     if (!Number.isFinite(totalNum) || totalNum <= 0 || submitting) return;
-    setSubmitting(true);
-    setErr(null);
-    try {
-      const wsId = await getActiveWorkspaceId();
-      if (!wsId) throw new Error("no_workspace");
-      const sanitized = allocs
-        .map((a) => ({
-          categoryId: a.categoryId,
-          amount: Math.max(0, Number(a.amount) || 0),
-        }))
-        .filter((a) => a.amount > 0);
-      const body = {
-        totalAmount: totalNum,
-        categoryAllocations: sanitized,
-      };
-      // Scope toggle picks the route: month writes a snapshot, default
-      // overwrites the template. First-time setup (no default yet)
-      // forces default scope so the next month already inherits.
-      if (scope === "month" && defaultPlan) {
-        await apiFetch<{ plan: Plan }>(
-          `/workspaces/${wsId}/budget-plans/months/${currentYearMonth()}`,
-          { method: "POST", body: JSON.stringify(body) },
+
+    const proceed = () => {
+      // First-time setup: no default yet → save default + apply to current
+      // month implicitly. No need to ask.
+      if (!defaultPlan) {
+        doSave("both");
+        return;
+      }
+      if (scope === "month") {
+        Alert.alert(
+          "Save this month's budget",
+          "Apply these changes only to the current month, or also overwrite the default going forward?",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "This month only", onPress: () => doSave("month_only") },
+            { text: "Apply to default too", onPress: () => doSave("both") },
+          ],
         );
       } else {
-        await apiFetch<{ plan: Plan }>(
-          `/workspaces/${wsId}/budget-plans/default`,
-          {
-            method: "POST",
-            body: JSON.stringify({
-              ...body,
-              // First setup: apply to current month too so the user
-              // sees their work immediately.
-              scope: defaultPlan ? "default_only" : "default_and_current",
-            }),
-          },
+        Alert.alert(
+          "Save default budget",
+          "Apply these changes only to the default for future months, or also overwrite the current month?",
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Default only", onPress: () => doSave("default_only") },
+            { text: "Apply to this month too", onPress: () => doSave("both") },
+          ],
         );
       }
-      router.back();
-    } catch (e) {
-      const code = (e as { code?: string }).code ?? "save_failed";
-      setErr(`Couldn't save: ${code}`);
-      setSubmitting(false);
+    };
+
+    // Sanity-warn before save: if their chosen total is well below their
+    // last-90-day average, surface it once. They can still save anyway.
+    if (recentAvg != null && recentAvg > 0 && totalNum < recentAvg * 0.6) {
+      Alert.alert(
+        "Budget below recent spending",
+        `You've averaged about $${recentAvg.toLocaleString()}/mo over the last 90 days. A $${totalNum.toLocaleString()} target will likely run over fast unless you cut spending significantly. Save anyway?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Save anyway", onPress: proceed },
+        ],
+      );
+      return;
     }
-  }, [scope, total, allocs, defaultPlan, submitting]);
+    proceed();
+  }, [scope, total, defaultPlan, doSave, submitting, recentAvg]);
 
   const setAlloc = (categoryId: string, amount: string) => {
     if (!/^\d*\.?\d{0,2}$/.test(amount)) return;
