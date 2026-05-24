@@ -40,4 +40,13 @@ export async function runCleanupEvents(env: Env): Promise<void> {
     { cron: CRON_NAME, deletedScheduledSpends: ssDeleted.count, ttlDays: ssTtlDays },
     "cleanup-events scheduled-spend pass",
   );
+
+  const pushTicketCutoff = new Date(Date.now() - 7 * 86_400_000);
+  const pushTicketResult = await prisma.pushTicket.deleteMany({
+    where: { polledAt: { lt: pushTicketCutoff } },
+  });
+  logInfo(
+    { cron: CRON_NAME, deletedPushTickets: pushTicketResult.count },
+    "push_tickets cleanup",
+  );
 }
