@@ -624,7 +624,10 @@ export async function runPushReceipts(env: Env): Promise<void> {
     const errorCode = r.details?.error ?? "Unknown";
 
     if (errorCode === "DeviceNotRegistered") {
-      await prisma.userDevice.delete({ where: { id: ticket.userDeviceId } });
+      // deleteMany (not delete) — idempotent. UserDevice may already be
+      // gone if sendBriefPush's own DNR handler or 2C-push-cleanup's
+      // sign-out DELETE fired in the meantime; we don't want P2025.
+      await prisma.userDevice.deleteMany({ where: { id: ticket.userDeviceId } });
       deletedDeviceIds.add(ticket.userDeviceId);
       logInfo(
         { cron: CRON_NAME, removedDeviceId: ticket.userDeviceId, receiptErrorCode: errorCode },
@@ -773,7 +776,9 @@ it("deletes push_tickets with polledAt > 7d ago; preserves recent rows", async (
     },
   });
 
-  const { runCleanupEvents } = await import("../src/cron/jobs/cleanup-events.js");
+  // Note: `runCleanupEvents` is already imported at top of test file
+  // (`import { runCleanupEvents } from "../src/cron/jobs/cleanup-events.js"`).
+  // Do NOT re-import dynamically — TS will flag redeclaration.
   await runCleanupEvents(testEnv());
 
   const remaining = await prisma.pushTicket.findMany({ orderBy: { expoTicketId: "asc" } });
@@ -791,7 +796,7 @@ Expected: new test fails (old ticket still present — cleanup doesn't touch pus
 
 - [ ] **Step 5.4: Extend `cleanup-events.ts`**
 
-Find the last `prisma.<X>.deleteMany` step in `apps/api/src/cron/jobs/cleanup-events.ts`. Directly after it, before the final `logInfo` summary call (if there is one), append:
+Locate `apps/api/src/cron/jobs/cleanup-events.ts`. The file has `const CRON_NAME = "cleanup-events";` at module top (~line 5) and the cleanup logic inside `runCleanupEvents(env)`. Append the new step at the END of the function body (after the last existing `deleteMany`/`logInfo` pair, before the closing `}` of the function):
 
 ```ts
   const pushTicketCutoff = new Date(Date.now() - 7 * 86_400_000);
