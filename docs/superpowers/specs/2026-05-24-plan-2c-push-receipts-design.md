@@ -139,6 +139,7 @@ export async function runPushReceipts(env: Env): Promise<void> {
   const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
   const pending = await prisma.pushTicket.findMany({
     where: { polledAt: null, sentAt: { lt: oneHourAgo } },
+    orderBy: { sentAt: "asc" },  // FIFO — oldest first; prevents starvation under flood.
     take: 200,  // batch limit; next tick picks up rest.
     select: { id: true, expoTicketId: true, userDeviceId: true },
   });
@@ -241,9 +242,11 @@ makeCron("0 * * * *", "push-receipts", () => runPushReceipts(env)),
 
 `apps/api/src/cron/jobs/cleanup-events.ts`에 PushTicket 정리 step 추가:
 
+`apps/api`에는 `date-fns` 없음 — 기존 `cleanup-events.ts:14`의 inline Date 패턴을 그대로 따름:
+
 ```ts
 // 기존 cleanup events 끝에 추가
-const cutoff = subDays(new Date(), 7);
+const cutoff = new Date(Date.now() - 7 * 86_400_000);
 const pushTicketResult = await prisma.pushTicket.deleteMany({
   where: { polledAt: { lt: cutoff } },
 });
@@ -251,11 +254,6 @@ logInfo(
   { cron: CRON_NAME, deletedPushTickets: pushTicketResult.count },
   "push_tickets cleanup",
 );
-```
-
-**Date 처리**: `apps/api`는 `date-fns` 없음 (확인). 기존 `cleanup-events.ts:14` 패턴 그대로 inline 사용:
-```ts
-const cutoff = new Date(Date.now() - 7 * 86_400_000);
 ```
 
 ## 7. Testing
@@ -272,6 +270,8 @@ const cutoff = new Date(Date.now() - 7 * 86_400_000);
 ```
 
 Mock pattern: 기존 `vi.mock("expo-server-sdk", ...)` 확장 — `getPushNotificationReceiptsAsync`를 프로토타입 메서드로 추가 (`vi.spyOn`으로 테스트별 stub).
+
+`logError` / `logWarn` assertions은 기존 codebase 패턴 따름: `vi.spyOn(loggerMod, "logError").mockImplementation(() => {})` (예시: `cron.scheduler.test.ts`, `plaid.webhook.routes.test.ts`). `vi.mock("../src/logger.js", ...)` 모듈 단위 mock 대신 spy + restoreAllMocks로 격리.
 
 ### `push.send.test.ts` 추가 테스트 1개
 
@@ -308,6 +308,7 @@ Mock pattern: 기존 `vi.mock("expo-server-sdk", ...)` 확장 — `getPushNotifi
 | `cleanup-events`에 한 정리 step 추가하면 의존성 ↑ | cleanup-events는 이미 N step iterator 패턴 — 1 step 추가는 well-bounded. |
 | Cron 충돌: `push-receipts`(`0 * * * *`)는 `cleanup-events`(`0 3 * * *`)와 03:00, `daily-refresh`(`0 9 * * *`)와 09:00에 동시 시작 | 각 Cron 인스턴스는 독립적이고 `protect`는 self-overlap만 막음. Prisma는 statement 단위로 atomic이고 in-memory shared state 없음 → 동시 실행 safe. 명시적 lock 불요. |
 | Unauthed Expo getReceipts API rate limit (free tier) | 본 plan은 `EXPO_ACCESS_TOKEN` optional 유지. dogfood 트래픽 OK. Production scale 진입 시 token 세팅 권장 (rate limit 완화 + 본 cron이 안정적). |
+| Expo `getPushNotificationReceiptsAsync` network 무한 hang | `expo-server-sdk`는 default `fetch` 사용 (timeout 없음). 외부 네트워크 hang 시 본 tick의 Promise가 무기한 대기. croner `protect` callback이 다음 tick overlap 방지 → 운영자 stdout에 `protected_skip` 경고 보임. 본 plan v1은 timeout wrapper 없이 OK (dogfood); production scale에서 `Promise.race(getReceipts, timeoutAfter(30s))` 패턴 적용 고려. |
 
 ## 10. Success criteria
 
