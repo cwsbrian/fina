@@ -203,9 +203,9 @@ export default function More() {
         <Group>
           <SettingsRow
             icon="calendar-outline"
-            title="Schedule"
-            subtitle="Recurring + upcoming spends"
-            onPress={comingSoon("Schedule")}
+            title="Scheduled"
+            subtitle="Upcoming planned spends"
+            onPress={() => router.push("/scheduled" as never)}
           />
           <SettingsRow
             icon="repeat-outline"

@@ -66,12 +66,14 @@ export default function ChatTab() {
         <View style={styles.header}>
           <HeaderIconButton
             icon="time-outline"
+            variant="plain"
             accessibilityLabel="Chat history"
             onPress={() => router.push("/chats" as never)}
           />
           <Text style={styles.headerTitle}>Chat</Text>
           <HeaderIconButton
             icon="create-outline"
+            variant="plain"
             accessibilityLabel="New chat"
             onPress={onNewChat}
           />
