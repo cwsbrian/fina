@@ -9,7 +9,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 
 type ChecklistItem = {
-  id: "connect-bank" | "set-goal" | "morning-brief";
+  id: "set-budget" | "connect-bank" | "set-goal" | "morning-brief";
   title: string;
   subtitle: string;
   cta: string;
@@ -21,6 +21,7 @@ export default function Home() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
   const [bankCount, setBankCount] = useState<number | null>(null);
+  const [hasBudget, setHasBudget] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   useEffect(() => {
@@ -40,6 +41,14 @@ export default function Home() {
           } catch {
             if (!cancelled) setBankCount(0);
           }
+          try {
+            const def = await apiFetch<{ plan: unknown }>(
+              `/workspaces/${activeId}/budget-plans/default`,
+            );
+            if (!cancelled) setHasBudget(def.plan !== null);
+          } catch {
+            if (!cancelled) setHasBudget(false);
+          }
         }
       } catch (e) {
         if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
@@ -58,6 +67,15 @@ export default function Home() {
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
 
   const checklist: ChecklistItem[] = [
+    {
+      id: "set-budget",
+      title: "Set a monthly budget",
+      subtitle:
+        "Pick a total — Fina tracks every spend against it and can suggest a category split.",
+      cta: "Set budget",
+      href: "/budget",
+      done: hasBudget === true,
+    },
     {
       id: "connect-bank",
       title: "Connect a bank",

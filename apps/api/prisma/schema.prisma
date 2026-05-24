@@ -124,6 +124,7 @@ model Workspace {
   auditEvents        AuditEvent[]
   scheduledSpends    ScheduledSpend[]
   goals              Goal[]
+  budgetPlans        BudgetPlan[]
 
   @@map("workspaces")
 }
@@ -422,6 +423,29 @@ model Budget {
   @@unique([workspaceId, categoryId, periodStart])
   @@index([workspaceId, periodStart])
   @@map("budgets")
+}
+
+/// Monthly budget plan — a total cap with optional per-category split.
+/// `periodStart = '1900-01-01'` is the sentinel value for the user's
+/// "default" template; every other row is a real month and is
+/// auto-snapshotted from the default on first access. Edits to a
+/// monthly snapshot do NOT propagate back to the default.
+/// `categoryAllocations` is `Array<{ categoryId: string, amount: number }>`
+/// — empty array when the user opts not to break the total down.
+model BudgetPlan {
+  id                  String   @id @default(cuid())
+  workspaceId         String
+  periodStart         DateTime @db.Date
+  totalAmount         Decimal  @db.Decimal(14, 2)
+  categoryAllocations Json     @default("[]")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, periodStart])
+  @@index([workspaceId])
+  @@map("budget_plans")
 }
 
 /// User-defined savings goal — "save $2,000 for a trip by Nov".

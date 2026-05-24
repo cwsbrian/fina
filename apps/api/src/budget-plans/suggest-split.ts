@@ -1,0 +1,183 @@
+import { GoogleGenAI } from "@google/genai";
+import { prisma } from "../db.js";
+import type { FinaEnv } from "../env.js";
+
+export type SuggestedAllocation = {
+  categoryId: string;
+  categoryName: string;
+  amount: number;
+};
+
+export type SuggestResult = {
+  allocations: SuggestedAllocation[];
+  notice?: string;
+};
+
+const MODEL_DEFAULT = "gemini-2.5-flash-lite";
+
+const SYSTEM_PROMPT = `You are Fina, a personal-finance coach.
+
+Given a user's monthly TOTAL budget and their average monthly spending
+by category (last 90 days), propose a per-category allocation that
+sums to (approximately) the total budget. Use realistic numbers based
+on the recent spending — don't propose zero for a category they
+actively use, and don't propose unrealistic increases.
+
+Return STRICT JSON only — no markdown, no commentary — matching:
+{
+  "allocations": [
+    { "categoryName": "Groceries", "amount": 400 },
+    { "categoryName": "Dining", "amount": 200 }
+  ]
+}
+
+Rules:
+- Include a row for each category the user currently spends on.
+- Round amounts to whole dollars.
+- Sum should be close to (within 5%) the total budget. If recent
+  spend exceeds the total budget you propose lower amounts that
+  hit the cap.
+- If the user has zero spend history return { "allocations": [] }.`;
+
+type SpendByCategory = {
+  categoryId: string;
+  categoryName: string;
+  monthlyAvgCAD: number;
+};
+
+async function recentMonthlySpend(
+  workspaceId: string,
+): Promise<SpendByCategory[]> {
+  const since = new Date(Date.now() - 90 * 86400_000);
+  const rows = await prisma.transactionAllocation.findMany({
+    where: {
+      amount: { gt: 0 },
+      categoryId: { not: null },
+      transaction: {
+        workspaceId,
+        removedAt: null,
+        occurredAt: { gte: since },
+        amount: { gt: 0 },
+      },
+    },
+    select: {
+      amount: true,
+      categoryId: true,
+      category: { select: { name: true } },
+    },
+  });
+  const totals = new Map<
+    string,
+    { name: string; total: number }
+  >();
+  for (const r of rows) {
+    if (!r.categoryId || !r.category) continue;
+    const cur = totals.get(r.categoryId) ?? { name: r.category.name, total: 0 };
+    cur.total += Number(r.amount);
+    totals.set(r.categoryId, cur);
+  }
+  return Array.from(totals, ([categoryId, v]) => ({
+    categoryId,
+    categoryName: v.name,
+    monthlyAvgCAD: Math.round((v.total / 3) * 100) / 100,
+  })).sort((a, b) => b.monthlyAvgCAD - a.monthlyAvgCAD);
+}
+
+function stripCodeFences(s: string): string {
+  return s
+    .replace(/^\s*```(?:json)?\s*/i, "")
+    .replace(/```\s*$/, "")
+    .trim();
+}
+
+function parseAllocations(
+  text: string,
+  byName: Map<string, string>,
+): SuggestedAllocation[] {
+  try {
+    const parsed = JSON.parse(stripCodeFences(text)) as unknown;
+    if (
+      typeof parsed !== "object" ||
+      parsed === null ||
+      !Array.isArray((parsed as { allocations?: unknown }).allocations)
+    ) {
+      return [];
+    }
+    const items = (parsed as { allocations: unknown[] }).allocations;
+    const out: SuggestedAllocation[] = [];
+    for (const raw of items) {
+      if (typeof raw !== "object" || raw === null) continue;
+      const r = raw as Record<string, unknown>;
+      const name = typeof r["categoryName"] === "string" ? r["categoryName"] : null;
+      const amt = typeof r["amount"] === "number" ? r["amount"] : null;
+      if (!name || amt === null || amt < 0) continue;
+      const id = byName.get(name.toLowerCase());
+      if (!id) continue;
+      out.push({
+        categoryId: id,
+        categoryName: name,
+        amount: Math.round(amt),
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
+export async function suggestBudgetSplit(
+  env: FinaEnv,
+  workspaceId: string,
+  totalAmount: number,
+): Promise<SuggestResult> {
+  const spend = await recentMonthlySpend(workspaceId);
+  if (spend.length === 0) {
+    return {
+      allocations: [],
+      notice:
+        "Connect a bank or log a few transactions first so I have something to split against.",
+    };
+  }
+  const lines: string[] = [];
+  lines.push(`Total monthly budget: $${totalAmount.toFixed(2)} CAD`);
+  lines.push("");
+  lines.push("Average monthly spending by category (last 90 days):");
+  for (const s of spend) {
+    lines.push(`  - ${s.categoryName}: $${s.monthlyAvgCAD.toFixed(2)}/mo`);
+  }
+
+  const byName = new Map<string, string>(
+    spend.map((s) => [s.categoryName.toLowerCase(), s.categoryId]),
+  );
+
+  try {
+    const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+    const model = env.CHAT_MODEL ?? MODEL_DEFAULT;
+    const response = await client.models.generateContent({
+      model,
+      contents: [{ role: "user", parts: [{ text: lines.join("\n") }] }],
+      config: {
+        systemInstruction: SYSTEM_PROMPT,
+        maxOutputTokens: 500,
+        temperature: 0.3,
+        responseMimeType: "application/json",
+      },
+    });
+    const text = response.text ?? "";
+    const allocations = parseAllocations(text, byName);
+    if (allocations.length === 0) {
+      return {
+        allocations: [],
+        notice:
+          "Fina couldn't suggest a split right now — try entering category amounts manually.",
+      };
+    }
+    return { allocations };
+  } catch {
+    return {
+      allocations: [],
+      notice:
+        "Couldn't reach Fina's plan model. Try entering category amounts manually.",
+    };
+  }
+}

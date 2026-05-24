@@ -216,8 +216,8 @@ export default function More() {
           <SettingsRow
             icon="trending-down-outline"
             title="Budget"
-            subtitle="Monthly category caps"
-            onPress={comingSoon("Budget")}
+            subtitle="Monthly cap + category split"
+            onPress={() => router.push("/budget" as never)}
             last
           />
         </Group>
