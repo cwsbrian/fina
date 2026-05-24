@@ -123,6 +123,7 @@ model Workspace {
   actionIntents      ActionIntent[]
   auditEvents        AuditEvent[]
   scheduledSpends    ScheduledSpend[]
+  goals              Goal[]
 
   @@map("workspaces")
 }
@@ -421,6 +422,30 @@ model Budget {
   @@unique([workspaceId, categoryId, periodStart])
   @@index([workspaceId, periodStart])
   @@map("budgets")
+}
+
+/// User-defined savings goal — "save $2,000 for a trip by Nov".
+/// `savedAmount` is a manual figure for v1; user updates it via PATCH.
+/// `icon` + `color` mirror the Category styling pattern so the UI can
+/// render a consistent badge.
+model Goal {
+  id            String    @id @default(cuid())
+  workspaceId   String
+  title         String
+  description   String?
+  targetAmount  Decimal   @db.Decimal(14, 2)
+  savedAmount   Decimal   @default(0) @db.Decimal(14, 2)
+  dueDate       DateTime  @db.Date
+  icon          String?
+  color         String?
+  archivedAt    DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  workspace     Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, dueDate])
+  @@map("goals")
 }
 
 enum RecurringCadence {

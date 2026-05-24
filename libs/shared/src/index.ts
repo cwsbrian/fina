@@ -19,6 +19,7 @@ export * from "./dto/accounts.js";
 export * from "./dto/plaid.js";
 export * from "./dto/health.js";
 export * from "./dto/subscription.js";
+export * from "./dto/goals.js";
 
 // Validators (pure helpers used by both API services and frontend forms)
 export * from "./validation/money.js";
@@ -32,6 +33,7 @@ export * from "./format/identity.js";
 export * from "./schemas/billing.js";
 export * from "./schemas/budgets.js";
 export * from "./schemas/categories.js";
+export * from "./schemas/goals.js";
 export * from "./schemas/chat.js";
 export * from "./schemas/devices.js";
 export * from "./schemas/invites.js";
