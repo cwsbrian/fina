@@ -208,6 +208,12 @@ export default function More() {
             onPress={comingSoon("Schedule")}
           />
           <SettingsRow
+            icon="repeat-outline"
+            title="Subscriptions"
+            subtitle="Monthly recurring services"
+            onPress={comingSoon("Subscriptions")}
+          />
+          <SettingsRow
             icon="trending-down-outline"
             title="Budget"
             subtitle="Monthly category caps"
