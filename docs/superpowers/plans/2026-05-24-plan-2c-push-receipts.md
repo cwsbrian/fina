@@ -624,9 +624,10 @@ export async function runPushReceipts(env: Env): Promise<void> {
     const errorCode = r.details?.error ?? "Unknown";
 
     if (errorCode === "DeviceNotRegistered") {
-      // deleteMany (not delete) — idempotent. UserDevice may already be
-      // gone if sendBriefPush's own DNR handler or 2C-push-cleanup's
-      // sign-out DELETE fired in the meantime; we don't want P2025.
+      // Spec §5 shows .delete; we use .deleteMany — same FK CASCADE, but
+      // idempotent. UserDevice may already be gone if sendBriefPush's own
+      // DNR handler or 2C-push-cleanup's sign-out DELETE fired between
+      // send and poll; .delete would throw P2025.
       await prisma.userDevice.deleteMany({ where: { id: ticket.userDeviceId } });
       deletedDeviceIds.add(ticket.userDeviceId);
       logInfo(
