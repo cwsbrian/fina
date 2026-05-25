@@ -23,7 +23,7 @@ No production code changes. No `@fina/shared` changes.
 **Files:**
 - Create: `apps/api/tests/goals.savings.test.ts`
 
-- [ ] **Step 1: Read precedent + production**
+- [x] **Step 1: Read precedent + production**
 
 Read `apps/api/src/goals/savings.ts` end-to-end (227 LOC). Note the algorithm:
 - L91-117: load goal, all GoalAllocations, default BudgetPlan in parallel
@@ -50,7 +50,7 @@ Read `apps/api/tests/push.anomaly.test.ts` for the real-DB + workspace+category+
 
 **Guardrail:** Do NOT edit any production file. Test-only addition.
 
-- [ ] **Step 2: Create the test file**
+- [x] **Step 2: Create the test file**
 
 ```ts
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -485,7 +485,7 @@ Per R2 review: the goal-under-test's GoalAllocation has plan=0. `myCategoryIds` 
   });
 ```
 
-- [ ] **Step 3: Run the file**
+- [x] **Step 3: Run the file**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/goals.savings.test.ts`
 Expected: `Tests  14 passed (14)`.
@@ -496,12 +496,12 @@ Common gotchas:
 - Test 11/12/14 call computeGoalSavings TWICE per test — order matters not (no side effects in the function).
 - `BankAccount.findFirst` in helper reuses across spendInCategory calls within same workspace — by design.
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "goals.savings" | head -5`
 Expected: 0 lines.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Branch confirmation: `git branch --show-current` must show `worktree-plan-1r-compute-goal-savings-test`.
 
