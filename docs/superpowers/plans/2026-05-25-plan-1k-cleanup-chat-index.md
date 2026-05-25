@@ -143,6 +143,8 @@ Expected: `-- This is an empty migration.`
 
 - [ ] **Step 1.9: Recurrence regression check — the main payoff**
 
+`prisma migrate dev` targets the DB in `apps/api/.env` `DATABASE_URL` (typically `fina`), and requires a shadow DB (auto-provisioned on local Postgres with CREATE DATABASE privileges — works for our `fina` superuser). Step 1.6 must have applied the migration to `fina` before this step runs.
+
 ```bash
 cd /home/cwsbr/personal/fina/apps/api && pnpm exec prisma migrate dev --name regression_check --create-only
 ```
@@ -170,7 +172,7 @@ Expected: 5 pass / 0 fail.
 cd /home/cwsbr/personal/fina && pnpm --filter @fina/api exec tsc --noEmit -p tsconfig.app.json 2>&1 | grep "error TS" | wc -l
 ```
 
-Expected: same count as pre-fix baseline (10 errors, all pre-existing — unchanged).
+Expected: same count as current pre-fix baseline (likely ~10 pre-existing errors — compare relative to before this task, not a strict number; baseline can drift across plans).
 
 - [ ] **Step 1.12: Commit**
 
