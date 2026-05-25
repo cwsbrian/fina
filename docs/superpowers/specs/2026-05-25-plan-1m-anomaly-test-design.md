@@ -103,7 +103,7 @@ async function setupWorkspaceWithMembers(
 
 async function seedCategory(wsId: string, name: string): Promise<string> {
   const cat = await prisma.category.create({
-    data: { workspaceId: wsId, name, kind: "expense" },
+    data: { workspaceId: wsId, name },
   });
   return cat.id;
 }
@@ -142,6 +142,7 @@ async function seedTransactionWithCategory(opts: {
       occurredAt: opts.occurredAt ?? new Date(),
       pending: false,
       source: "manual",
+      rawData: {},  // Required Json field; empty for tests (no Plaid payload).
     },
   });
   if (opts.categoryId !== null) {
@@ -170,10 +171,12 @@ await checkLargeChargeAndPush(env, { transactionId: txId, workspaceId: wsId, amo
 expect(vi.mocked(sendMod.sendLargeChargePush).mock.calls.length).toBe(0);
 ```
 
-**Test 2 (uncategorized)**:
-- Seed transaction with `categoryId: null` (no allocation).
-- Call with `amount: 200` (would be unusual if it had a category).
+**Test 2 (uncategorized — no allocation row)**:
+- Seed transaction with `categoryId: null` → helper skips `transactionAllocation.create` → no allocation row in DB.
+- anomaly.ts:36-46 `findUnique` returns `tx.allocations = []` → `allocations[0]` is `undefined` → `allocation?.categoryId` undefined → return early.
+- Call with `amount: 200` (would be unusual if categorized).
 - `expect(calls.length).toBe(0)`.
+- Note: this covers the "no allocation row" shape. The alternate "row exists with categoryId = null" shape can't occur in production (TransactionAllocation.categoryId is non-null per schema), so 1 test covers the branch.
 
 **Test 3 (cold-start < $150)**:
 - Workspace + owner + 1 category. New tx amount=100, no prior allocations.
@@ -210,9 +213,9 @@ expect(vi.mocked(sendMod.sendLargeChargePush).mock.calls.length).toBe(0);
 
 | Risk | Mitigation |
 |---|---|
-| `prisma.user.create` requires fields not in our minimal helper | Better-Auth schema has `id` (cuid default), `email`, `name`, `emailVerified` (default false), `image` (nullable), `createdAt`/`updatedAt` (defaults). Our minimal `{ id, email, name }` should pass — verify against `apps/api/prisma/schema.prisma` User model. |
-| `prisma.category.create` requires `kind` enum | Schema defines `kind` as `CategoryKind` enum (expense/income/savings) — we use "expense". Verify. |
-| `prisma.bankAccount.create` field shape | Real account creation goes through workspaces/bootstrap.ts seedDefaultAccounts. Our helper mimics. Verify required fields. |
+| `prisma.user.create` requires fields not in our minimal helper | Better-Auth schema: `{ id (cuid default), email, name (nullable), emailVerified (default false), image (nullable), createdAt/updatedAt (defaults) }`. Minimal `{ id, email, name }` passes — verified per precedent `chat.tools.get-cashflow-summary.test.ts:13`. |
+| `prisma.transaction.create` requires `rawData: Json` field (no default) | Helper passes `rawData: {}` empty object. Verified per precedent `plaid.sync.unified-alloc.test.ts:38`. |
+| `prisma.bankAccount.create` field shape | Real account creation goes through workspaces/bootstrap.ts seedDefaultAccounts. Our helper mimics. Verified required fields. |
 | `prisma.transactionAllocation.create` requires Transaction FK + Category FK both valid | Verified via setup order. |
 | Email uniqueness across tests in same suite | `Date.now()` + `userCounter` global ensures uniqueness. |
 | `sendLargeChargePush` mock signature mismatch | Real signature: `(env, userId, merchant, amountStr, categoryName)` — 5 args. Mock assertion in test #7 verifies. |
