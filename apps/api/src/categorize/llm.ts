@@ -5,7 +5,13 @@ export type LLMTransaction = {
   id: string;
   merchantRaw: string;
   amount: number;
-  occurredAtISO: string; // YYYY-MM-DD
+  occurredAtISO: string;
+  /** Optional Plaid PFC. Caller (service.ts) extracts from rawData and omits when missing. */
+  pfc?: {
+    primary: string;
+    detailed: string;
+    confidence: string; // "VERY_HIGH" | "HIGH" | "MEDIUM" | "LOW"
+  };
 };
 
 export type LLMResult = { tx_id: string; category: string };
@@ -29,6 +35,7 @@ export async function callGeminiCategorize(
       merchant: t.merchantRaw,
       amount: t.amount,
       date: t.occurredAtISO,
+      ...(t.pfc ? { plaid_hint: t.pfc } : {}),
     })),
   };
 
@@ -56,7 +63,10 @@ export async function callGeminiCategorize(
       systemInstruction:
         "You categorize Canadian personal financial transactions. CAD currency. " +
         "Positive amount = expense, negative = income/refund. " +
-        "Use exact category names from the categories list. If genuinely unclear, use 'Other'.",
+        "Use exact category names from the categories list. " +
+        "If a transaction includes plaid_hint (Plaid's personal_finance_category with primary/detailed/confidence), " +
+        "treat HIGH/VERY_HIGH as a strong hint and MEDIUM/LOW as a weak hint when mapping into our category list. " +
+        "If genuinely unclear, use 'Other'.",
     },
     contents: [
       { role: "user", parts: [{ text: JSON.stringify(userPayload) }] },
