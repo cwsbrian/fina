@@ -10,6 +10,19 @@ import { registerForPushNotifications } from "../src/api/push";
 import { useSession } from "../src/auth/client";
 import { syncDeviceTz } from "../src/api/tz-sync";
 
+// Show banner + play sound when a push arrives while the app is
+// foregrounded. Without this, expo-notifications swallows in-app
+// pushes silently — which makes test buttons feel broken even when
+// the push went through.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 export default function RootLayout() {
   const { data: session } = useSession();
 
