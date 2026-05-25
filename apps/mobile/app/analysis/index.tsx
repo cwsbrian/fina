@@ -180,6 +180,8 @@ export default function AnalysisScreen() {
             <CompareList
               current={withUncategorized(data.current)}
               previous={withUncategorized(data.previous)}
+              year={year}
+              month={month}
             />
           </>
         )}
@@ -487,9 +489,13 @@ function SpendBreakdown({
 function CompareList({
   current,
   previous,
+  year,
+  month,
 }: {
   current: CategorySpend[];
   previous: CategorySpend[];
+  year: number;
+  month: number;
 }) {
   const prevByCat = useMemo(
     () => new Map(previous.map((p) => [p.categoryId, p.amount])),
@@ -519,6 +525,8 @@ function CompareList({
             pct={pct}
             flat={flat}
             isLast={i === Math.min(current.length, 8) - 1}
+            year={year}
+            month={month}
           />
         );
       })}
@@ -532,12 +540,16 @@ function CompareRow({
   pct,
   flat,
   isLast,
+  year,
+  month,
 }: {
   category: CategorySpend;
   delta: number;
   pct: number | null;
   flat: boolean;
   isLast: boolean;
+  year: number;
+  month: number;
 }) {
   const isUncategorized = category.categoryId === UNCATEGORIZED_ID;
   const meta = isUncategorized
@@ -567,14 +579,27 @@ function CompareRow({
     deltaText = `${sign}${pct}%`;
     deltaColor = up ? colors.down : down ? colors.up : colors.muted;
   }
+  const onPress = () => {
+    router.push({
+      pathname: "/analysis/category/[id]",
+      params: {
+        id: category.categoryId,
+        name: category.categoryName,
+        year: String(year),
+        month: String(month),
+      },
+    } as never);
+  };
   return (
-    <View
-      style={[
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
         styles.compareRow,
         !isLast && {
           borderBottomWidth: 1,
           borderBottomColor: colors.hairlineSoft,
         },
+        pressed && { backgroundColor: colors.surfaceSoft },
       ]}
     >
       <View style={[styles.compareGlyph, { backgroundColor: meta.bg }]}>
@@ -600,7 +625,13 @@ function CompareRow({
           {deltaText}
         </Text>
       </View>
-    </View>
+      <Ionicons
+        name="chevron-forward"
+        size={14}
+        color={colors.mutedSoft}
+        style={{ marginLeft: 4 }}
+      />
+    </Pressable>
   );
 }
 
@@ -634,17 +665,24 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  // Month stepper sitting ABOVE the cashflow card, right-aligned —
-  // chevrons flank the month label and step prev/next.
+  // Month stepper above the cashflow card, left-aligned. Text styled
+  // like the section labels on other cards (small uppercase muted)
+  // so it sits quietly instead of stealing focus from the data.
   stepper: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-end",
-    gap: 10,
-    paddingVertical: 6,
+    alignSelf: "flex-start",
+    gap: 8,
+    paddingVertical: 4,
+    marginTop: space.sm,
     marginBottom: space.sm,
   },
-  stepperLabel: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+  stepperLabel: {
+    ...type$.captionStrong,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
 
   sectionLabel: {
     ...type$.captionStrong,
