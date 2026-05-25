@@ -76,6 +76,7 @@ export async function categorizeNewTransactions(
     amount: number;
     occurredAt: Date;
     rawData: unknown;
+    allocationId: string;
   };
   const loaded: Loaded[] = [];
   for (const t of singleAllocTxs) {
@@ -93,6 +94,7 @@ export async function categorizeNewTransactions(
       amount: Number(t.amount),
       occurredAt: t.occurredAt,
       rawData: t.rawData,
+      allocationId: t.allocations[0]!.id,
     });
   }
 
@@ -171,17 +173,9 @@ export async function categorizeNewTransactions(
     });
     const dismissedUntil = hint.dismissedUntil && hint.dismissedUntil.getTime() > Date.now() ? hint.dismissedUntil : null;
 
-    // Find the single allocation row to update.
-    const tx = await prisma.transaction.findFirst({
-      where: { id: t.id, workspaceId },
-      include: { allocations: { select: { id: true } } },
-    });
-    if (!tx || tx.allocations.length !== 1) { stillUnmapped.push(t); continue; }
-    const alloc = tx.allocations[0]!;
-
     // Atomic guard preserved (categoryId IS NULL AND source IS NULL).
     await prisma.transactionAllocation.updateMany({
-      where: { id: alloc.id, categoryId: null, source: null },
+      where: { id: t.allocationId, categoryId: null, source: null },
       data: { categoryId: hint.categoryId, source: "history", needsConfirmation, dismissedUntil },
     });
   }
