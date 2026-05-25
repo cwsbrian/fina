@@ -12,7 +12,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 
-const HEADER_HEIGHT = 72;
+const HEADER_HEIGHT = 84;
 import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -405,7 +405,10 @@ export default function More() {
         ]}
       >
         <View style={styles.head}>
-          <Text style={styles.title}>More</Text>
+          <View>
+            <Text style={styles.title}>More</Text>
+            <Text style={styles.subtitle}>Profile, workspace &amp; settings</Text>
+          </View>
         </View>
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
@@ -509,6 +512,7 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   scroll: { padding: space.lg, paddingBottom: space.xxl },
   title: { ...type$.titleLg, color: colors.ink },
+  subtitle: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
 
   // Profile card
   profileCard: {

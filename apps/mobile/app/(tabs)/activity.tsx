@@ -26,7 +26,7 @@ import { type DateRange } from "../../src/datetime/DateRangeSheet";
 import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
 import { ConnectBankButton } from "../../src/plaid/ConnectBankButton";
 
-const HEADER_HEIGHT = 72;
+const HEADER_HEIGHT = 84;
 
 type TxListResp = {
   transactions: TransactionDTO[];
@@ -356,6 +356,7 @@ export default function Activity() {
             onSearch={() => setSearchOpen(true)}
             onRange={() => dateRangeSheet.open(range, setRange)}
             rangeActive={!!(range.from || range.to)}
+            count={txs?.length}
           />
         )}
       </Animated.View>
@@ -404,14 +405,23 @@ function ActivityHeader({
   onSearch,
   onRange,
   rangeActive,
+  count,
 }: {
   onSearch?: () => void;
   onRange?: () => void;
   rangeActive?: boolean;
+  count?: number;
 } = {}) {
   return (
     <View style={styles.head}>
-      <Text style={styles.title}>Activity</Text>
+      <View>
+        <Text style={styles.title}>Activity</Text>
+        <Text style={styles.subtitle}>
+          {count !== undefined
+            ? `${count.toLocaleString()} transaction${count === 1 ? "" : "s"}`
+            : "All accounts"}
+        </Text>
+      </View>
       <View style={styles.headActions}>
         <HeaderIconButton
           icon="calendar-outline"
@@ -522,6 +532,7 @@ const styles = StyleSheet.create({
     height: HEADER_HEIGHT,
   },
   title: { ...type$.titleLg, color: colors.ink },
+  subtitle: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   headActions: {
     flexDirection: "row",
     alignItems: "center",

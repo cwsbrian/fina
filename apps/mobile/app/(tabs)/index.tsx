@@ -9,7 +9,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 
-const HEADER_HEIGHT = 72;
+const HEADER_HEIGHT = 84;
 
 type ChecklistItem = {
   id: "set-budget" | "connect-bank" | "set-goal" | "morning-brief";

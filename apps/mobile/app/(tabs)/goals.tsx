@@ -26,7 +26,7 @@ import {
   formatDue,
 } from "../../src/goals/meta";
 
-const HEADER_HEIGHT = 72;
+const HEADER_HEIGHT = 84;
 
 export default function Goals() {
   const [me, setMe] = useState<Me | null>(null);
@@ -171,11 +171,11 @@ export default function Goals() {
         <View style={styles.head}>
           <View>
             <Text style={styles.title}>Goals</Text>
-            {active.length > 0 && (
-              <Text style={styles.subtitle}>
-                {active.length} active · {formatMoney(monthlyAside.toFixed(2)).display}/mo set aside
-              </Text>
-            )}
+            <Text style={styles.subtitle}>
+              {active.length === 0
+                ? "Nothing set aside yet"
+                : `${active.length} active · ${formatMoney(monthlyAside.toFixed(2)).display}/mo set aside`}
+            </Text>
           </View>
           <View style={styles.headActions}>
             <HeaderIconButton
