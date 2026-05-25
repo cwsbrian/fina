@@ -7,8 +7,12 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Animated,
 } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+
+const HEADER_HEIGHT = 58;
 import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -151,11 +155,17 @@ export default function More() {
         }`
     : "—";
 
-  return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.title}>More</Text>
+  const insets = useSafeAreaInsets();
+  const totalHeader = insets.top + HEADER_HEIGHT;
+  const header = useCollapsingHeader(HEADER_HEIGHT);
 
+  return (
+    <View style={styles.safe}>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: totalHeader }]}
+        onScroll={header.onScroll}
+        scrollEventThrottle={header.scrollEventThrottle}
+      >
         {/* Profile card */}
         {me && (
           <View style={styles.profileCard}>
@@ -387,7 +397,19 @@ export default function More() {
           </Text>
         )}
       </ScrollView>
-    </SafeAreaView>
+      <Animated.View
+        style={[
+          styles.headerOverlay,
+          { top: insets.top, height: HEADER_HEIGHT },
+          header.headerStyle,
+        ]}
+      >
+        <View style={styles.head}>
+          <Text style={styles.title}>More</Text>
+        </View>
+      </Animated.View>
+      <View style={[styles.statusBarBg, { height: insets.top }]} />
+    </View>
   );
 }
 
@@ -461,9 +483,33 @@ function SettingsRow({
 }
 
 const styles = StyleSheet.create({
+  headerOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    backgroundColor: colors.canvas,
+  },
+  statusBarBg: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 11,
+    backgroundColor: colors.canvas,
+  },
+  head: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
+    paddingBottom: space.sm,
+    height: HEADER_HEIGHT,
+  },
   safe: { flex: 1, backgroundColor: colors.canvas },
   scroll: { padding: space.lg, paddingBottom: space.xxl },
-  title: { ...type$.titleLg, color: colors.ink, marginBottom: space.lg },
+  title: { ...type$.titleLg, color: colors.ink },
 
   // Profile card
   profileCard: {

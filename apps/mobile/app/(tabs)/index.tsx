@@ -1,12 +1,15 @@
 import { useEffect, useState } from "react";
-import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator } from "react-native";
-import { SafeAreaView } from "react-native-safe-area-context";
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Animated } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { displayName, trialDaysLeft, type MeDTO as Me } from "@fina/shared";
 import { useSession } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+
+const HEADER_HEIGHT = 58;
 
 type ChecklistItem = {
   id: "set-budget" | "connect-bank" | "set-goal" | "morning-brief";
@@ -102,12 +105,17 @@ export default function Home() {
     },
   ];
 
+  const insets = useSafeAreaInsets();
+  const totalHeader = insets.top + HEADER_HEIGHT;
+  const header = useCollapsingHeader(HEADER_HEIGHT);
+
   return (
-    <SafeAreaView style={styles.safe} edges={["top"]}>
-      <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.greeting}>
-          Hi{greetingName ? `, ${greetingName}` : ""}
-        </Text>
+    <View style={styles.safe}>
+      <ScrollView
+        contentContainerStyle={[styles.scroll, { paddingTop: totalHeader }]}
+        onScroll={header.onScroll}
+        scrollEventThrottle={header.scrollEventThrottle}
+      >
         <Text style={styles.subgreeting}>Welcome to Fina.</Text>
 
         {me?.trial?.active && days !== null && (
@@ -165,18 +173,52 @@ export default function Home() {
           </>
         )}
       </ScrollView>
-    </SafeAreaView>
+      <Animated.View
+        style={[
+          styles.headerOverlay,
+          { top: insets.top, height: HEADER_HEIGHT },
+          header.headerStyle,
+        ]}
+      >
+        <View style={styles.head}>
+          <Text style={styles.title} numberOfLines={1}>
+            Hi{greetingName ? `, ${greetingName}` : ""}
+          </Text>
+        </View>
+      </Animated.View>
+      <View style={[styles.statusBarBg, { height: insets.top }]} />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
-  scroll: { padding: space.lg, paddingBottom: space.xxl },
-  greeting: {
-    ...type$.titleLg,
-    color: colors.ink,
-    marginBottom: 4,
+  headerOverlay: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    zIndex: 10,
+    backgroundColor: colors.canvas,
   },
+  statusBarBg: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 11,
+    backgroundColor: colors.canvas,
+  },
+  head: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.lg,
+    paddingTop: space.sm,
+    paddingBottom: space.sm,
+    height: HEADER_HEIGHT,
+  },
+  title: { ...type$.titleLg, color: colors.ink },
+  scroll: { padding: space.lg, paddingBottom: space.xxl },
   subgreeting: {
     ...type$.bodyMd,
     color: colors.body,
