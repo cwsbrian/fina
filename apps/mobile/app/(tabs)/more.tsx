@@ -315,12 +315,6 @@ export default function More() {
             title="Notifications"
             detail={notificationsDetail(me)}
             onPress={() => router.push("/notifications" as never)}
-          />
-          <SettingsRow
-            icon="construct-outline"
-            title="Categorization style"
-            detail="Strict"
-            onPress={comingSoon("Categorization style")}
             last
           />
         </Group>
