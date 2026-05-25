@@ -158,9 +158,9 @@ export default function AnalysisScreen() {
           </View>
         ) : (
           <>
-            <CashflowCard
-              analysis={data.current}
-              history={data.monthlyHistory}
+            <MonthStepper
+              year={year}
+              month={month}
               onPrev={() => setYM(prevYM(year, month))}
               onNext={() => {
                 const n = nextYM(year, month);
@@ -168,6 +168,7 @@ export default function AnalysisScreen() {
               }}
               canGoNext={!isFutureMonth(nextYM(year, month).year, nextYM(year, month).month)}
             />
+            <CashflowCard analysis={data.current} history={data.monthlyHistory} />
             <SectionLabel>Where it went</SectionLabel>
             <SpendBreakdown
               spend={data.current.spend}
@@ -221,47 +222,59 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <Text style={styles.sectionLabel}>{children}</Text>;
 }
 
-function CashflowCard({
-  analysis,
-  history,
+function MonthStepper({
+  year,
+  month,
   onPrev,
   onNext,
   canGoNext,
 }: {
-  analysis: MonthAnalysis;
-  history: CashflowPoint[];
+  year: number;
+  month: number;
   onPrev: () => void;
   onNext: () => void;
   canGoNext: boolean;
 }) {
+  const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(
+    undefined,
+    { month: "long", year: "numeric" },
+  );
+  return (
+    <View style={styles.stepper}>
+      <Pressable
+        onPress={onPrev}
+        hitSlop={10}
+        style={({ pressed }) => pressed && { opacity: 0.5 }}
+      >
+        <Ionicons name="chevron-back" size={18} color={colors.muted} />
+      </Pressable>
+      <Text style={styles.stepperLabel}>{label}</Text>
+      <Pressable
+        onPress={onNext}
+        hitSlop={10}
+        disabled={!canGoNext}
+        style={({ pressed }) => [
+          !canGoNext && { opacity: 0.25 },
+          pressed && canGoNext && { opacity: 0.5 },
+        ]}
+      >
+        <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+      </Pressable>
+    </View>
+  );
+}
+
+function CashflowCard({
+  analysis,
+  history,
+}: {
+  analysis: MonthAnalysis;
+  history: CashflowPoint[];
+}) {
   const { width: screenW } = useWindowDimensions();
   const chartW = Math.max(280, screenW - space.lg * 2 - space.base * 2);
-  const monthLabel = new Date(
-    Date.UTC(analysis.year, analysis.month - 1, 1),
-  ).toLocaleDateString(undefined, { month: "long", year: "numeric" });
   return (
     <View style={styles.card}>
-      <View style={styles.cardStepper}>
-        <Pressable
-          onPress={onPrev}
-          hitSlop={10}
-          style={({ pressed }) => pressed && { opacity: 0.5 }}
-        >
-          <Ionicons name="chevron-back" size={18} color={colors.muted} />
-        </Pressable>
-        <Text style={styles.cardMonth}>{monthLabel}</Text>
-        <Pressable
-          onPress={onNext}
-          hitSlop={10}
-          disabled={!canGoNext}
-          style={({ pressed }) => [
-            !canGoNext && { opacity: 0.25 },
-            pressed && canGoNext && { opacity: 0.5 },
-          ]}
-        >
-          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-        </Pressable>
-      </View>
       <Text style={styles.cardEyebrow}>Net cashflow</Text>
       <Text
         style={[
@@ -621,16 +634,17 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  // Month stepper sitting at the top-left of the cashflow card —
+  // Month stepper sitting ABOVE the cashflow card, left-aligned —
   // chevrons flank the month label and step prev/next.
-  cardStepper: {
+  stepper: {
     flexDirection: "row",
     alignItems: "center",
     alignSelf: "flex-start",
     gap: 10,
-    marginBottom: 6,
+    paddingVertical: 6,
+    marginBottom: space.sm,
   },
-  cardMonth: { ...type$.bodySm, color: colors.ink, fontWeight: "600" },
+  stepperLabel: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
 
   sectionLabel: {
     ...type$.captionStrong,
@@ -653,6 +667,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textTransform: "uppercase",
     letterSpacing: 0.6,
+    marginBottom: 4,
   },
   cardValue: {
     fontSize: 32,
