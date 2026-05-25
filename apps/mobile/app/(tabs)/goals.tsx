@@ -118,13 +118,6 @@ export default function Goals() {
             progressViewOffset={totalHeader}
           />
         }
-        ListHeaderComponent={
-          active.length > 0 ? (
-            <Text style={styles.summary}>
-              {active.length} active · {formatMoney(monthlyAside.toFixed(2)).display}/mo set aside
-            </Text>
-          ) : null
-        }
         renderItem={({ item }) => (
           <GoalCard
             goal={item}
@@ -176,7 +169,14 @@ export default function Goals() {
         ]}
       >
         <View style={styles.head}>
-          <Text style={styles.title}>Goals</Text>
+          <View>
+            <Text style={styles.title}>Goals</Text>
+            {active.length > 0 && (
+              <Text style={styles.subtitle}>
+                {active.length} active · {formatMoney(monthlyAside.toFixed(2)).display}/mo set aside
+              </Text>
+            )}
+          </View>
           <HeaderIconButton
             icon="add"
             size={22}
@@ -322,11 +322,7 @@ const styles = StyleSheet.create({
     height: HEADER_HEIGHT,
   },
   title: { ...type$.titleLg, color: colors.ink },
-  summary: {
-    ...type$.bodySm,
-    color: colors.muted,
-    marginBottom: space.sm,
-  },
+  subtitle: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   body: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
   iconWrap: {
     width: 72,
