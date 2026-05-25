@@ -171,7 +171,7 @@ export async function sendBankReconnectPush(
   }
   return sendToUserDevices(env, userId, {
     title: "Reconnect your bank",
-    body: `${institutionName} stopped syncing — open Fina to reconnect.`,
+    body: `${institutionName} stopped syncing. Open Fina to reconnect.`,
     dataType: "bank-reconnect",
   });
 }
@@ -210,7 +210,7 @@ export async function sendGoalMilestonePush(
     pct >= 100 ? `Goal complete: ${goalTitle}` : `${pct}% there on ${goalTitle}`;
   const body =
     pct >= 100
-      ? "Nice — open Fina to see what's next."
+      ? "Nice. Open Fina to see what's next."
       : "Keep going. Tap to see what's funding it.";
   return sendToUserDevices(env, userId, {
     title,

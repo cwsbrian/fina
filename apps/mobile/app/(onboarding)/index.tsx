@@ -125,7 +125,7 @@ function MorningBriefIllustration() {
       </View>
       <View style={illoStyles.bubble}>
         <Text style={illoStyles.bubbleText}>
-          Morning — yesterday came to <Text style={{ fontWeight: "700" }}>$214.83</Text>.
+          Morning. Yesterday came to <Text style={{ fontWeight: "700" }}>$214.83</Text>.
         </Text>
       </View>
       <View style={illoStyles.card}>

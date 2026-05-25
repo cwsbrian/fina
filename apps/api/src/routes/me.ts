@@ -109,7 +109,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       let result: { sent: number; failed: number };
       switch (channel) {
         case "morningBrief":
-          result = await sendBriefPush(env, session.userId, "Test brief — yesterday looked normal.");
+          result = await sendBriefPush(env, session.userId, "Test brief. Yesterday looked normal.");
           break;
         case "bankReconnect":
           result = await sendBankReconnectPush(env, session.userId, "Test Bank");

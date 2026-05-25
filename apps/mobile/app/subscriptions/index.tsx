@@ -184,7 +184,7 @@ export default function SubscriptionsScreen() {
           </View>
           <Text style={styles.emptyTitle}>No subscriptions yet</Text>
           <Text style={styles.emptyBody}>
-            Track Netflix, rent, Adobe — anything that bills on a schedule.
+            Track Netflix, rent, Adobe, anything that bills on a schedule.
             Tap + to add one.
           </Text>
         </View>

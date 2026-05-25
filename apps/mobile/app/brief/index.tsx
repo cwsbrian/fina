@@ -55,7 +55,7 @@ function formatSnooze(iso: string | null): string {
 
 type SnoozeOption = { key: string; label: string; daysAhead: number | null };
 const SNOOZE_OPTIONS: SnoozeOption[] = [
-  { key: "off", label: "Off — keep sending", daysAhead: null },
+  { key: "off", label: "Off (keep sending)", daysAhead: null },
   { key: "1d", label: "1 day", daysAhead: 1 },
   { key: "3d", label: "3 days", daysAhead: 3 },
   { key: "1w", label: "1 week", daysAhead: 7 },

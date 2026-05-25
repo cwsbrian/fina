@@ -9,7 +9,7 @@ const inter = Inter({
 });
 
 export const metadata = {
-  title: "Fina — Your financial advisor",
+  title: "Fina · Your financial advisor",
   description:
     "Every morning, before you open your wallet. Join the waitlist for early access.",
 };

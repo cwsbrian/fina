@@ -334,7 +334,7 @@ export default function NewBudget() {
               </View>
               <Text style={styles.scopeHelp}>
                 {scope === "month"
-                  ? "Edits apply to the current month only — your default stays as-is for next month."
+                  ? "Edits apply to the current month only. Your default stays as-is for next month."
                   : "Edits update the default that every new month is copied from. The current month isn't affected unless you flip it above."}
               </Text>
             </>
@@ -434,7 +434,7 @@ export default function NewBudget() {
           {err && <Text style={styles.error}>{err}</Text>}
 
           <Text style={styles.helper}>
-            Categories are optional — set caps on the ones you want to track,
+            Categories are optional. Set caps on the ones you want to track,
             leave the rest blank. Fina shows progress against whatever is set.
           </Text>
         </ScrollView>

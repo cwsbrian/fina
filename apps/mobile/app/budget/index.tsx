@@ -164,7 +164,7 @@ export default function BudgetScreen() {
           </View>
           <Text style={styles.emptyTitle}>No budget yet</Text>
           <Text style={styles.emptyBody}>
-            Set a monthly total — Fina will track your spend against it and
+            Set a monthly total. Fina will track your spend against it and
             (optionally) help you split it across categories.
           </Text>
           <Pressable

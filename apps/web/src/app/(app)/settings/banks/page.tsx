@@ -102,7 +102,7 @@ export default function BanksPage() {
             <div className={styles.sectionSub}>
               {isOwner
                 ? isPro
-                  ? "Plaid securely links your account. Read-only — Fina can't move money."
+                  ? "Plaid securely links your account. Read-only. Fina can't move money."
                   : "Connecting a bank requires Pro."
                 : "Only the workspace owner can connect or manage banks."}
             </div>

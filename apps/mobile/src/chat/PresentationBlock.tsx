@@ -55,7 +55,7 @@ export function PresentationBlock({ block, role, onAccept, onReject }: Props) {
   return (
     <View style={styles.unknown}>
       <Text style={styles.unknownText}>
-        (Unsupported message type — update the app.)
+        (Unsupported message type. Update the app.)
       </Text>
       <Text style={{ display: "none" }}>{JSON.stringify(_exhaustive)}</Text>
     </View>

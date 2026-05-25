@@ -505,7 +505,7 @@ function CompareList({
     return (
       <View style={styles.card}>
         <Text style={styles.emptyBody}>
-          Nothing to compare yet — log a few transactions to see the trend.
+          Nothing to compare yet. Log a few transactions to see the trend.
         </Text>
       </View>
     );

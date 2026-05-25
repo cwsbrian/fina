@@ -227,7 +227,7 @@ export async function suggestBudgetSplit(
       return {
         allocations: [],
         notice:
-          "Fina couldn't suggest a split right now — try entering category amounts manually.",
+          "Fina couldn't suggest a split right now. Try entering category amounts manually.",
       };
     }
     return { allocations: normalizeToTotal(raw, totalAmount) };

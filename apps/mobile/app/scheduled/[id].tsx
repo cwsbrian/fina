@@ -279,7 +279,7 @@ export default function EditScheduled() {
                 color={colors.up}
               />
               <Text style={styles.bannerText}>
-                Already matched to a real transaction — fields are
+                Already matched to a real transaction. Fields are
                 read-only. Delete this to detach.
               </Text>
             </View>

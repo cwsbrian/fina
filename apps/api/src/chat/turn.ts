@@ -151,7 +151,7 @@ export async function processChatTurn(
 
     if (dispatched + fcs.length > MAX_TOOL_CALLS) {
       logWarn({ threadId: thread.id }, `chat: max tool calls exceeded (dispatched=${dispatched}, requested=${fcs.length})`);
-      return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
+      return { assistantText: "I couldn't complete that. Try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
     }
 
     const newContents: GeminiContent[] = [...contents];
@@ -187,7 +187,7 @@ export async function processChatTurn(
 
     if (dispatchedThisRound === 0) {
       logWarn({ threadId: thread.id }, `chat: function-call round with no dispatchable calls (requested=${fcs.length})`);
-      return { assistantText: "I couldn't complete that — try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
+      return { assistantText: "I couldn't complete that. Try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
     }
 
     contents = newContents;

@@ -144,8 +144,8 @@ export default function Goals() {
               </View>
               <Text style={styles.emptyTitle}>No goals yet</Text>
               <Text style={styles.emptyBody}>
-                Set a target — a trip, a laptop, a down payment — and Fina will
-                help you pace it.
+                Set a target like a trip, a laptop, or a down payment.
+                Fina will help you pace it.
               </Text>
               <Pressable
                 style={({ pressed }) => [

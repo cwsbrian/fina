@@ -91,7 +91,7 @@ export default function InviteMember() {
         >
           <Text style={styles.sub}>
             Add a family member or roommate. They'll see your transactions and
-            budgets — Fina is free for them.
+            budgets. Fina is free for them.
           </Text>
 
           <Text style={styles.label}>Email</Text>
@@ -132,7 +132,7 @@ export default function InviteMember() {
             />
             <RoleCard
               label="Viewer"
-              description="Read-only — sees the numbers, doesn't change them."
+              description="Read-only. Sees the numbers, doesn't change them."
               selected={role === "viewer"}
               onPress={() => setRole("viewer")}
               disabled={submitting}
@@ -148,7 +148,7 @@ export default function InviteMember() {
             />
             <Text style={styles.helperText}>
               We'll email a magic-link invite. They join automatically after
-              signing up — no payment needed.
+              signing up. No payment needed.
             </Text>
           </View>
 

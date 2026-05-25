@@ -167,7 +167,7 @@ export default function HomePage() {
                     {fromLabel} invited you to {inv.workspaceName}
                   </div>
                   <div className={styles.bannerSub}>
-                    Join as {inv.invitedRole} — see their transactions,
+                    Join as {inv.invitedRole} to see their transactions,
                     categories, and budgets.
                   </div>
                 </div>
@@ -192,7 +192,7 @@ export default function HomePage() {
           </span>
           <div className={styles.bannerBody}>
             <div className={styles.bannerTitle}>
-              You&apos;re on Pro trial — {days}{" "}
+              You&apos;re on Pro trial · {days}{" "}
               {days === 1 ? "day" : "days"} left
             </div>
             <div className={styles.bannerSub}>

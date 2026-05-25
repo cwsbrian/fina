@@ -90,9 +90,9 @@ export default function NewWorkspace() {
           contentContainerStyle={styles.body}
         >
           <Text style={styles.sub}>
-            A new workspace is its own world — separate categories, accounts,
-            budgets, and members. Useful for a side business or another
-            household.
+            A new workspace is its own world with separate categories,
+            accounts, budgets, and members. Useful for a side business or
+            another household.
           </Text>
 
           <Text style={styles.label}>Name</Text>

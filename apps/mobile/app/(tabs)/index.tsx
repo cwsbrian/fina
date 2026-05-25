@@ -74,7 +74,7 @@ export default function Home() {
       id: "set-budget",
       title: "Set a monthly budget",
       subtitle:
-        "Pick a total — Fina tracks every spend against it and can suggest a category split.",
+        "Pick a total. Fina tracks every spend against it and can suggest a category split.",
       cta: "Set budget",
       href: "/budget",
       done: hasBudget === true,

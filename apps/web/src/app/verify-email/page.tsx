@@ -80,7 +80,7 @@ function VerifyEmailInner() {
   async function verify(code: string) {
     if (busy) return;
     if (!params.get("email")) {
-      setErr("Missing email — go back and sign up again.");
+      setErr("Missing email. Go back and sign up again.");
       return;
     }
     setBusy(true);

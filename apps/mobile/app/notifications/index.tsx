@@ -221,7 +221,7 @@ export default function NotificationSettings() {
         ))}
 
         <Text style={styles.helper}>
-          Disabling a channel here stops the push only — the underlying
+          Disabling a channel here stops the push only. The underlying
           event still lands in chat and on the relevant screen.
         </Text>
 
@@ -262,12 +262,12 @@ function DevTestButtons() {
       } else if (r.deviceCount === 0) {
         Alert.alert(
           "No device registered",
-          "Push notifications need a development build — Expo Go on iOS doesn't receive them since SDK 50. Sign out / sign in once you build a dev client to register a device.",
+          "Push notifications need a development build. Expo Go on iOS doesn't receive them since SDK 50. Sign out / sign in once you build a dev client to register a device.",
         );
       } else {
         Alert.alert(
           "All sends failed",
-          `${r.failed} device(s) rejected — check API logs (likely a stale or invalid token).`,
+          `${r.failed} device(s) rejected. Check API logs (likely a stale or invalid token).`,
         );
       }
     } catch (e) {

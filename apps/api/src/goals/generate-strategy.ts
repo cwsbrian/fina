@@ -412,7 +412,7 @@ export async function generateAndStoreGoalStrategy(
       );
       notice =
         totalDiscretionary < 50
-          ? "Most of your spend is locked into rent, mortgage, or subscriptions — there's little discretionary room to cut. Consider extending the deadline or trimming a recurring subscription."
+          ? "Most of your spend is locked into rent, mortgage, or subscriptions. There's little discretionary room to cut. Consider extending the deadline or trimming a recurring subscription."
           : "Couldn't form a useful plan from this history. Try regenerating later.";
     } else {
       // Post-validate: clamp each item's monthlyAmount to 60% of the
