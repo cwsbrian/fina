@@ -158,7 +158,7 @@ export default function More() {
             styles.wsCard,
             pressed && { backgroundColor: colors.surfaceSoft },
           ]}
-          onPress={() => router.push("/workspace" as never)}
+          onPress={() => router.push("/workspace/switch" as never)}
         >
           <View style={styles.wsMark}>
             <Text style={styles.wsMarkText}>
@@ -191,7 +191,7 @@ export default function More() {
               styles.wsAction,
               pressed && { opacity: 0.6 },
             ]}
-            onPress={comingSoon("New workspace")}
+            onPress={() => router.push("/workspace/new" as never)}
           >
             <Ionicons name="add" size={16} color={colors.body} />
             <Text style={styles.wsActionText}>New workspace</Text>

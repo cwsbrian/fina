@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import {
+  CreateWorkspaceBody,
   PatchMemberRoleBody,
   PatchWorkspaceCurrencyBody,
   type Role,
@@ -13,6 +14,7 @@ import {
   transferOwner,
   MembersServiceError,
 } from "../workspaces/members.js";
+import { createWorkspaceForUser } from "../workspaces/bootstrap.js";
 
 function mapMembersError(e: unknown): { statusCode: number; code: string } {
   if (e instanceof MembersServiceError) {
@@ -52,8 +54,26 @@ export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
           id: m.workspace.id,
           name: m.workspace.name,
           role: m.role as Role,
+          currency: m.workspace.currency,
         })),
       };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.post("/workspaces", async (req, reply) => {
+    const parsed = CreateWorkspaceBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+    try {
+      const session = await requireSession(req, app);
+      const result = await createWorkspaceForUser({
+        userId: session.userId,
+        name: parsed.data.name,
+        ...(parsed.data.currency ? { currency: parsed.data.currency } : {}),
+      });
+      return reply.code(201).send(result);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;

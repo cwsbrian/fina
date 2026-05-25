@@ -19,6 +19,47 @@ function deriveWorkspaceName(name: string | null, email: string): string {
   return `${local}'s workspace`;
 }
 
+export type CreateWorkspaceInput = {
+  userId: string;
+  name: string;
+  currency?: string;
+};
+
+/** Create an additional workspace for an already-bootstrapped user.
+ *  Not idempotent — every call creates a new workspace (with a fresh
+ *  owner membership + seeded categories/accounts) so this is the right
+ *  primitive for the "+ New workspace" flow in the app. */
+export async function createWorkspaceForUser(
+  input: CreateWorkspaceInput,
+): Promise<{ workspace: { id: string; name: string; currency: string } }> {
+  return await prisma.$transaction(
+    async (tx) => {
+      const user = await tx.user.findUniqueOrThrow({ where: { id: input.userId } });
+      const trimmed = input.name.trim();
+      const name = trimmed.length > 0 ? trimmed : deriveWorkspaceName(user.name, user.email);
+      const workspace = await tx.workspace.create({
+        data: {
+          name,
+          ...(input.currency ? { currency: input.currency } : {}),
+        },
+      });
+      await tx.membership.create({
+        data: { userId: user.id, workspaceId: workspace.id, role: "owner" },
+      });
+      await seedDefaultCategories(tx, workspace.id);
+      await seedDefaultAccounts(tx, workspace.id, workspace.currency);
+      return {
+        workspace: {
+          id: workspace.id,
+          name: workspace.name,
+          currency: workspace.currency,
+        },
+      };
+    },
+    { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+  );
+}
+
 export async function startTrialAndBootstrapWorkspace(
   input: BootstrapInput,
 ): Promise<BootstrapResult> {
