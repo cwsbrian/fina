@@ -243,9 +243,6 @@ export default function MorningBriefSettings() {
           </Pressable>
         </View>
 
-        <Text style={styles.helper}>
-          Fina skips the brief on days with no new transactions.
-        </Text>
       </ScrollView>
 
       <TimePickerSheet
@@ -586,13 +583,6 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
   },
 
-  helper: {
-    ...type$.bodySm,
-    color: colors.muted,
-    textAlign: "center",
-    marginTop: space.base,
-    paddingHorizontal: space.lg,
-  },
 });
 
 const sheetStyles = StyleSheet.create({
