@@ -90,9 +90,9 @@ export default function Home() {
     {
       id: "morning-brief",
       title: "Try your first morning brief",
-      subtitle: "Fina drops a daily summary. Open it any time.",
-      cta: "Open brief",
-      href: "/brief",
+      subtitle: "Tap Chat to see what Fina has to say about today.",
+      cta: "Open chat",
+      href: "/(tabs)/chat",
       done: false,
     },
     {

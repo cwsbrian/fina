@@ -278,12 +278,6 @@ export default function More() {
         <GroupLabel>Insights</GroupLabel>
         <Group>
           <SettingsRow
-            icon="sunny-outline"
-            title="Morning brief"
-            subtitle="Today's summary from Fina"
-            onPress={() => router.push("/brief" as never)}
-          />
-          <SettingsRow
             icon="bar-chart-outline"
             title="Analysis"
             subtitle="Patterns, trends, category breakdown"
@@ -312,9 +306,9 @@ export default function More() {
         <Group>
           <SettingsRow
             icon="sunny-outline"
-            title="Morning brief time"
-            detail="8:00 AM"
-            onPress={comingSoon("Brief time")}
+            title="Morning brief"
+            subtitle="Daily summary time and pause"
+            onPress={() => router.push("/brief" as never)}
           />
           <SettingsRow
             icon="notifications-outline"
