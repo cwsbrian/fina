@@ -184,11 +184,21 @@ export default function BudgetScreen() {
   const total = Number(data.current.plan.totalAmount);
   const spent = Number(data.current.totalSpent);
   const scheduled = Number(data.current.totalScheduled ?? "0");
+  const goalsTotal = Object.values(goalsByCategory)
+    .flat()
+    .reduce((s, g) => s + g.monthlyAmount, 0);
   const remaining = total - spent - scheduled;
   const pct = total > 0 ? Math.min(100, Math.round((spent / total) * 100)) : 0;
   const scheduledPct =
     total > 0
       ? Math.max(0, Math.min(100 - pct, (scheduled / total) * 100))
+      : 0;
+  const goalsPct =
+    total > 0
+      ? Math.max(
+          0,
+          Math.min(100 - pct - scheduledPct, (goalsTotal / total) * 100),
+        )
       : 0;
   const over = spent > total;
   const willExceed = !over && spent + scheduled > total;
@@ -307,6 +317,18 @@ export default function BudgetScreen() {
                   ]}
                 />
               )}
+              {goalsPct > 0 && (
+                <View
+                  style={[
+                    styles.barSeg,
+                    {
+                      width: `${goalsPct}%`,
+                      backgroundColor: colors.accentYellow,
+                      opacity: 0.7,
+                    },
+                  ]}
+                />
+              )}
             </View>
           </View>
           <View style={styles.heroFoot}>
@@ -328,6 +350,11 @@ export default function BudgetScreen() {
           {scheduled > 0 && (
             <Text style={styles.heroScheduled}>
               + {formatMoney(scheduled.toFixed(2)).display} scheduled this month
+            </Text>
+          )}
+          {goalsTotal > 0 && (
+            <Text style={styles.heroGoals}>
+              + {formatMoney(goalsTotal.toFixed(2)).display} reserved for goals
             </Text>
           )}
         </View>
@@ -372,6 +399,7 @@ function CategoryRow({
 }) {
   const meta = categoryMeta(row.cat);
   const hasBudget = row.budget > 0;
+  const goalsSum = goals.reduce((s, g) => s + g.monthlyAmount, 0);
   const pct = hasBudget
     ? Math.min(100, Math.round((row.spent / row.budget) * 100))
     : 0;
@@ -380,6 +408,13 @@ function CategoryRow({
       ? Math.max(
           0,
           Math.min(100 - pct, (row.scheduled / row.budget) * 100),
+        )
+      : 0;
+  const goalPct =
+    hasBudget && goalsSum > 0
+      ? Math.max(
+          0,
+          Math.min(100 - pct - schedPct, (goalsSum / row.budget) * 100),
         )
       : 0;
   const over = hasBudget && row.spent > row.budget;
@@ -435,6 +470,18 @@ function CategoryRow({
                       width: `${schedPct}%`,
                       backgroundColor: willExceed ? colors.down : meta.fg,
                       opacity: 0.35,
+                    },
+                  ]}
+                />
+              )}
+              {goalPct > 0 && (
+                <View
+                  style={[
+                    styles.catBarSeg,
+                    {
+                      width: `${goalPct}%`,
+                      backgroundColor: colors.accentYellow,
+                      opacity: 0.7,
                     },
                   ]}
                 />
@@ -608,6 +655,12 @@ const styles = StyleSheet.create({
   },
   heroFootText: { ...type$.bodySm, color: colors.muted },
   heroScheduled: {
+    ...type$.bodySm,
+    color: colors.muted,
+    alignSelf: "flex-end",
+    marginTop: 2,
+  },
+  heroGoals: {
     ...type$.bodySm,
     color: colors.muted,
     alignSelf: "flex-end",
