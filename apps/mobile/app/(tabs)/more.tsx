@@ -425,7 +425,7 @@ function briefSubtitle(me: Me | null): string {
   const ampm = h >= 12 ? "PM" : "AM";
   const h12 = h % 12 === 0 ? 12 : h % 12;
   const timeLabel = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
-  if (me.user.pauseEnabled) return `Off · ${timeLabel}`;
+  if (me.user.pauseEnabled) return "Off";
   if (
     me.user.snoozeUntil &&
     new Date(me.user.snoozeUntil).getTime() > Date.now()
