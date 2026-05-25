@@ -116,7 +116,15 @@ Expected: 7/7 pass. Vitest's `include` pattern picks up `src/**/*.test.ts`.
 cd /home/cwsbr/personal/fina && pnpm --filter @fina/shared exec tsc --noEmit -p tsconfig.lib.json 2>&1 | tail -5
 ```
 
-Expected: clean (no errors). Note: `tsconfig.lib.json` may exclude `*.test.ts` — if so, run `tsc --noEmit -p tsconfig.spec.json` instead.
+Expected: clean (no errors).
+
+**Note**: `tsconfig.lib.json` excludes `*.test.ts` files. The correct command for typechecking the new test file is:
+
+```bash
+cd /home/cwsbr/personal/fina && pnpm --filter @fina/shared exec tsc --noEmit -p tsconfig.spec.json 2>&1 | tail -5
+```
+
+Use the `spec` variant for any test-file typecheck verification.
 
 - [ ] **Step 1.4: Commit T1**
 
@@ -183,6 +191,7 @@ describe("PATCH /me notificationPrefs", () => {
     const blob = fresh.notificationPrefs as Record<string, boolean>;
     expect(blob.morningBrief).toBe(false);
     expect(blob.largeCharges).toBe(true);  // default merged in by route
+    await app.close();
   });
 
   it("PATCH merges with existing prefs across 2 sequential patches", async () => {
@@ -207,6 +216,7 @@ describe("PATCH /me notificationPrefs", () => {
     expect(blob.morningBrief).toBe(false);
     expect(blob.largeCharges).toBe(false);
     expect(blob.bankReconnect).toBe(true);  // untouched default
+    await app.close();
   });
 
   it("GET returns fully-populated notificationPrefs (defaults for unset)", async () => {
@@ -231,6 +241,7 @@ describe("PATCH /me notificationPrefs", () => {
       transactionAdded: true,
       productUpdates: true,
     });
+    await app.close();
   });
 
   it("PATCH silently drops unknown keys (zod .partial() default-strip)", async () => {
@@ -251,6 +262,7 @@ describe("PATCH /me notificationPrefs", () => {
     const blob = fresh.notificationPrefs as Record<string, unknown>;
     expect(blob.morningBrief).toBe(false);
     expect(blob.unknown).toBeUndefined();
+    await app.close();
   });
 });
 ```
