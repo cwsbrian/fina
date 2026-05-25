@@ -4,8 +4,10 @@ import { colors } from "../design/tokens";
 
 type IoniconName = keyof typeof Ionicons.glyphMap;
 
-/** Curated icon options the user picks from when creating a goal. */
+/** Curated icon options the user picks from when creating a goal.
+ *  `flag-outline` is first so it's the visible default in the picker. */
 export const GOAL_ICON_CHOICES: ReadonlyArray<IoniconName> = [
+  "flag-outline",
   "airplane-outline",
   "home-outline",
   "car-outline",
@@ -28,6 +30,14 @@ export const GOAL_COLOR_CHOICES: ReadonlyArray<string> = [
 
 export const DEFAULT_GOAL_ICON: IoniconName = "flag-outline";
 export const DEFAULT_GOAL_COLOR = colors.primary;
+
+/** Pick a random color from the palette — used as the initial value on
+ *  the New Goal form so every new goal starts with a distinct look
+ *  without forcing the user to pick. */
+export function randomGoalColor(): string {
+  const idx = Math.floor(Math.random() * GOAL_COLOR_CHOICES.length);
+  return GOAL_COLOR_CHOICES[idx] ?? DEFAULT_GOAL_COLOR;
+}
 
 export function goalAccent(g: Pick<GoalDTO, "color">): string {
   return g.color ?? DEFAULT_GOAL_COLOR;

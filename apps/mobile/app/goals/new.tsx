@@ -19,10 +19,10 @@ import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
 import {
-  DEFAULT_GOAL_COLOR,
   DEFAULT_GOAL_ICON,
   GOAL_COLOR_CHOICES,
   GOAL_ICON_CHOICES,
+  randomGoalColor,
   withAlpha,
 } from "../../src/goals/meta";
 
@@ -49,7 +49,10 @@ export default function NewGoal() {
     return d;
   });
   const [icon, setIcon] = useState<typeof DEFAULT_GOAL_ICON>(DEFAULT_GOAL_ICON);
-  const [color, setColor] = useState<string>(DEFAULT_GOAL_COLOR);
+  // Each new-goal session gets a random palette color so the user
+  // doesn't have to pick — they can still override. `useState(() => ...)`
+  // runs once on mount, not every render.
+  const [color, setColor] = useState<string>(() => randomGoalColor());
   const [dateOpen, setDateOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -310,12 +313,18 @@ const styles = StyleSheet.create({
     marginBottom: space.lg,
     gap: 4,
   },
-  amountCurrency: { ...type$.bodyMd, color: colors.ink },
+  // Match line-height + zero padding on both sides so the `$` glyph
+  // and the TextInput cursor sit on the same baseline. iOS TextInput
+  // adds invisible vertical padding by default; explicit lineHeight on
+  // BOTH children is the predictable fix.
+  amountCurrency: { ...type$.bodyMd, color: colors.ink, lineHeight: 20 },
   amountInput: {
     flex: 1,
     ...type$.bodyMd,
     color: colors.ink,
+    lineHeight: 20,
     paddingVertical: 0,
+    includeFontPadding: false,
   },
   dueBtn: {
     flexDirection: "row",

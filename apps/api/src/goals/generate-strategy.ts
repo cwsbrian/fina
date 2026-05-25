@@ -48,10 +48,20 @@ of monthly_amount should land close to the required monthly pace.
 Return STRICT JSON only — no markdown, no commentary — matching:
 {
   "items": [
-    { "categoryName": "Dining", "monthlyAmount": 80, "rationale": "Trim
-       dining by ~$20/wk — small swaps add up." }
+    { "categoryName": "Dining", "monthlyAmount": 80, "rationale": "You
+       averaged $280/mo on dining — well above other discretionary
+       categories. Cutting back here has the most headroom." }
   ]
 }
+
+Rationale style (very important):
+- Explain WHY this category was picked. The user wants to understand
+  the reasoning, not just the tactic. Lead with the observation:
+  "You averaged $X/mo on Y" or "Y is your biggest discretionary
+  bucket" or "Y has been creeping up vs last month".
+- Always express figures in MONTHLY terms (e.g. "$80/mo"). Never
+  weekly ($20/wk), daily, or annual.
+- ≤ 140 chars, plain text, no emojis.
 
 HARD rules:
 - Never cut from a category whose discretionary is 0 (fully committed).
@@ -63,8 +73,7 @@ HARD rules:
 - If discretionary across all categories is too small to meet the pace,
   do your best and let the rationale acknowledge the gap.
 - If the user has zero spending history, return { "items": [] }.
-- Currency is CAD. Round monthlyAmount to whole dollars.
-- Rationale: ≤ 100 chars, plain text, no emojis.`;
+- Currency is CAD. Round monthlyAmount to whole dollars.`;
 
 type CategoryAnalysis = {
   categoryName: string;
@@ -258,7 +267,7 @@ function parseStrategy(text: string): GoalStrategyItem[] {
       out.push({
         categoryName: name.trim().slice(0, 80),
         monthlyAmount: Math.round(amt),
-        rationale: why.trim().slice(0, 200),
+        rationale: why.trim().slice(0, 240),
       });
       if (out.length >= 5) break;
     }
