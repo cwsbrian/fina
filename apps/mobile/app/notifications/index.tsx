@@ -57,6 +57,11 @@ const SECTIONS: Section[] = [
         sub: "When something costs way more than your usual.",
       },
       {
+        key: "transactionAdded",
+        title: "New transaction added",
+        sub: "Every new charge on any workspace you're in. Manual entries skip the person who typed it.",
+      },
+      {
         key: "goalMilestones",
         title: "Goal milestones",
         sub: "When you cross 25 / 50 / 75% on a goal.",
@@ -219,8 +224,66 @@ export default function NotificationSettings() {
           Disabling a channel here stops the push only — the underlying
           event still lands in chat and on the relevant screen.
         </Text>
+
+        {__DEV__ && <DevTestButtons />}
       </ScrollView>
     </SafeAreaView>
+  );
+}
+
+function DevTestButtons() {
+  const [busy, setBusy] = useState<ToggleKey | null>(null);
+  const send = async (channel: ToggleKey) => {
+    if (busy) return;
+    setBusy(channel);
+    try {
+      await apiFetch("/me/test-push", {
+        method: "POST",
+        body: JSON.stringify({ channel }),
+      });
+    } catch (e) {
+      Alert.alert(
+        "Test push failed",
+        (e as { code?: string }).code ?? "Make sure the channel is enabled above.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+  const channels: Array<{ key: ToggleKey; label: string }> = [
+    { key: "morningBrief", label: "Morning brief" },
+    { key: "bankReconnect", label: "Bank reconnect" },
+    { key: "workspaceInvites", label: "Workspace invite" },
+    { key: "trialExpiring", label: "Trial expiring" },
+    { key: "goalMilestones", label: "Goal milestone" },
+    { key: "largeCharges", label: "Large charge" },
+    { key: "transactionAdded", label: "Transaction added" },
+    { key: "productUpdates", label: "Product update" },
+  ];
+  return (
+    <View style={styles.devSection}>
+      <Text style={styles.devLabel}>Dev · test pushes</Text>
+      <Text style={styles.devHelp}>
+        Fires a sample push of each channel to this device. Disabled
+        channels above are still gated server-side.
+      </Text>
+      <View style={styles.devGrid}>
+        {channels.map((c) => (
+          <Pressable
+            key={c.key}
+            onPress={() => send(c.key)}
+            disabled={busy !== null}
+            style={({ pressed }) => [
+              styles.devBtn,
+              busy === c.key && { opacity: 0.5 },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <Text style={styles.devBtnText}>{c.label}</Text>
+          </Pressable>
+        ))}
+      </View>
+    </View>
   );
 }
 
@@ -339,4 +402,42 @@ const styles = StyleSheet.create({
     marginTop: space.lg,
     paddingHorizontal: space.lg,
   },
+
+  // Dev-only section — wrapped in __DEV__ on render, but styled here
+  // so the production bundle still tree-shakes the JSX out cleanly.
+  devSection: {
+    marginTop: space.xl,
+    padding: space.base,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceSoft,
+  },
+  devLabel: {
+    ...type$.captionStrong,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: 4,
+  },
+  devHelp: {
+    ...type$.bodySm,
+    color: colors.muted,
+    marginBottom: space.sm,
+  },
+  devGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  devBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.canvas,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  devBtnText: { ...type$.bodySm, color: colors.ink, fontWeight: "600" },
 });

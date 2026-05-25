@@ -7,6 +7,7 @@ import { sanitizePlaidError } from "../../plaid/client.js";
 import { checkBackgroundSyncGate } from "../tier-gate.js";
 import { removeItemForBilling } from "../../plaid/items.js";
 import { checkLargeChargeAndPush } from "../../push/anomaly.js";
+import { notifyTransactionAdded } from "../../push/transaction-added.js";
 
 const CRON_NAME = "daily-refresh";
 
@@ -85,19 +86,38 @@ export async function runDailyRefresh(env: Env): Promise<void> {
             "categorize after daily-refresh failed",
           ),
         );
-        // Run anomaly check serially after categorize — the check reads
-        // the tx's categoryId which categorize just filled in.
+        // Run anomaly + transaction-added pushes serially after
+        // categorize, so each push has the category name ready.
         for (const txId of r.newTxIds) {
           const tx = await prisma.transaction.findUnique({
             where: { id: txId },
-            select: { amount: true, merchantNormalized: true, merchantRaw: true },
+            select: {
+              amount: true,
+              merchantNormalized: true,
+              merchantRaw: true,
+              allocations: {
+                select: { category: { select: { name: true } } },
+                take: 1,
+              },
+            },
           });
           if (!tx) continue;
+          const amount = Math.abs(Number(tx.amount));
+          const merchant = tx.merchantNormalized ?? tx.merchantRaw ?? "New charge";
+          const categoryName = tx.allocations[0]?.category?.name ?? null;
           await checkLargeChargeAndPush(env, {
             transactionId: txId,
             workspaceId: item.workspaceId,
-            amount: Math.abs(Number(tx.amount)),
-            merchant: tx.merchantNormalized ?? tx.merchantRaw,
+            amount,
+            merchant,
+          });
+          // No actor exclusion — Plaid-synced txs come from the bank,
+          // so every workspace member who opted in gets a push.
+          await notifyTransactionAdded(env, {
+            workspaceId: item.workspaceId,
+            merchant,
+            amount,
+            categoryName,
           });
         }
       }

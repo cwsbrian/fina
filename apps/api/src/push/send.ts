@@ -240,6 +240,45 @@ export async function sendLargeChargePush(
   });
 }
 
+/** Generic "new transaction" push, sent per-tx to workspace members
+ *  (excluding the creator on manual entry — caller filters). */
+export async function sendTransactionAddedPush(
+  env: Env,
+  userId: string,
+  merchant: string,
+  amount: string,
+  categoryName: string | null,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "transactionAdded"))) {
+    logInfo({ userId, channel: "transactionAdded" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  const where = categoryName ? ` · ${categoryName}` : "";
+  return sendToUserDevices(env, userId, {
+    title: `${merchant} · $${amount}`,
+    body: `New transaction${where}`,
+    dataType: "transaction-added",
+  });
+}
+
+/** Sparse marketing — new features, tips. Caller chooses copy. */
+export async function sendProductUpdatePush(
+  env: Env,
+  userId: string,
+  title: string,
+  body: string,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "productUpdates"))) {
+    logInfo({ userId, channel: "productUpdates" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  return sendToUserDevices(env, userId, {
+    title,
+    body,
+    dataType: "product-update",
+  });
+}
+
 /** Someone with an existing account was invited to a workspace. */
 export async function sendWorkspaceInvitePush(
   env: Env,

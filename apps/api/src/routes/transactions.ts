@@ -11,6 +11,7 @@ import {
 import { editTransactionService, EditTxError, type EditTxInput, type EditTxInputFlags } from "../transactions/edit.js";
 import { removeTransactionService, RemoveTxError } from "../transactions/remove.js";
 import { checkLargeChargeAndPush } from "../push/anomaly.js";
+import { notifyTransactionAdded } from "../push/transaction-added.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -317,14 +318,26 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           { workspaceId: ctx.membership.workspaceId, userId: ctx.session.userId },
           input,
         );
-        // Fire-and-forget anomaly check now that the txn is committed.
-        // Won't block the response; helper swallows its own errors.
+        // Fire-and-forget side-effects now that the txn is committed.
+        // Each helper swallows its own errors so the response stays fast.
+        const txMerchant =
+          result.transaction.merchantNormalized
+          ?? result.transaction.merchantRaw;
+        const txAmount = Math.abs(Number(result.transaction.amount));
         void checkLargeChargeAndPush(app.fina.env, {
           transactionId: result.transaction.id,
           workspaceId: ctx.membership.workspaceId,
-          amount: Math.abs(Number(result.transaction.amount)),
-          merchant: result.transaction.merchantNormalized
-            ?? result.transaction.merchantRaw,
+          amount: txAmount,
+          merchant: txMerchant,
+        });
+        // Notify other workspace members — actor excluded since they
+        // just typed this in themselves.
+        void notifyTransactionAdded(app.fina.env, {
+          workspaceId: ctx.membership.workspaceId,
+          merchant: txMerchant ?? "New charge",
+          amount: txAmount,
+          categoryName: null,
+          excludeUserId: ctx.session.userId,
         });
         return reply.code(201).send(result);
       } catch (err) {
