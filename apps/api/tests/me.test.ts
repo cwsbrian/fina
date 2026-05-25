@@ -213,3 +213,102 @@ describe("categorizationMode", () => {
     await app.close();
   });
 });
+
+describe("PATCH /me notificationPrefs", () => {
+  beforeEach(async () => {
+    await truncateAll();
+  });
+  afterAll(async () => {
+    await disconnect();
+  });
+
+  it("PATCH applies new prefs (single field) → 200 + merged blob persisted", async () => {
+    const app = await buildApp(env);
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "np1@t.co" });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ notificationPrefs: { morningBrief: false } }),
+    });
+    expect(res.statusCode).toBe(200);
+
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const blob = fresh.notificationPrefs as Record<string, boolean>;
+    expect(blob.morningBrief).toBe(false);
+    expect(blob.largeCharges).toBe(true);  // default merged in by route
+    await app.close();
+  });
+
+  it("PATCH merges with existing prefs across 2 sequential patches", async () => {
+    const app = await buildApp(env);
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "np2@t.co" });
+
+    await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ notificationPrefs: { morningBrief: false } }),
+    });
+    await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ notificationPrefs: { largeCharges: false } }),
+    });
+
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const blob = fresh.notificationPrefs as Record<string, boolean>;
+    expect(blob.morningBrief).toBe(false);
+    expect(blob.largeCharges).toBe(false);
+    expect(blob.bankReconnect).toBe(true);  // untouched default
+    await app.close();
+  });
+
+  it("GET returns fully-populated notificationPrefs (defaults for unset)", async () => {
+    const app = await buildApp(env);
+    const { cookie } = await signUpAndGetCookie(app, { email: "np3@t.co" });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/me",
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const body = res.json() as { user: { notificationPrefs: Record<string, boolean> } };
+    expect(body.user.notificationPrefs).toEqual({
+      morningBrief: true,
+      bankReconnect: true,
+      workspaceInvites: true,
+      trialExpiring: true,
+      goalMilestones: true,
+      largeCharges: true,
+      transactionAdded: true,
+      productUpdates: true,
+    });
+    await app.close();
+  });
+
+  it("PATCH silently drops unknown keys (zod .partial() default-strip)", async () => {
+    const app = await buildApp(env);
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "np4@t.co" });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({
+        notificationPrefs: { unknown: false, morningBrief: false },
+      }),
+    });
+    expect(res.statusCode).toBe(200);
+
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    const blob = fresh.notificationPrefs as Record<string, unknown>;
+    expect(blob.morningBrief).toBe(false);
+    expect(blob.unknown).toBeUndefined();
+    await app.close();
+  });
+});
