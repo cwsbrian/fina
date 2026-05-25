@@ -10,6 +10,7 @@ import {
   parseOccurredAt,
 } from "./validators.js";
 import { applyAllocations, AllocationError } from "./allocations.js";
+import { maybeAutoPromote } from "../categorize/auto-promote.js";
 
 export type EditTxInput = {
   amount?: number;
@@ -164,7 +165,7 @@ export async function editTransactionService(
     select: { currency: true },
   });
 
-  return await withWorkspaceLock(ctx.workspaceId, async (tx) => {
+  const result = await withWorkspaceLock(ctx.workspaceId, async (tx) => {
     // 4a. Read tx.
     const row = await tx.transaction.findFirst({
       where: { id: txId, workspaceId: ctx.workspaceId },
@@ -269,4 +270,20 @@ export async function editTransactionService(
     });
     return { transaction: shape(finalRow, workspace.currency) };
   });
+
+  // Per-allocation auto-promote trigger (best-effort, post-commit).
+  // Reuses the already-fetched post-update tx so we don't re-query.
+  if (result.transaction.merchantNormalized) {
+    for (const a of result.transaction.allocations) {
+      if (a.categoryId) {
+        await maybeAutoPromote(
+          ctx.workspaceId,
+          result.transaction.merchantNormalized,
+          a.categoryId,
+        );
+      }
+    }
+  }
+
+  return result;
 }

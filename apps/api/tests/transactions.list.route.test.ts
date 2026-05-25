@@ -122,6 +122,74 @@ describe("GET /workspaces/:id/transactions", () => {
     expect(body.transactions[0].allocations[0].categoryId).toBeNull();
   });
 
+  it("response includes allocation needsConfirmation + dismissedUntil fields", async () => {
+    const { cookie, wsId } = await setup("tl-needs@t.co");
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-tl-needs" } });
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Test", type: "depository" },
+    });
+    const dismissed = new Date("2026-06-15T00:00:00Z");
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id,
+        amount: "12.00", merchantRaw: "Test", merchantNormalized: "test",
+        occurredAt: new Date("2026-05-19T12:00:00Z"),
+        pending: false, source: "manual", rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.create({
+      data: {
+        transactionId: tx.id, categoryId: cat.id, amount: "12.00", source: "ai",
+        needsConfirmation: true, dismissedUntil: dismissed,
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    const alloc = body.transactions[0].allocations[0];
+    expect(alloc.needsConfirmation).toBe(true);
+    expect(alloc.dismissedUntil).toBe(dismissed.toISOString());
+  });
+
+  it("single GET includes allocation needsConfirmation + dismissedUntil fields", async () => {
+    const { cookie, wsId } = await setup("tl-single-needs@t.co");
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-tl-snd" } });
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Test", type: "depository" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id,
+        amount: "8.00", merchantRaw: "T2", merchantNormalized: "t2",
+        occurredAt: new Date("2026-05-19T12:00:00Z"),
+        pending: false, source: "manual", rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.create({
+      data: {
+        transactionId: tx.id, categoryId: cat.id, amount: "8.00", source: "ai",
+        needsConfirmation: true, dismissedUntil: null,
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions/${tx.id}`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json();
+    expect(body.transaction.allocations[0].needsConfirmation).toBe(true);
+    expect(body.transaction.allocations[0].dismissedUntil).toBeNull();
+  });
+
   it("filter ?uncategorizedOnly=true & ?categoryId=X combines via OR (both filters applied)", async () => {
     const { cookie, wsId } = await setup("tl5@t.co");
     const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-tl5" } });

@@ -86,6 +86,53 @@ describe("POST /workspaces/:id/transactions/:txId/confirm-category", () => {
   });
 });
 
+describe("PATCH auto-promote trigger", () => {
+  it("auto-promotes after 3rd manual edit assigning same merchant+category", async () => {
+    const { cookie, wsId, catId, accountId } = await setup();
+    // Seed 2 prior allocs (same merchant/category) as confirmed manual edits.
+    for (let i = 0; i < 2; i++) {
+      await prisma.transaction.create({
+        data: {
+          workspaceId: wsId, accountId,
+          merchantRaw: "STARBUCKS", merchantNormalized: "starbucks",
+          amount: "5.00", occurredAt: new Date(),
+          source: "plaid", rawData: {},
+          allocations: {
+            create: {
+              amount: "5.00", categoryId: catId, source: "manual",
+              needsConfirmation: false,
+            },
+          },
+        },
+      });
+    }
+
+    // Third tx: starts with null-category alloc; PATCH sets the category.
+    const third = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId,
+        merchantRaw: "STARBUCKS", merchantNormalized: "starbucks",
+        amount: "5.00", occurredAt: new Date(),
+        source: "manual", rawData: {},
+        allocations: { create: { amount: "5.00", categoryId: null, source: null } },
+      },
+    });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${third.id}`,
+      headers: { cookie, "x-workspace-id": wsId },
+      payload: { categoryId: catId },
+    });
+    expect(res.statusCode).toBe(200);
+
+    const map = await prisma.merchantMapping.findFirst({
+      where: { workspaceId: wsId, merchantNormalized: "starbucks" },
+    });
+    expect(map?.source).toBe("auto");
+  });
+});
+
 describe("POST /workspaces/:id/transactions/:txId/snooze-category", () => {
   it("sets dismissedUntil ~7d from now, keeps needsConfirmation=true", async () => {
     const { cookie, wsId, txId } = await setup();

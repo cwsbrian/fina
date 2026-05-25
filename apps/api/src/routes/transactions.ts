@@ -167,7 +167,14 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         take: q.limit + 1,
         include: {
           allocations: {
-            select: { id: true, categoryId: true, amount: true, source: true },
+            select: {
+              id: true,
+              categoryId: true,
+              amount: true,
+              source: true,
+              needsConfirmation: true,
+              dismissedUntil: true,
+            },
             orderBy: { createdAt: "asc" },
           },
         },
@@ -199,6 +206,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             categoryId: a.categoryId,
             amount: a.amount.toString(),
             source: a.source,
+            needsConfirmation: a.needsConfirmation,
+            dismissedUntil: a.dismissedUntil ? a.dismissedUntil.toISOString() : null,
           })),
         })),
         nextCursor,
@@ -226,7 +235,14 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             where: { id: req.params.txId, workspaceId: ctx.membership.workspaceId },
             include: {
               allocations: {
-                select: { id: true, categoryId: true, amount: true, source: true },
+                select: {
+                  id: true,
+                  categoryId: true,
+                  amount: true,
+                  source: true,
+                  needsConfirmation: true,
+                  dismissedUntil: true,
+                },
                 orderBy: { createdAt: "asc" },
               },
             },
@@ -254,6 +270,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
               categoryId: a.categoryId,
               amount: a.amount.toString(),
               source: a.source,
+              needsConfirmation: a.needsConfirmation,
+              dismissedUntil: a.dismissedUntil ? a.dismissedUntil.toISOString() : null,
             })),
           },
         });

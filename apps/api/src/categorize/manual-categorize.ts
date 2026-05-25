@@ -2,6 +2,7 @@ import { prisma } from "../db.js";
 import { normalizeMerchant } from "./normalize.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { applyAllocations } from "../transactions/allocations.js";
+import { maybeAutoPromote } from "./auto-promote.js";
 
 export class ManualCategorizeError extends Error {
   constructor(public code: "tx_not_found" | "category_not_found") {
@@ -188,6 +189,15 @@ export async function applyManualCategorize(
       },
     },
   });
+
+  // Per-allocation auto-promote trigger (best-effort, post-commit).
+  if (updated.merchantNormalized) {
+    for (const a of updated.allocations) {
+      if (a.categoryId) {
+        await maybeAutoPromote(input.workspaceId, updated.merchantNormalized, a.categoryId);
+      }
+    }
+  }
 
   return {
     tx: {
