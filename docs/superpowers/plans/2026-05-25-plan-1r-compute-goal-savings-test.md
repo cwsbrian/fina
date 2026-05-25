@@ -228,13 +228,27 @@ Then add the 14 `it()` blocks. **Important**: every test calls `vi.setSystemTime
   });
 ```
 
-**Test 4 — plan=0 filtered:**
+**Test 4 — plan=0 competitor filter (L208 empty competitors path):**
+
+Per R2 review: the goal-under-test's GoalAllocation has plan=0. `myCategoryIds` still includes catId (line 137-138 doesn't filter by plan). But the competitor list for catId is empty (line 127 filtered out the only allocation). With real savings available (cap=100, spend=70 → 30), line 208 `if (competitors.length === 0) continue` causes the 30 to be DISCARDED. Result: 0.
+
 ```ts
-  it("GoalAllocation monthlyAmount=0 is filtered → myCategoryIds empty → 0", async () => {
+  it("GoalAllocation monthlyAmount=0 → competitor list empty for catId → savings discarded (L208)", async () => {
     const wsId = await createWorkspace();
-    const goalId = await createGoal({ workspaceId: wsId, createdAt: new Date("2026-05-01T12:00:00Z") });
     const catId = await createCategory(wsId);
+    const goalId = await createGoal({ workspaceId: wsId, createdAt: new Date("2026-05-01T12:00:00Z") });
     await createGoalAllocation({ goalId, categoryId: catId, monthlyAmount: 0 });
+    // Real cap + real underspend → savings exists, but competitor list is empty
+    // because the only allocation (plan=0) was filtered at L127.
+    await createBudgetPlan({
+      workspaceId: wsId,
+      periodStart: firstOfMonth(2026, 5),
+      capsByCategoryId: { [catId]: 100 },
+    });
+    await spendInCategory({
+      workspaceId: wsId, categoryId: catId, amount: 70,
+      occurredAt: new Date("2026-05-15T12:00:00Z"),
+    });
     vi.setSystemTime(TODAY);
     const r = await computeGoalSavings(wsId, goalId);
     expect(r).toBe(0);
