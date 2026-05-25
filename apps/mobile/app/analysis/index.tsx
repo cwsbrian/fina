@@ -20,7 +20,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
-import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
+import { MonthPickerSheet } from "../../src/datetime/MonthPickerSheet";
 
 type CategorySpend = {
   categoryId: string;
@@ -57,6 +57,21 @@ type AnalysisResp = {
 function nowYM(): { year: number; month: number } {
   const d = new Date();
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
+}
+
+function prevYM(year: number, month: number): { year: number; month: number } {
+  if (month === 1) return { year: year - 1, month: 12 };
+  return { year, month: month - 1 };
+}
+
+function nextYM(year: number, month: number): { year: number; month: number } {
+  if (month === 12) return { year: year + 1, month: 1 };
+  return { year, month: month + 1 };
+}
+
+function isFutureMonth(year: number, month: number): boolean {
+  const now = nowYM();
+  return year > now.year || (year === now.year && month > now.month);
 }
 
 const UNCATEGORIZED_ID = "__uncategorized__";
@@ -143,7 +158,16 @@ export default function AnalysisScreen() {
           </View>
         ) : (
           <>
-            <CashflowCard analysis={data.current} history={data.monthlyHistory} />
+            <CashflowCard
+              analysis={data.current}
+              history={data.monthlyHistory}
+              onPrev={() => setYM(prevYM(year, month))}
+              onNext={() => {
+                const n = nextYM(year, month);
+                if (!isFutureMonth(n.year, n.month)) setYM(n);
+              }}
+              canGoNext={!isFutureMonth(nextYM(year, month).year, nextYM(year, month).month)}
+            />
             <SectionLabel>Where it went</SectionLabel>
             <SpendBreakdown
               spend={data.current.spend}
@@ -159,14 +183,13 @@ export default function AnalysisScreen() {
           </>
         )}
       </ScrollView>
-      <DatePickerSheet
+      <MonthPickerSheet
         visible={pickerOpen}
-        value={new Date(Date.UTC(year, month - 1, 15))}
-        mode="date"
-        maximumDate={new Date()}
+        year={year}
+        month={month}
         onClose={() => setPickerOpen(false)}
-        onConfirm={(d) => {
-          setYM({ year: d.getFullYear(), month: d.getMonth() + 1 });
+        onConfirm={(y, m) => {
+          setYM({ year: y, month: m });
           setPickerOpen(false);
         }}
       />
@@ -201,9 +224,15 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function CashflowCard({
   analysis,
   history,
+  onPrev,
+  onNext,
+  canGoNext,
 }: {
   analysis: MonthAnalysis;
   history: CashflowPoint[];
+  onPrev: () => void;
+  onNext: () => void;
+  canGoNext: boolean;
 }) {
   const { width: screenW } = useWindowDimensions();
   const chartW = Math.max(280, screenW - space.lg * 2 - space.base * 2);
@@ -212,10 +241,28 @@ function CashflowCard({
   ).toLocaleDateString(undefined, { month: "long", year: "numeric" });
   return (
     <View style={styles.card}>
-      <View style={styles.cardHead}>
-        <Text style={styles.cardEyebrow}>Net cashflow</Text>
+      <View style={styles.cardStepper}>
+        <Pressable
+          onPress={onPrev}
+          hitSlop={10}
+          style={({ pressed }) => pressed && { opacity: 0.5 }}
+        >
+          <Ionicons name="chevron-back" size={18} color={colors.muted} />
+        </Pressable>
         <Text style={styles.cardMonth}>{monthLabel}</Text>
+        <Pressable
+          onPress={onNext}
+          hitSlop={10}
+          disabled={!canGoNext}
+          style={({ pressed }) => [
+            !canGoNext && { opacity: 0.25 },
+            pressed && canGoNext && { opacity: 0.5 },
+          ]}
+        >
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
       </View>
+      <Text style={styles.cardEyebrow}>Net cashflow</Text>
       <Text
         style={[
           styles.cardValue,
@@ -574,16 +621,16 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  // Cashflow card carries the month label inline next to the eyebrow
-  // — flexed row so the label hugs the right while the eyebrow stays
-  // pinned left.
-  cardHead: {
+  // Month stepper sitting at the top-left of the cashflow card —
+  // chevrons flank the month label and step prev/next.
+  cardStepper: {
     flexDirection: "row",
-    alignItems: "baseline",
-    justifyContent: "space-between",
-    marginBottom: 4,
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 10,
+    marginBottom: 6,
   },
-  cardMonth: { ...type$.bodySm, color: colors.muted, fontWeight: "600" },
+  cardMonth: { ...type$.bodySm, color: colors.ink, fontWeight: "600" },
 
   sectionLabel: {
     ...type$.captionStrong,
