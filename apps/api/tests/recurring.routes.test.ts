@@ -94,27 +94,9 @@ describe("POST /workspaces/:id/recurring", () => {
     expect(res.json().error).toBe("category_not_found");
   });
 
-  it("POST 402 upgrade_required when trial expired (Free tier)", async () => {
-    const { cookie, wsId, userId } = await setupProUser(`r-post-free-${Date.now()}@t.co`);
-    // Expire trial and mark consumed → free tier
-    await prisma.user.update({
-      where: { id: userId },
-      data: { trialEndsAt: new Date(Date.now() - 24 * 60 * 60 * 1000), trialConsumed: true },
-    });
-    const res = await app.inject({
-      method: "POST",
-      url: `/workspaces/${wsId}/recurring`,
-      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
-      payload: {
-        name: "Netflix",
-        amount: 15.99,
-        cadence: "monthly",
-        nextOccurrenceDate: "2026-06-01",
-      },
-    });
-    expect(res.statusCode).toBe(402);
-    expect(res.json().error).toBe("upgrade_required");
-  });
+  // Recurring is free for all tiers — no Pro gate on POST
+  // /workspaces/:id/recurring (Plan 1K-cleanup-test-baseline 2026-05-25).
+  // Previous '402 when trial expired' test removed.
 
   it("POST 400 workspace_mismatch when path :id differs from X-Workspace-Id header", async () => {
     const a = await setupProUser(`r-post-mismatch-a-${Date.now()}@t.co`);
