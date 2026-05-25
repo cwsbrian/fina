@@ -24,11 +24,15 @@
 - [ ] **Step 1: Read current state**
 
 Run: `wc -l apps/api/tests/push.send.test.ts`
-Expected: `207 apps/api/tests/push.send.test.ts` (trailing newline). Last meaningful line is `});` at 206 closing the `channel gate` describe.
+Expected: `206 apps/api/tests/push.send.test.ts`. Last meaningful line is `});` at 206 closing the `channel gate (notificationPrefs)` describe.
+
+**Guardrail:** Do NOT edit `apps/api/src/push/send.ts` — production code stays unchanged. The pre-existing `logInfo` meta label `"trialExpiringPush"` on `send.ts:186` (vs channel key `"trialExpiring"`) is intentional out-of-scope cosmetic noise; leave it.
 
 - [ ] **Step 2: Insert 6 nested describes inside `channel gate (notificationPrefs)`**
 
-Locate the closing `});` of the `channel gate (notificationPrefs)` block (line 206). Insert the following 6 nested describes BEFORE that closing brace.
+Locate the end of the last existing `it()` body — the line containing `expect(spy).toHaveBeenCalledTimes(1);` (around line 204) followed by `});` on the next line — and the OUTER `});` on line 206 that closes the `channel gate (notificationPrefs)` describe. Insert the 6 nested describes AFTER the last existing `it()`'s closing `});` and BEFORE the outer `});` on line 206.
+
+Existing 4 sibling `it()` blocks in the channel-gate describe stay as-is (2-space indent, NOT nested in sub-describes). The 6 new nested describes use 2-space indent for `describe`, 4-space for `it`, 6-space for body — exactly as shown in the snippet.
 
 ```ts
   describe("sendBankReconnectPush", () => {
@@ -246,8 +250,8 @@ If a NON-push test newly fails, halt and report — likely unrelated drift; do n
 
 - [ ] **Step 6: Typecheck regression**
 
-Run: `pnpm --filter @fina/api typecheck`
-Expected: 0 errors.
+Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit`
+Expected: 0 errors. (apps/api has no `typecheck` npm script; tsc is invoked directly. `tsconfig.spec.json` includes the test files.)
 
 - [ ] **Step 7: Commit**
 
