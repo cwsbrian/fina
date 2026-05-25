@@ -6,6 +6,7 @@ export * from "./tier.js";
 export * from "./constants.js";
 export * from "./enums.js";
 export * from "./errors.js";
+export * from "./notifications.js";
 
 // Pricing / billing
 export * from "./pricing.js";

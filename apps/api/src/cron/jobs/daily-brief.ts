@@ -109,7 +109,10 @@ export async function runDailyBrief(env: Env): Promise<void> {
       });
 
       // Push notification (Plan 2C). Best-effort — brief is already in
-      // DB so push failure doesn't lose user data.
+      // DB so push failure doesn't lose user data. sendBriefPush checks
+      // the user's notificationPrefs.morningBrief internally and skips
+      // if the user opted out of the push (the brief still landed in
+      // their chat).
       try {
         const briefText = briefBlocksToText(blocks);
         const preview = markdownToPlainPreview(briefText);

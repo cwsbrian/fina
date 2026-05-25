@@ -1,7 +1,25 @@
 import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
 import { prisma } from "../db.js";
 import { logInfo, logWarn, logError } from "../logger.js";
+import {
+  resolveNotificationPrefs,
+  type NotificationPrefs,
+} from "@fina/shared";
 import type { Env } from "../env.js";
+
+/** Read the user's notification prefs and return whether the given
+ *  channel is enabled. Missing user or unset prefs use the defaults. */
+async function isChannelEnabled(
+  userId: string,
+  channel: keyof NotificationPrefs,
+): Promise<boolean> {
+  const u = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { notificationPrefs: true },
+  });
+  if (!u) return false;
+  return resolveNotificationPrefs(u.notificationPrefs)[channel];
+}
 
 /** Carrier-message: ExpoPushMessage extended with our DB row id so the
  *  receipt-error handler knows which UserDevice to delete on
@@ -11,15 +29,22 @@ type CarrierMessage = ExpoPushMessage & { __deviceId: string };
 /** Result of one push send pass for a single user. */
 export type PushSendResult = { sent: number; failed: number };
 
-/** Send the daily brief preview to all of `userId`'s registered devices.
- *  Fire-and-forget — catches its own errors. Returns counts for logging.
- *
- *  Cleans up stale tokens inline: a DeviceNotRegistered ticket triggers
- *  deletion of the UserDevice row so the next send doesn't retry. */
-export async function sendBriefPush(
+type PushPayload = {
+  title: string;
+  body: string;
+  /** Goes into the notification's data blob; mobile uses it to route
+   *  the user to the right screen when they tap. */
+  dataType: string;
+};
+
+/** Core send helper. Filters out registered devices into one Expo
+ *  request, persists ok tickets for the receipt-polling cron, deletes
+ *  stale-token devices, and returns send/fail counts. Used by the
+ *  per-channel wrappers below — they handle pref gating + copy. */
+async function sendToUserDevices(
   env: Env,
   userId: string,
-  briefText: string,
+  payload: PushPayload,
 ): Promise<PushSendResult> {
   const devices = await prisma.userDevice.findMany({ where: { userId } });
   if (devices.length === 0) {
@@ -42,9 +67,9 @@ export async function sendBriefPush(
     }
     messages.push({
       to: d.expoPushToken,
-      title: "Fina ☀️",
-      body: briefText,  // caller already truncated/cleaned via markdownToPlainPreview
-      data: { type: "daily-brief" },
+      title: payload.title,
+      body: payload.body,
+      data: { type: payload.dataType },
       sound: "default",
       priority: "high",
       __deviceId: d.id,
@@ -107,6 +132,64 @@ export async function sendBriefPush(
     }
   }
 
-  logInfo({ userId, deviceCount: devices.length, pushSent: sent, pushFailed: failed }, "push send done");
+  logInfo(
+    { userId, deviceCount: devices.length, pushSent: sent, pushFailed: failed, channel: payload.dataType },
+    "push send done",
+  );
   return { sent, failed };
+}
+
+/** Send the daily brief preview to all of `userId`'s registered devices.
+ *  Fire-and-forget — catches its own errors. Skips when the user
+ *  disabled the morningBrief channel. */
+export async function sendBriefPush(
+  env: Env,
+  userId: string,
+  briefText: string,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "morningBrief"))) {
+    logInfo({ userId, channel: "morningBrief" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  return sendToUserDevices(env, userId, {
+    title: "Fina ☀️",
+    body: briefText,
+    dataType: "daily-brief",
+  });
+}
+
+/** Plaid item entered relink_required / error. Tell the user so they
+ *  can reconnect before sync silently drifts. */
+export async function sendBankReconnectPush(
+  env: Env,
+  userId: string,
+  institutionName: string,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "bankReconnect"))) {
+    logInfo({ userId, channel: "bankReconnect" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  return sendToUserDevices(env, userId, {
+    title: "Reconnect your bank",
+    body: `${institutionName} stopped syncing — open Fina to reconnect.`,
+    dataType: "bank-reconnect",
+  });
+}
+
+/** Someone with an existing account was invited to a workspace. */
+export async function sendWorkspaceInvitePush(
+  env: Env,
+  userId: string,
+  inviterName: string,
+  workspaceName: string,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "workspaceInvites"))) {
+    logInfo({ userId, channel: "workspaceInvites" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  return sendToUserDevices(env, userId, {
+    title: "Workspace invite",
+    body: `${inviterName} invited you to ${workspaceName}.`,
+    dataType: "workspace-invite",
+  });
 }

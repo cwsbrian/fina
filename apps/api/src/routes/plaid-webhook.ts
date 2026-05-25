@@ -75,6 +75,7 @@ export async function plaidWebhookRoutes(app: FastifyInstance): Promise<void> {
       void dispatchItemEvent(
         item,
         parsed as { webhook_code: string; error?: { error_code?: string | null } | null },
+        app.fina.env,
       ).catch((e) => {
         logError({ err: e, plaidItemId: item.id }, "ITEM webhook dispatch failed");
       });

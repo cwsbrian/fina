@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { NotificationPrefsSchema } from "../notifications.js";
 
 // Note: `Intl.supportedValuesOf` is Node 20+ / modern browsers. Used at schema
 // build time (module load). If your env doesn't support it, replace this with
@@ -31,6 +32,7 @@ export const PatchMeBody = z.object({
       { message: "invalid IANA tz" },
     )
     .optional(),
+  notificationPrefs: NotificationPrefsSchema.optional(),
 }).strict();
 
 export type PatchMeBody = z.infer<typeof PatchMeBody>;

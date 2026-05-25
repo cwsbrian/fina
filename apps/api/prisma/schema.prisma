@@ -37,6 +37,12 @@ model User {
   snoozeUntil  DateTime?
   pauseEnabled Boolean   @default(false)
 
+  /// Per-type push notification preferences. Shape:
+  ///   { morningBrief, bankReconnect, workspaceInvites, trialExpiring,
+  ///     goalMilestones, largeCharges, productUpdates: boolean }
+  /// Missing keys read as the type's default (see libs/shared/src/notifications.ts).
+  notificationPrefs Json?
+
   // Better Auth relations
   sessions Session[]
   accounts Account[]

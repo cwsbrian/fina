@@ -313,8 +313,8 @@ export default function More() {
           <SettingsRow
             icon="notifications-outline"
             title="Notifications"
-            detail="All on"
-            onPress={comingSoon("Notifications")}
+            detail={notificationsDetail(me)}
+            onPress={() => router.push("/notifications" as never)}
           />
           <SettingsRow
             icon="construct-outline"
@@ -414,6 +414,16 @@ export default function More() {
       <View style={[styles.statusBarBg, { height: insets.top }]} />
     </View>
   );
+}
+
+function notificationsDetail(me: Me | null): string {
+  if (!me?.user.notificationPrefs) return "—";
+  const prefs = me.user.notificationPrefs;
+  const keys = Object.keys(prefs) as Array<keyof typeof prefs>;
+  const on = keys.filter((k) => prefs[k]).length;
+  if (on === 0) return "All off";
+  if (on === keys.length) return "All on";
+  return `${on} on`;
 }
 
 function briefSubtitle(me: Me | null): string {

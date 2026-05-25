@@ -3,7 +3,13 @@ import type { $Enums, Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError, requireSession } from "../auth/context.js";
 import { computeEffectiveTier } from "../auth/tier.js";
-import { ACTIVE_SUBSCRIPTION_STATUSES, PatchMeBody, type MeDTO, type SubscriptionDTO } from "@fina/shared";
+import {
+  ACTIVE_SUBSCRIPTION_STATUSES,
+  PatchMeBody,
+  resolveNotificationPrefs,
+  type MeDTO,
+  type SubscriptionDTO,
+} from "@fina/shared";
 import { localMidnightToUtc } from "../chat/tools/periods.js";
 
 /** Convert "YYYY-MM-DD" + tz → UTC instant at NOON in that tz. Noon (not
@@ -51,6 +57,7 @@ function toMeDTO(
       morningTime: user.morningTime,
       snoozeUntil: snoozeUntilStr,
       pauseEnabled: user.pauseEnabled,
+      notificationPrefs: resolveNotificationPrefs(user.notificationPrefs),
     },
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
@@ -89,6 +96,19 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       if (body.morningTime !== undefined) data.morningTime = body.morningTime;
       if (body.pauseEnabled !== undefined) data.pauseEnabled = body.pauseEnabled;
       if (body.tz !== undefined) data.tz = body.tz;
+      if (body.notificationPrefs !== undefined) {
+        // Partial patch: merge incoming keys on top of whatever's stored
+        // (or defaults if nothing stored yet).
+        const existing = await prisma.user.findUniqueOrThrow({
+          where: { id: session.userId },
+          select: { notificationPrefs: true },
+        });
+        const current = resolveNotificationPrefs(existing.notificationPrefs);
+        data.notificationPrefs = {
+          ...current,
+          ...body.notificationPrefs,
+        } as unknown as Prisma.InputJsonValue;
+      }
       if (body.snoozeUntil !== undefined) {
         // null clears; "YYYY-MM-DD" sets to UTC noon in user's tz.
         if (body.snoozeUntil === null) {

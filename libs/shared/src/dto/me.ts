@@ -1,5 +1,6 @@
 import type { Tier } from "../tier.js";
 import type { SubscriptionDTO } from "./subscription.js";
+import type { NotificationPrefs } from "../notifications.js";
 
 /** Response of `GET /me`. Use this everywhere — never re-declare. */
 export type MeDTO = {
@@ -13,6 +14,9 @@ export type MeDTO = {
     morningTime: string;          // "HH:mm" 24h format
     snoozeUntil: string | null;   // ISO date string "YYYY-MM-DD" or null
     pauseEnabled: boolean;
+    /** Per-type push notification prefs, fully resolved (server applies
+     *  defaults so the client always sees every key). */
+    notificationPrefs: NotificationPrefs;
   };
   tier: Tier;
   trial: {

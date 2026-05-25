@@ -11,6 +11,8 @@ import {
   InviteServiceError,
 } from "../workspaces/invites.js";
 import { sendInviteEmail } from "../email/invite.js";
+import { sendWorkspaceInvitePush } from "../push/send.js";
+import { displayName } from "@fina/shared";
 import { logError } from "../logger.js";
 
 function mapInviteError(e: unknown): { statusCode: number; code: string } {
@@ -90,6 +92,25 @@ export async function inviteRoutes(app: FastifyInstance): Promise<void> {
         logError({ err: sendErr }, `invite email send failed (inviteId=${invite.id})`);
         return reply.code(502).send({ error: "email_send_failed" });
       }
+      // Best-effort push to the invitee IF they already have an account.
+      // Wrapped + caught so a push failure never blocks the invite flow.
+      try {
+        const invitee = await prisma.user.findUnique({
+          where: { email: invite.invitedEmail },
+          select: { id: true },
+        });
+        if (invitee) {
+          await sendWorkspaceInvitePush(
+            app.fina.env,
+            invitee.id,
+            displayName({ name: inviter.name, email: inviter.email }),
+            ws.name,
+          );
+        }
+      } catch (pushErr) {
+        logError({ err: pushErr, inviteId: invite.id }, "invite push send failed");
+      }
+
       return reply.code(201).send({
         invite: {
           id: invite.id,
