@@ -21,14 +21,14 @@
 **Files:**
 - Modify: `apps/api/tests/push.send.test.ts` (append before final `});` of channel-gate block at line 206)
 
-- [ ] **Step 1: Read current state**
+- [x] **Step 1: Read current state**
 
 Run: `wc -l apps/api/tests/push.send.test.ts`
 Expected: `206 apps/api/tests/push.send.test.ts`. Last meaningful line is `});` at 206 closing the `channel gate (notificationPrefs)` describe.
 
 **Guardrail:** Do NOT edit `apps/api/src/push/send.ts` — production code stays unchanged. The pre-existing `logInfo` meta label `"trialExpiringPush"` on `send.ts:186` (vs channel key `"trialExpiring"`) is intentional out-of-scope cosmetic noise; leave it.
 
-- [ ] **Step 2: Insert 6 nested describes inside `channel gate (notificationPrefs)`**
+- [x] **Step 2: Insert 6 nested describes inside `channel gate (notificationPrefs)`**
 
 Locate the end of the last existing `it()` body — the line containing `expect(spy).toHaveBeenCalledTimes(1);` (around line 204) followed by `});` on the next line — and the OUTER `});` on line 206 that closes the `channel gate (notificationPrefs)` describe. Insert the 6 nested describes AFTER the last existing `it()`'s closing `});` and BEFORE the outer `});` on line 206.
 
@@ -216,7 +216,7 @@ Existing 4 sibling `it()` blocks in the channel-gate describe stay as-is (2-spac
   });
 ```
 
-- [ ] **Step 3: Verify file structure**
+- [x] **Step 3: Verify file structure**
 
 Run: `grep -c "^  describe(" apps/api/tests/push.send.test.ts`
 Expected: `6` (the 6 new nested describes; outer `channel gate` describe is at column 0).
