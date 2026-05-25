@@ -331,6 +331,28 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  app.post<{ Params: { id: string; txId: string } }>(
+    "/workspaces/:id/transactions/:txId/snooze-category",
+    async (req, reply) => {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== req.params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const tx = await prisma.transaction.findFirst({
+        where: { id: req.params.txId, workspaceId: ctx.membership.workspaceId, removedAt: null },
+        select: { id: true },
+      });
+      if (!tx) return reply.code(404).send({ error: "transaction_not_found" });
+
+      const dismissedUntil = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      await prisma.transactionAllocation.updateMany({
+        where: { transactionId: tx.id },
+        data: { dismissedUntil },
+      });
+      return reply.code(200).send({ ok: true, dismissedUntil: dismissedUntil.toISOString() });
+    },
+  );
+
   app.post<{ Params: { id: string } }>(
     "/workspaces/:id/transactions/manual",
     async (req, reply) => {

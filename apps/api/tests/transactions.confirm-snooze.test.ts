@@ -85,3 +85,31 @@ describe("POST /workspaces/:id/transactions/:txId/confirm-category", () => {
     expect(map?.source).toBe("auto");
   });
 });
+
+describe("POST /workspaces/:id/transactions/:txId/snooze-category", () => {
+  it("sets dismissedUntil ~7d from now, keeps needsConfirmation=true", async () => {
+    const { cookie, wsId, txId } = await setup();
+    const r = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/transactions/${txId}/snooze-category`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(r.statusCode).toBe(200);
+    const alloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: txId } });
+    expect(alloc?.needsConfirmation).toBe(true);
+    expect(alloc?.dismissedUntil).not.toBeNull();
+    const futureMs = alloc!.dismissedUntil!.getTime() - Date.now();
+    expect(futureMs).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
+    expect(futureMs).toBeLessThan(8 * 24 * 60 * 60 * 1000);
+  });
+
+  it("returns 404 for missing tx", async () => {
+    const { cookie, wsId } = await setup();
+    const r = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/transactions/nope/snooze-category`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(r.statusCode).toBe(404);
+  });
+});
