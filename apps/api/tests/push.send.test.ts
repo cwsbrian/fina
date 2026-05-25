@@ -28,7 +28,10 @@ beforeEach(async () => { await truncateAll(); });
 afterEach(() => { vi.restoreAllMocks(); });  // Vitest singleFork — prevent spy leakage across files.
 afterAll(async () => { await disconnect(); });
 
-async function makeUserWithDevices(tokens: Array<{ token: string; platform: "ios" | "android" }>) {
+async function makeUserWithDevices(
+  tokens: Array<{ token: string; platform: "ios" | "android" }>,
+  notificationPrefs?: Record<string, boolean>,
+) {
   const u = await prisma.user.create({
     data: { id: `push-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
             email: `push-${Date.now()}@t.co`, name: "P" },
@@ -36,6 +39,12 @@ async function makeUserWithDevices(tokens: Array<{ token: string; platform: "ios
   for (const t of tokens) {
     await prisma.userDevice.create({
       data: { userId: u.id, expoPushToken: t.token, platform: t.platform },
+    });
+  }
+  if (notificationPrefs) {
+    await prisma.user.update({
+      where: { id: u.id },
+      data: { notificationPrefs },
     });
   }
   return u;
@@ -137,5 +146,61 @@ describe("sendBriefPush", () => {
     // Malformed token gets filtered before send; only 1 ticket expected.
     expect(sendSpy).toHaveBeenCalledTimes(1);
     expect(result.sent).toBe(1);
+  });
+});
+
+describe("channel gate (notificationPrefs)", () => {
+  it("sendBriefPush respects morningBrief: false (no Expo call)", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+    const u = await makeUserWithDevices(
+      [{ token: "ExponentPushToken[gate-mb-off]", platform: "ios" }],
+      { morningBrief: false },
+    );
+
+    const { sendBriefPush } = await import("../src/push/send.js");
+    await sendBriefPush(testEnv(), u.id, "brief text");
+
+    expect(spy).toHaveBeenCalledTimes(0);
+  });
+
+  it("sendBriefPush with default prefs (null - Expo called once)", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[gate-mb-on]", platform: "ios" },
+    ]);
+
+    const { sendBriefPush } = await import("../src/push/send.js");
+    await sendBriefPush(testEnv(), u.id, "brief text");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it("sendLargeChargePush respects largeCharges: false (no Expo call)", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+    const u = await makeUserWithDevices(
+      [{ token: "ExponentPushToken[gate-lc-off]", platform: "ios" }],
+      { largeCharges: false },
+    );
+
+    const { sendLargeChargePush } = await import("../src/push/send.js");
+    await sendLargeChargePush(testEnv(), u.id, "Best Buy", "200.00", "Electronics");
+
+    expect(spy).toHaveBeenCalledTimes(0);
+  });
+
+  it("sendLargeChargePush with default prefs (null - Expo called once)", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[gate-lc-on]", platform: "ios" },
+    ]);
+
+    const { sendLargeChargePush } = await import("../src/push/send.js");
+    await sendLargeChargePush(testEnv(), u.id, "Best Buy", "200.00", "Electronics");
+
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
