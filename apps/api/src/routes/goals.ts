@@ -23,7 +23,7 @@ type GoalRow = {
     categoryId: string;
     monthlyAmount: Prisma.Decimal;
     rationale: string | null;
-    category: { name: string };
+    category: { name: string; icon: string | null; color: string | null };
   }>;
 };
 
@@ -44,6 +44,8 @@ function dto(g: GoalRow, computedSaved: number): unknown {
     allocations: g.allocations.map((a) => ({
       categoryId: a.categoryId,
       categoryName: a.category.name,
+      categoryIcon: a.category.icon,
+      categoryColor: a.category.color,
       monthlyAmount: a.monthlyAmount.toFixed(2),
       rationale: a.rationale,
     })),
@@ -55,7 +57,9 @@ function dto(g: GoalRow, computedSaved: number): unknown {
 
 const goalInclude = {
   allocations: {
-    include: { category: { select: { name: true } } },
+    include: {
+      category: { select: { name: true, icon: true, color: true } },
+    },
     orderBy: { monthlyAmount: "desc" as const },
   },
 };

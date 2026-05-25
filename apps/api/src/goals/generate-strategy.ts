@@ -284,6 +284,83 @@ function monthsBetween(a: Date, b: Date): number {
   );
 }
 
+/** Adjust LLM-produced cut amounts so the sum matches the required
+ *  monthly pace, while respecting per-category 60%-of-discretionary
+ *  ceilings. LLMs often round each item to neat numbers and the sum
+ *  ends up short by $3–$20; this closes that gap so 130/mo × 15mo
+ *  actually equals the user's $2000 target. */
+function normalizePlanToPace(
+  items: GoalStrategyItem[],
+  categories: CategoryAnalysis[],
+  requiredPace: number,
+): GoalStrategyItem[] {
+  if (items.length === 0 || requiredPace <= 0) return items;
+  const target = Math.round(requiredPace);
+  const byName = new Map(
+    categories.map((c) => [c.categoryName.toLowerCase(), c]),
+  );
+  const ceilings = items.map((i) => {
+    const c = byName.get(i.categoryName.toLowerCase());
+    return c ? Math.floor(c.discretionaryMonthly * 0.6) : i.monthlyAmount;
+  });
+  let amounts = items.map((i, idx) =>
+    Math.min(i.monthlyAmount, ceilings[idx]!),
+  );
+  let sum = amounts.reduce((a, b) => a + b, 0);
+
+  if (sum > target) {
+    // Scale down proportionally.
+    const ratio = target / sum;
+    amounts = amounts.map((a) => Math.round(a * ratio));
+  } else if (sum < target) {
+    // Scale up proportionally to slack (ceiling - current), capped at
+    // each item's ceiling. Any rounding remainder is distributed below.
+    const slack = amounts.map((a, i) => ceilings[i]! - a);
+    const totalSlack = slack.reduce((a, b) => a + b, 0);
+    if (totalSlack > 0) {
+      const fill = Math.min(target - sum, totalSlack);
+      const ratio = fill / totalSlack;
+      amounts = amounts.map((a, i) => a + Math.floor(slack[i]! * ratio));
+    }
+  }
+
+  // Re-clamp to per-item ceilings + non-negative.
+  amounts = amounts.map((a, i) => Math.max(0, Math.min(a, ceilings[i]!)));
+
+  // Distribute any rounding-error remainder to the items with the most
+  // slack so the final sum lands exactly on target (unless ceilings
+  // simply don't allow it).
+  let finalSum = amounts.reduce((a, b) => a + b, 0);
+  if (finalSum < target) {
+    let diff = target - finalSum;
+    const order = amounts
+      .map((a, i) => ({ idx: i, slack: ceilings[i]! - a }))
+      .sort((x, y) => y.slack - x.slack);
+    for (const o of order) {
+      if (diff <= 0) break;
+      const add = Math.min(diff, o.slack);
+      amounts[o.idx] = (amounts[o.idx] ?? 0) + add;
+      diff -= add;
+    }
+  } else if (finalSum > target) {
+    let diff = finalSum - target;
+    const order = amounts
+      .map((a, i) => ({ idx: i, amt: a }))
+      .sort((x, y) => y.amt - x.amt);
+    for (const o of order) {
+      if (diff <= 0) break;
+      const cut = Math.min(diff, amounts[o.idx] ?? 0);
+      amounts[o.idx] = (amounts[o.idx] ?? 0) - cut;
+      diff -= cut;
+    }
+  }
+
+  return items.map((it, idx) => ({
+    ...it,
+    monthlyAmount: amounts[idx] ?? it.monthlyAmount,
+  }));
+}
+
 /** Generate + persist a strategy for the given goal. Failures are
  *  swallowed — the goal stays usable without a strategy, the UI will
  *  show "no plan yet" and the user can regenerate later. */
@@ -297,6 +374,7 @@ export async function generateAndStoreGoalStrategy(
   const saved = Number(goal.savedAmount);
   const due = goal.dueDate;
   const months = monthsBetween(new Date(), due);
+  const requiredMonthly = Math.max(0, (target - saved) / Math.max(1, months));
   const categories = await analyzeCategories(goal.workspaceId);
   const prompt = buildPrompt({
     goalTitle: goal.title,
@@ -354,6 +432,11 @@ export async function generateAndStoreGoalStrategy(
         }
         return item;
       });
+      // Then nudge the sum toward the required monthly pace so
+      // amount × monthsRemaining actually closes the goal gap — the
+      // LLM frequently rounds to neat numbers and lands a few dollars
+      // short. Per-item ceilings still bound everything.
+      items = normalizePlanToPace(items, categories, requiredMonthly);
     }
   } catch {
     // Generation failed — store an empty strategy with a notice so the

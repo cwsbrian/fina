@@ -5,6 +5,11 @@ export type GoalAllocationDTO = {
   categoryId: string;
   /** Joined from `categories.name` for display. */
   categoryName: string;
+  /** Joined from `categories.icon` so the row glyph can match the
+   *  same icon the category uses elsewhere. Null when no icon set. */
+  categoryIcon: string | null;
+  /** Joined from `categories.color`. Null when no color is set. */
+  categoryColor: string | null;
   /** Decimal serialized as a string. */
   monthlyAmount: string;
   /** LLM-generated one-liner; may be null if the row was created

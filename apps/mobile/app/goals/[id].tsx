@@ -24,6 +24,8 @@ import {
   goalStatus,
   withAlpha,
 } from "../../src/goals/meta";
+import { categoryMeta } from "../../src/categories/meta";
+import type { CategoryDTO } from "@fina/shared";
 
 export default function GoalDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -164,18 +166,33 @@ export default function GoalDetail() {
               />
             </View>
             <View style={styles.heroAxis}>
-              <Text style={styles.axisText}>{pct}%</Text>
-              <Text style={[styles.axisText, { color: statusFg(status) }]}>
+              <Text
+                style={[
+                  styles.axisText,
+                  { color: statusFg(status), fontWeight: "600" },
+                ]}
+              >
+                {pct}%
+              </Text>
+              <View style={styles.axisDot} />
+              <Text
+                style={[styles.axisText, { color: statusFg(status) }]}
+                numberOfLines={1}
+              >
                 {status === "on-track"
-                  ? `On track · ${formatDue(due, new Date())}`
+                  ? "On track"
                   : status === "behind"
-                    ? `Behind · ${formatDue(due, new Date())}`
+                    ? "Behind"
                     : status === "done"
                       ? "Done"
                       : "Paused"}
               </Text>
-              <Text style={styles.axisText}>
-                {formatMoney(remaining.toFixed(2)).display} to go
+              <View style={styles.axisDot} />
+              <Text
+                style={styles.axisText}
+                numberOfLines={1}
+              >
+                {formatDue(due, new Date())}
               </Text>
             </View>
           </View>
@@ -291,7 +308,7 @@ function PathSection({
   return (
     <>
       <View style={styles.pathHead}>
-        <Text style={styles.groupLabel}>
+        <Text style={styles.pathHeadLabel}>
           {allocations.length > 0 ? `Path · $${totalMo.toFixed(0)}/mo` : "Path"}
         </Text>
         <Pressable
@@ -323,26 +340,37 @@ function PathSection({
         </View>
       ) : (
         <View style={styles.group}>
-          {allocations.map((item, idx) => (
-            <View
-              key={item.categoryId}
-              style={[
-                styles.pathRow,
-                idx === allocations.length - 1 && { borderBottomWidth: 0 },
-              ]}
-            >
-              <View style={[styles.pathRowGlyph, { backgroundColor: withAlpha(accent, 0.12) }]}>
-                <Ionicons name="trending-down-outline" size={14} color={accent} />
+          {allocations.map((item, idx) => {
+            // Build the minimum shape categoryMeta needs from the
+            // joined category fields on the allocation.
+            const catShape = {
+              id: item.categoryId,
+              name: item.categoryName,
+              icon: item.categoryIcon,
+              color: item.categoryColor,
+            } as unknown as CategoryDTO;
+            const meta = categoryMeta(catShape);
+            return (
+              <View
+                key={item.categoryId}
+                style={[
+                  styles.pathRow,
+                  idx === allocations.length - 1 && { borderBottomWidth: 0 },
+                ]}
+              >
+                <View style={[styles.pathRowGlyph, { backgroundColor: meta.bg }]}>
+                  <Ionicons name={meta.icon} size={14} color={meta.fg} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.pathRowTitle}>{item.categoryName}</Text>
+                  {item.rationale && (
+                    <Text style={styles.pathRowMeta}>{item.rationale}</Text>
+                  )}
+                </View>
+                <Text style={styles.pathRowAmt}>+${Number(item.monthlyAmount).toFixed(0)}</Text>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.pathRowTitle}>{item.categoryName}</Text>
-                {item.rationale && (
-                  <Text style={styles.pathRowMeta}>{item.rationale}</Text>
-                )}
-              </View>
-              <Text style={styles.pathRowAmt}>+${Number(item.monthlyAmount).toFixed(0)}</Text>
-            </View>
-          ))}
+            );
+          })}
         </View>
       )}
     </>
@@ -445,10 +473,17 @@ const styles = StyleSheet.create({
   barFill: { height: "100%", borderRadius: 999 },
   heroAxis: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    alignItems: "center",
+    gap: 8,
     marginTop: 8,
   },
-  axisText: { ...type$.bodySm, color: colors.muted },
+  axisText: { ...type$.bodySm, color: colors.muted, flexShrink: 1 },
+  axisDot: {
+    width: 3,
+    height: 3,
+    borderRadius: 999,
+    backgroundColor: colors.mutedSoft,
+  },
 
   groupLabel: {
     ...type$.bodySm,
@@ -489,10 +524,17 @@ const styles = StyleSheet.create({
   pathHead: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-end",
+    alignItems: "center",
     paddingHorizontal: space.lg,
     paddingTop: space.lg,
     paddingBottom: space.xs,
+  },
+  pathHeadLabel: {
+    ...type$.bodySm,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    fontWeight: "600",
   },
   regenText: { ...type$.bodySm, color: colors.primary, fontWeight: "600" },
   pathHint: {
