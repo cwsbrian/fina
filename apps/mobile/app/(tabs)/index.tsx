@@ -116,8 +116,6 @@ export default function Home() {
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
       >
-        <Text style={styles.subgreeting}>Welcome to Fina.</Text>
-
         {me?.trial?.active && days !== null && (
           <View style={styles.trialBanner}>
             <Ionicons name="sparkles" size={16} color={colors.navy} />
@@ -181,9 +179,12 @@ export default function Home() {
         ]}
       >
         <View style={styles.head}>
-          <Text style={styles.title} numberOfLines={1}>
-            Hi{greetingName ? `, ${greetingName}` : ""}
-          </Text>
+          <View>
+            <Text style={styles.title} numberOfLines={1}>
+              Hi{greetingName ? `, ${greetingName}` : ""}
+            </Text>
+            <Text style={styles.subtitle}>Welcome to Fina.</Text>
+          </View>
         </View>
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
@@ -218,12 +219,8 @@ const styles = StyleSheet.create({
     height: HEADER_HEIGHT,
   },
   title: { ...type$.titleLg, color: colors.ink },
+  subtitle: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   scroll: { padding: space.lg, paddingBottom: space.xxl },
-  subgreeting: {
-    ...type$.bodyMd,
-    color: colors.body,
-    marginBottom: space.lg,
-  },
   trialBanner: {
     flexDirection: "row",
     alignItems: "center",
