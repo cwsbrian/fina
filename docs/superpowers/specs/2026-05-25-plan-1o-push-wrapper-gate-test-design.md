@@ -16,12 +16,13 @@
 | `sendProductUpdatePush` | `productUpdates` | `(env, userId, title, body)` |
 | `sendWorkspaceInvitePush` | `workspaceInvites` | `(env, userId, inviterName, workspaceName)` |
 
-Gate code (`isChannelEnabled(userId, channel)` → `sendToUserDevices`) is **byte-identical** across all 8 wrappers — only `channel` key, `dataType`, and `title`/`body` formatting differ.
+Gate code (`isChannelEnabled(userId, channel)` → `sendToUserDevices`) is **structurally identical** across all 8 wrappers — only `channel` key, `dataType`, and `title`/`body` formatting differ.
 
-Add 6 smoke tests — one disabled-channel assertion per wrapper. The enabled-path is implicitly covered: every wrapper shares the same `sendToUserDevices(env, userId, payload)` call site that Plan 1N's enabled tests (`sendBriefPush` + `sendLargeChargePush` with default prefs) already exercise.
+Add **12 smoke tests** — one disabled-channel assertion + one enabled (default) assertion per wrapper. R2 spec review caught that disabled-only tests would miss a wrapper with broken `sendToUserDevices` wiring (e.g., wrong `userId` variable, accidental early-return before the call). The paired enabled assertion closes that gap with minimal LOC overhead.
+
+Structured as **6 nested describes** (one per wrapper) inside the existing `describe("channel gate (notificationPrefs)", ...)` block — improves diagnostic clarity on failures vs 12 sibling `it()` blocks with near-identical names.
 
 **Out of scope:**
-- Enabled-path tests per wrapper (gate is the only branch — payload formatting belongs in a separate plan if anyone cares).
 - Title/body/dataType payload-content assertions (already implicit in the prod code; would only catch typo regressions, low value).
 - `isChannelEnabled` direct unit test (private function — exercised via 8 wrappers).
 - New channel additions or schema changes.
@@ -36,36 +37,54 @@ Add 6 smoke tests — one disabled-channel assertion per wrapper. The enabled-pa
 
 ## 4. Test additions — `apps/api/tests/push.send.test.ts`
 
-Extend the existing `describe("channel gate (notificationPrefs)", ...)` block (currently 4 tests, lines 152-206) with 6 new tests. **One commit.**
+Extend the existing `describe("channel gate (notificationPrefs)", ...)` block (currently 4 tests, lines 152-206) with **6 nested `describe` blocks (one per wrapper), 2 tests each**. **One commit.**
 
-### Pattern (identical for each wrapper)
+### Pattern per nested describe
 
 ```ts
-it("send<Wrapper> respects <channel>: false (no Expo call)", async () => {
-  const { Expo } = await import("expo-server-sdk");
-  const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
-  const u = await makeUserWithDevices(
-    [{ token: "ExponentPushToken[gate-<short>-off]", platform: "ios" }],
-    { <channel>: false },
-  );
+describe("send<Wrapper>", () => {
+  it("respects <channel>: false (no Expo call)", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+    const u = await makeUserWithDevices(
+      [{ token: "ExponentPushToken[gate-<short>-off]", platform: "ios" }],
+      { <channel>: false },
+    );
 
-  const { send<Wrapper> } = await import("../src/push/send.js");
-  await send<Wrapper>(testEnv(), u.id, /* wrapper-specific args */);
+    const { send<Wrapper> } = await import("../src/push/send.js");
+    await send<Wrapper>(testEnv(), u.id, /* wrapper-specific args */);
 
-  expect(spy).toHaveBeenCalledTimes(0);
+    expect(spy).toHaveBeenCalledTimes(0);
+  });
+
+  it("default prefs → Expo called once", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t" }]);
+    vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[gate-<short>-on]", platform: "ios" },
+    ]);
+
+    const { send<Wrapper> } = await import("../src/push/send.js");
+    await send<Wrapper>(testEnv(), u.id, /* wrapper-specific args */);
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
 });
 ```
 
+**Enabled-path pattern detail**: the enabled assertion uses `mockResolvedValueOnce([{ status: "ok", id: "t" }])` so the receipt-processing path doesn't throw on the empty default `[]` return. Matches the existing `sendBriefPush > one device — calls Expo once` test at `push.send.test.ts:62-76`.
+
 ### Per-wrapper invocations
 
-| # | Test description | Wrapper call |
-|---|---|---|
-| 1 | `sendBankReconnectPush respects bankReconnect: false (no Expo call)` | `sendBankReconnectPush(testEnv(), u.id, "Chase")` |
-| 2 | `sendTrialExpiringPush respects trialExpiring: false (no Expo call)` | `sendTrialExpiringPush(testEnv(), u.id, 3)` |
-| 3 | `sendGoalMilestonePush respects goalMilestones: false (no Expo call)` | `sendGoalMilestonePush(testEnv(), u.id, "Emergency Fund", 50)` |
-| 4 | `sendTransactionAddedPush respects transactionAdded: false (no Expo call)` | `sendTransactionAddedPush(testEnv(), u.id, "Coffee", "5.50", "Food")` |
-| 5 | `sendProductUpdatePush respects productUpdates: false (no Expo call)` | `sendProductUpdatePush(testEnv(), u.id, "New feature", "Try it now")` |
-| 6 | `sendWorkspaceInvitePush respects workspaceInvites: false (no Expo call)` | `sendWorkspaceInvitePush(testEnv(), u.id, "Alice", "Family")` |
+| # | Wrapper | Channel | Disabled token short | Enabled token short | Args (both tests) |
+|---|---|---|---|---|---|
+| 1 | `sendBankReconnectPush` | `bankReconnect` | `gate-br-off` | `gate-br-on` | `"Chase"` |
+| 2 | `sendTrialExpiringPush` | `trialExpiring` | `gate-te-off` | `gate-te-on` | `3` |
+| 3 | `sendGoalMilestonePush` | `goalMilestones` | `gate-gm-off` | `gate-gm-on` | `"Emergency Fund", 50` |
+| 4 | `sendTransactionAddedPush` | `transactionAdded` | `gate-ta-off` | `gate-ta-on` | `"Coffee", "5.50", "Food"` |
+| 5 | `sendProductUpdatePush` | `productUpdates` | `gate-pu-off` | `gate-pu-on` | `"New feature", "Try it now"` |
+| 6 | `sendWorkspaceInvitePush` | `workspaceInvites` | `gate-wi-off` | `gate-wi-on` | `"Alice", "Family"` |
 
 ### Setup/teardown — reused as-is
 
@@ -76,7 +95,7 @@ File header at `push.send.test.ts:1-51` already provides:
 
 No helper changes. No new mock setup. No new `vi.mock` calls. No production code.
 
-**Commit:** `test(api): push/send channel gate — 6 remaining sendXxxPush wrappers`
+**Commit:** `test(api): push/send channel gate — 6 remaining sendXxxPush wrappers (12 tests)`
 
 ## 5. Risks
 
@@ -91,7 +110,7 @@ No helper changes. No new mock setup. No new `vi.mock` calls. No production code
 
 ## 6. Success criteria
 
-- 6 new tests pass.
+- 12 new tests pass (6 nested describes × 2 tests).
 - All 10 existing `push.send.test.ts` tests still pass.
 - Full `@fina/api` suite regression: 0 fail.
 - Typecheck baseline unchanged.
@@ -99,7 +118,7 @@ No helper changes. No new mock setup. No new `vi.mock` calls. No production code
 
 ## 7. Follow-ups (별도 plans)
 
-- Enabled-path per-wrapper tests (assert dataType + title/body formatting per channel). Low priority — only catches formatting typos.
+- Payload-content assertions per wrapper (assert `dataType` + `title`/`body` formatting). Low priority — only catches formatting typos.
 - HTTP route integration tests covering each wrapper's caller (e.g., POST /workspaces/{id}/invites firing `sendWorkspaceInvitePush`).
 - Mobile `/notifications` UI screen tests.
 - `NotificationPrefsSchema` PATCH validation tests (non-boolean values, malformed JSON).
