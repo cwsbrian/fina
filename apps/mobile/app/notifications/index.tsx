@@ -186,36 +186,55 @@ export default function NotificationSettings() {
           <View key={section.label} style={styles.section}>
             <Text style={styles.groupLabel}>{section.label}</Text>
             <View style={styles.group}>
-              {section.rows.map((r, idx) => (
-                <View
-                  key={r.key}
-                  style={[
-                    styles.row,
-                    idx > 0 && styles.rowBorder,
-                  ]}
-                >
-                  <View style={styles.rowBody}>
-                    <View style={styles.rowTitleRow}>
-                      <Text style={styles.rowTitle}>{r.title}</Text>
-                      {r.comingSoon && (
-                        <View style={styles.soonPill}>
-                          <Text style={styles.soonPillText}>Soon</Text>
-                        </View>
+              {section.rows.map((r, idx) => {
+                const briefGated =
+                  r.key === "morningBrief" && me.user.pauseEnabled;
+                return (
+                  <View
+                    key={r.key}
+                    style={[
+                      styles.row,
+                      idx > 0 && styles.rowBorder,
+                    ]}
+                  >
+                    <View style={styles.rowBody}>
+                      <View style={styles.rowTitleRow}>
+                        <Text
+                          style={[
+                            styles.rowTitle,
+                            briefGated && styles.rowTitleMuted,
+                          ]}
+                        >
+                          {r.title}
+                        </Text>
+                        {r.comingSoon && (
+                          <View style={styles.soonPill}>
+                            <Text style={styles.soonPillText}>Soon</Text>
+                          </View>
+                        )}
+                      </View>
+                      {briefGated ? (
+                        <Pressable onPress={() => router.push("/brief" as never)}>
+                          <Text style={styles.rowSubLink}>
+                            Brief is off. Turn it on in Brief settings.
+                          </Text>
+                        </Pressable>
+                      ) : (
+                        <Text style={styles.rowSub}>{r.sub}</Text>
                       )}
                     </View>
-                    <Text style={styles.rowSub}>{r.sub}</Text>
+                    <Switch
+                      value={prefs[r.key] && !briefGated}
+                      onValueChange={(v) => toggle(r.key, v)}
+                      disabled={saving || briefGated}
+                      trackColor={{
+                        true: colors.primary,
+                        false: colors.surfaceStrong,
+                      }}
+                    />
                   </View>
-                  <Switch
-                    value={prefs[r.key]}
-                    onValueChange={(v) => toggle(r.key, v)}
-                    disabled={saving}
-                    trackColor={{
-                      true: colors.primary,
-                      false: colors.surfaceStrong,
-                    }}
-                  />
-                </View>
-              ))}
+                );
+              })}
             </View>
           </View>
         ))}
@@ -410,7 +429,14 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   rowTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
+  rowTitleMuted: { color: colors.muted },
   rowSub: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
+  rowSubLink: {
+    ...type$.bodySm,
+    color: colors.primary,
+    marginTop: 2,
+    textDecorationLine: "underline",
+  },
   soonPill: {
     paddingHorizontal: 6,
     paddingVertical: 1,
