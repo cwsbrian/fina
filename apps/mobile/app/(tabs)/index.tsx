@@ -9,7 +9,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 
-const HEADER_HEIGHT = 58;
+const HEADER_HEIGHT = 72;
 
 type ChecklistItem = {
   id: "set-budget" | "connect-bank" | "set-goal" | "morning-brief";
@@ -211,11 +211,10 @@ const styles = StyleSheet.create({
   },
   head: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     paddingHorizontal: space.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
+    paddingTop: 12,
     height: HEADER_HEIGHT,
   },
   title: { ...type$.titleLg, color: colors.ink },

@@ -26,7 +26,7 @@ import {
   formatDue,
 } from "../../src/goals/meta";
 
-const HEADER_HEIGHT = 58;
+const HEADER_HEIGHT = 72;
 
 export default function Goals() {
   const [me, setMe] = useState<Me | null>(null);
@@ -177,12 +177,14 @@ export default function Goals() {
               </Text>
             )}
           </View>
-          <HeaderIconButton
-            icon="add"
-            size={22}
-            accessibilityLabel="New goal"
-            onPress={() => router.push("/goals/new" as never)}
-          />
+          <View style={styles.headActions}>
+            <HeaderIconButton
+              icon="add"
+              size={22}
+              accessibilityLabel="New goal"
+              onPress={() => router.push("/goals/new" as never)}
+            />
+          </View>
         </View>
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
@@ -314,15 +316,15 @@ const styles = StyleSheet.create({
   },
   head: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     paddingHorizontal: space.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
+    paddingTop: 12,
     height: HEADER_HEIGHT,
   },
   title: { ...type$.titleLg, color: colors.ink },
   subtitle: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
+  headActions: { alignSelf: "center" },
   body: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
   iconWrap: {
     width: 72,

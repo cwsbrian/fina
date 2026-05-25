@@ -26,7 +26,7 @@ import { type DateRange } from "../../src/datetime/DateRangeSheet";
 import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
 import { ConnectBankButton } from "../../src/plaid/ConnectBankButton";
 
-const HEADER_HEIGHT = 58;
+const HEADER_HEIGHT = 72;
 
 type TxListResp = {
   transactions: TransactionDTO[];
@@ -509,17 +509,25 @@ const styles = StyleSheet.create({
     zIndex: 11,
     backgroundColor: colors.canvas,
   },
+  // Title pinned to a fixed top offset so its Y is identical whether
+  // or not a subtitle is present below it. Action buttons override the
+  // parent flex-start with alignSelf: center so they stay vertically
+  // centered in the full header height.
   head: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     paddingHorizontal: space.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
+    paddingTop: 12,
     height: HEADER_HEIGHT,
   },
   title: { ...type$.titleLg, color: colors.ink },
-  headActions: { flexDirection: "row", alignItems: "center", gap: 6 },
+  headActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "center",
+    gap: 6,
+  },
   searchWrap: {
     flex: 1,
     flexDirection: "row",

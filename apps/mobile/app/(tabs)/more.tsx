@@ -12,7 +12,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 
-const HEADER_HEIGHT = 58;
+const HEADER_HEIGHT = 72;
 import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -500,11 +500,10 @@ const styles = StyleSheet.create({
   },
   head: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     justifyContent: "space-between",
     paddingHorizontal: space.lg,
-    paddingTop: space.sm,
-    paddingBottom: space.sm,
+    paddingTop: 12,
     height: HEADER_HEIGHT,
   },
   safe: { flex: 1, backgroundColor: colors.canvas },
