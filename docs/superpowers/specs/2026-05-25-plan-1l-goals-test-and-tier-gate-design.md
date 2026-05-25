@@ -99,7 +99,9 @@ export const PatchGoalBody = z
 
 ## 3. Production change — Pro-gate on goals.ts
 
-3 routes get the gate inserted directly after `requireWorkspaceContext` and BEFORE the workspace-mismatch check (mirrors existing patterns in `budgets.ts` and `budget-plans.ts`).
+3 routes get the gate inserted **AFTER** the workspace-mismatch check (mirrors `budget-plans.ts:170-178` + `budgets.ts:37-41,90-94` existing pattern — verified via R2). Order: `requireWorkspaceContext` → `workspace_mismatch` 400 → `effectiveTier` → `upgrade_required` 402 → handler body.
+
+This ordering means a Free-tier user with a wsId mismatch still gets `400 workspace_mismatch` (not 402). Matches `budget-plans` test expectations.
 
 Add import:
 ```ts
@@ -129,7 +131,7 @@ Follows the `recurring.routes.test.ts` + `budget-plans.routes.test.ts` pattern:
 **GET list** (3):
 - 401 no session
 - 200 happy path (empty list initially after truncate)
-- 200 happy path (Pro user with seeded goal)
+- 200 happy path with seeded goal via direct `prisma.goal.create` (avoids Pro setup since GET is free; same workspace as the user)
 
 **GET detail** (3):
 - 401 no session
@@ -240,7 +242,7 @@ No separate `vi.spyOn(strategyMod, ...)` needed — the partial `vi.mock` factor
 3 commits (per CLAUDE.md shared-first rule + clean revert paths):
 - **T1**: `@fina/shared` — `CreateGoalBody` + `PatchGoalBody` dueDate refine + `minDueDateOneMonthUTC` export.
 - **T2**: API — `goals.ts` Pro-gate on 3 LLM-touching routes.
-- **T3**: API tests — `goals.routes.test.ts` new file with 25 tests.
+- **T3**: API tests — `goals.routes.test.ts` new file with 27 tests.
 
 ## 9. Follow-ups (별도 plan)
 
