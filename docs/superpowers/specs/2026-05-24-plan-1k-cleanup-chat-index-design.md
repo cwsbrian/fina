@@ -84,11 +84,11 @@ Timestamp via `date -u +%Y%m%d%H%M%S`.
    ```
    Expected: clean output (no syntax errors).
 
-1.5. **Auto-name check** — verify Prisma's expected index name matches:
+1.5. **Auto-name check** — verify Prisma's expected index name matches. Use tight pattern (column names are double-quoted in emitted SQL) to avoid false positives from unrelated indexes:
    ```bash
-   cd apps/api && pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script | grep "CREATE INDEX.*chat_threads.*userId.*archivedAt.*lastMessageAt"
+   cd apps/api && pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script | grep '"chat_threads"' | grep '"lastMessageAt"'
    ```
-   Expected name: `chat_threads_userId_archivedAt_lastMessageAt_idx`. If different, add `map: "chat_threads_userId_archivedAt_lastMessageAt_idx"` to the `@@index` attribute in schema and re-run.
+   Expected line includes the exact name `chat_threads_userId_archivedAt_lastMessageAt_idx`. If different, add `map: "chat_threads_userId_archivedAt_lastMessageAt_idx"` to the `@@index` attribute in schema and re-run.
 
 2. **Apply migration**:
    ```bash
@@ -108,7 +108,13 @@ Timestamp via `date -u +%Y%m%d%H%M%S`.
    cd apps/api && pnpm exec prisma migrate dev --name regression_check --create-only
    ```
    Expected: "No schema changes found." (Prisma 5.22 wording) → no migration file generated. Confirms `@@index` registration prevents future auto-DROP.
-   If a directory got created with non-empty `migration.sql`, inspect it — any `DROP INDEX "chat_threads_userId_archivedAt_lastMessageAt_idx"` line means schema/DB out of sync (treat as blocker, debug before continuing). Empty/absent dir is the success state.
+
+   **Any non-empty `migration.sql` is a blocker**:
+   - `DROP INDEX "chat_threads_userId_archivedAt_lastMessageAt_idx"` line → schema/DB sync drift (this fix didn't take), debug before continuing.
+   - `CREATE INDEX` with a name different from the existing one → step 1.5's naming fallback was missed; return to 1.5 and add `map:`.
+   - 그 외 무엇이든 → unexpected, investigate.
+
+   Empty/absent dir is the success state.
 
 5. **Test gate**:
    ```bash
