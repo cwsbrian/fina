@@ -5,6 +5,7 @@ import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { generateAndStoreGoalStrategy } from "../goals/generate-strategy.js";
 import { computeGoalSavings } from "../goals/savings.js";
+import { effectiveTier } from "../auth/tier.js";
 
 type GoalRow = {
   id: string;
@@ -141,6 +142,10 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
+      const tier = await effectiveTier(ctx.session.userId);
+      if (tier.tier !== "pro") {
+        return reply.code(402).send({ error: "upgrade_required" });
+      }
       const created = await prisma.goal.create({
         data: {
           workspaceId: ctx.membership.workspaceId,
@@ -182,6 +187,10 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const tier = await effectiveTier(ctx.session.userId);
+        if (tier.tier !== "pro") {
+          return reply.code(402).send({ error: "upgrade_required" });
         }
         const row = await prisma.goal.findFirst({
           where: { id: req.params.goalId, workspaceId: ctx.membership.workspaceId },
@@ -226,6 +235,10 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
+        }
+        const tier = await effectiveTier(ctx.session.userId);
+        if (tier.tier !== "pro") {
+          return reply.code(402).send({ error: "upgrade_required" });
         }
         const row = await prisma.goal.findFirst({
           where: { id: req.params.goalId, workspaceId: ctx.membership.workspaceId },
