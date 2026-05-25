@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -18,38 +18,53 @@ import BottomSheet, {
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
-import { useMemo, useRef } from "react";
 import type { MeDTO as Me } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
-function formatTime(hhmm: string): string {
-  const [hStr, mStr] = hhmm.split(":");
-  const h = Number(hStr);
-  const m = Number(mStr);
-  if (!Number.isFinite(h) || !Number.isFinite(m)) return hhmm;
-  const date = new Date();
-  date.setHours(h, m, 0, 0);
-  return date.toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
-
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
 }
-
 function toHHmm(d: Date): string {
   return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
 }
-
 function hhmmToDate(hhmm: string): Date {
   const [hStr, mStr] = hhmm.split(":");
   const d = new Date();
   d.setHours(Number(hStr) || 8, Number(mStr) || 0, 0, 0);
   return d;
+}
+function splitTime(hhmm: string): { h12: string; mm: string; ampm: string } {
+  const [hStr, mStr] = hhmm.split(":");
+  const h = Number(hStr) || 8;
+  const m = Number(mStr) || 0;
+  const ampm = h >= 12 ? "PM" : "AM";
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return { h12: String(h12), mm: pad2(m), ampm };
+}
+function formatSnooze(iso: string | null): string {
+  if (!iso) return "Off";
+  const d = new Date(iso);
+  const now = new Date();
+  if (d.getTime() <= now.getTime()) return "Off";
+  return `Until ${d.toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+}
+
+type SnoozeOption = { key: string; label: string; daysAhead: number | null };
+const SNOOZE_OPTIONS: SnoozeOption[] = [
+  { key: "off", label: "Off — keep sending", daysAhead: null },
+  { key: "1d", label: "1 day", daysAhead: 1 },
+  { key: "3d", label: "3 days", daysAhead: 3 },
+  { key: "1w", label: "1 week", daysAhead: 7 },
+  { key: "1mo", label: "1 month", daysAhead: 30 },
+];
+
+function daysAheadIso(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 export default function MorningBriefSettings() {
@@ -57,6 +72,7 @@ export default function MorningBriefSettings() {
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
+  const [pauseOpen, setPauseOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -72,31 +88,23 @@ export default function MorningBriefSettings() {
     load();
   }, [load]);
 
-  const patch = useCallback(
-    async (body: Record<string, unknown>) => {
-      setSaving(true);
-      try {
-        const m = await apiFetch<Me>("/me", {
-          method: "PATCH",
-          body: JSON.stringify(body),
-        });
-        setMe(m);
-      } catch (e) {
-        Alert.alert(
-          "Couldn't save",
-          (e as { code?: string }).code ?? "Try again.",
-        );
-      } finally {
-        setSaving(false);
-      }
-    },
-    [],
-  );
-
-  const onTimeConfirm = (next: Date) => {
-    setTimeOpen(false);
-    patch({ morningTime: toHHmm(next) });
-  };
+  const patch = useCallback(async (body: Record<string, unknown>) => {
+    setSaving(true);
+    try {
+      const m = await apiFetch<Me>("/me", {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+      setMe(m);
+    } catch (e) {
+      Alert.alert(
+        "Couldn't save",
+        (e as { code?: string }).code ?? "Try again.",
+      );
+    } finally {
+      setSaving(false);
+    }
+  }, []);
 
   if (!me) {
     return (
@@ -120,38 +128,60 @@ export default function MorningBriefSettings() {
     );
   }
 
+  const morningTime = me.user.morningTime ?? "08:00";
+  const t = splitTime(morningTime);
+  const enabled = !me.user.pauseEnabled;
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
       <Header />
       <ScrollView contentContainerStyle={styles.scroll}>
-        <Text style={styles.lead}>
-          Fina drops a short summary every morning — categorize anything new,
-          flag scheduled items, nudge you on budget. Set when to receive it
-          and pause anytime.
-        </Text>
+        <View style={styles.hero}>
+          <View style={styles.heroGlyph}>
+            <Ionicons name="sunny-outline" size={26} color={colors.primary} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.heroTitle}>Daily morning brief</Text>
+            <Text style={styles.heroSub}>
+              Fina sends one push each morning with yesterday's activity and
+              what's coming.
+            </Text>
+          </View>
+        </View>
 
         <Text style={styles.groupLabel}>Delivery</Text>
         <View style={styles.group}>
+          <View style={styles.row}>
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Get the brief</Text>
+              <Text style={styles.rowSub}>Push on days with new activity</Text>
+            </View>
+            <Switch
+              value={enabled}
+              onValueChange={(v) => patch({ pauseEnabled: !v })}
+              disabled={saving}
+              trackColor={{ true: colors.primary, false: colors.surfaceStrong }}
+            />
+          </View>
+
           <Pressable
             style={({ pressed }) => [
               styles.row,
+              styles.rowBorder,
               pressed && { backgroundColor: colors.surfaceSoft },
             ]}
             onPress={() => setTimeOpen(true)}
-            disabled={saving}
+            disabled={saving || !enabled}
           >
-            <View style={styles.rowGlyph}>
-              <Ionicons name="time-outline" size={18} color={colors.muted} />
-            </View>
             <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Brief time</Text>
-              <Text style={styles.rowSub}>
-                Every morning at {formatTime(me.user.morningTime ?? "08:00")}
+              <Text style={[styles.rowTitle, !enabled && { color: colors.muted }]}>
+                Delivery time
               </Text>
+              <Text style={styles.rowSub}>Tap to change</Text>
             </View>
-            <Text style={styles.rowDetail}>
-              {formatTime(me.user.morningTime ?? "08:00")}
+            <Text style={[styles.rowDetail, !enabled && { color: colors.mutedSoft }]}>
+              {t.h12}:{t.mm} {t.ampm}
             </Text>
             <Ionicons
               name="chevron-forward"
@@ -162,37 +192,86 @@ export default function MorningBriefSettings() {
           </Pressable>
 
           <View style={[styles.row, styles.rowBorder]}>
-            <View style={styles.rowGlyph}>
-              <Ionicons name="pause-outline" size={18} color={colors.muted} />
-            </View>
             <View style={styles.rowBody}>
-              <Text style={styles.rowTitle}>Pause briefings</Text>
-              <Text style={styles.rowSub}>
-                {me.user.pauseEnabled
-                  ? "Paused — Fina won't send a brief until you turn this off."
-                  : "Skip the morning brief without losing your time setting."}
-              </Text>
+              <Text style={styles.rowTitle}>Time zone</Text>
+              <Text style={styles.rowSub}>Profile setting</Text>
             </View>
-            <Switch
-              value={me.user.pauseEnabled}
-              onValueChange={(v) => patch({ pauseEnabled: v })}
-              disabled={saving}
-              trackColor={{ true: colors.primary, false: colors.surfaceStrong }}
-            />
+            <Text style={styles.rowDetail}>{me.user.tz}</Text>
           </View>
         </View>
 
+        {/* Big time hero — design's centerpiece. */}
+        <View style={styles.timeHero}>
+          <Text style={styles.timeNum}>{t.h12}</Text>
+          <Text style={styles.timeColon}>:</Text>
+          <Text style={styles.timeNum}>{t.mm}</Text>
+          <Text style={styles.timeAmpm}>{t.ampm}</Text>
+        </View>
+
+        <Text style={styles.groupLabel}>Pause</Text>
+        <View style={styles.group}>
+          <Pressable
+            style={({ pressed }) => [
+              styles.row,
+              pressed && { backgroundColor: colors.surfaceSoft },
+            ]}
+            onPress={() => setPauseOpen(true)}
+            disabled={saving}
+          >
+            <View style={styles.rowBody}>
+              <Text style={styles.rowTitle}>Pause briefs</Text>
+              <Text style={styles.rowSub}>Useful for vacations</Text>
+            </View>
+            <Text style={styles.rowDetail}>{formatSnooze(me.user.snoozeUntil)}</Text>
+            <Ionicons
+              name="chevron-forward"
+              size={14}
+              color={colors.mutedSoft}
+              style={{ marginLeft: 4 }}
+            />
+          </Pressable>
+        </View>
+
+        <Pressable
+          style={({ pressed }) => [
+            styles.testBtn,
+            pressed && { opacity: 0.7 },
+          ]}
+          onPress={() =>
+            Alert.alert(
+              "Send a test brief",
+              "On-demand briefs are on the way — for now the next one drops at your delivery time.",
+            )
+          }
+        >
+          <Ionicons name="paper-plane-outline" size={16} color={colors.primary} />
+          <Text style={styles.testBtnText}>Send me one now</Text>
+        </Pressable>
+
         <Text style={styles.helper}>
-          Briefs use the timezone on your account ({me.user.tz}). Change it
-          from More → Profile if you've moved.
+          Fina skips the brief on days with no new transactions.
         </Text>
       </ScrollView>
 
       <TimePickerSheet
         visible={timeOpen}
-        initial={hhmmToDate(me.user.morningTime ?? "08:00")}
+        initial={hhmmToDate(morningTime)}
         onClose={() => setTimeOpen(false)}
-        onConfirm={onTimeConfirm}
+        onConfirm={(d) => {
+          setTimeOpen(false);
+          patch({ morningTime: toHHmm(d) });
+        }}
+      />
+      <PauseSheet
+        visible={pauseOpen}
+        snoozeUntil={me.user.snoozeUntil}
+        onClose={() => setPauseOpen(false)}
+        onSelect={(daysAhead) => {
+          setPauseOpen(false);
+          patch({
+            snoozeUntil: daysAhead === null ? null : daysAheadIso(daysAhead),
+          });
+        }}
       />
     </SafeAreaView>
   );
@@ -290,6 +369,83 @@ function TimePickerSheet({
   );
 }
 
+function PauseSheet({
+  visible,
+  snoozeUntil,
+  onClose,
+  onSelect,
+}: {
+  visible: boolean;
+  snoozeUntil: string | null;
+  onClose: () => void;
+  onSelect: (daysAhead: number | null) => void;
+}) {
+  const ref = useRef<BottomSheet>(null);
+  const snapPoints = useMemo(() => ["48%"], []);
+  const isActive = !!snoozeUntil && new Date(snoozeUntil).getTime() > Date.now();
+
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        opacity={0.35}
+        pressBehavior="close"
+      />
+    ),
+    [],
+  );
+
+  return (
+    <BottomSheet
+      ref={ref}
+      snapPoints={snapPoints}
+      enableDynamicSizing={false}
+      index={visible ? 0 : -1}
+      backdropComponent={renderBackdrop}
+      onClose={onClose}
+      handleIndicatorStyle={sheetStyles.grabber}
+      backgroundStyle={sheetStyles.background}
+      enablePanDownToClose
+    >
+      <BottomSheetView style={sheetStyles.body}>
+        <View style={sheetStyles.head}>
+          <Pressable onPress={() => ref.current?.close()} hitSlop={8}>
+            <Text style={sheetStyles.cancel}>Cancel</Text>
+          </Pressable>
+          <Text style={sheetStyles.title}>Pause briefs</Text>
+          <View style={{ width: 50 }} />
+        </View>
+        <View style={sheetStyles.pauseList}>
+          {SNOOZE_OPTIONS.map((opt) => {
+            const isOff = opt.daysAhead === null;
+            const isSelected = isOff ? !isActive : false;
+            return (
+              <Pressable
+                key={opt.key}
+                onPress={() => {
+                  ref.current?.close();
+                  onSelect(opt.daysAhead);
+                }}
+                style={({ pressed }) => [
+                  sheetStyles.pauseRow,
+                  pressed && { backgroundColor: colors.surfaceSoft },
+                ]}
+              >
+                <Text style={sheetStyles.pauseRowText}>{opt.label}</Text>
+                {isSelected && (
+                  <Ionicons name="checkmark" size={18} color={colors.primary} />
+                )}
+              </Pressable>
+            );
+          })}
+        </View>
+      </BottomSheetView>
+    </BottomSheet>
+  );
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   nav: {
@@ -315,17 +471,33 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  lead: {
-    ...type$.bodyMd,
-    color: colors.body,
+  hero: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.base,
+    backgroundColor: "rgba(62, 179, 139, 0.10)",
+    borderRadius: 16,
+    padding: space.base,
     marginBottom: space.lg,
   },
+  heroGlyph: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    backgroundColor: "rgba(62, 179, 139, 0.16)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  heroTitle: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+  heroSub: { ...type$.bodySm, color: colors.body, marginTop: 2 },
+
   groupLabel: {
     ...type$.captionStrong,
     color: colors.muted,
     textTransform: "uppercase",
     letterSpacing: 0.6,
     marginBottom: space.sm,
+    marginTop: space.base,
   },
   group: {
     backgroundColor: colors.canvas,
@@ -345,24 +517,56 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.hairlineSoft,
   },
-  rowGlyph: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: colors.surfaceSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
   rowBody: { flex: 1, minWidth: 0 },
   rowTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   rowSub: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   rowDetail: { ...type$.bodyMd, color: colors.body },
 
+  timeHero: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "center",
+    gap: 4,
+    marginTop: space.lg,
+  },
+  timeNum: {
+    fontSize: 56,
+    fontWeight: "300",
+    color: colors.ink,
+    letterSpacing: -2,
+    fontVariant: ["tabular-nums"],
+  },
+  timeColon: {
+    fontSize: 44,
+    fontWeight: "300",
+    color: colors.mutedSoft,
+    marginHorizontal: 2,
+  },
+  timeAmpm: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: colors.muted,
+    marginLeft: 8,
+    letterSpacing: 1,
+  },
+
+  testBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 14,
+    backgroundColor: "rgba(62, 179, 139, 0.10)",
+    borderRadius: 999,
+    marginTop: space.lg,
+  },
+  testBtnText: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
+
   helper: {
     ...type$.bodySm,
     color: colors.muted,
-    marginTop: space.lg,
     textAlign: "center",
+    marginTop: space.base,
     paddingHorizontal: space.lg,
   },
 });
@@ -382,13 +586,21 @@ const sheetStyles = StyleSheet.create({
     paddingHorizontal: space.lg,
     paddingTop: space.xs,
     paddingBottom: space.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
   },
   title: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
   cancel: { ...type$.bodyMd, color: colors.muted },
   done: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
-  pickerWrap: {
-    flex: 1,
+  pickerWrap: { flex: 1, alignItems: "center", justifyContent: "center" },
+
+  pauseList: { flex: 1, paddingVertical: 4 },
+  pauseRow: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.lg,
+    paddingVertical: 14,
   },
+  pauseRowText: { ...type$.bodyMd, color: colors.ink },
 });
