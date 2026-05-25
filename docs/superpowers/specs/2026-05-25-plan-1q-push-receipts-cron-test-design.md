@@ -105,9 +105,20 @@ async function createTicket(opts: {
   return t.id;
 }
 
-async function mockReceipts(map: Record<string, unknown>) {
+/** Returns the spy so tests can assert call count directly.
+ *  Pass `{ throws: err }` to mock a rejection (test 10). */
+async function mockReceipts(
+  map: Record<string, unknown>,
+  opts: { throws?: Error } = {},
+) {
   const { Expo } = await import("expo-server-sdk");
-  vi.spyOn(Expo.prototype, "getPushNotificationReceiptsAsync").mockResolvedValue(map);
+  const spy = vi.spyOn(Expo.prototype, "getPushNotificationReceiptsAsync");
+  if (opts.throws) {
+    spy.mockRejectedValue(opts.throws);
+  } else {
+    spy.mockResolvedValue(map);
+  }
+  return spy;
 }
 ```
 
@@ -115,16 +126,16 @@ async function mockReceipts(map: Record<string, unknown>) {
 
 | # | Setup | Mocked receipts response | Expected |
 |---|---|---|---|
-| 1 | No tickets in DB | — | Early return, no Expo call. Verify via `vi.mocked(Expo.prototype.getPushNotificationReceiptsAsync)` spy `toHaveBeenCalledTimes(0)`. |
-| 2 | Ticket sentAt = 30 minutes ago (within 1h window) | — | Filter excludes; no Expo call. `expect(spy).toHaveBeenCalledTimes(0)`. |
-| 3 | Ticket already polledAt (≠ null), sentAt 2h ago | — | Filter excludes; no Expo call. |
-| 4 | 1 ticket sentAt 2h ago, polledAt null | `mockResolvedValueOnce({})` (Expo doesn't have it yet) | spy called once. Ticket UNCHANGED (`polledAt` STILL null). |
+| 1 | No tickets in DB | — | Early return, no Expo call. Acquire spy via `mockReceipts({})`; assert `toHaveBeenCalledTimes(0)`. |
+| 2 | Ticket sentAt = 30 minutes ago (within 1h window) | — | Filter excludes; spy called 0 times. |
+| 3 | Ticket already polledAt (≠ null), sentAt 2h ago | — | Filter excludes; spy called 0 times. |
+| 4 | 1 ticket sentAt 2h ago, polledAt null | `mockReceipts({})` (Expo doesn't have it yet) | Spy called once. Ticket UNCHANGED (`polledAt` STILL null). |
 | 5 | 1 ticket, status ok | `{ "tick-1": { status: "ok" } }` | Ticket updated: `polledAt !== null`, `status === "ok"`, `errorCode === null`. |
 | 6 | 1 UserDevice + 1 ticket, DNR error | `{ "tick-2": { status: "error", message: "...", details: { error: "DeviceNotRegistered" } } }` | UserDevice deleted (`count === 0`). Ticket also deleted via FK CASCADE (`pushTicket.count === 0`). |
 | 7 | 1 ticket, InvalidCredentials error | `{ "tick-3": { status: "error", message: "creds bad", details: { error: "InvalidCredentials" } } }` | Ticket updated: `status === "error"`, `errorCode === "InvalidCredentials"`, `polledAt !== null`. UserDevice **NOT** deleted. |
 | 8 | 1 ticket, MessageRateExceeded error | `{ "tick-4": { status: "error", message: "...", details: { error: "MessageRateExceeded" } } }` | Ticket updated: `status === "error"`, `errorCode === "MessageRateExceeded"`. UserDevice NOT deleted. |
-| 9 | **Same-batch cascade guard**: 1 UserDevice + 2 tickets (`tick-A` sentAt 3h ago, `tick-B` sentAt 2h ago — orderBy asc → A processed first) | `{ "tick-A": DNR, "tick-B": ok }` | Cron does NOT throw P2025. UserDevice deleted (count=0). Both tickets gone via CASCADE (`pushTicket.count === 0`). |
-| 10 | Expo SDK throws (`mockRejectedValueOnce(new Error("network"))`) | rejected | Cron does NOT throw. logError called. Ticket UNCHANGED (`polledAt` still null). |
+| 9 | **Same-batch cascade guard**: 1 UserDevice + 2 tickets (`tick-A` sentAt 3h ago, `tick-B` sentAt 2h ago — orderBy asc → A processed first) | `{ "tick-A": DNR, "tick-B": ok }` | **LEAD assertion: `await expect(runPushReceipts(env)).resolves.not.toThrow()`** (guard prevents P2025). Corroborating: UserDevice + both tickets gone via CASCADE. |
+| 10 | Expo SDK throws (`mockReceipts({}, { throws: new Error("network") })`) | rejected | Cron does NOT throw. Ticket UNCHANGED (`polledAt` still null). logError called implicitly — not spied (Plan 1P precedent). |
 
 **Assertion pattern**:
 - Use `vi.mocked(Expo.prototype.getPushNotificationReceiptsAsync).mock.calls.length` for spy count.
