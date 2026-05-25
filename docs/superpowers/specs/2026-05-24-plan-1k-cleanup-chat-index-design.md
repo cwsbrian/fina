@@ -66,11 +66,16 @@ CREATE INDEX IF NOT EXISTS "chat_threads_userId_archivedAt_lastMessageAt_idx"
 
 Timestamp via `date -u +%Y%m%d%H%M%S`.
 
-**중요 detail**: index 이름 `chat_threads_userId_archivedAt_lastMessageAt_idx`은 Prisma 5.x의 @@index auto-naming convention (`<table>_<cols>_idx`)과 정확히 일치. 추가 인덱스 없이 schema-DB 동기화됨.
+**중요 detail**: index 이름 `chat_threads_userId_archivedAt_lastMessageAt_idx`은 Prisma 5.x의 @@index auto-naming convention (`<table>_<cols>_idx`)과 일치 (53 chars, Postgres 63-char limit 안). 단 Prisma 5.5+의 `sort`/`nulls` modifier가 들어가면 이름 생성 규칙이 minor variant될 수 있어서 **fallback**:
+
+- §5 step 1.5에서 `prisma migrate diff --from-empty --to-schema-datamodel`으로 Prisma가 생성하는 정확한 이름 확인.
+- 만약 이름이 다르면 `@@index` 라인에 `map: "chat_threads_userId_archivedAt_lastMessageAt_idx"` 추가해서 forced rename.
 
 ## 5. Verification gates
 
 순서대로 진행:
+
+0. **Create migration file** (`<timestamp>_chat_listing_index_in_schema/migration.sql`) with the exact SQL from §4 before any subsequent step. Manual write — no `prisma migrate dev --create-only` here because we want to control the SQL.
 
 1. **Schema validation**:
    ```bash
@@ -78,6 +83,12 @@ Timestamp via `date -u +%Y%m%d%H%M%S`.
    pnpm --filter @fina/api exec prisma format
    ```
    Expected: clean output (no syntax errors).
+
+1.5. **Auto-name check** — verify Prisma's expected index name matches:
+   ```bash
+   cd apps/api && pnpm exec prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script | grep "CREATE INDEX.*chat_threads.*userId.*archivedAt.*lastMessageAt"
+   ```
+   Expected name: `chat_threads_userId_archivedAt_lastMessageAt_idx`. If different, add `map: "chat_threads_userId_archivedAt_lastMessageAt_idx"` to the `@@index` attribute in schema and re-run.
 
 2. **Apply migration**:
    ```bash
@@ -96,8 +107,8 @@ Timestamp via `date -u +%Y%m%d%H%M%S`.
    ```bash
    cd apps/api && pnpm exec prisma migrate dev --name regression_check --create-only
    ```
-   Expected: "Already in sync, no schema change or pending migration was found." — confirms no auto-DROP generated.
-   (Discard the generated migration dir if any was created — it should be empty/absent.)
+   Expected: "No schema changes found." (Prisma 5.22 wording) → no migration file generated. Confirms `@@index` registration prevents future auto-DROP.
+   If a directory got created with non-empty `migration.sql`, inspect it — any `DROP INDEX "chat_threads_userId_archivedAt_lastMessageAt_idx"` line means schema/DB out of sync (treat as blocker, debug before continuing). Empty/absent dir is the success state.
 
 5. **Test gate**:
    ```bash
@@ -122,7 +133,7 @@ Timestamp via `date -u +%Y%m%d%H%M%S`.
 | @@index addition으로 Prisma migrate dev autogen이 별도 CREATE INDEX 만들어냄 | §5 step 4가 정확히 이걸 detect. "Already in sync"가 나와야 함. 그 외 출력 시 SQL 검토 후 hand-edit. |
 | Production DB에 index 이미 존재 (대부분 케이스) | IF NOT EXISTS로 idempotent. 추가 작업 0. |
 | `prisma format`이 index 줄 순서 재배치 → diff 노이즈 | format 후 git diff 확인하면 명확. 의도된 reformat은 commit에 포함. |
-| Concurrent test execution이 chat_threads에 락 걸려 migration 실패 | dev/test DB은 단독 사용자라 락 충돌 없음. CI는 사용자 안 함. |
+| 기존 `_ensure_chat_listing_index` migration이 redundant해 보임 | 그대로 두기 — fresh-clone lexical replay 시 historical 정확성 필요. 삭제하면 production replay 깨짐. |
 
 ## 8. Success criteria
 
