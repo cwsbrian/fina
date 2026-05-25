@@ -65,13 +65,25 @@ expect(txs).toHaveLength(2);
 expect(new Set(txs.map((t) => t.accountId))).toEqual(new Set([accounts[0]!.id]));
 
 // After:
+const manualBefore = await prisma.bankAccount.count({
+  where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
+});
+// (2nd createManualTransactionService call happens between these — see test flow)
 const txs = await prisma.transaction.findMany({ where: { workspaceId: wsId } });
 expect(txs).toHaveLength(2);
 // Both transactions reused the same manual account (reuse semantics);
 // account identity doesn't matter — just that they collapsed onto one.
 const accountIds = new Set(txs.map((t) => t.accountId));
 expect(accountIds.size).toBe(1);
+// Belt+suspenders: confirm the 2nd call didn't silently create a 6th
+// manual row alongside the reuse.
+const manualAfter = await prisma.bankAccount.count({
+  where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
+});
+expect(manualAfter).toBe(manualBefore);
 ```
+
+**Note**: in actual test code, `manualBefore` should be captured AFTER setup but BEFORE the first service call. Reorganize accordingly during implementation.
 
 **Test #4** ("does NOT reuse a ghost ex-Plaid account"): 핵심은 ghost account가 픽업 안 되는 것. Reuse target이 어느 시드인지는 무관:
 ```ts
