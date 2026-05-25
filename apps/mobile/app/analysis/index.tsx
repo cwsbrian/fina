@@ -401,6 +401,10 @@ function SpendBreakdown({
       color: meta.fg,
     };
   });
+  // Sort by amount descending so the biggest slice — Uncategorized
+  // very often — leads the legend instead of getting dropped off the
+  // bottom when the list is truncated.
+  segments.sort((a, b) => b.amount - a.amount);
 
   const size = 140;
   const stroke = 18;
@@ -454,7 +458,7 @@ function SpendBreakdown({
         </SvgText>
       </Svg>
       <View style={styles.legend}>
-        {segments.slice(0, 5).map((s) => (
+        {segments.map((s) => (
           <View key={s.key} style={styles.legendRow}>
             <View style={[styles.legendDot, { backgroundColor: s.color }]} />
             <Text style={styles.legendName} numberOfLines={1}>
