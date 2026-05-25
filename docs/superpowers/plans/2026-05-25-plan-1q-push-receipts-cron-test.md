@@ -6,7 +6,7 @@
 
 **Architecture:** Module-level `vi.mock("expo-server-sdk")` defines an Expo class with prototype methods (matching real SDK). Per-test `vi.spyOn(Expo.prototype, "getPushNotificationReceiptsAsync")` (via `mockReceipts` helper that returns the spy). Real Postgres :5433 + `truncateAll` in `beforeEach`. `afterEach(vi.restoreAllMocks)` restores spies; module-mock factory survives. Precedent: `apps/api/tests/push.send.test.ts:12-28`.
 
-**Tech Stack:** Vitest 1.x, prisma, Expo SDK mock.
+**Tech Stack:** Vitest 2.x, prisma, Expo SDK mock.
 
 ---
 
