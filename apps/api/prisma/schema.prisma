@@ -596,7 +596,11 @@ model ChatThread {
   workspace Workspace?    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
 
-  // Index lives in the migration SQL because @@index can't express NULLS LAST.
+  // Supports the chat-thread listing query at apps/api/src/chat/threads.ts:
+  //   findMany WHERE userId = ? ORDER BY archivedAt ASC, lastMessageAt DESC NULLS LAST.
+  // Prisma 5.5+ supports the `nulls` keyword in @@index — that's why this
+  // can finally live in schema instead of raw migration SQL.
+  @@index([userId, archivedAt, lastMessageAt(sort: Desc, nulls: Last)])
   @@map("chat_threads")
 }
 
