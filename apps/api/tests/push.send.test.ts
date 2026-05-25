@@ -203,4 +203,184 @@ describe("channel gate (notificationPrefs)", () => {
 
     expect(spy).toHaveBeenCalledTimes(1);
   });
+
+  describe("sendBankReconnectPush", () => {
+    it("respects bankReconnect: false (no Expo call)", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+      const u = await makeUserWithDevices(
+        [{ token: "ExponentPushToken[gate-br-off]", platform: "ios" }],
+        { bankReconnect: false },
+      );
+
+      const { sendBankReconnectPush } = await import("../src/push/send.js");
+      await sendBankReconnectPush(testEnv(), u.id, "Chase");
+
+      expect(spy).toHaveBeenCalledTimes(0);
+    });
+
+    it("default prefs → Expo called once", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-br" }]);
+      vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[gate-br-on]", platform: "ios" },
+      ]);
+
+      const { sendBankReconnectPush } = await import("../src/push/send.js");
+      await sendBankReconnectPush(testEnv(), u.id, "Chase");
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("sendTrialExpiringPush", () => {
+    it("respects trialExpiring: false (no Expo call)", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+      const u = await makeUserWithDevices(
+        [{ token: "ExponentPushToken[gate-te-off]", platform: "ios" }],
+        { trialExpiring: false },
+      );
+
+      const { sendTrialExpiringPush } = await import("../src/push/send.js");
+      await sendTrialExpiringPush(testEnv(), u.id, 3);
+
+      expect(spy).toHaveBeenCalledTimes(0);
+    });
+
+    it("default prefs → Expo called once", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-te" }]);
+      vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[gate-te-on]", platform: "ios" },
+      ]);
+
+      const { sendTrialExpiringPush } = await import("../src/push/send.js");
+      await sendTrialExpiringPush(testEnv(), u.id, 3);
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("sendGoalMilestonePush", () => {
+    it("respects goalMilestones: false (no Expo call)", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+      const u = await makeUserWithDevices(
+        [{ token: "ExponentPushToken[gate-gm-off]", platform: "ios" }],
+        { goalMilestones: false },
+      );
+
+      const { sendGoalMilestonePush } = await import("../src/push/send.js");
+      await sendGoalMilestonePush(testEnv(), u.id, "Emergency Fund", 50);
+
+      expect(spy).toHaveBeenCalledTimes(0);
+    });
+
+    it("default prefs → Expo called once", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-gm" }]);
+      vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[gate-gm-on]", platform: "ios" },
+      ]);
+
+      const { sendGoalMilestonePush } = await import("../src/push/send.js");
+      await sendGoalMilestonePush(testEnv(), u.id, "Emergency Fund", 50);
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("sendTransactionAddedPush", () => {
+    it("respects transactionAdded: false (no Expo call)", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+      const u = await makeUserWithDevices(
+        [{ token: "ExponentPushToken[gate-ta-off]", platform: "ios" }],
+        { transactionAdded: false },
+      );
+
+      const { sendTransactionAddedPush } = await import("../src/push/send.js");
+      await sendTransactionAddedPush(testEnv(), u.id, "Coffee", "5.50", "Food");
+
+      expect(spy).toHaveBeenCalledTimes(0);
+    });
+
+    it("default prefs → Expo called once", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-ta" }]);
+      vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[gate-ta-on]", platform: "ios" },
+      ]);
+
+      const { sendTransactionAddedPush } = await import("../src/push/send.js");
+      await sendTransactionAddedPush(testEnv(), u.id, "Coffee", "5.50", "Food");
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("sendProductUpdatePush", () => {
+    it("respects productUpdates: false (no Expo call)", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+      const u = await makeUserWithDevices(
+        [{ token: "ExponentPushToken[gate-pu-off]", platform: "ios" }],
+        { productUpdates: false },
+      );
+
+      const { sendProductUpdatePush } = await import("../src/push/send.js");
+      await sendProductUpdatePush(testEnv(), u.id, "New feature", "Try it now");
+
+      expect(spy).toHaveBeenCalledTimes(0);
+    });
+
+    it("default prefs → Expo called once", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-pu" }]);
+      vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[gate-pu-on]", platform: "ios" },
+      ]);
+
+      const { sendProductUpdatePush } = await import("../src/push/send.js");
+      await sendProductUpdatePush(testEnv(), u.id, "New feature", "Try it now");
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("sendWorkspaceInvitePush", () => {
+    it("respects workspaceInvites: false (no Expo call)", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");
+      const u = await makeUserWithDevices(
+        [{ token: "ExponentPushToken[gate-wi-off]", platform: "ios" }],
+        { workspaceInvites: false },
+      );
+
+      const { sendWorkspaceInvitePush } = await import("../src/push/send.js");
+      await sendWorkspaceInvitePush(testEnv(), u.id, "Alice", "Family");
+
+      expect(spy).toHaveBeenCalledTimes(0);
+    });
+
+    it("default prefs → Expo called once", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-wi" }]);
+      vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[gate-wi-on]", platform: "ios" },
+      ]);
+
+      const { sendWorkspaceInvitePush } = await import("../src/push/send.js");
+      await sendWorkspaceInvitePush(testEnv(), u.id, "Alice", "Family");
+
+      expect(sendSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 });
