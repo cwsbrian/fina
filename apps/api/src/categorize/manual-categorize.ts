@@ -90,6 +90,14 @@ export async function applyManualCategorize(
       [{ categoryId: category.id, amount: Number(txRow.amount.toString()) }],
     );
 
+    // Clear new flag fields on the just-written allocations. Defaults already
+    // give us needsConfirmation=false + dismissedUntil=null, but for split→single
+    // transitions or future refactors we set explicitly.
+    await tx.transactionAllocation.updateMany({
+      where: { transactionId: txRow.id },
+      data: { needsConfirmation: false, dismissedUntil: null },
+    });
+
     // Update merchantNormalized on the transaction.
     await tx.transaction.update({
       where: { id: txRow.id },
