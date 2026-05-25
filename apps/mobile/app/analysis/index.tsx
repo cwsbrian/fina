@@ -20,7 +20,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
-import { MonthPickerSheet } from "../../src/datetime/MonthPickerSheet";
+import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
 
 type CategorySpend = {
   categoryId: string;
@@ -119,12 +119,6 @@ export default function AnalysisScreen() {
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
       <Header onPickMonth={() => setPickerOpen(true)} />
-      <Text style={styles.monthLine}>
-        {new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
-          month: "long",
-          year: "numeric",
-        })}
-      </Text>
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={
@@ -165,13 +159,14 @@ export default function AnalysisScreen() {
           </>
         )}
       </ScrollView>
-      <MonthPickerSheet
+      <DatePickerSheet
         visible={pickerOpen}
-        year={year}
-        month={month}
+        value={new Date(Date.UTC(year, month - 1, 15))}
+        mode="date"
+        maximumDate={new Date()}
         onClose={() => setPickerOpen(false)}
-        onSelect={(y, m) => {
-          setYM({ year: y, month: m });
+        onConfirm={(d) => {
+          setYM({ year: d.getFullYear(), month: d.getMonth() + 1 });
           setPickerOpen(false);
         }}
       />
@@ -212,9 +207,15 @@ function CashflowCard({
 }) {
   const { width: screenW } = useWindowDimensions();
   const chartW = Math.max(280, screenW - space.lg * 2 - space.base * 2);
+  const monthLabel = new Date(
+    Date.UTC(analysis.year, analysis.month - 1, 1),
+  ).toLocaleDateString(undefined, { month: "long", year: "numeric" });
   return (
     <View style={styles.card}>
-      <Text style={styles.cardEyebrow}>Net cashflow</Text>
+      <View style={styles.cardHead}>
+        <Text style={styles.cardEyebrow}>Net cashflow</Text>
+        <Text style={styles.cardMonth}>{monthLabel}</Text>
+      </View>
       <Text
         style={[
           styles.cardValue,
@@ -573,16 +574,16 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  // The month label that lives between the header and the body —
-  // calendar icon in the header opens a sheet picker; this just
-  // shows which month is currently displayed.
-  monthLine: {
-    ...type$.bodyMd,
-    color: colors.muted,
-    textAlign: "center",
-    paddingTop: space.base,
-    paddingBottom: space.sm,
+  // Cashflow card carries the month label inline next to the eyebrow
+  // — flexed row so the label hugs the right while the eyebrow stays
+  // pinned left.
+  cardHead: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    marginBottom: 4,
   },
+  cardMonth: { ...type$.bodySm, color: colors.muted, fontWeight: "600" },
 
   sectionLabel: {
     ...type$.captionStrong,
@@ -605,7 +606,6 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textTransform: "uppercase",
     letterSpacing: 0.6,
-    marginBottom: 4,
   },
   cardValue: {
     fontSize: 32,
