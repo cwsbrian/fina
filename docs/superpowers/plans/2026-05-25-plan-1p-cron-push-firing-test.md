@@ -24,13 +24,13 @@ No edits to production code. No edits to `@fina/shared`.
 **Files:**
 - Create: `apps/api/tests/cron.trial-expiring.test.ts`
 
-- [ ] **Step 1: Read precedent**
+- [x] **Step 1: Read precedent**
 
 Read `apps/api/tests/push.anomaly.test.ts` lines 1-70 — note the `vi.mock(..., importOriginal)` partial-spread pattern and `afterEach(vi.clearAllMocks)`. Read `apps/api/src/cron/jobs/trial-expiring.ts` end-to-end (56 LOC). Understand the THRESHOLDS=[5,3,1] gate.
 
 **Guardrail:** Do NOT edit `apps/api/src/cron/jobs/trial-expiring.ts` or `apps/api/src/push/send.ts` — production code is unchanged.
 
-- [ ] **Step 2: Create the test file**
+- [x] **Step 2: Create the test file**
 
 Write the file with this header (verbatim):
 
@@ -207,7 +207,7 @@ Then add the 9 `it()` blocks below inside the describe:
   });
 ```
 
-- [ ] **Step 3: Run the file**
+- [x] **Step 3: Run the file**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/cron.trial-expiring.test.ts`
 Expected: `Tests  9 passed (9)`.
@@ -217,12 +217,12 @@ If FAIL: read first error, fix one test, rerun. Common gotchas:
 - `vi.clearAllMocks` not restoring the mock — that's intentional; `clearAllMocks` clears call history, NOT the implementation.
 - `mockRejectedValueOnce` not propagating — verify `vi.mocked()` returns the spy.
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "cron.trial-expiring" | head -5`
 Expected: 0 lines (no errors in the new file).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/tests/cron.trial-expiring.test.ts
