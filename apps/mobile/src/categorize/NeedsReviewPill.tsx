@@ -1,29 +1,24 @@
-import { Text, Pressable, StyleSheet } from "react-native";
-import { colors, type as type$ } from "../design/tokens";
+import { View, StyleSheet } from "react-native";
+import { colors } from "../design/tokens";
 
-export function NeedsReviewPill({ isOther, onPress }: { isOther: boolean; onPress: () => void }) {
+/** Minimal dot indicator on transaction rows that still need user
+ *  confirmation. Color signals urgency:
+ *    - yellow: AI-categorized, awaiting first confirmation
+ *    - red:    LLM dropped it into "Other" — needs review more urgently
+ *  Visual only — the surrounding row's onPress navigates to the
+ *  transaction detail, where the confirm banner lives. */
+export function NeedsReviewDot({ isOther }: { isOther: boolean }) {
   return (
-    <Pressable
-      onPress={onPress}
-      hitSlop={12}
-      style={[styles.pill, isOther ? styles.pillOther : styles.pillNormal]}
-    >
-      <Text style={[styles.text, isOther ? styles.textOther : styles.textNormal]}>
-        Needs review
-      </Text>
-    </Pressable>
+    <View style={[styles.dot, isOther ? styles.dotOther : styles.dotNormal]} />
   );
 }
 
 const styles = StyleSheet.create({
-  pill: {
-    paddingHorizontal: 10, paddingVertical: 4,
-    borderRadius: 999, borderWidth: 1,
-    backgroundColor: colors.surfaceSoft,
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
   },
-  pillNormal: { borderColor: colors.accentYellow },
-  pillOther:  { borderColor: colors.down },
-  text: { ...type$.captionStrong },
-  textNormal: { color: colors.accentYellow },
-  textOther:  { color: colors.down },
+  dotNormal: { backgroundColor: colors.accentYellow },
+  dotOther:  { backgroundColor: colors.down },
 });

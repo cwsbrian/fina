@@ -128,6 +128,25 @@ export default function TransactionDetail() {
   const firstAlloc = tx.allocations[0];
   const firstCat = firstAlloc?.categoryId ? categories[firstAlloc.categoryId] : null;
   const heroMeta = categoryMeta(firstCat);
+  const needsConfirm =
+    !isSplit && !!firstAlloc?.needsConfirmation && !!firstCat;
+  const isOther =
+    !!firstCat && firstCat.name.trim().toLowerCase() === "other";
+
+  async function confirmCategory() {
+    if (!tx) return;
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) return;
+      await apiFetch(
+        `/workspaces/${wsId}/transactions/${tx.id}/confirm-category`,
+        { method: "POST" },
+      );
+      load();
+    } catch (e) {
+      Alert.alert("Couldn't confirm", (e as { code?: string }).code ?? "Try again.");
+    }
+  }
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -225,6 +244,45 @@ export default function TransactionDetail() {
             </View>
           )}
         </View>
+
+        {/* Confirm-category banner */}
+        {needsConfirm && (
+          <View
+            style={[
+              styles.confirmBanner,
+              isOther && styles.confirmBannerOther,
+            ]}
+          >
+            <Text style={styles.confirmBannerTitle}>
+              {isOther
+                ? "Other로 분류됐어요. 맞아요?"
+                : `${firstCat?.name} 이 카테고리가 맞아요?`}
+            </Text>
+            <Text style={styles.confirmBannerSub}>{merchant}</Text>
+            <View style={styles.confirmBannerActions}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmBtn,
+                  styles.confirmBtnPrimary,
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={confirmCategory}
+              >
+                <Text style={styles.confirmBtnPrimaryText}>맞아요</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmBtn,
+                  styles.confirmBtnGhost,
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={() => setPickerOpen(true)}
+              >
+                <Text style={styles.confirmBtnGhostText}>다른 카테고리</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
 
         {/* Category */}
         {!isSplit ? (
@@ -557,6 +615,52 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 0.4,
     color: colors.muted,
+  },
+
+  // Confirm-category banner
+  confirmBanner: {
+    marginHorizontal: space.lg,
+    marginTop: space.lg,
+    padding: space.base,
+    borderRadius: 14,
+    backgroundColor: "rgba(230, 184, 92, 0.12)",
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accentYellow,
+    gap: 6,
+  },
+  confirmBannerOther: {
+    backgroundColor: "rgba(207, 32, 47, 0.08)",
+    borderLeftColor: colors.down,
+  },
+  confirmBannerTitle: { ...type$.titleSm, color: colors.ink },
+  confirmBannerSub: { ...type$.bodySm, color: colors.muted },
+  confirmBannerActions: {
+    flexDirection: "row",
+    gap: space.sm,
+    marginTop: space.sm,
+  },
+  confirmBtn: {
+    flex: 1,
+    height: 40,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 10,
+  },
+  confirmBtnPrimary: { backgroundColor: colors.primary },
+  confirmBtnPrimaryText: {
+    ...type$.bodySm,
+    color: colors.onPrimary,
+    fontWeight: "600",
+  },
+  confirmBtnGhost: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.canvas,
+  },
+  confirmBtnGhostText: {
+    ...type$.bodySm,
+    color: colors.ink,
+    fontWeight: "600",
   },
 
   // Group label

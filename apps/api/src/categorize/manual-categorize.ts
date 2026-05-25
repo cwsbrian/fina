@@ -30,7 +30,7 @@ export type ManualCategorizeResult = {
       id: string;
       categoryId: string | null;
       amount: string;
-      source: "manual" | "mapping" | "ai" | null;
+      source: "manual" | "mapping" | "ai" | "history" | null;
     }>;
   };
   backfilledCount: number;

@@ -25,8 +25,7 @@ import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { type DateRange } from "../../src/datetime/DateRangeSheet";
 import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
 import { ConnectBankButton } from "../../src/plaid/ConnectBankButton";
-import { NeedsReviewPill } from "../../src/categorize/NeedsReviewPill";
-import { ConfirmSheet, type ConfirmSheetTarget } from "../../src/categorize/ConfirmSheet";
+import { NeedsReviewDot } from "../../src/categorize/NeedsReviewPill";
 
 const HEADER_HEIGHT = 84;
 
@@ -136,7 +135,6 @@ export default function Activity() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<DateRange>({});
-  const [confirmTarget, setConfirmTarget] = useState<ConfirmSheetTarget | null>(null);
   const dateRangeSheet = useDateRangeSheet();
   // Mirror query + range into refs so load() can always read the latest
   // values without putting them in its closure (keeps useFocusEffect
@@ -281,12 +279,7 @@ export default function Activity() {
           </View>
         )}
         renderItem={({ item }) => (
-          <TxRow
-            tx={item}
-            categories={categories}
-            workspaceId={wsId}
-            onNeedsReviewPress={setConfirmTarget}
-          />
+          <TxRow tx={item} categories={categories} />
         )}
         ListEmptyComponent={
           isSearching ? (
@@ -369,24 +362,6 @@ export default function Activity() {
         )}
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
-      <ConfirmSheet
-        target={confirmTarget}
-        onClose={() => {
-          setConfirmTarget(null);
-          load();
-        }}
-        onConfirmed={() => {
-          setConfirmTarget(null);
-          load();
-        }}
-        onEditPress={(t) => {
-          setConfirmTarget(null);
-          // No row-level picker on the Activity tab — route to the
-          // transaction detail page where the user taps the category
-          // to open the existing CategoryPickerSheet.
-          router.push(`/transactions/${t.txId}` as never);
-        }}
-      />
     </View>
   );
 }
@@ -473,13 +448,9 @@ function ActivityHeader({
 function TxRow({
   tx,
   categories,
-  workspaceId,
-  onNeedsReviewPress,
 }: {
   tx: TransactionDTO;
   categories: Record<string, CategoryDTO>;
-  workspaceId: string | null;
-  onNeedsReviewPress: (target: ConfirmSheetTarget) => void;
 }) {
   const money = formatMoney(tx.amount, tx.currency);
   const isSplit = tx.allocations.length > 1;
@@ -493,15 +464,13 @@ function TxRow({
     : firstAllocCat?.name ?? "Uncategorized";
   const uncategorized = !isSplit && !firstAllocCat?.id;
   const meta = categoryMeta(firstAllocCat);
-  // Needs-review pill: only on single-allocation rows with a categorized
-  // allocation that needs confirmation and isn't currently snoozed.
-  const showPill =
+  // Needs-review dot: only on single-allocation rows with a categorized
+  // allocation that needs confirmation. Visual only — row tap navigates
+  // to the transaction detail where the confirm banner lives.
+  const showDot =
     !isSplit &&
     !!firstAlloc?.needsConfirmation &&
-    !!firstAllocCat &&
-    !!workspaceId &&
-    (!firstAlloc.dismissedUntil ||
-      new Date(firstAlloc.dismissedUntil) < new Date());
+    !!firstAllocCat;
   const isOther =
     !!firstAllocCat && firstAllocCat.name.trim().toLowerCase() === "other";
   return (
@@ -530,19 +499,7 @@ function TxRow({
           >
             {categoryLabel}
           </Text>
-          {showPill && (
-            <NeedsReviewPill
-              isOther={isOther}
-              onPress={() =>
-                onNeedsReviewPress({
-                  workspaceId: workspaceId!,
-                  txId: tx.id,
-                  merchant,
-                  categoryName: firstAllocCat!.name,
-                })
-              }
-            />
-          )}
+          {showDot && <NeedsReviewDot isOther={isOther} />}
         </View>
       </View>
       <View style={styles.rowRight}>
