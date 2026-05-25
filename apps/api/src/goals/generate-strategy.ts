@@ -17,8 +17,11 @@ export type GoalStrategyItem = {
   rationale: string;
 };
 
-export type GoalStrategy = {
-  items: GoalStrategyItem[];
+/** Persisted metadata for a goal's strategy. Per-row data (which
+ *  categories, how much, rationale) lives in the GoalAllocation table.
+ *  This JSON carries only the generator timestamp and an optional
+ *  notice the UI can surface. */
+export type GoalStrategyMeta = {
   generatedAt: string;
   /** When the LLM couldn't form a useful plan (no spend history etc.). */
   notice?: string;
@@ -349,13 +352,44 @@ export async function generateAndStoreGoalStrategy(
     notice = "Couldn't generate a plan right now. Try regenerating later.";
   }
 
-  const strategy: GoalStrategy = {
-    items,
+  // Resolve LLM's free-text category names to real category IDs so we
+  // can persist proper FK-backed allocations (no more JSON name matching
+  // at read time). Items whose name doesn't match a known category in
+  // this workspace are kept in the JSON only for debug visibility but
+  // do NOT become allocations — they wouldn't earn savings anyway.
+  const cats = await prisma.category.findMany({
+    where: { workspaceId: goal.workspaceId, archivedAt: null },
+    select: { id: true, name: true },
+  });
+  const catByName = new Map(cats.map((c) => [c.name.toLowerCase(), c.id]));
+  type ResolvedItem = GoalStrategyItem & { categoryId: string };
+  const resolvedItems: ResolvedItem[] = [];
+  for (const it of items) {
+    const id = catByName.get(it.categoryName.toLowerCase());
+    if (id) resolvedItems.push({ ...it, categoryId: id });
+  }
+
+  // Strategy JSON now only carries generator metadata. Per-row data
+  // lives in GoalAllocation.
+  const strategy = {
     generatedAt: new Date().toISOString(),
     ...(notice ? { notice } : {}),
   };
-  await prisma.goal.update({
-    where: { id: goalId },
-    data: { strategy: strategy as unknown as Prisma.InputJsonValue },
+  await prisma.$transaction(async (tx) => {
+    await tx.goal.update({
+      where: { id: goalId },
+      data: { strategy: strategy as unknown as Prisma.InputJsonValue },
+    });
+    await tx.goalAllocation.deleteMany({ where: { goalId } });
+    if (resolvedItems.length > 0) {
+      await tx.goalAllocation.createMany({
+        data: resolvedItems.map((r) => ({
+          goalId,
+          categoryId: r.categoryId,
+          monthlyAmount: new Prisma.Decimal(r.monthlyAmount),
+          rationale: r.rationale,
+        })),
+      });
+    }
   });
 }

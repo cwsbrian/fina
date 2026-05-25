@@ -257,9 +257,11 @@ function PathSection({
     }
   };
 
-  // Brand-new goal — strategy is still null. Show a hint that Fina is
-  // preparing it. Don't block; user can keep navigating.
-  if (!strategy) {
+  const allocations = goal.allocations;
+
+  // Brand-new goal — strategy is still null AND no allocations yet.
+  // Show a hint that Fina is preparing it. Don't block.
+  if (!strategy && allocations.length === 0) {
     return (
       <>
         <Text style={styles.groupLabel}>Path</Text>
@@ -281,8 +283,8 @@ function PathSection({
     );
   }
 
-  const totalMo = strategy.items.reduce(
-    (sum, i) => sum + (Number.isFinite(i.monthlyAmount) ? i.monthlyAmount : 0),
+  const totalMo = allocations.reduce(
+    (sum, a) => sum + (Number(a.monthlyAmount) || 0),
     0,
   );
 
@@ -290,7 +292,7 @@ function PathSection({
     <>
       <View style={styles.pathHead}>
         <Text style={styles.groupLabel}>
-          {strategy.items.length > 0 ? `Path · $${totalMo}/mo` : "Path"}
+          {allocations.length > 0 ? `Path · $${totalMo.toFixed(0)}/mo` : "Path"}
         </Text>
         <Pressable
           onPress={regenerate}
@@ -306,7 +308,7 @@ function PathSection({
         </Pressable>
       </View>
 
-      {strategy.items.length === 0 ? (
+      {allocations.length === 0 ? (
         <View style={[styles.group, styles.pathHint]}>
           <View style={[styles.pathHintGlyph, { backgroundColor: colors.surfaceSoft }]}>
             <Ionicons name="information-circle-outline" size={20} color={colors.muted} />
@@ -314,19 +316,19 @@ function PathSection({
           <View style={{ flex: 1 }}>
             <Text style={styles.pathHintTitle}>No plan yet</Text>
             <Text style={styles.pathHintBody}>
-              {strategy.notice ??
+              {strategy?.notice ??
                 "Add a few transactions and tap Regenerate so Fina has something to work with."}
             </Text>
           </View>
         </View>
       ) : (
         <View style={styles.group}>
-          {strategy.items.map((item, idx) => (
+          {allocations.map((item, idx) => (
             <View
-              key={`${item.categoryName}-${idx}`}
+              key={item.categoryId}
               style={[
                 styles.pathRow,
-                idx === strategy.items.length - 1 && { borderBottomWidth: 0 },
+                idx === allocations.length - 1 && { borderBottomWidth: 0 },
               ]}
             >
               <View style={[styles.pathRowGlyph, { backgroundColor: withAlpha(accent, 0.12) }]}>
@@ -334,9 +336,11 @@ function PathSection({
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.pathRowTitle}>{item.categoryName}</Text>
-                <Text style={styles.pathRowMeta}>{item.rationale}</Text>
+                {item.rationale && (
+                  <Text style={styles.pathRowMeta}>{item.rationale}</Text>
+                )}
               </View>
-              <Text style={styles.pathRowAmt}>+${item.monthlyAmount}</Text>
+              <Text style={styles.pathRowAmt}>+${Number(item.monthlyAmount).toFixed(0)}</Text>
             </View>
           ))}
         </View>

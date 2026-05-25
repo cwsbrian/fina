@@ -5,27 +5,6 @@ import {
   monthlySpendByCategory,
 } from "../budget-plans/service.js";
 
-/** A goal's strategy-item shape that the savings algorithm cares about.
- *  Mirrors `GoalStrategyItem` in generate-strategy.ts but local — we
- *  don't depend on the LLM module here. */
-type StrategyItem = { categoryName: string; monthlyAmount: number };
-
-function parseStrategyItems(raw: unknown): StrategyItem[] {
-  if (!raw || typeof raw !== "object") return [];
-  const items = (raw as { items?: unknown }).items;
-  if (!Array.isArray(items)) return [];
-  const out: StrategyItem[] = [];
-  for (const it of items) {
-    if (!it || typeof it !== "object") continue;
-    const r = it as Record<string, unknown>;
-    const name = typeof r["categoryName"] === "string" ? r["categoryName"] : null;
-    const amt = typeof r["monthlyAmount"] === "number" ? r["monthlyAmount"] : null;
-    if (!name || amt === null || amt <= 0) continue;
-    out.push({ categoryName: name, monthlyAmount: amt });
-  }
-  return out;
-}
-
 function monthsBetweenInclusive(
   start: Date,
   end: Date,
@@ -81,16 +60,21 @@ export async function computeGoalSavings(
   workspaceId: string,
   goalId: string,
 ): Promise<number> {
-  const [thisGoal, allGoals, categories, defaultPlan] = await Promise.all([
-    prisma.goal.findUnique({ where: { id: goalId } }),
-    prisma.goal.findMany({
-      where: { workspaceId, archivedAt: null },
-      orderBy: { createdAt: "asc" },
-      select: { id: true, createdAt: true, strategy: true },
+  const [thisGoal, allAllocations, defaultPlan] = await Promise.all([
+    prisma.goal.findUnique({
+      where: { id: goalId },
+      select: { id: true, workspaceId: true, createdAt: true },
     }),
-    prisma.category.findMany({
-      where: { workspaceId, archivedAt: null },
-      select: { id: true, name: true },
+    // Every allocation in the workspace, joined with its goal so we can
+    // order competitors by goal createdAt and exclude archived goals.
+    prisma.goalAllocation.findMany({
+      where: { goal: { workspaceId, archivedAt: null } },
+      select: {
+        goalId: true,
+        categoryId: true,
+        monthlyAmount: true,
+        goal: { select: { createdAt: true } },
+      },
     }),
     prisma.budgetPlan.findUnique({
       where: {
@@ -100,40 +84,37 @@ export async function computeGoalSavings(
     }),
   ]);
   if (!thisGoal || thisGoal.workspaceId !== workspaceId) return 0;
-  const thisItems = parseStrategyItems(thisGoal.strategy);
-  if (thisItems.length === 0) return 0;
 
-  // Name → catId (case-insensitive). Strategy items use free-text
-  // category names; this maps them back to IDs the budget + spend
-  // tables use.
-  const catByName = new Map<string, string>();
-  for (const c of categories) catByName.set(c.name.toLowerCase(), c.id);
+  // Build the per-category competitor list, ordered by goal createdAt
+  // ascending. Older goals "claim" first; the last in line absorbs
+  // overflow.
+  type Competitor = { goalId: string; plan: number; createdAt: Date };
+  const competitorsByCatId = new Map<string, Competitor[]>();
+  for (const a of allAllocations) {
+    const plan = Number(a.monthlyAmount);
+    if (plan <= 0) continue;
+    const arr = competitorsByCatId.get(a.categoryId) ?? [];
+    arr.push({ goalId: a.goalId, plan, createdAt: a.goal.createdAt });
+    competitorsByCatId.set(a.categoryId, arr);
+  }
+  for (const arr of competitorsByCatId.values()) {
+    arr.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+
+  // The categories THIS goal targets.
+  const myCategoryIds = new Set(
+    allAllocations.filter((a) => a.goalId === goalId).map((a) => a.categoryId),
+  );
+  if (myCategoryIds.size === 0) return 0;
 
   const defaultCap = readCapsFromAllocations(
     defaultPlan?.categoryAllocations as unknown,
   );
 
-  // Build, per category-id, the ordered list of competing goals + each
-  // one's monthly plan for that category. Already sorted by createdAt
-  // since allGoals was queried that way.
-  type Competitor = { goalId: string; plan: number };
-  const competitorsByCatId = new Map<string, Competitor[]>();
-  for (const g of allGoals) {
-    const items = parseStrategyItems(g.strategy);
-    for (const it of items) {
-      const catId = catByName.get(it.categoryName.toLowerCase());
-      if (!catId) continue;
-      const arr = competitorsByCatId.get(catId) ?? [];
-      arr.push({ goalId: g.id, plan: it.monthlyAmount });
-      competitorsByCatId.set(catId, arr);
-    }
-  }
-
   const months = monthsBetweenInclusive(thisGoal.createdAt, new Date());
 
   let total = 0;
   for (const { year, month } of months) {
-    // Caps for this month: prefer a snapshot, fall back to default.
     const snap = await prisma.budgetPlan.findUnique({
       where: {
         workspaceId_periodStart: {
@@ -147,13 +128,10 @@ export async function computeGoalSavings(
       ? readCapsFromAllocations(snap.categoryAllocations as unknown)
       : defaultCap;
 
-    // Actual spend per category this month — one query for all categories.
     const spendRows = await monthlySpendByCategory(workspaceId, year, month);
     const spendByCat = new Map(spendRows.map((s) => [s.categoryId, s.spent]));
 
-    for (const item of thisItems) {
-      const catId = catByName.get(item.categoryName.toLowerCase());
-      if (!catId) continue;
+    for (const catId of myCategoryIds) {
       const cap = monthCap.get(catId) ?? 0;
       if (cap <= 0) continue;
       const spent = spendByCat.get(catId) ?? 0;
@@ -163,9 +141,6 @@ export async function computeGoalSavings(
       const competitors = competitorsByCatId.get(catId) ?? [];
       if (competitors.length === 0) continue;
 
-      // Cascade allocation: each competitor takes up to its plan, except
-      // the LAST one which absorbs all remaining overflow (so a single
-      // goal still gets the full over-savings, per user spec).
       let remaining = savings;
       const lastIdx = competitors.length - 1;
       for (let i = 0; i < competitors.length; i++) {

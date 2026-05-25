@@ -19,11 +19,17 @@ type GoalRow = {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  allocations: Array<{
+    categoryId: string;
+    monthlyAmount: Prisma.Decimal;
+    rationale: string | null;
+    category: { name: string };
+  }>;
 };
 
 /** Build the wire DTO. `computedSaved` overrides the stored amount —
  *  goal savings are derived from actual under-budget behavior per the
- *  goal's strategy (see goals/savings.ts), not from manual input. */
+ *  goal's allocations (see goals/savings.ts), not from manual input. */
 function dto(g: GoalRow, computedSaved: number): unknown {
   return {
     id: g.id,
@@ -35,11 +41,24 @@ function dto(g: GoalRow, computedSaved: number): unknown {
     icon: g.icon,
     color: g.color,
     strategy: g.strategy,
+    allocations: g.allocations.map((a) => ({
+      categoryId: a.categoryId,
+      categoryName: a.category.name,
+      monthlyAmount: a.monthlyAmount.toFixed(2),
+      rationale: a.rationale,
+    })),
     archivedAt: g.archivedAt?.toISOString() ?? null,
     createdAt: g.createdAt.toISOString(),
     updatedAt: g.updatedAt.toISOString(),
   };
 }
+
+const goalInclude = {
+  allocations: {
+    include: { category: { select: { name: true } } },
+    orderBy: { monthlyAmount: "desc" as const },
+  },
+};
 
 function dateOnly(s: string): Date {
   // YYYY-MM-DD → UTC noon, same convention as transactions.
@@ -63,6 +82,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         },
         // Soonest due first — matches the design's "list sorted by due date".
         orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+        include: goalInclude,
       });
       const goals = await Promise.all(
         rows.map(async (g) => {
@@ -93,6 +113,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
             id: req.params.goalId,
             workspaceId: ctx.membership.workspaceId,
           },
+          include: goalInclude,
         });
         if (!row) return reply.code(404).send({ error: "not_found" });
         const saved = await computeGoalSavings(
@@ -127,6 +148,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
           icon: parsed.data.icon ?? null,
           color: parsed.data.color ?? null,
         },
+        include: goalInclude,
       });
       // Fire-and-forget LLM strategy generation. The user gets an
       // immediate 201; the detail screen polls / refetches when shown
@@ -176,7 +198,11 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         if (d.archived !== undefined) {
           data.archivedAt = d.archived ? new Date() : null;
         }
-        const updated = await prisma.goal.update({ where: { id: row.id }, data });
+        const updated = await prisma.goal.update({
+          where: { id: row.id },
+          data,
+          include: goalInclude,
+        });
         const saved = await computeGoalSavings(
           ctx.membership.workspaceId,
           updated.id,
@@ -205,7 +231,10 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         // Wait for generation to complete here (small + bounded) so the
         // caller can refresh once and see the new plan, rather than poll.
         await generateAndStoreGoalStrategy(app.fina.env, row.id);
-        const updated = await prisma.goal.findUniqueOrThrow({ where: { id: row.id } });
+        const updated = await prisma.goal.findUniqueOrThrow({
+          where: { id: row.id },
+          include: goalInclude,
+        });
         const saved = await computeGoalSavings(
           ctx.membership.workspaceId,
           updated.id,
