@@ -36,14 +36,40 @@ type PlaidItemSummary = {
   errorCode: string | null;
 };
 
+type ActiveWorkspace = {
+  id: string;
+  name: string;
+  role: "owner" | "editor" | "viewer";
+};
+
 export default function More() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
+  const [activeWs, setActiveWs] = useState<ActiveWorkspace | null>(null);
   const [banks, setBanks] = useState<PlaidItemSummary[] | null>(null);
   const [openingBilling, setOpeningBilling] = useState(false);
 
   const loadMe = useCallback(() => {
     apiFetch<Me>("/me").then(setMe).catch(() => {});
+  }, []);
+
+  const loadActiveWorkspace = useCallback(async () => {
+    try {
+      const wsId =
+        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      if (!wsId) return;
+      const list = await apiFetch<{
+        workspaces: Array<{
+          id: string;
+          name: string;
+          role: "owner" | "editor" | "viewer";
+        }>;
+      }>("/workspaces");
+      const match = list.workspaces.find((w) => w.id === wsId);
+      if (match) setActiveWs(match);
+    } catch {
+      // Non-fatal — card falls back to a generic label.
+    }
   }, []);
 
   const loadBanks = useCallback(async () => {
@@ -62,15 +88,17 @@ export default function More() {
 
   useEffect(() => {
     loadMe();
+    loadActiveWorkspace();
     loadBanks();
-  }, [loadMe, loadBanks]);
+  }, [loadMe, loadActiveWorkspace, loadBanks]);
 
   // Refresh on focus so a bank disconnected / billing portal change shows fresh.
   useFocusEffect(
     useCallback(() => {
       loadMe();
+      loadActiveWorkspace();
       loadBanks();
-    }, [loadMe, loadBanks]),
+    }, [loadMe, loadActiveWorkspace, loadBanks]),
   );
 
   const onSignOut = () => {
@@ -162,16 +190,30 @@ export default function More() {
         >
           <View style={styles.wsMark}>
             <Text style={styles.wsMarkText}>
-              {me ? initials(me.user.name, me.user.email)[0] : "F"}
+              {activeWs
+                ? (activeWs.name.trim()[0]?.toUpperCase() ?? "W")
+                : me
+                  ? initials(me.user.name, me.user.email)[0]
+                  : "F"}
             </Text>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.wsName}>
-              {me?.user.name
-                ? `${me.user.name}'s workspace`
-                : "Personal workspace"}
+            <Text style={styles.wsName} numberOfLines={1}>
+              {activeWs
+                ? activeWs.name
+                : me?.user.name
+                  ? `${me.user.name}'s workspace`
+                  : "Personal workspace"}
             </Text>
-            <Text style={styles.wsMeta}>Owner</Text>
+            <Text style={styles.wsMeta}>
+              {activeWs
+                ? activeWs.role === "owner"
+                  ? "Owner"
+                  : activeWs.role === "editor"
+                    ? "Editor"
+                    : "Viewer"
+                : "Owner"}
+            </Text>
           </View>
           <Ionicons name="chevron-down" size={14} color={colors.muted} />
         </Pressable>
