@@ -11,7 +11,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import type { CategoryDTO } from "@fina/shared";
+import type { CategoryDTO, GoalDTO } from "@fina/shared";
+import { goalAccent } from "../../src/goals/meta";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
@@ -54,9 +55,19 @@ function formatDelta(amount: number): string {
   return `${sign}${formatMoney(abs.toFixed(2)).display}`;
 }
 
+type GoalChip = {
+  goalId: string;
+  goalTitle: string;
+  color: string;
+  monthlyAmount: number;
+};
+
 export default function BudgetScreen() {
   const [data, setData] = useState<Data | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
+  const [goalsByCategory, setGoalsByCategory] = useState<
+    Record<string, GoalChip[]>
+  >({});
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -65,15 +76,36 @@ export default function BudgetScreen() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const [resp, cats, def] = await Promise.all([
+      const [resp, cats, def, goalsResp] = await Promise.all([
         apiFetch<CurrentResp>(`/workspaces/${wsId}/budget-plans/current`),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${wsId}/categories`),
         apiFetch<{ plan: Plan | null }>(
           `/workspaces/${wsId}/budget-plans/default`,
         ),
+        apiFetch<{ goals: GoalDTO[] }>(`/workspaces/${wsId}/goals`).catch(
+          () => ({ goals: [] as GoalDTO[] }),
+        ),
       ]);
       setData({ current: resp, defaultPlan: def.plan });
       setCategories(Object.fromEntries(cats.categories.map((c) => [c.id, c])));
+      // Build categoryId → goal chips map. Active goals only (archived
+      // already filtered server-side). Each chip carries the goal's
+      // accent color so the budget row can render it consistently.
+      const byCat: Record<string, GoalChip[]> = {};
+      for (const g of goalsResp.goals) {
+        const accent = goalAccent({ color: g.color });
+        for (const a of g.allocations) {
+          const arr = byCat[a.categoryId] ?? [];
+          arr.push({
+            goalId: g.id,
+            goalTitle: g.title,
+            color: accent,
+            monthlyAmount: Number(a.monthlyAmount),
+          });
+          byCat[a.categoryId] = arr;
+        }
+      }
+      setGoalsByCategory(byCat);
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -310,7 +342,11 @@ export default function BudgetScreen() {
         ) : (
           <View style={styles.list}>
             {rows.map((r) => (
-              <CategoryRow key={r.categoryId} row={r} />
+              <CategoryRow
+                key={r.categoryId}
+                row={r}
+                goals={goalsByCategory[r.categoryId] ?? []}
+              />
             ))}
           </View>
         )}
@@ -321,6 +357,7 @@ export default function BudgetScreen() {
 
 function CategoryRow({
   row,
+  goals,
 }: {
   row: {
     categoryId: string;
@@ -331,6 +368,7 @@ function CategoryRow({
     spent: number;
     scheduled: number;
   };
+  goals: GoalChip[];
 }) {
   const meta = categoryMeta(row.cat);
   const hasBudget = row.budget > 0;
@@ -430,6 +468,21 @@ function CategoryRow({
         </Text>
       ) : (
         <Text style={styles.catRemaining}>No cap set</Text>
+      )}
+      {goals.length > 0 && (
+        <View style={styles.goalChips}>
+          {goals.map((g) => (
+            <View
+              key={g.goalId}
+              style={[styles.goalChip, { borderColor: g.color }]}
+            >
+              <View style={[styles.goalChipDot, { backgroundColor: g.color }]} />
+              <Text style={[styles.goalChipText, { color: g.color }]}>
+                Saving ${g.monthlyAmount.toFixed(0)}/mo for {g.goalTitle}
+              </Text>
+            </View>
+          ))}
+        </View>
       )}
     </View>
   );
@@ -601,6 +654,23 @@ const styles = StyleSheet.create({
   },
   catRemaining: { ...type$.bodySm, color: colors.muted },
   catScheduled: { ...type$.bodySm, color: colors.muted },
+  goalChips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 6,
+    marginTop: 8,
+  },
+  goalChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  goalChipDot: { width: 6, height: 6, borderRadius: 999 },
+  goalChipText: { ...type$.bodySm, fontWeight: "600" },
 
   noCats: {
     padding: space.lg,

@@ -8,6 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -175,7 +176,10 @@ export default function NewGoal() {
           <Text style={styles.label}>By</Text>
           <Pressable
             style={styles.dueBtn}
-            onPress={() => setDateOpen(true)}
+            onPress={() => {
+              Keyboard.dismiss();
+              setDateOpen(true);
+            }}
             disabled={submitting}
           >
             <Ionicons name="calendar-outline" size={18} color={colors.muted} />
