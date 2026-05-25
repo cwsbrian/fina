@@ -1,22 +1,25 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { prisma } from "../src/db.js";
-import { truncateAll, disconnect } from "./helpers/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
+import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 import { maybeAutoPromote } from "../src/categorize/auto-promote.js";
 
+const env = testEnv();
+let app: Awaited<ReturnType<typeof buildApp>>;
+let counter = 0;
+
+beforeAll(async () => { app = await buildApp(env); await app.ready(); });
+afterAll(async () => { await app.close(); await disconnect(); });
 beforeEach(async () => { await truncateAll(); });
-afterAll(async () => { await disconnect(); });
 
 async function setup() {
-  const app = await buildApp(testEnv());
-  const u = await signUpAndGetCookie(app, { email: `ap-${Date.now()}@x.com`, name: "T" });
+  const email = `ap-${counter++}@x.com`;
+  const u = await signUpAndGetCookie(app, { email, name: "T" });
   const wsId = await getOwnerWorkspaceId(u.userId);
   const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "A", type: "depository" } });
-  // Use a non-default category name to avoid collision with bootstrap-seeded defaults.
   const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "AutoPromoteCat" } });
-  await app.close();
   return { wsId, accountId: acct.id, catId: cat.id };
 }
 
