@@ -10,6 +10,7 @@ import {
 } from "../transactions/create-manual.js";
 import { editTransactionService, EditTxError, type EditTxInput, type EditTxInputFlags } from "../transactions/edit.js";
 import { removeTransactionService, RemoveTxError } from "../transactions/remove.js";
+import { checkLargeChargeAndPush } from "../push/anomaly.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -316,6 +317,15 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           { workspaceId: ctx.membership.workspaceId, userId: ctx.session.userId },
           input,
         );
+        // Fire-and-forget anomaly check now that the txn is committed.
+        // Won't block the response; helper swallows its own errors.
+        void checkLargeChargeAndPush(app.fina.env, {
+          transactionId: result.transaction.id,
+          workspaceId: ctx.membership.workspaceId,
+          amount: Math.abs(Number(result.transaction.amount)),
+          merchant: result.transaction.merchantNormalized
+            ?? result.transaction.merchantRaw,
+        });
         return reply.code(201).send(result);
       } catch (err) {
         if (err instanceof HttpError) {

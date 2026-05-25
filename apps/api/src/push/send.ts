@@ -176,6 +176,70 @@ export async function sendBankReconnectPush(
   });
 }
 
+/** Pro trial within 5 / 3 / 1 days of ending. Cron picks the day. */
+export async function sendTrialExpiringPush(
+  env: Env,
+  userId: string,
+  daysLeft: number,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "trialExpiring"))) {
+    logInfo({ userId, channel: "trialExpiringPush" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  const label =
+    daysLeft === 1 ? "Your trial ends tomorrow" : `Your trial ends in ${daysLeft} days`;
+  return sendToUserDevices(env, userId, {
+    title: label,
+    body: "Pick a plan to keep Plaid sync, chat, and the morning brief running.",
+    dataType: "trial-expiring",
+  });
+}
+
+/** Crossed a 25 / 50 / 75 / 100 milestone on a savings goal. */
+export async function sendGoalMilestonePush(
+  env: Env,
+  userId: string,
+  goalTitle: string,
+  pct: number,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "goalMilestones"))) {
+    logInfo({ userId, channel: "goalMilestones" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  const title =
+    pct >= 100 ? `Goal complete: ${goalTitle}` : `${pct}% there on ${goalTitle}`;
+  const body =
+    pct >= 100
+      ? "Nice — open Fina to see what's next."
+      : "Keep going. Tap to see what's funding it.";
+  return sendToUserDevices(env, userId, {
+    title,
+    body,
+    dataType: "goal-milestone",
+  });
+}
+
+/** A new transaction looks unusually large vs the category's recent
+ *  baseline. Anomaly detection lives in apps/api/src/push/anomaly.ts. */
+export async function sendLargeChargePush(
+  env: Env,
+  userId: string,
+  merchant: string,
+  amount: string,
+  categoryName: string | null,
+): Promise<PushSendResult> {
+  if (!(await isChannelEnabled(userId, "largeCharges"))) {
+    logInfo({ userId, channel: "largeCharges" }, "push skipped — channel disabled");
+    return { sent: 0, failed: 0 };
+  }
+  const where = categoryName ? ` for ${categoryName}` : "";
+  return sendToUserDevices(env, userId, {
+    title: `Unusual charge: $${amount}`,
+    body: `${merchant}${where} is well above your usual.`,
+    dataType: "large-charge",
+  });
+}
+
 /** Someone with an existing account was invited to a workspace. */
 export async function sendWorkspaceInvitePush(
   env: Env,

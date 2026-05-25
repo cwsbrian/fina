@@ -7,6 +7,8 @@ import { runCleanupEvents } from "./jobs/cleanup-events.js";
 import { runScheduledSpendMatch } from "./jobs/scheduled-spend-match.js";
 import { runDailyBrief } from "./jobs/daily-brief.js";
 import { runPushReceipts } from "./jobs/push-receipts.js";
+import { runTrialExpiring } from "./jobs/trial-expiring.js";
+import { runGoalMilestones } from "./jobs/goal-milestones.js";
 
 let jobs: Cron[] = [];
 
@@ -42,6 +44,11 @@ export function startScheduler(env: Env): void {
     makeCron("*/10 * * * *", "retry-unprocessed",     () => runRetryUnprocessed(env)),
     makeCron("0 3 * * *",    "cleanup-events",        () => runCleanupEvents(env)),
     makeCron("5 9 * * *",    "scheduled-spend-match", () => runScheduledSpendMatch(env)),
+    // Trial + goal milestones: morning UTC, after daily-refresh has had
+    // time to import yesterday's tx. Goal milestones reads the same
+    // savings figures the user sees on /goals.
+    makeCron("0 10 * * *",   "trial-expiring",        () => runTrialExpiring(env)),
+    makeCron("10 10 * * *",  "goal-milestones",       () => runGoalMilestones(env)),
   ];
 
   logInfo({}, `cron scheduler started — ${jobs.length} jobs`);

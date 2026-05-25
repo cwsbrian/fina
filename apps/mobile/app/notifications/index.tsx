@@ -55,13 +55,11 @@ const SECTIONS: Section[] = [
         key: "largeCharges",
         title: "Large or unusual charges",
         sub: "When something costs way more than your usual.",
-        comingSoon: true,
       },
       {
         key: "goalMilestones",
         title: "Goal milestones",
         sub: "When you cross 25 / 50 / 75% on a goal.",
-        comingSoon: true,
       },
     ],
   },
@@ -77,7 +75,6 @@ const SECTIONS: Section[] = [
         key: "trialExpiring",
         title: "Trial expiring",
         sub: "5, 3, and 1 day before your trial ends.",
-        comingSoon: true,
       },
       {
         key: "workspaceInvites",

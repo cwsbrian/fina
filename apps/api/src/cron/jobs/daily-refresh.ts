@@ -6,6 +6,7 @@ import { categorizeNewTransactions } from "../../categorize/service.js";
 import { sanitizePlaidError } from "../../plaid/client.js";
 import { checkBackgroundSyncGate } from "../tier-gate.js";
 import { removeItemForBilling } from "../../plaid/items.js";
+import { checkLargeChargeAndPush } from "../../push/anomaly.js";
 
 const CRON_NAME = "daily-refresh";
 
@@ -84,6 +85,21 @@ export async function runDailyRefresh(env: Env): Promise<void> {
             "categorize after daily-refresh failed",
           ),
         );
+        // Run anomaly check serially after categorize — the check reads
+        // the tx's categoryId which categorize just filled in.
+        for (const txId of r.newTxIds) {
+          const tx = await prisma.transaction.findUnique({
+            where: { id: txId },
+            select: { amount: true, merchantNormalized: true, merchantRaw: true },
+          });
+          if (!tx) continue;
+          await checkLargeChargeAndPush(env, {
+            transactionId: txId,
+            workspaceId: item.workspaceId,
+            amount: Math.abs(Number(tx.amount)),
+            merchant: tx.merchantNormalized ?? tx.merchantRaw,
+          });
+        }
       }
     } catch (e) {
       failed++;

@@ -43,6 +43,11 @@ model User {
   /// Missing keys read as the type's default (see libs/shared/src/notifications.ts).
   notificationPrefs Json?
 
+  /// Idempotency for the trial-expiring push: stores the last threshold
+  /// (5, 3, or 1) we pushed for so we don't repeat each day inside the
+  /// same threshold band.
+  lastTrialPushDays Int?
+
   // Better Auth relations
   sessions Session[]
   accounts Account[]
@@ -474,6 +479,10 @@ model Goal {
   /// with proper FKs — this column is only for the generator's notice
   /// + timestamp.
   strategy      Json?
+  /// Highest savings-milestone (25/50/75/100) we've already pushed for.
+  /// Cron compares current pct against this and only sends when we cross
+  /// upward; never re-fires when savings dip back below the line.
+  lastMilestonePct Int?
   archivedAt    DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
