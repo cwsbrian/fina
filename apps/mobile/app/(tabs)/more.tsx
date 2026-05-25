@@ -281,7 +281,7 @@ export default function More() {
             icon="bar-chart-outline"
             title="Analysis"
             subtitle="Patterns, trends, category breakdown"
-            onPress={comingSoon("Analysis")}
+            onPress={() => router.push("/analysis" as never)}
             last
           />
         </Group>

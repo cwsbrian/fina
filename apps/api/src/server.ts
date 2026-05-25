@@ -23,6 +23,7 @@ import { schedulesRoutes } from "./routes/schedules.js";
 import { categoriesRoutes } from "./routes/categories.js";
 import { goalsRoutes } from "./routes/goals.js";
 import { budgetPlansRoutes } from "./routes/budget-plans.js";
+import { analysisRoutes } from "./routes/analysis.js";
 import { intentsRoutes } from "./routes/intents.js";
 import { chatRoutes } from "./routes/chat.js";
 import { billingRoutes } from "./routes/billing.js";
@@ -156,6 +157,7 @@ export async function buildApp(env: Env): Promise<FastifyInstance> {
   await app.register(categoriesRoutes);
   await app.register(goalsRoutes);
   await app.register(budgetPlansRoutes);
+  await app.register(analysisRoutes);
   await app.register(budgetsRoutes);
   await app.register(recurringRoutes);
   await app.register(schedulesRoutes);
