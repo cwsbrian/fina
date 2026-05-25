@@ -88,31 +88,33 @@ async function drainFireAndForget() {
 }
 ```
 
-### Helpers
+### Helpers used (existing, NOT redefined)
 
-For invites, we need 2 users + 1 workspace. For manual tx, we need 1 user + workspace + bank account + category. These tests use the standard `signUpAndGetCookie` helper.
+- `signUpAndGetCookie(app, { email, name? })` from `tests/helpers/auth.ts` — creates User + bootstraps a Workspace + owner Membership. Returns `{ userId, email, cookie }`.
+- `getOwnerWorkspaceId(userId)` from `tests/helpers/auth.ts` — looks up the user's owner workspace and returns its id. Used after `signUpAndGetCookie` to obtain the bootstrapped wsId.
 
-```ts
-async function setupWorkspace(ownerCookie: string) {
-  // signUpAndGetCookie creates user. Workspace + owner membership are
-  // auto-bootstrapped by /me first-call OR via signUp flow. Check by
-  // GET /me first to ensure workspace exists.
-  // ...
-}
-```
-
-Actually the existing test files (e.g., `transactions.create-manual.test.ts`, `invites.routes.test.ts`) have setup patterns we can mirror. We'll mirror their structure rather than redefine helpers.
+Bank account / categories are seeded only as required by the manual-tx flow (the route resolves a default account when none is specified — verify in `transactions.ts` whether `accountId` is required in `ManualTxBody`. If yes, pre-create one via `prisma.bankAccount.create`; if no, omit).
 
 ### 6 test scenarios
 
+**R1+R2 corrections applied below.** Key facts:
+- **Body field is `merchantRaw`** (not `merchant`) — `ManualTxBody` schema requires it.
+- **`checkLargeChargeAndPush(env, {...})`** — `env` is first positional arg, then options object.
+- **`notifyTransactionAdded(env, {...})`** — same pattern.
+- **`categoryName` is hardcoded `null`** at `transactions.ts:437` regardless of body's `categoryId`.
+- **`merchant` arg** = `result.transaction.merchantNormalized ?? merchantRaw` — depends on normalization service.
+- **`signUpAndGetCookie` returns `{userId, email, cookie}`** — use `getOwnerWorkspaceId(userId)` helper for workspace id.
+- **Test 3 invalid-body** — `z.number()` accepts negatives; use missing-`merchantRaw` or non-numeric amount to trigger `safeParse` 400.
+- **Test 6** — do NOT mock `sendInviteEmail` to throw; the push try/catch at `invites.ts:99-114` only catches the push path.
+
 | # | Route | Setup | Assertion |
 |---|---|---|---|
-| 1 | POST /workspaces/:id/transactions/manual | Owner + bank account + category. Body: amount $30. | 201 created. After drain: `checkLargeChargeAndPush` called once with `{transactionId, workspaceId, amount: 30, merchant}`. |
-| 2 | POST /workspaces/:id/transactions/manual | Same as #1. | After drain: `notifyTransactionAdded` called once with `{workspaceId, merchant, amount: 30, categoryName, excludeUserId: ownerId}`. |
-| 3 | POST /workspaces/:id/transactions/manual with 400 invalid body (negative amount) | Owner. Body amount: -5. | 400 invalid_body. After drain: NEITHER push helper called (request never committed). |
-| 4 | POST /workspaces/:id/invites with existing user | Owner workspace. Pre-create invitee User row with email "x@t.co". Body: `{email: "x@t.co", role: "viewer"}`. | 201 created. `sendWorkspaceInvitePush` called once with `(env, inviteeId, inviterDisplayName, wsName)`. |
-| 5 | POST /workspaces/:id/invites with NON-existing user (no User row) | Owner workspace. Body: `{email: "noone@nowhere.com", role: "viewer"}`. | 201 created. `sendWorkspaceInvitePush` NOT called (best-effort skip). |
-| 6 | POST /workspaces/:id/invites push throws | Pre-create invitee. Mock `sendWorkspaceInvitePush.mockRejectedValueOnce(new Error("boom"))`. | 201 created (invite still succeeds — error caught + logged at invites.ts:113). `sendWorkspaceInvitePush` called once (and threw). |
+| 1 | POST /workspaces/:id/transactions/manual | Owner via `signUpAndGetCookie({email, name: "Alice"})`. `wsId` via `getOwnerWorkspaceId(owner.userId)`. Body: `{merchantRaw: "Coffee", amount: 30}`. | 201 created. After drain: `vi.mocked(anomalyMod.checkLargeChargeAndPush).mock.calls[0]` deep-equals `[env, expect.objectContaining({transactionId: expect.any(String), workspaceId: wsId, amount: 30, merchant: expect.any(String)})]`. |
+| 2 | POST /workspaces/:id/transactions/manual | Same setup. | After drain: `vi.mocked(addedMod.notifyTransactionAdded).mock.calls[0]` deep-equals `[env, expect.objectContaining({workspaceId: wsId, merchant: expect.any(String), amount: 30, categoryName: null, excludeUserId: owner.userId})]`. |
+| 3 | POST /workspaces/:id/transactions/manual with invalid body | Owner. Body: `{amount: 30}` (missing required `merchantRaw`). | 400 invalid_body. After drain: NEITHER `checkLargeChargeAndPush` NOR `notifyTransactionAdded` called (request rejected by `safeParse` before reaching fire-and-forget block). |
+| 4 | POST /workspaces/:id/invites with existing user | Owner via `signUpAndGetCookie({email, name: "Alice"})`. `wsId` via `getOwnerWorkspaceId`. Pre-create invitee: `prisma.user.create({data: {id, email: "invitee@t.co", name: "Bob"}})`. Body: `{email: "invitee@t.co", role: "viewer"}`. | 201 created. `vi.mocked(sendMod.sendWorkspaceInvitePush).mock.calls[0]` deep-equals `[env, inviteeId, "Alice", expect.any(String)]` (workspace name auto-bootstrapped per signup; assert via `expect.any(String)`). |
+| 5 | POST /workspaces/:id/invites with NON-existing user (no User row) | Owner via signUp. Body: `{email: "noone@nowhere.com", role: "viewer"}`. | 201 created. `sendWorkspaceInvitePush` NOT called (best-effort skip at `invites.ts:101-110`). |
+| 6 | POST /workspaces/:id/invites push throws | Pre-create invitee. **Do NOT mock email send** — it must succeed so the route reaches the push block. Mock `sendMod.sendWorkspaceInvitePush.mockRejectedValueOnce(new Error("boom"))`. | 201 created (route's try/catch at `invites.ts:99-114` swallows the push error). `sendWorkspaceInvitePush` called once. |
 
 **Commit:** `test(api): http→push integration — anomaly + notify + invite fan-out (6 tests)`
 
