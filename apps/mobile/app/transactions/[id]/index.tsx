@@ -187,6 +187,46 @@ export default function TransactionDetail() {
           </View>
         </View>
 
+        {/* Confirm-category banner — above Details so it's the first thing
+            the user sees after the hero. */}
+        {needsConfirm && (
+          <View
+            style={[
+              styles.confirmBanner,
+              isOther && styles.confirmBannerOther,
+            ]}
+          >
+            <Text style={styles.confirmBannerTitle}>
+              {isOther
+                ? "Auto-categorized as Other. Is that right?"
+                : `Is ${firstCat?.name} the right category?`}
+            </Text>
+            <Text style={styles.confirmBannerSub}>{merchant}</Text>
+            <View style={styles.confirmBannerActions}>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmBtn,
+                  styles.confirmBtnPrimary,
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={confirmCategory}
+              >
+                <Text style={styles.confirmBtnPrimaryText}>Confirm</Text>
+              </Pressable>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.confirmBtn,
+                  styles.confirmBtnGhost,
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={() => setPickerOpen(true)}
+              >
+                <Text style={styles.confirmBtnGhostText}>Change category</Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
+
         {/* Details */}
         <Text style={styles.groupLabel}>Details</Text>
         <View style={styles.group}>
@@ -244,45 +284,6 @@ export default function TransactionDetail() {
             </View>
           )}
         </View>
-
-        {/* Confirm-category banner */}
-        {needsConfirm && (
-          <View
-            style={[
-              styles.confirmBanner,
-              isOther && styles.confirmBannerOther,
-            ]}
-          >
-            <Text style={styles.confirmBannerTitle}>
-              {isOther
-                ? "Other로 분류됐어요. 맞아요?"
-                : `${firstCat?.name} 이 카테고리가 맞아요?`}
-            </Text>
-            <Text style={styles.confirmBannerSub}>{merchant}</Text>
-            <View style={styles.confirmBannerActions}>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.confirmBtn,
-                  styles.confirmBtnPrimary,
-                  pressed && { opacity: 0.7 },
-                ]}
-                onPress={confirmCategory}
-              >
-                <Text style={styles.confirmBtnPrimaryText}>맞아요</Text>
-              </Pressable>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.confirmBtn,
-                  styles.confirmBtnGhost,
-                  pressed && { opacity: 0.7 },
-                ]}
-                onPress={() => setPickerOpen(true)}
-              >
-                <Text style={styles.confirmBtnGhostText}>다른 카테고리</Text>
-              </Pressable>
-            </View>
-          </View>
-        )}
 
         {/* Category */}
         {!isSplit ? (

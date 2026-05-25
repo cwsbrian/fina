@@ -1,24 +1,36 @@
-import { View, StyleSheet } from "react-native";
-import { colors } from "../design/tokens";
+import { View, Text, StyleSheet } from "react-native";
+import { colors, type as type$ } from "../design/tokens";
 
-/** Minimal dot indicator on transaction rows that still need user
- *  confirmation. Color signals urgency:
- *    - yellow: AI-categorized, awaiting first confirmation
- *    - red:    LLM dropped it into "Other" — needs review more urgently
- *  Visual only — the surrounding row's onPress navigates to the
- *  transaction detail, where the confirm banner lives. */
+/** Compact indicator on transaction rows that still need user
+ *  confirmation. Visual only — the surrounding row's onPress navigates
+ *  to the transaction detail, where the confirm banner lives.
+ *    - yellow chip: AI-categorized, awaiting first confirmation
+ *    - red chip:    LLM dropped it into "Other" — review more urgently
+ */
 export function NeedsReviewDot({ isOther }: { isOther: boolean }) {
   return (
-    <View style={[styles.dot, isOther ? styles.dotOther : styles.dotNormal]} />
+    <View style={[styles.chip, isOther ? styles.chipOther : styles.chipNormal]}>
+      <Text
+        style={[
+          styles.text,
+          isOther ? styles.textOther : styles.textNormal,
+        ]}
+      >
+        Review
+      </Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  dot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+  chip: {
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    borderRadius: 6,
   },
-  dotNormal: { backgroundColor: colors.accentYellow },
-  dotOther:  { backgroundColor: colors.down },
+  chipNormal: { backgroundColor: "rgba(230, 184, 92, 0.18)" },
+  chipOther: { backgroundColor: "rgba(207, 32, 47, 0.10)" },
+  text: { ...type$.captionStrong, fontSize: 11 },
+  textNormal: { color: colors.accentYellow },
+  textOther: { color: colors.down },
 });
