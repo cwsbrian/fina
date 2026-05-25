@@ -13,7 +13,10 @@ import {
 } from "@fina/shared";
 import { useSession } from "../../../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
-import { getActiveWorkspaceId } from "../../../lib/active-workspace";
+import {
+  getActiveWorkspaceId,
+  setActiveWorkspaceId,
+} from "../../../lib/active-workspace";
 import { WebIcon } from "../../../components/WebIcon";
 import styles from "./home.module.css";
 
@@ -105,20 +108,23 @@ export default function HomePage() {
     async (inv: IncomingInvite) => {
       setAcceptingId(inv.id);
       try {
-        await apiFetch(`/me/incoming-invites/${inv.id}/accept`, {
-          method: "POST",
-        });
-        // Refresh the home list + drop the accepted invite from local
-        // state so the banner disappears immediately.
+        const r = await apiFetch<{ workspaceId: string; role: string }>(
+          `/me/incoming-invites/${inv.id}/accept`,
+          { method: "POST" },
+        );
+        // Make the newly-joined workspace active so the user lands
+        // inside it (not whatever they had open before). Full page
+        // navigate so every consumer of /workspaces refetches.
+        setActiveWorkspaceId(r.workspaceId);
         setIncoming((prev) => prev.filter((i) => i.id !== inv.id));
-        router.push("/settings/workspace");
+        window.location.href = "/home";
       } catch (e) {
         setErr((e as { code?: string }).code ?? "accept_failed");
       } finally {
         setAcceptingId(null);
       }
     },
-    [router],
+    [],
   );
 
   if (err) {
@@ -292,13 +298,15 @@ export default function HomePage() {
             </div>
           </div>
           <div className={styles.mobileQr}>
-            <QRCodeSVG
-              value="https://fina.app/download"
-              size={88}
-              bgColor="transparent"
-              fgColor="var(--color-ink)"
-              level="M"
-            />
+            <div className={styles.mobileQrInner}>
+              <QRCodeSVG
+                value="https://fina.app/download"
+                size={104}
+                bgColor="#ffffff"
+                fgColor="#0b0f17"
+                level="M"
+              />
+            </div>
             <div className={styles.mobileQrCaption}>
               Scan with your phone
             </div>
