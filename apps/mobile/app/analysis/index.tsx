@@ -116,7 +116,13 @@ export default function AnalysisScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <Header />
+      <Header
+        year={year}
+        month={month}
+        onPrev={goPrev}
+        onNext={goNext}
+        canGoNext={canGoNext}
+      />
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={
@@ -127,14 +133,6 @@ export default function AnalysisScreen() {
           />
         }
       >
-        <PeriodBar
-          year={year}
-          month={month}
-          onPrev={goPrev}
-          onNext={goNext}
-          canGoNext={canGoNext}
-        />
-
         {err && !data ? (
           <View style={styles.fallback}>
             <Text style={styles.errTitle}>Couldn't load analysis</Text>
@@ -166,22 +164,7 @@ export default function AnalysisScreen() {
   );
 }
 
-function Header() {
-  return (
-    <View style={styles.nav}>
-      <HeaderIconButton
-        icon="chevron-back"
-        accessibilityLabel="Back"
-        onPress={() => router.back()}
-        variant="plain"
-      />
-      <Text style={styles.navTitle}>Analysis</Text>
-      <View style={{ width: 34 }} />
-    </View>
-  );
-}
-
-function PeriodBar({
+function Header({
   year,
   month,
   onPrev,
@@ -200,29 +183,35 @@ function PeriodBar({
     year: "numeric",
   });
   return (
-    <View style={styles.periodBar}>
-      <Pressable
-        onPress={onPrev}
-        hitSlop={8}
-        style={({ pressed }) => [styles.periodStep, pressed && { opacity: 0.6 }]}
-      >
-        <Ionicons name="chevron-back" size={18} color={colors.ink} />
-      </Pressable>
-      <View style={styles.periodLabel}>
-        <Text style={styles.periodLabelText}>{label}</Text>
+    <View style={styles.nav}>
+      <HeaderIconButton
+        icon="chevron-back"
+        accessibilityLabel="Back"
+        onPress={() => router.back()}
+        variant="plain"
+      />
+      <View style={styles.headCenter}>
+        <Pressable
+          onPress={onPrev}
+          hitSlop={10}
+          style={({ pressed }) => pressed && { opacity: 0.5 }}
+        >
+          <Ionicons name="chevron-back" size={18} color={colors.muted} />
+        </Pressable>
+        <Text style={styles.headMonth}>{label}</Text>
+        <Pressable
+          onPress={onNext}
+          hitSlop={10}
+          disabled={!canGoNext}
+          style={({ pressed }) => [
+            !canGoNext && { opacity: 0.25 },
+            pressed && canGoNext && { opacity: 0.5 },
+          ]}
+        >
+          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
+        </Pressable>
       </View>
-      <Pressable
-        onPress={onNext}
-        hitSlop={8}
-        disabled={!canGoNext}
-        style={({ pressed }) => [
-          styles.periodStep,
-          !canGoNext && { opacity: 0.3 },
-          pressed && canGoNext && { opacity: 0.6 },
-        ]}
-      >
-        <Ionicons name="chevron-forward" size={18} color={colors.ink} />
-      </Pressable>
+      <View style={{ width: 34 }} />
     </View>
   );
 }
@@ -343,16 +332,56 @@ function SpendBreakdown({
   spend: number;
   byCategory: CategorySpend[];
 }) {
-  // Donut + legend. Empty state when no spend.
-  if (spend <= 0 || byCategory.length === 0) {
+  // Donut + legend. Empty state when no spend at all.
+  if (spend <= 0) {
     return (
       <View style={styles.card}>
-        <Text style={styles.emptyBody}>
-          No spending categorized this month yet.
-        </Text>
+        <Text style={styles.emptyBody}>No spending this month yet.</Text>
       </View>
     );
   }
+
+  // Pad with an "Uncategorized" segment if the sum of categorized
+  // allocations is less than total spend — otherwise the donut renders
+  // with a grey gap and looks incomplete. The gap is real spend on
+  // transactions that don't have a category allocation yet.
+  const categorizedSum = byCategory.reduce((s, c) => s + c.amount, 0);
+  const uncategorized = Math.max(0, spend - categorizedSum);
+  type Segment = {
+    key: string;
+    name: string;
+    amount: number;
+    color: string;
+    icon: string | null;
+    categoryColor: string | null;
+  };
+  const segments: Segment[] = byCategory.map((s) => {
+    const meta = categoryMeta({
+      id: s.categoryId,
+      name: s.categoryName,
+      icon: s.icon,
+      color: s.color,
+    } as unknown as CategoryDTO);
+    return {
+      key: s.categoryId,
+      name: s.categoryName,
+      amount: s.amount,
+      color: meta.fg,
+      icon: s.icon,
+      categoryColor: s.color,
+    };
+  });
+  if (uncategorized > 0.005) {
+    segments.push({
+      key: "uncategorized",
+      name: "Uncategorized",
+      amount: uncategorized,
+      color: colors.mutedSoft,
+      icon: null,
+      categoryColor: null,
+    });
+  }
+
   const size = 140;
   const stroke = 18;
   const cx = size / 2;
@@ -364,24 +393,18 @@ function SpendBreakdown({
     <View style={[styles.card, styles.donutCard]}>
       <Svg width={size} height={size}>
         <Circle cx={cx} cy={cy} r={r} stroke={colors.surfaceStrong} strokeWidth={stroke} fill="none" />
-        {byCategory.map((s, i) => {
+        {segments.map((s) => {
           const len = (s.amount / spend) * circumference;
           const dash = `${len} ${circumference - len}`;
           const offset = -acc;
           acc += len;
-          const meta = categoryMeta({
-            id: s.categoryId,
-            name: s.categoryName,
-            icon: s.icon,
-            color: s.color,
-          } as unknown as CategoryDTO);
           return (
             <Circle
-              key={s.categoryId + i}
+              key={s.key}
               cx={cx}
               cy={cy}
               r={r}
-              stroke={meta.fg}
+              stroke={s.color}
               strokeWidth={stroke}
               fill="none"
               strokeDasharray={dash}
@@ -411,25 +434,17 @@ function SpendBreakdown({
         </SvgText>
       </Svg>
       <View style={styles.legend}>
-        {byCategory.slice(0, 5).map((s) => {
-          const meta = categoryMeta({
-            id: s.categoryId,
-            name: s.categoryName,
-            icon: s.icon,
-            color: s.color,
-          } as unknown as CategoryDTO);
-          return (
-            <View key={s.categoryId} style={styles.legendRow}>
-              <View style={[styles.legendDot, { backgroundColor: meta.fg }]} />
-              <Text style={styles.legendName} numberOfLines={1}>
-                {s.categoryName}
-              </Text>
-              <Text style={styles.legendAmount}>
-                {formatMoney(s.amount.toFixed(0)).display}
-              </Text>
-            </View>
-          );
-        })}
+        {segments.slice(0, 5).map((s) => (
+          <View key={s.key} style={styles.legendRow}>
+            <View style={[styles.legendDot, { backgroundColor: s.color }]} />
+            <Text style={styles.legendName} numberOfLines={1}>
+              {s.name}
+            </Text>
+            <Text style={styles.legendAmount}>
+              {formatMoney(s.amount.toFixed(0)).display}
+            </Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -578,27 +593,12 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  periodBar: {
+  headCenter: {
     flexDirection: "row",
     alignItems: "center",
-    gap: space.sm,
-    marginBottom: space.lg,
+    gap: 14,
   },
-  periodStep: {
-    width: 36,
-    height: 36,
-    borderRadius: 999,
-    backgroundColor: colors.surfaceSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  periodLabel: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 8,
-  },
-  periodLabelText: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+  headMonth: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
 
   sectionLabel: {
     ...type$.captionStrong,
