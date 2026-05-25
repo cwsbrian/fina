@@ -91,6 +91,7 @@ export async function runDailyBrief(env: Env): Promise<void> {
         const since = new Date(sinceMs);
         const whereCard = {
           needsConfirmation: true,
+          categoryId: { not: null },
           OR: [{ dismissedUntil: null }, { dismissedUntil: { lt: new Date() } }],
           transaction: {
             removedAt: null,

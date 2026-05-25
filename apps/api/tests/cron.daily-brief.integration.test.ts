@@ -351,6 +351,41 @@ describe("daily-brief categorize_confirm_card block", () => {
     expect(card!.items[0]!.merchant).toBe("Recent");
   });
 
+  it("excludes uncategorized allocations (categoryId IS NULL) from the card", async () => {
+    const { userId, wsId, accountId } = await setupCardUser();
+    // Uncategorized alloc — categoryId=null + needsConfirmation=true.
+    // Semantically NOT a "confirm" candidate; should be filtered out.
+    ccTxCounter++;
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId,
+        plaidTransactionId: `pt_cc_${Date.now()}_${ccTxCounter}`,
+        amount: 5,
+        merchantRaw: "UNKNOWN MERCH",
+        merchantNormalized: "unknown",
+        occurredAt: new Date(),
+        rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.create({
+      data: {
+        transactionId: tx.id,
+        categoryId: null,
+        amount: "5",
+        needsConfirmation: true,
+      },
+    });
+    await syncMorningTimeToNow(userId, "Asia/Seoul");
+
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+    await runDailyBrief(testEnv());
+
+    // No categorized rows exist; total count is 0, so block must not emit.
+    const card = await getCategorizeCard(userId);
+    expect(card).toBeUndefined();
+  });
+
   it("normal: lastBriefAt 2d ago + 1 (1d ago) + 1 (5d ago) → window from 2d ago → count=1", async () => {
     const { userId, wsId, accountId, catId } = await setupCardUser();
     // Synthetic prior brief 2 days ago — INSIDE the 7d cap so it wins.
