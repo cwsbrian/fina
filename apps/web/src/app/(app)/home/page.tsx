@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { QRCodeSVG } from "qrcode.react";
 import {
   displayName,
   trialDaysLeft,
@@ -15,6 +16,17 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
 import { getActiveWorkspaceId } from "../../../lib/active-workspace";
 import { WebIcon } from "../../../components/WebIcon";
 import styles from "./home.module.css";
+
+type IncomingInvite = {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  inviterEmail: string;
+  inviterName: string | null;
+  invitedRole: "editor" | "viewer";
+  expiresAt: string;
+  createdAt: string;
+};
 
 function formatToday(): string {
   return new Date().toLocaleDateString("en-CA", {
@@ -35,7 +47,20 @@ export default function HomePage() {
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [memberCount, setMemberCount] = useState<number | null>(null);
   const [bankCount, setBankCount] = useState<number | null>(null);
+  const [incoming, setIncoming] = useState<IncomingInvite[]>([]);
+  const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const loadIncoming = useCallback(async () => {
+    try {
+      const r = await apiFetch<{ invites: IncomingInvite[] }>(
+        "/me/incoming-invites",
+      );
+      setIncoming(r.invites);
+    } catch {
+      // Non-fatal — banner just won't render.
+    }
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -52,6 +77,7 @@ export default function HomePage() {
           wsData.workspaces[0] ??
           null;
         setWorkspace(active);
+        loadIncoming();
 
         if (active) {
           // Pull member + bank counts in parallel; tolerate either failing
@@ -73,7 +99,27 @@ export default function HomePage() {
         setErr((e as { code?: string }).code ?? "load_error");
       }
     })();
-  }, []);
+  }, [loadIncoming]);
+
+  const acceptInvite = useCallback(
+    async (inv: IncomingInvite) => {
+      setAcceptingId(inv.id);
+      try {
+        await apiFetch(`/me/incoming-invites/${inv.id}/accept`, {
+          method: "POST",
+        });
+        // Refresh the home list + drop the accepted invite from local
+        // state so the banner disappears immediately.
+        setIncoming((prev) => prev.filter((i) => i.id !== inv.id));
+        router.push("/settings/workspace");
+      } catch (e) {
+        setErr((e as { code?: string }).code ?? "accept_failed");
+      } finally {
+        setAcceptingId(null);
+      }
+    },
+    [router],
+  );
 
   if (err) {
     return (
@@ -95,6 +141,43 @@ export default function HomePage() {
         </h1>
         <div className={styles.date}>{formatToday()}</div>
       </div>
+
+      {incoming.length > 0 && (
+        <div className={styles.inviteBanners}>
+          {incoming.map((inv) => {
+            const fromLabel = inv.inviterName?.trim().length
+              ? inv.inviterName
+              : inv.inviterEmail;
+            return (
+              <div
+                key={inv.id}
+                className={`${styles.banner} ${styles.bannerInvite}`}
+              >
+                <span className={styles.bannerIcon}>
+                  <WebIcon name="users" size={20} strokeWidth={1.8} />
+                </span>
+                <div className={styles.bannerBody}>
+                  <div className={styles.bannerTitle}>
+                    {fromLabel} invited you to {inv.workspaceName}
+                  </div>
+                  <div className={styles.bannerSub}>
+                    Join as {inv.invitedRole} — see their transactions,
+                    categories, and budgets.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className={styles.bannerBtn}
+                  onClick={() => acceptInvite(inv)}
+                  disabled={acceptingId === inv.id}
+                >
+                  {acceptingId === inv.id ? "Joining…" : "Accept"}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {isTrial && (
         <div className={`${styles.banner} ${styles.bannerTrial}`}>
@@ -206,6 +289,18 @@ export default function HomePage() {
                   <div className={styles.mobileCtaBadgeLine2}>Google Play</div>
                 </div>
               </a>
+            </div>
+          </div>
+          <div className={styles.mobileQr}>
+            <QRCodeSVG
+              value="https://fina.app/download"
+              size={88}
+              bgColor="transparent"
+              fgColor="var(--color-ink)"
+              level="M"
+            />
+            <div className={styles.mobileQrCaption}>
+              Scan with your phone
             </div>
           </div>
         </div>

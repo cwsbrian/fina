@@ -63,6 +63,10 @@ export function AuthForm({ mode }: { mode: Mode }) {
       setErr("Please enter a valid email address.");
       return;
     }
+    if (mode === "signUp" && name.trim().length === 0) {
+      setErr("Please enter your name.");
+      return;
+    }
     if (!meetsPasswordPolicy(password)) {
       setErr(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
       return;
@@ -80,7 +84,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
             body: JSON.stringify({
               email,
               password,
-              name: name || email.split("@")[0],
+              name: name.trim(),
             }),
           },
         );
@@ -105,7 +109,7 @@ export function AuthForm({ mode }: { mode: Mode }) {
         const r = await signUp.email({
           email,
           password,
-          name: name || email.split("@")[0]!,
+          name: name.trim(),
         });
         if (r.error) {
           if (
@@ -185,13 +189,14 @@ export function AuthForm({ mode }: { mode: Mode }) {
           <form onSubmit={submit}>
             {mode === "signUp" && (
               <div className={styles.field}>
-                <label className={styles.fieldLabel}>Name (optional)</label>
+                <label className={styles.fieldLabel}>Name</label>
                 <input
                   className={styles.input}
                   placeholder="Your name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   autoComplete="name"
+                  required
                   autoFocus={!inviteToken}
                 />
               </div>

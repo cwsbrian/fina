@@ -208,6 +208,109 @@ export type AcceptResult = {
   role: Role;
 };
 
+export type IncomingInviteRow = {
+  id: string;
+  workspaceId: string;
+  workspaceName: string;
+  inviterEmail: string;
+  inviterName: string | null;
+  invitedRole: "editor" | "viewer";
+  expiresAt: Date;
+  createdAt: Date;
+};
+
+/** All currently-pending invites addressed to `email`. The user can see
+ *  these from their /me/incoming-invites surface (web Home banner)
+ *  even after they've already signed up, so a missed acceptance during
+ *  the signup flow is recoverable. */
+export async function listIncomingInvites(
+  email: string,
+): Promise<IncomingInviteRow[]> {
+  const rows = await prisma.invite.findMany({
+    where: {
+      invitedEmail: lower(email),
+      status: "pending",
+      expiresAt: { gt: new Date() },
+    },
+    orderBy: { createdAt: "desc" },
+    include: {
+      workspace: { select: { name: true } },
+      invitedBy: { select: { email: true, name: true } },
+    },
+  });
+  return rows.map((r) => ({
+    id: r.id,
+    workspaceId: r.workspaceId,
+    workspaceName: r.workspace.name,
+    inviterEmail: r.invitedBy.email,
+    inviterName: r.invitedBy.name,
+    invitedRole: r.invitedRole as "editor" | "viewer",
+    expiresAt: r.expiresAt,
+    createdAt: r.createdAt,
+  }));
+}
+
+export type AcceptByIdInput = {
+  inviteId: string;
+  acceptingUserId: string;
+  acceptingEmail: string;
+};
+
+/** Same claim semantics as acceptInviteByToken but looks the invite
+ *  up by primary key — used for the post-signup "your pending invite"
+ *  surface where the raw token isn't in hand. Email-match enforcement
+ *  is identical so a logged-in user can't accept somebody else's
+ *  invite even if they guess the id. */
+export async function acceptInviteById(
+  input: AcceptByIdInput,
+): Promise<AcceptResult> {
+  return await prisma.$transaction(async (tx) => {
+    const inv = await tx.invite.findUnique({ where: { id: input.inviteId } });
+    if (!inv) throw new InviteServiceError("not_found", "invite not found");
+
+    if (lower(input.acceptingEmail) !== inv.invitedEmail) {
+      throw new InviteServiceError("wrong_email", "session email does not match invited email");
+    }
+    if (inv.status === "revoked") throw new InviteServiceError("revoked", "invite revoked");
+    if (inv.status === "accepted") throw new InviteServiceError("consumed", "invite already accepted");
+    if (inv.status === "expired" || inv.expiresAt.getTime() <= Date.now()) {
+      if (inv.status === "pending") {
+        await tx.invite.update({ where: { id: inv.id }, data: { status: "expired" } });
+      }
+      throw new InviteServiceError("expired", "invite expired");
+    }
+
+    const claim = await tx.invite.updateMany({
+      where: { id: inv.id, status: "pending", expiresAt: { gt: new Date() } },
+      data: {
+        status: "accepted",
+        acceptedAt: new Date(),
+        acceptedById: input.acceptingUserId,
+      },
+    });
+    if (claim.count === 0) {
+      const after = await tx.invite.findUniqueOrThrow({ where: { id: inv.id } });
+      if (after.status === "accepted") throw new InviteServiceError("consumed", "invite already accepted");
+      if (after.status === "revoked") throw new InviteServiceError("revoked", "invite revoked");
+      throw new InviteServiceError("expired", "invite expired");
+    }
+
+    await tx.membership.upsert({
+      where: {
+        userId_workspaceId: { userId: input.acceptingUserId, workspaceId: inv.workspaceId },
+      },
+      update: {},
+      create: {
+        userId: input.acceptingUserId,
+        workspaceId: inv.workspaceId,
+        role: inv.invitedRole,
+      },
+    });
+
+    return { workspaceId: inv.workspaceId, role: inv.invitedRole as Role };
+  });
+}
+
 export async function acceptInviteByToken(input: AcceptInput): Promise<AcceptResult> {
   const tokenHash = hashToken(input.token);
 

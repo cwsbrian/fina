@@ -8,6 +8,8 @@ import {
   revokeInvite,
   getInviteByToken,
   acceptInviteByToken,
+  acceptInviteById,
+  listIncomingInvites,
   InviteServiceError,
 } from "../workspaces/invites.js";
 import { sendInviteEmail } from "../email/invite.js";
@@ -248,6 +250,53 @@ export async function inviteRoutes(app: FastifyInstance): Promise<void> {
     if (setCookies.length > 0) reply.header("set-cookie", setCookies);
     return reply.send(Buffer.from(await upstream.arrayBuffer()));
   });
+
+  // Incoming invites for the authenticated user — by email match.
+  // Lets the web home / mobile UI surface pending invites for someone
+  // who finished signup but didn't accept on the way through.
+  app.get("/me/incoming-invites", async (req, reply) => {
+    try {
+      const session = await requireSession(req, app);
+      const invites = await listIncomingInvites(session.email);
+      return {
+        invites: invites.map((i) => ({
+          id: i.id,
+          workspaceId: i.workspaceId,
+          workspaceName: i.workspaceName,
+          inviterEmail: i.inviterEmail,
+          inviterName: i.inviterName,
+          invitedRole: i.invitedRole,
+          expiresAt: i.expiresAt.toISOString(),
+          createdAt: i.createdAt.toISOString(),
+        })),
+      };
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.post<{ Params: { id: string } }>(
+    "/me/incoming-invites/:id/accept",
+    async (req, reply) => {
+      try {
+        const session = await requireSession(req, app);
+        const result = await acceptInviteById({
+          inviteId: req.params.id,
+          acceptingUserId: session.userId,
+          acceptingEmail: session.email,
+        });
+        return reply.code(200).send({
+          workspaceId: result.workspaceId,
+          role: result.role,
+        });
+      } catch (e) {
+        if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+        const m = mapInviteError(e);
+        return reply.code(m.statusCode).send({ error: m.code });
+      }
+    },
+  );
 
   app.post("/invites/by-token/:token/accept", async (req, reply) => {
     const params = req.params as { token: string };
