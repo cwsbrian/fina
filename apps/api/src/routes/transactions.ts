@@ -3,6 +3,7 @@ import { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { applyManualCategorize, ManualCategorizeError } from "../categorize/manual-categorize.js";
+import { maybeAutoPromote } from "../categorize/auto-promote.js";
 import {
   createManualTransactionService,
   CreateManualTxError,
@@ -295,6 +296,40 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       throw e;
     }
   });
+
+  app.post<{ Params: { id: string; txId: string } }>(
+    "/workspaces/:id/transactions/:txId/confirm-category",
+    async (req, reply) => {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
+      if (ctx.membership.workspaceId !== req.params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const tx = await prisma.transaction.findFirst({
+        where: { id: req.params.txId, workspaceId: ctx.membership.workspaceId, removedAt: null },
+        select: {
+          id: true,
+          merchantNormalized: true,
+          allocations: { select: { id: true, categoryId: true } },
+        },
+      });
+      if (!tx) return reply.code(404).send({ error: "transaction_not_found" });
+
+      await prisma.transactionAllocation.updateMany({
+        where: { transactionId: tx.id },
+        data: { needsConfirmation: false, dismissedUntil: null },
+      });
+
+      // Auto-promote per allocation (best-effort).
+      if (tx.merchantNormalized) {
+        for (const a of tx.allocations) {
+          if (a.categoryId) {
+            await maybeAutoPromote(ctx.membership.workspaceId, tx.merchantNormalized, a.categoryId);
+          }
+        }
+      }
+      return reply.code(200).send({ ok: true });
+    },
+  );
 
   app.post<{ Params: { id: string } }>(
     "/workspaces/:id/transactions/manual",
