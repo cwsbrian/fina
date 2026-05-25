@@ -22,6 +22,7 @@ import type { MeDTO as Me } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
+import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
 
 function pad2(n: number): string {
   return String(n).padStart(2, "0");
@@ -67,12 +68,22 @@ function daysAheadIso(days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function dateToYmd(d: Date): string {
+  // Local-time YYYY-MM-DD — matches the calendar day the user picked,
+  // not a UTC-shifted day.
+  const y = d.getFullYear();
+  const m = pad2(d.getMonth() + 1);
+  const dd = pad2(d.getDate());
+  return `${y}-${m}-${dd}`;
+}
+
 export default function MorningBriefSettings() {
   const [me, setMe] = useState<Me | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [timeOpen, setTimeOpen] = useState(false);
   const [pauseOpen, setPauseOpen] = useState(false);
+  const [customDateOpen, setCustomDateOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -232,22 +243,6 @@ export default function MorningBriefSettings() {
           </Pressable>
         </View>
 
-        <Pressable
-          style={({ pressed }) => [
-            styles.testBtn,
-            pressed && { opacity: 0.7 },
-          ]}
-          onPress={() =>
-            Alert.alert(
-              "Send a test brief",
-              "On-demand briefs are on the way — for now the next one drops at your delivery time.",
-            )
-          }
-        >
-          <Ionicons name="paper-plane-outline" size={16} color={colors.primary} />
-          <Text style={styles.testBtnText}>Send me one now</Text>
-        </Pressable>
-
         <Text style={styles.helper}>
           Fina skips the brief on days with no new transactions.
         </Text>
@@ -271,6 +266,28 @@ export default function MorningBriefSettings() {
           patch({
             snoozeUntil: daysAhead === null ? null : daysAheadIso(daysAhead),
           });
+        }}
+        onPickCustom={() => {
+          setPauseOpen(false);
+          // Defer so the pause sheet fully closes before the date sheet
+          // opens — overlapping backdrops on @gorhom/bottom-sheet get
+          // stuck otherwise.
+          setTimeout(() => setCustomDateOpen(true), 250);
+        }}
+      />
+      <DatePickerSheet
+        visible={customDateOpen}
+        value={
+          me.user.snoozeUntil
+            ? new Date(me.user.snoozeUntil)
+            : new Date(Date.now() + 7 * 86_400_000)
+        }
+        mode="date"
+        maximumDate={new Date(Date.now() + 365 * 86_400_000)}
+        onClose={() => setCustomDateOpen(false)}
+        onConfirm={(d) => {
+          setCustomDateOpen(false);
+          patch({ snoozeUntil: dateToYmd(d) });
         }}
       />
     </SafeAreaView>
@@ -374,11 +391,13 @@ function PauseSheet({
   snoozeUntil,
   onClose,
   onSelect,
+  onPickCustom,
 }: {
   visible: boolean;
   snoozeUntil: string | null;
   onClose: () => void;
   onSelect: (daysAhead: number | null) => void;
+  onPickCustom: () => void;
 }) {
   const ref = useRef<BottomSheet>(null);
   const snapPoints = useMemo(() => ["48%"], []);
@@ -440,6 +459,23 @@ function PauseSheet({
               </Pressable>
             );
           })}
+          <Pressable
+            onPress={() => {
+              ref.current?.close();
+              onPickCustom();
+            }}
+            style={({ pressed }) => [
+              sheetStyles.pauseRow,
+              pressed && { backgroundColor: colors.surfaceSoft },
+            ]}
+          >
+            <Text style={sheetStyles.pauseRowText}>Pick a date…</Text>
+            <Ionicons
+              name="chevron-forward"
+              size={16}
+              color={colors.mutedSoft}
+            />
+          </Pressable>
         </View>
       </BottomSheetView>
     </BottomSheet>
@@ -549,18 +585,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     letterSpacing: 1,
   },
-
-  testBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 14,
-    backgroundColor: "rgba(62, 179, 139, 0.10)",
-    borderRadius: 999,
-    marginTop: space.lg,
-  },
-  testBtnText: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
 
   helper: {
     ...type$.bodySm,

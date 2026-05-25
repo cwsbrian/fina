@@ -307,7 +307,7 @@ export default function More() {
           <SettingsRow
             icon="sunny-outline"
             title="Morning brief"
-            subtitle="Daily summary time and pause"
+            subtitle={briefSubtitle(me)}
             onPress={() => router.push("/brief" as never)}
           />
           <SettingsRow
@@ -414,6 +414,30 @@ export default function More() {
       <View style={[styles.statusBarBg, { height: insets.top }]} />
     </View>
   );
+}
+
+function briefSubtitle(me: Me | null): string {
+  if (!me) return "Daily summary time and pause";
+  const hhmm = me.user.morningTime ?? "08:00";
+  const [hStr, mStr] = hhmm.split(":");
+  const h = Number(hStr) || 8;
+  const m = Number(mStr) || 0;
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  const timeLabel = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+  if (me.user.pauseEnabled) return `Off · ${timeLabel}`;
+  if (
+    me.user.snoozeUntil &&
+    new Date(me.user.snoozeUntil).getTime() > Date.now()
+  ) {
+    const d = new Date(me.user.snoozeUntil);
+    const dateLabel = d.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    return `Paused until ${dateLabel}`;
+  }
+  return `On · ${timeLabel}`;
 }
 
 function GroupLabel({ children }: { children: ReactNode }) {
