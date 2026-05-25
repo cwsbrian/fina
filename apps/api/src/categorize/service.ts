@@ -3,6 +3,9 @@ import { prisma } from "../db.js";
 import { normalizeMerchant } from "./normalize.js";
 import { callGeminiCategorize, type LLMTransaction } from "./llm.js";
 import { logError } from "../logger.js";
+import { findHistoryHints } from "./history-lookup.js";
+import { computeNeedsConfirmation } from "./needs-confirmation.js";
+import { isOtherCategory } from "./other-detection.js";
 
 /**
  * Categorize a list of newly-inserted transactions in a workspace.
@@ -29,6 +32,14 @@ export async function categorizeNewTransactions(
 ): Promise<void> {
   if (newTxIds.length === 0) return;
 
+  // Resolve mode from the workspace owner's user record. (Plan v3: user-level mode,
+  // sync runs workspace-scoped, so owner's mode applies. v2 may revisit.)
+  const owner = await prisma.membership.findFirst({
+    where: { workspaceId, role: "owner" },
+    select: { user: { select: { categorizationMode: true } } },
+  });
+  const mode = owner?.user.categorizationMode ?? "flexible";
+
   // Step 1: Load tx + populate merchantNormalized on each row.
   // Use allocation-based predicate so this filter survives Task 8's column drop.
   const txs = await prisma.transaction.findMany({
@@ -44,6 +55,7 @@ export async function categorizeNewTransactions(
       merchantNormalized: true,
       amount: true,
       occurredAt: true,
+      rawData: true,
       allocations: { select: { id: true } },
     },
   });
@@ -57,7 +69,14 @@ export async function categorizeNewTransactions(
   // Split tx (N≥2) are excluded per spec §6.2.
   const singleAllocTxs = sortedTxs.filter((t) => t.allocations.length === 1);
 
-  type Loaded = { id: string; merchantRaw: string; merchantNormalized: string; amount: number; occurredAt: Date };
+  type Loaded = {
+    id: string;
+    merchantRaw: string;
+    merchantNormalized: string;
+    amount: number;
+    occurredAt: Date;
+    rawData: unknown;
+  };
   const loaded: Loaded[] = [];
   for (const t of singleAllocTxs) {
     const normalized = t.merchantNormalized ?? normalizeMerchant(t.merchantRaw);
@@ -73,6 +92,7 @@ export async function categorizeNewTransactions(
       merchantNormalized: normalized,
       amount: Number(t.amount),
       occurredAt: t.occurredAt,
+      rawData: t.rawData,
     });
   }
 
@@ -113,7 +133,7 @@ export async function categorizeNewTransactions(
         // Idempotent atomic write — only fires if the allocation is still null/null.
         const upd = await prisma.transactionAllocation.updateMany({
           where: { id: a.id, categoryId: null, source: null },
-          data: { categoryId: catId, source: "mapping" },
+          data: { categoryId: catId, source: "mapping", needsConfirmation: false, dismissedUntil: null },
         });
         if (upd.count > 0) {
           // allocation updated — no mirror-write needed (Task 8 dropped the columns)
@@ -123,7 +143,49 @@ export async function categorizeNewTransactions(
       unmapped.push(t);
     }
   }
-  if (unmapped.length === 0) return;
+
+  // Step 2: History lookup (batch).
+  const historyMerchants = [...new Set(unmapped.map((t) => t.merchantNormalized))];
+  const historyHints = await findHistoryHints(workspaceId, historyMerchants);
+
+  // Pre-fetch categories referenced by hints to evaluate isOther.
+  const hintCategoryIds = [...new Set(Array.from(historyHints.values()).map((h) => h.categoryId))];
+  const hintCategories = hintCategoryIds.length === 0 ? [] : await prisma.category.findMany({
+    where: { id: { in: hintCategoryIds }, archivedAt: null },
+    select: { id: true, name: true, archivedAt: true },
+  });
+  const hintCatById = new Map(hintCategories.map((c) => [c.id, c]));
+
+  const stillUnmapped: Loaded[] = [];
+  for (const t of unmapped) {
+    const hint = historyHints.get(t.merchantNormalized);
+    const hintCat = hint ? hintCatById.get(hint.categoryId) : undefined;
+    if (!hint || !hintCat) { stillUnmapped.push(t); continue; }
+
+    const isOther = isOtherCategory({ name: hintCat.name, archivedAt: hintCat.archivedAt });
+    const needsConfirmation = computeNeedsConfirmation({
+      mode,
+      source: "history",
+      isOther,
+      priorNeedsConfirmation: hint.needsConfirmation,
+    });
+    const dismissedUntil = hint.dismissedUntil && hint.dismissedUntil.getTime() > Date.now() ? hint.dismissedUntil : null;
+
+    // Find the single allocation row to update.
+    const tx = await prisma.transaction.findFirst({
+      where: { id: t.id, workspaceId },
+      include: { allocations: { select: { id: true } } },
+    });
+    if (!tx || tx.allocations.length !== 1) { stillUnmapped.push(t); continue; }
+    const alloc = tx.allocations[0]!;
+
+    // Atomic guard preserved (categoryId IS NULL AND source IS NULL).
+    await prisma.transactionAllocation.updateMany({
+      where: { id: alloc.id, categoryId: null, source: null },
+      data: { categoryId: hint.categoryId, source: "history", needsConfirmation, dismissedUntil },
+    });
+  }
+  if (stillUnmapped.length === 0) return;
 
   // Step 3: LLM batch. Build workspace-scoped active category map.
   const categoryRows = await prisma.category.findMany({
@@ -135,14 +197,21 @@ export async function categorizeNewTransactions(
   if (categoryNames.length === 0) return; // no vocabulary, nothing to do
 
   const batchMax = env.CATEGORIZE_BATCH_MAX ?? 50; // optional field; default in code not zod
-  for (let i = 0; i < unmapped.length; i += batchMax) {
-    const batch = unmapped.slice(i, i + batchMax);
-    const llmTxs: LLMTransaction[] = batch.map((t) => ({
-      id: t.id,
-      merchantRaw: t.merchantRaw,
-      amount: t.amount,
-      occurredAtISO: t.occurredAt.toISOString().slice(0, 10),
-    }));
+  for (let i = 0; i < stillUnmapped.length; i += batchMax) {
+    const batch = stillUnmapped.slice(i, i + batchMax);
+    const llmTxs: LLMTransaction[] = batch.map((t) => {
+      const pfcRaw = (t.rawData as { personal_finance_category?: { primary?: string; detailed?: string; confidence_level?: string } } | null)?.personal_finance_category;
+      const pfc = pfcRaw?.primary
+        ? { primary: pfcRaw.primary, detailed: pfcRaw.detailed ?? "", confidence: pfcRaw.confidence_level ?? "LOW" }
+        : undefined;
+      return {
+        id: t.id,
+        merchantRaw: t.merchantRaw,
+        amount: t.amount,
+        occurredAtISO: t.occurredAt.toISOString().slice(0, 10),
+        ...(pfc ? { pfc } : {}),
+      };
+    });
 
     let results: Array<{ tx_id: string; category: string }> = [];
     try {
@@ -175,9 +244,16 @@ export async function categorizeNewTransactions(
       const a = tx.allocations[0]!;
       if (a.categoryId !== null || a.source !== null) continue;
 
+      const aiCat = await prisma.category.findUnique({
+        where: { id: aiCatId },
+        select: { name: true, archivedAt: true },
+      });
+      const isOther = aiCat ? isOtherCategory({ name: aiCat.name, archivedAt: aiCat.archivedAt }) : false;
+      const needsConfirmation = computeNeedsConfirmation({ mode, source: "ai", isOther, priorNeedsConfirmation: null });
+
       const upd = await prisma.transactionAllocation.updateMany({
         where: { id: a.id, categoryId: null, source: null },
-        data: { categoryId: aiCatId, source: "ai" },
+        data: { categoryId: aiCatId, source: "ai", needsConfirmation, dismissedUntil: null },
       });
       if (upd.count > 0) {
         // allocation updated — no mirror-write needed (Task 8 dropped the columns)

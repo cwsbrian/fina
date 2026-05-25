@@ -9,9 +9,15 @@ export const geminiMock = {
   generateContent: [] as CategorizeResponse[],
 };
 
+let _lastCategorizeRequest: unknown = null;
+export function lastGeminiRequest(): unknown {
+  return _lastCategorizeRequest;
+}
+
 export function resetGeminiMock(): void {
   geminiMock.generateContent.length = 0;
   chatGeminiMock.responses.length = 0;
+  _lastCategorizeRequest = null;
 }
 
 function popCategorize(): CategorizeResponse {
@@ -37,11 +43,26 @@ function popChat(): ChatMockRound {
   return next;
 }
 
-type GenContentReq = { config?: { responseSchema?: unknown } };
+type GenContentReq = {
+  config?: { responseSchema?: unknown };
+  contents?: Array<{ role?: string; parts?: Array<{ text?: string }> }>;
+};
 
 async function generateContent(req: GenContentReq = {}) {
   const isCategorize = !!req.config?.responseSchema;
   if (isCategorize) {
+    // Capture the categorize payload (JSON-stringified in contents[0].parts[0].text)
+    // so tests can assert plaid_hint inclusion etc.
+    const rawText = req.contents?.[0]?.parts?.[0]?.text;
+    if (typeof rawText === "string") {
+      try {
+        _lastCategorizeRequest = JSON.parse(rawText);
+      } catch {
+        _lastCategorizeRequest = rawText;
+      }
+    } else {
+      _lastCategorizeRequest = null;
+    }
     const next = popCategorize();
     if (next && typeof (next as Promise<unknown>).then === "function") {
       const resolved = await (next as Promise<{ results: Array<{ tx_id: string; category: string }> } | Error>);

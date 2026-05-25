@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { geminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
+import { geminiMock, resetGeminiMock, lastGeminiRequest } from "./helpers/gemini-mock.js";
 
 const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
   async () => await import("./helpers/gemini-mock.js"),
@@ -431,5 +431,267 @@ describe("categorizeNewTransactions", () => {
     const after = await prisma.transactionAllocation.findMany({ where: { transactionId: tx.id } });
     expect(after).toHaveLength(2);
     expect(after.every((a) => a.source === "manual")).toBe(true);
+  });
+});
+
+describe("categorize pipeline — history step + needsConfirmation + PFC", () => {
+  /** Helper to create a tx + single allocation already categorized (history prior). */
+  async function makePriorTx(
+    wsId: string,
+    accountId: string,
+    merchantNormalized: string,
+    categoryId: string,
+    opts: {
+      occurredAt?: Date;
+      needsConfirmation?: boolean;
+      dismissedUntil?: Date | null;
+      source?: "manual" | "ai" | "history" | "mapping";
+    } = {},
+  ): Promise<string> {
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId,
+        plaidTransactionId: `prior_${merchantNormalized}_${Math.random().toString(36).slice(2, 8)}`,
+        amount: "10",
+        merchantRaw: merchantNormalized,
+        merchantNormalized,
+        occurredAt: opts.occurredAt ?? new Date("2026-05-01"),
+        rawData: {},
+      },
+    });
+    // Remove any auto-seeded allocation, then create a definite one with categoryId set.
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.create({
+      data: {
+        transactionId: tx.id,
+        categoryId,
+        amount: "10",
+        source: opts.source ?? "manual",
+        needsConfirmation: opts.needsConfirmation ?? false,
+        dismissedUntil: opts.dismissedUntil ?? null,
+      },
+    });
+    return tx.id;
+  }
+
+  it("history step hits with prior_unconfirmed=true and mode='strict' → new alloc needsConfirmation=true, source='history'", async () => {
+    const { wsId, accountId, userId } = await setupWorkspaceWithAccount();
+    await prisma.user.update({ where: { id: userId }, data: { categorizationMode: "strict" } });
+    const groceriesId = await categoryId(wsId, "Groceries");
+
+    // Prior history hit with needsConfirmation=true.
+    await makePriorTx(wsId, accountId, "loblaws", groceriesId, { needsConfirmation: true });
+
+    const newTxId = await makeTx(wsId, accountId, "Loblaws", "new-1");
+    // Force merchantNormalized to match (normalizeMerchant("Loblaws") → "loblaws").
+    await prisma.transaction.update({ where: { id: newTxId }, data: { merchantNormalized: "loblaws" } });
+
+    // No Gemini push — history should resolve it.
+    await categorizeNewTransactions(env, wsId, [newTxId]);
+
+    const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: newTxId } });
+    expect(alloc.source).toBe("history");
+    expect(alloc.categoryId).toBe(groceriesId);
+    expect(alloc.needsConfirmation).toBe(true);
+  });
+
+  it("history step hits with prior dismissedUntil > now → new alloc inherits dismissedUntil", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+    const groceriesId = await categoryId(wsId, "Groceries");
+    const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    await makePriorTx(wsId, accountId, "loblaws", groceriesId, {
+      needsConfirmation: true,
+      dismissedUntil: future,
+    });
+
+    const newTxId = await makeTx(wsId, accountId, "Loblaws", "new-2");
+    await prisma.transaction.update({ where: { id: newTxId }, data: { merchantNormalized: "loblaws" } });
+
+    await categorizeNewTransactions(env, wsId, [newTxId]);
+
+    const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: newTxId } });
+    expect(alloc.source).toBe("history");
+    expect(alloc.dismissedUntil).not.toBeNull();
+    expect(alloc.dismissedUntil!.getTime()).toBe(future.getTime());
+  });
+
+  it("history step prior categoryId IS NULL → no history match; falls through to LLM", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+
+    // Prior tx with null-cat allocation (uncategorized) — not a valid history hint.
+    const priorTx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId,
+        plaidTransactionId: `prior_null_${Date.now()}`,
+        amount: "10",
+        merchantRaw: "Loblaws",
+        merchantNormalized: "loblaws",
+        occurredAt: new Date("2026-05-01"),
+        rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: priorTx.id } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: priorTx.id, categoryId: null, amount: "10", source: null },
+    });
+
+    const newTxId = await makeTx(wsId, accountId, "Loblaws", "new-3");
+    await prisma.transaction.update({ where: { id: newTxId }, data: { merchantNormalized: "loblaws" } });
+
+    geminiMock.generateContent.push({ results: [{ tx_id: newTxId, category: "Groceries" }] });
+
+    await categorizeNewTransactions(env, wsId, [newTxId]);
+
+    const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: newTxId } });
+    expect(alloc.source).toBe("ai");
+    expect(alloc.categoryId).toBe(await categoryId(wsId, "Groceries"));
+  });
+
+  it("history step prior category archived → falls through to LLM", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+    const groceriesId = await categoryId(wsId, "Groceries");
+    const diningId = await categoryId(wsId, "Dining");
+
+    await makePriorTx(wsId, accountId, "loblaws", diningId);
+
+    // Archive Dining after the prior tx was assigned.
+    await prisma.category.update({ where: { id: diningId }, data: { archivedAt: new Date() } });
+
+    const newTxId = await makeTx(wsId, accountId, "Loblaws", "new-4");
+    await prisma.transaction.update({ where: { id: newTxId }, data: { merchantNormalized: "loblaws" } });
+
+    geminiMock.generateContent.push({ results: [{ tx_id: newTxId, category: "Groceries" }] });
+
+    await categorizeNewTransactions(env, wsId, [newTxId]);
+
+    const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: newTxId } });
+    expect(alloc.source).toBe("ai");
+    expect(alloc.categoryId).toBe(groceriesId);
+  });
+
+  it("LLM result 'Other' + mode='auto' → needsConfirmation=true (Other override)", async () => {
+    const { wsId, accountId, userId } = await setupWorkspaceWithAccount();
+    await prisma.user.update({ where: { id: userId }, data: { categorizationMode: "auto" } });
+    const otherId = await categoryId(wsId, "Other");
+
+    const newTxId = await makeTx(wsId, accountId, "WeirdShop", "ai-other");
+    geminiMock.generateContent.push({ results: [{ tx_id: newTxId, category: "Other" }] });
+
+    await categorizeNewTransactions(env, wsId, [newTxId]);
+
+    const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: newTxId } });
+    expect(alloc.source).toBe("ai");
+    expect(alloc.categoryId).toBe(otherId);
+    expect(alloc.needsConfirmation).toBe(true);
+  });
+
+  it("LLM result non-Other + mode='auto' → needsConfirmation=false", async () => {
+    const { wsId, accountId, userId } = await setupWorkspaceWithAccount();
+    await prisma.user.update({ where: { id: userId }, data: { categorizationMode: "auto" } });
+
+    const newTxId = await makeTx(wsId, accountId, "Loblaws", "ai-nonother");
+    geminiMock.generateContent.push({ results: [{ tx_id: newTxId, category: "Groceries" }] });
+
+    await categorizeNewTransactions(env, wsId, [newTxId]);
+
+    const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: newTxId } });
+    expect(alloc.source).toBe("ai");
+    expect(alloc.needsConfirmation).toBe(false);
+  });
+
+  it("split tx (allocations.length=2) → pipeline skips, needsConfirmation stays default false", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+    const c1 = await categoryId(wsId, "Groceries");
+    const c2 = await categoryId(wsId, "Dining");
+
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId,
+        plaidTransactionId: `split-needsconf-${Date.now()}`,
+        amount: "10",
+        merchantRaw: "SplitMerch",
+        merchantNormalized: "splitmerch",
+        occurredAt: new Date("2026-05-10"),
+        rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: tx.id, categoryId: c1, amount: "4", source: "manual", needsConfirmation: false },
+        { transactionId: tx.id, categoryId: c2, amount: "6", source: "manual", needsConfirmation: false },
+      ],
+    });
+
+    await categorizeNewTransactions(env, wsId, [tx.id]);
+
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: tx.id } });
+    expect(allocs).toHaveLength(2);
+    for (const a of allocs) {
+      expect(a.source).toBe("manual");
+      expect(a.needsConfirmation).toBe(false);
+    }
+  });
+
+  it("PFC present in rawData → lastGeminiRequest() shows plaid_hint for that tx", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId,
+        plaidTransactionId: `pfc-present-${Date.now()}`,
+        amount: "10",
+        merchantRaw: "SomeShop",
+        occurredAt: new Date("2026-05-10"),
+        rawData: {
+          personal_finance_category: {
+            primary: "FOOD_AND_DRINK",
+            detailed: "FOOD_AND_DRINK_RESTAURANT",
+            confidence_level: "HIGH",
+          },
+        },
+      },
+    });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: null, amount: "10", source: null },
+    });
+
+    geminiMock.generateContent.push({ results: [{ tx_id: tx.id, category: "Dining" }] });
+
+    await categorizeNewTransactions(env, wsId, [tx.id]);
+
+    const req = lastGeminiRequest() as {
+      transactions: Array<{ tx_id: string; plaid_hint?: { primary: string; detailed: string; confidence: string } }>;
+    } | null;
+    expect(req).not.toBeNull();
+    const found = req!.transactions.find((t) => t.tx_id === tx.id);
+    expect(found).toBeDefined();
+    expect(found!.plaid_hint).toEqual({
+      primary: "FOOD_AND_DRINK",
+      detailed: "FOOD_AND_DRINK_RESTAURANT",
+      confidence: "HIGH",
+    });
+  });
+
+  it("PFC absent → lastGeminiRequest() does NOT show plaid_hint for that tx, no throw", async () => {
+    const { wsId, accountId } = await setupWorkspaceWithAccount();
+
+    const txId = await makeTx(wsId, accountId, "PlainShop", "pfc-absent");
+    geminiMock.generateContent.push({ results: [{ tx_id: txId, category: "Groceries" }] });
+
+    await categorizeNewTransactions(env, wsId, [txId]);
+
+    const req = lastGeminiRequest() as {
+      transactions: Array<{ tx_id: string; plaid_hint?: unknown }>;
+    } | null;
+    expect(req).not.toBeNull();
+    const found = req!.transactions.find((t) => t.tx_id === txId);
+    expect(found).toBeDefined();
+    expect(found!.plaid_hint).toBeUndefined();
   });
 });
