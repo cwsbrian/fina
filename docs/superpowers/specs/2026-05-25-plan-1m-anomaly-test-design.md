@@ -136,7 +136,6 @@ async function seedTransactionWithCategory(opts: {
       workspaceId: opts.wsId,
       accountId: opts.accountId,
       amount: new Prisma.Decimal(opts.amount),
-      currency: "CAD",
       merchantRaw: opts.merchant ?? "Test Merchant",
       merchantNormalized: (opts.merchant ?? "test merchant").toLowerCase(),
       occurredAt: opts.occurredAt ?? new Date(),
@@ -145,6 +144,7 @@ async function seedTransactionWithCategory(opts: {
       rawData: {},  // Required Json field; empty for tests (no Plaid payload).
     },
   });
+// Note: Transaction has no currency column (workspace+account carry it).
   if (opts.categoryId !== null) {
     await prisma.transactionAllocation.create({
       data: {
@@ -231,6 +231,6 @@ expect(vi.mocked(sendMod.sendLargeChargePush).mock.calls.length).toBe(0);
 
 ## 7. Follow-ups (별도 plans)
 
-- Other `sendXxxPush` wrappers in `push/send.ts` (7 untested: sendBankReconnect, sendTrialExpiring, sendGoalMilestone, sendTransactionAdded, sendProductUpdate, sendWorkspaceInvite, sendGoalMilestonePush etc.).
+- Other `sendXxxPush` wrappers in `push/send.ts` (6 untested after this plan: sendBankReconnectPush, sendTrialExpiringPush, sendGoalMilestonePush, sendTransactionAddedPush, sendProductUpdatePush, sendWorkspaceInvitePush). `sendBriefPush` and `sendLargeChargePush` are covered.
 - `daily-refresh` cron tests that exercise the anomaly call path (verify Plaid sync → anomaly fan-out chain).
 - HTTP integration: extend `transactions.create-manual.test.ts` to assert anomaly call from POST /transactions/manual.
