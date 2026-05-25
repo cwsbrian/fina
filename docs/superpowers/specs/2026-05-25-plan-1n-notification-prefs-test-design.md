@@ -78,8 +78,10 @@ describe("resolveNotificationPrefs", () => {
   it("unknown keys are silently dropped from the result", () => {
     const out = resolveNotificationPrefs({ foo: false, bar: true, morningBrief: false });
     expect(out.morningBrief).toBe(false);
-    expect((out as Record<string, unknown>).foo).toBeUndefined();
-    expect((out as Record<string, unknown>).bar).toBeUndefined();
+    // Result shape matches the 8-key contract exactly — no extra keys leak.
+    expect(Object.keys(out).sort()).toEqual(
+      Object.keys(DEFAULT_NOTIFICATION_PREFS).sort(),
+    );
   });
 });
 ```
@@ -104,27 +106,55 @@ Append a new `describe("notificationPrefs", ...)` block after existing tests:
 
 ### T3: `apps/api/tests/push.send.test.ts` extension (4 tests)
 
-Add channel gate spot check at end of existing describe block. Setup: create user via direct `prisma.user.create` (minimal `{ id, email, name }`) → set `notificationPrefs` field via `prisma.user.update` → create device → call `sendXxxPush`.
+Add channel gate spot check at end of existing describe block.
 
-1. **"sendBriefPush respects morningBrief: false → no Expo call, logs skip"**:
-   - Setup user with `notificationPrefs: { morningBrief: false }` + 1 device.
-   - `vi.spyOn(Expo.prototype, "sendPushNotificationsAsync")` to verify NO call.
-   - Call `sendBriefPush(env, userId, "brief text")`.
-   - Assert `sendPushNotificationsAsync` was NOT called.
-   - (Optional) Spy `logInfo` and assert "push skipped — channel disabled" was logged.
+**Setup helper — extend existing `makeUserWithDevices` (lines 31-42)**: add an optional 2nd parameter `notificationPrefs?: Record<string, boolean>`. If provided, call `prisma.user.update` to set the field after the user/device creation. Keeps DRY with existing 5 tests that use the same helper.
 
-2. **"sendBriefPush respects morningBrief: true (default null prefs) → Expo called once"**:
-   - Setup user with `notificationPrefs: null` (or omit, defaults apply) + 1 device.
-   - Call `sendBriefPush(env, userId, "brief text")`.
-   - Assert `sendPushNotificationsAsync` called exactly once.
+Concretely:
+```ts
+async function makeUserWithDevices(
+  tokens: Array<{ token: string; platform: "ios" | "android" }>,
+  notificationPrefs?: Record<string, boolean>,
+) {
+  // ... existing body ...
+  if (notificationPrefs) {
+    await prisma.user.update({
+      where: { id: u.id },
+      data: { notificationPrefs },
+    });
+  }
+  return u;
+}
+```
+
+**Assertion pattern**: assert ONLY via spy call count (`toHaveBeenCalledTimes(0)` / `toHaveBeenCalledTimes(1)`), NOT via `result.sent` count. The "enabled" tests must `mockResolvedValueOnce([{ status: "ok", id: "..." }])` if they also want to assert `result.sent === 1`, but the channel gate test cares about the Expo call itself, not the ticket processing path.
+
+**4 tests:**
+
+1. **"sendBriefPush respects morningBrief: false → no Expo call"**:
+   - `makeUserWithDevices([{ token: "ExponentPushToken[a]", platform: "ios" }], { morningBrief: false })`.
+   - `const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");`
+   - Call `await sendBriefPush(testEnv(), u.id, "brief text");`
+   - `expect(spy).toHaveBeenCalledTimes(0);`
+
+2. **"sendBriefPush with default prefs (null) → Expo called once"**:
+   - `makeUserWithDevices([{ token: "ExponentPushToken[b]", platform: "ios" }])` (no notificationPrefs arg → DB row has null).
+   - `const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");`
+   - Call `await sendBriefPush(testEnv(), u.id, "brief text");`
+   - `expect(spy).toHaveBeenCalledTimes(1);`
 
 3. **"sendLargeChargePush respects largeCharges: false → no Expo call"**:
-   - Same shape, channel: `largeCharges`. Wrapper signature: `sendLargeChargePush(env, userId, merchant, amount, categoryName)`.
+   - `makeUserWithDevices([...], { largeCharges: false })`. Wrapper signature: `sendLargeChargePush(env, userId, merchant, amount, categoryName)`.
+   - `const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync");`
+   - Call `await sendLargeChargePush(testEnv(), u.id, "Best Buy", "200.00", "Electronics");`
+   - `expect(spy).toHaveBeenCalledTimes(0);`
 
-4. **"sendLargeChargePush respects largeCharges: true (default) → Expo called once"**:
-   - Default prefs (null). Assert 1 call.
+4. **"sendLargeChargePush with default prefs (null) → Expo called once"**:
+   - `makeUserWithDevices([...])` (default prefs).
+   - Same spy + call shape.
+   - `expect(spy).toHaveBeenCalledTimes(1);`
 
-**Mock pattern**: `push.send.test.ts` already mocks `expo-server-sdk` at module scope (prototype-method Expo class). New tests use existing mock + `vi.spyOn(Expo.prototype, "sendPushNotificationsAsync")` per test. `afterEach(() => vi.restoreAllMocks())` already in file.
+**Mock pattern**: `push.send.test.ts` already mocks `expo-server-sdk` at module scope (prototype-method Expo class). New tests use existing mock + `vi.spyOn(Expo.prototype, "sendPushNotificationsAsync")` per test. `afterEach(() => vi.restoreAllMocks())` already in file — spy isolation per test.
 
 **Commit**: `test(api): push/send channel gate — spot check morningBrief + largeCharges`
 
