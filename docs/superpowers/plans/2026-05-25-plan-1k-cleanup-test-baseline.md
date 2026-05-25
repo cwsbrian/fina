@@ -151,8 +151,10 @@ it("Transaction.currency inherits Workspace.currency", async () => {
     { merchantRaw: "X", amount: 1, occurredAt: "2026-05-17" },
   );
   expect(result.transaction.currency).toBe("USD");
+  // Query mirrors production MANUAL_WHERE (create-manual.ts:129-133) so
+  // it never picks up unrelated rows if seed semantics change later.
   const acct = await prisma.bankAccount.findFirstOrThrow({
-    where: { workspaceId: wsId, plaidItemId: null },
+    where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
   });
   expect(acct.currency).toBe("USD");
   expect(acct.name).toBe("Cash");
