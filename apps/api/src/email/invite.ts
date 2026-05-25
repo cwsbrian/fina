@@ -20,7 +20,7 @@ export async function sendInviteEmail(input: SendInviteEmailInput): Promise<void
     `This link expires in 7 days. If you weren't expecting this email, just ignore it.`;
   await sendEmail(input.apiKey, input.from, {
     to: input.to,
-    subject: `${inviter} invited you to ${input.workspaceName}`,
+    subject: `${inviter} invited you to ${input.workspaceName} on Fina`,
     text,
   });
 }
