@@ -23,7 +23,7 @@ No production code changes. No `@fina/shared` changes.
 **Files:**
 - Create: `apps/api/tests/cron.push-receipts.test.ts`
 
-- [ ] **Step 1: Read precedent + production**
+- [x] **Step 1: Read precedent + production**
 
 Read `apps/api/tests/push.send.test.ts` lines 1-30 (mock setup precedent — same Expo-class mock).
 Read `apps/api/src/cron/jobs/push-receipts.ts` end-to-end (104 LOC). Note key branches:
@@ -41,7 +41,7 @@ PushTicket FK: `userDevice` with `onDelete: Cascade`. DNR → device delete → 
 
 **Guardrail:** Do NOT edit `apps/api/src/cron/jobs/push-receipts.ts` or any other production file. Test-only addition.
 
-- [ ] **Step 2: Create the test file**
+- [x] **Step 2: Create the test file**
 
 ```ts
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -312,7 +312,7 @@ Then add the 10 `it()` blocks inside the describe:
   });
 ```
 
-- [ ] **Step 3: Run the file**
+- [x] **Step 3: Run the file**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/cron.push-receipts.test.ts`
 Expected: `Tests  10 passed (10)`.
@@ -322,12 +322,12 @@ If FAIL: read first error, fix one test, rerun. Common gotchas:
 - `MockInstance` import from `vitest` — required for helper return type.
 - `mockResolvedValue` on a spy created via `vi.spyOn` — verify the spy chain.
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "cron.push-receipts" | head -5`
 Expected: 0 lines.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Branch confirmation: `git branch --show-current` must show `worktree-plan-1q-push-receipts-cron-test`.
 
