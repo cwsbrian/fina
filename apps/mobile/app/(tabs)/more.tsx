@@ -278,6 +278,12 @@ export default function More() {
         <GroupLabel>Insights</GroupLabel>
         <Group>
           <SettingsRow
+            icon="sunny-outline"
+            title="Morning brief"
+            subtitle="Today's summary from Fina"
+            onPress={() => router.push("/brief" as never)}
+          />
+          <SettingsRow
             icon="bar-chart-outline"
             title="Analysis"
             subtitle="Patterns, trends, category breakdown"
