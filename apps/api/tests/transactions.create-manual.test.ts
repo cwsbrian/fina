@@ -35,15 +35,25 @@ describe("createManualTransactionService", () => {
     expect(result.transaction.source).toBe("manual");
     expect(result.transaction.merchantNormalized).toBe("starbucks");
     expect(result.transaction.currency).toBe("CAD");
-    const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId, plaidItemId: null } });
-    expect(accounts).toHaveLength(1);
-    expect(accounts[0]!.name).toBe("Cash");
-    expect(accounts[0]!.type).toBe("depository");
-    expect(accounts[0]!.currency).toBe("CAD");
+    const manualAccounts = await prisma.bankAccount.findMany({
+      where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
+    });
+    // Bootstrap seeds 5 default manual accounts (Cash/Debit/Checking/Savings/
+    // Credit); service reused one of them for this transaction.
+    expect(manualAccounts.length).toBeGreaterThanOrEqual(1);
+    const picked = manualAccounts.find((a) => a.id === result.transaction.accountId);
+    expect(picked).toBeDefined();
+    expect(picked!.type).toBe("depository");
+    expect(picked!.currency).toBe("CAD");
+    // Cash is among the seed defaults, confirming the bootstrap path:
+    expect(manualAccounts.some((a) => a.name === "Cash")).toBe(true);
   });
 
   it("reuses the existing manual account on second call", async () => {
     const { wsId, userId } = await setupEditor("mt2@t.co");
+    const manualBefore = await prisma.bankAccount.count({
+      where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
+    });
     await createManualTransactionService(
       { workspaceId: wsId, userId },
       { merchantRaw: "A", amount: 1, occurredAt: "2026-05-17" },
@@ -52,11 +62,18 @@ describe("createManualTransactionService", () => {
       { workspaceId: wsId, userId },
       { merchantRaw: "B", amount: 2, occurredAt: "2026-05-17" },
     );
-    const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId, plaidItemId: null } });
-    expect(accounts).toHaveLength(1);
     const txs = await prisma.transaction.findMany({ where: { workspaceId: wsId } });
     expect(txs).toHaveLength(2);
-    expect(new Set(txs.map((t) => t.accountId))).toEqual(new Set([accounts[0]!.id]));
+    // Both transactions reused the same manual account (reuse semantics);
+    // account identity doesn't matter — just that they collapsed onto one.
+    const accountIds = new Set(txs.map((t) => t.accountId));
+    expect(accountIds.size).toBe(1);
+    // Belt+suspenders: 2nd call didn't silently create a 6th manual row
+    // alongside the reuse.
+    const manualAfter = await prisma.bankAccount.count({
+      where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
+    });
+    expect(manualAfter).toBe(manualBefore);
   });
 
   it("accepts explicit accountId when plaidItemId IS NULL", async () => {
@@ -186,14 +203,24 @@ describe("createManualTransactionService", () => {
 
   it("Transaction.currency inherits Workspace.currency", async () => {
     const { wsId, userId } = await setupEditor("mtcur@t.co");
+    // Bootstrap seeded 5 manual accounts at workspace.currency=CAD. The service
+    // would reuse one of them rather than honor a subsequent currency change.
+    // Drop the seeds so the service has to create a fresh Cash account using
+    // the updated workspace.currency, exercising the inherit code path.
+    await prisma.bankAccount.deleteMany({ where: { workspaceId: wsId } });
     await prisma.workspace.update({ where: { id: wsId }, data: { currency: "USD" } });
     const result = await createManualTransactionService(
       { workspaceId: wsId, userId },
       { merchantRaw: "X", amount: 1, occurredAt: "2026-05-17" },
     );
     expect(result.transaction.currency).toBe("USD");
-    const acct = await prisma.bankAccount.findFirstOrThrow({ where: { workspaceId: wsId, plaidItemId: null } });
+    // Query mirrors production MANUAL_WHERE (create-manual.ts:129-133) so
+    // it never picks up unrelated rows if seed semantics change later.
+    const acct = await prisma.bankAccount.findFirstOrThrow({
+      where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
+    });
     expect(acct.currency).toBe("USD");
+    expect(acct.name).toBe("Cash");
   });
 
   it("does NOT reuse a ghost ex-Plaid account (plaidItemId=null + plaidAccountId set + archived)", async () => {
@@ -213,12 +240,15 @@ describe("createManualTransactionService", () => {
       { workspaceId: wsId, userId },
       { merchantRaw: "X", amount: 1, occurredAt: "2026-05-17" },
     );
-    const cashAccts = await prisma.bankAccount.findMany({
-      where: { workspaceId: wsId, plaidAccountId: null, archivedAt: null },
+    const ghostId = (await prisma.bankAccount.findFirstOrThrow({
+      where: { workspaceId: wsId, plaidAccountId: { not: null } },
+    })).id;
+    expect(result.transaction.accountId).not.toBe(ghostId);
+    const pickedAccount = await prisma.bankAccount.findUniqueOrThrow({
+      where: { id: result.transaction.accountId },
     });
-    expect(cashAccts).toHaveLength(1);
-    expect(cashAccts[0]!.name).toBe("Cash");
-    expect(result.transaction.accountId).toBe(cashAccts[0]!.id);
+    expect(pickedAccount.plaidAccountId).toBeNull();
+    expect(pickedAccount.archivedAt).toBeNull();
   });
 
   it("race: two concurrent first-time calls produce exactly one Cash account", async () => {
@@ -227,10 +257,14 @@ describe("createManualTransactionService", () => {
       createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "A", amount: 1, occurredAt: "2026-05-17" }),
       createManualTransactionService({ workspaceId: wsId, userId }, { merchantRaw: "B", amount: 2, occurredAt: "2026-05-17" }),
     ]);
-    const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId, plaidItemId: null } });
-    expect(accounts).toHaveLength(1);
-    expect(r1.transaction.accountId).toBe(accounts[0]!.id);
-    expect(r2.transaction.accountId).toBe(accounts[0]!.id);
+    expect(r1.transaction.accountId).toBe(r2.transaction.accountId);
+    // And it's an active, non-Plaid account from the bootstrap seed pool.
+    const picked = await prisma.bankAccount.findUniqueOrThrow({
+      where: { id: r1.transaction.accountId },
+    });
+    expect(picked.plaidItemId).toBeNull();
+    expect(picked.plaidAccountId).toBeNull();
+    expect(picked.archivedAt).toBeNull();
   });
 
   it("response includes updatedAt, removedAt:null, pending:false, plaidTransactionId:null", async () => {
