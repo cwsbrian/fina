@@ -2,6 +2,8 @@ import { GoogleGenAI } from "@google/genai";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { FinaEnv } from "../env.js";
+import { monthlyEquivalent } from "../recurring/occurrences.js";
+import { DEFAULT_PERIOD } from "../budget-plans/service.js";
 
 /** One row in a generated savings plan. */
 export type GoalStrategyItem = {
@@ -26,11 +28,19 @@ const MODEL_DEFAULT = "gemini-2.5-flash-lite";
 
 const SYSTEM_PROMPT = `You are Fina, a thoughtful personal-finance coach.
 
-Given a user's savings goal (title, target amount, due date) and their
-average monthly spending by category, suggest a concrete monthly savings
-plan: which categories to trim or reroute, by how much, and a one-line
-rationale per item. Sum of recommended monthly_amount should be close to
-the required monthly pace (target / months remaining minus current saved).
+You are given a user's savings goal and a per-category spending picture
+broken into THREE numbers per category:
+  - total: their actual average monthly spend (last 90 days)
+  - committed: the portion that is recurring/fixed (rent, mortgage,
+    subscriptions). This is OFF-LIMITS — you cannot cut it.
+  - discretionary: total - committed. This is the ONLY portion you may
+    propose cuts from.
+
+Some categories also include a current monthly budget cap.
+
+Your job: produce a concrete monthly savings plan listing which
+categories to trim, by how much, and one short rationale each. The sum
+of monthly_amount should land close to the required monthly pace.
 
 Return STRICT JSON only — no markdown, no commentary — matching:
 {
@@ -40,45 +50,127 @@ Return STRICT JSON only — no markdown, no commentary — matching:
   ]
 }
 
-Rules:
-- 2–5 items max. Pick categories with the highest realistic savings room.
-- Don't suggest negative amounts.
+HARD rules:
+- Never cut from a category whose discretionary is 0 (fully committed).
+- Never propose monthlyAmount > 60% of that category's discretionary.
+  Realistic cuts only — going to zero on dining is not realistic.
+- Don't touch committed/recurring spend (rent, mortgage, subscriptions).
+  Mention them in rationale only if relevant context.
+- 2–5 items max. Pick categories with the largest discretionary room.
+- If discretionary across all categories is too small to meet the pace,
+  do your best and let the rationale acknowledge the gap.
 - If the user has zero spending history, return { "items": [] }.
 - Currency is CAD. Round monthlyAmount to whole dollars.
-- Rationale: ≤ 100 chars, no emojis, plain text.`;
+- Rationale: ≤ 100 chars, plain text, no emojis.`;
 
-type SpendByCategory = { categoryName: string; monthlyAvgCAD: number };
+type CategoryAnalysis = {
+  categoryName: string;
+  /** Average monthly total spend across last 90 days. */
+  totalMonthly: number;
+  /** Portion that is locked-in recurring expense (subscriptions etc). */
+  committedMonthly: number;
+  /** total - committed, floored at 0. The cuttable budget. */
+  discretionaryMonthly: number;
+  /** Current default-budget cap for this category, if any. */
+  budgetCap: number | null;
+};
 
-async function recentMonthlySpend(workspaceId: string): Promise<SpendByCategory[]> {
-  // Last 90 days of expense allocations (positive amount), grouped by
-  // category. Divide total by 3 to get monthly average.
-  const since = new Date(Date.now() - 90 * 86400_000);
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      amount: { gt: 0 },
-      transaction: {
-        workspaceId,
-        removedAt: null,
-        occurredAt: { gte: since },
+async function analyzeCategories(workspaceId: string): Promise<CategoryAnalysis[]> {
+  const since = new Date(Date.now() - 90 * 86_400_000);
+  // 1. 90-day spend grouped by category.
+  const [allocations, recurring, defaultPlan] = await Promise.all([
+    prisma.transactionAllocation.findMany({
+      where: {
         amount: { gt: 0 },
+        transaction: {
+          workspaceId,
+          removedAt: null,
+          occurredAt: { gte: since },
+          amount: { gt: 0 },
+        },
+        categoryId: { not: null },
       },
-      categoryId: { not: null },
-    },
-    select: {
-      amount: true,
-      category: { select: { name: true } },
-    },
-  });
-  const totals = new Map<string, number>();
-  for (const r of rows) {
-    if (!r.category) continue;
-    const cur = totals.get(r.category.name) ?? 0;
-    totals.set(r.category.name, cur + Number(r.amount));
+      select: {
+        amount: true,
+        categoryId: true,
+        category: { select: { name: true } },
+      },
+    }),
+    prisma.recurringExpense.findMany({
+      where: { workspaceId, categoryId: { not: null } },
+      select: {
+        amount: true,
+        cadence: true,
+        categoryId: true,
+        category: { select: { name: true } },
+      },
+    }),
+    prisma.budgetPlan.findUnique({
+      where: {
+        workspaceId_periodStart: { workspaceId, periodStart: DEFAULT_PERIOD },
+      },
+      select: { categoryAllocations: true },
+    }),
+  ]);
+
+  // Aggregate spend by category id (so different category-name displays
+  // can't double-count) but key the output by name for the LLM.
+  type Agg = { name: string; spend: number };
+  const totals = new Map<string, Agg>();
+  for (const r of allocations) {
+    if (!r.categoryId || !r.category) continue;
+    const cur = totals.get(r.categoryId) ?? { name: r.category.name, spend: 0 };
+    cur.spend += Number(r.amount);
+    totals.set(r.categoryId, cur);
   }
-  return Array.from(totals, ([categoryName, total]) => ({
-    categoryName,
-    monthlyAvgCAD: Math.round((total / 3) * 100) / 100,
-  })).sort((a, b) => b.monthlyAvgCAD - a.monthlyAvgCAD);
+
+  // Sum recurring monthlyEquivalents per category id.
+  const committed = new Map<string, number>();
+  for (const r of recurring) {
+    if (!r.categoryId) continue;
+    const m = monthlyEquivalent(Number(r.amount), r.cadence);
+    committed.set(r.categoryId, (committed.get(r.categoryId) ?? 0) + m);
+  }
+
+  // Budget caps per category id from the default plan.
+  const caps = new Map<string, number>();
+  if (defaultPlan?.categoryAllocations) {
+    const raw = defaultPlan.categoryAllocations;
+    if (Array.isArray(raw)) {
+      for (const a of raw as Array<{ categoryId?: unknown; amount?: unknown }>) {
+        if (
+          typeof a.categoryId === "string" &&
+          typeof a.amount === "number" &&
+          a.amount > 0
+        ) {
+          caps.set(a.categoryId, a.amount);
+        }
+      }
+    }
+  }
+
+  // Build the final analysis array. Include categories that have either
+  // spend or a recurring commitment — categories the user knows about.
+  const allIds = new Set([...totals.keys(), ...committed.keys()]);
+  const out: CategoryAnalysis[] = [];
+  for (const id of allIds) {
+    const t = totals.get(id);
+    const name = t?.name ?? "Unknown";
+    const totalMonthly = t ? Math.round((t.spend / 3) * 100) / 100 : 0;
+    const committedMonthly =
+      Math.round((committed.get(id) ?? 0) * 100) / 100;
+    const discretionary = Math.max(0, totalMonthly - committedMonthly);
+    out.push({
+      categoryName: name,
+      totalMonthly,
+      committedMonthly,
+      discretionaryMonthly: Math.round(discretionary * 100) / 100,
+      budgetCap: caps.get(id) ?? null,
+    });
+  }
+  // Sort by discretionary descending — most cuttable categories first.
+  out.sort((a, b) => b.discretionaryMonthly - a.discretionaryMonthly);
+  return out;
 }
 
 function buildPrompt(args: {
@@ -87,7 +179,7 @@ function buildPrompt(args: {
   saved: number;
   due: Date;
   monthsRemaining: number;
-  spend: SpendByCategory[];
+  categories: CategoryAnalysis[];
 }): string {
   const lines: string[] = [];
   lines.push(`Goal: "${args.goalTitle}"`);
@@ -100,13 +192,35 @@ function buildPrompt(args: {
   );
   lines.push(`Required monthly pace: $${requiredMonthly.toFixed(2)}/mo`);
   lines.push("");
-  if (args.spend.length === 0) {
+  if (args.categories.length === 0) {
     lines.push("Spending history: none (user has no recent transactions).");
-  } else {
-    lines.push("Average monthly spending by category (last 90 days):");
-    for (const s of args.spend.slice(0, 12)) {
-      lines.push(`  - ${s.categoryName}: $${s.monthlyAvgCAD.toFixed(2)}/mo`);
-    }
+    return lines.join("\n");
+  }
+  lines.push("Per-category breakdown (last 90 days, monthly averages, CAD):");
+  lines.push(
+    "  format: <name> · total $X · committed $Y · discretionary $Z (cap $C)",
+  );
+  lines.push("  (committed = subscriptions/recurring; cap = current budget cap)");
+  for (const c of args.categories.slice(0, 14)) {
+    const cap = c.budgetCap !== null ? `$${c.budgetCap.toFixed(0)}` : "—";
+    lines.push(
+      `  - ${c.categoryName} · total $${c.totalMonthly.toFixed(0)} · ` +
+        `committed $${c.committedMonthly.toFixed(0)} · ` +
+        `discretionary $${c.discretionaryMonthly.toFixed(0)} (cap ${cap})`,
+    );
+  }
+  const totalDiscretionary = args.categories.reduce(
+    (s, c) => s + c.discretionaryMonthly,
+    0,
+  );
+  lines.push("");
+  lines.push(
+    `Total cuttable discretionary across all categories: $${totalDiscretionary.toFixed(0)}/mo`,
+  );
+  if (totalDiscretionary < requiredMonthly) {
+    lines.push(
+      `WARNING: required pace exceeds total discretionary. Suggest the largest realistic cuts and note the shortfall in rationales.`,
+    );
   }
   return lines.join("\n");
 }
@@ -171,14 +285,14 @@ export async function generateAndStoreGoalStrategy(
   const saved = Number(goal.savedAmount);
   const due = goal.dueDate;
   const months = monthsBetween(new Date(), due);
-  const spend = await recentMonthlySpend(goal.workspaceId);
+  const categories = await analyzeCategories(goal.workspaceId);
   const prompt = buildPrompt({
     goalTitle: goal.title,
     target,
     saved,
     due,
     monthsRemaining: months,
-    spend,
+    categories,
   });
 
   let items: GoalStrategyItem[] = [];
@@ -198,9 +312,36 @@ export async function generateAndStoreGoalStrategy(
     });
     const text = response.text ?? "";
     items = parseStrategy(text);
-    if (items.length === 0 && spend.length === 0) {
+    if (items.length === 0 && categories.length === 0) {
       notice =
         "Connect a bank or log a few transactions and I'll suggest where to cut back.";
+    } else if (items.length === 0) {
+      const totalDiscretionary = categories.reduce(
+        (s, c) => s + c.discretionaryMonthly,
+        0,
+      );
+      notice =
+        totalDiscretionary < 50
+          ? "Most of your spend is locked into rent, mortgage, or subscriptions — there's little discretionary room to cut. Consider extending the deadline or trimming a recurring subscription."
+          : "Couldn't form a useful plan from this history. Try regenerating later.";
+    } else {
+      // Post-validate: clamp each item's monthlyAmount to 60% of the
+      // category's discretionary so the LLM can't accidentally exceed
+      // our HARD rule. Matches by case-insensitive name; if no match,
+      // we leave the item as-is (LLM may have invented a category we
+      // don't track yet).
+      const byName = new Map(
+        categories.map((c) => [c.categoryName.toLowerCase(), c]),
+      );
+      items = items.map((item) => {
+        const c = byName.get(item.categoryName.toLowerCase());
+        if (!c) return item;
+        const ceiling = Math.floor(c.discretionaryMonthly * 0.6);
+        if (item.monthlyAmount > ceiling) {
+          return { ...item, monthlyAmount: Math.max(0, ceiling) };
+        }
+        return item;
+      });
     }
   } catch {
     // Generation failed — store an empty strategy with a notice so the
