@@ -6,6 +6,7 @@ import { logError } from "../logger.js";
 import { findHistoryHints } from "./history-lookup.js";
 import { computeNeedsConfirmation } from "./needs-confirmation.js";
 import { isOtherCategory } from "./other-detection.js";
+import { emitCategorizeCompleted } from "../telemetry/categorize.js";
 
 /**
  * Categorize a list of newly-inserted transactions in a workspace.
@@ -138,7 +139,15 @@ export async function categorizeNewTransactions(
           data: { categoryId: catId, source: "mapping", needsConfirmation: false, dismissedUntil: null },
         });
         if (upd.count > 0) {
-          // allocation updated — no mirror-write needed (Task 8 dropped the columns)
+          const mapCat = await prisma.category.findUnique({ where: { id: catId }, select: { name: true } });
+          emitCategorizeCompleted({
+            workspaceId,
+            source: "mapping",
+            categoryName: mapCat?.name ?? "?",
+            pfcPrimary: null,
+            pfcConfidence: null,
+            pfcMissing: true,
+          });
         }
       }
     } else {
@@ -177,6 +186,14 @@ export async function categorizeNewTransactions(
     await prisma.transactionAllocation.updateMany({
       where: { id: t.allocationId, categoryId: null, source: null },
       data: { categoryId: hint.categoryId, source: "history", needsConfirmation, dismissedUntil },
+    });
+    emitCategorizeCompleted({
+      workspaceId,
+      source: "history",
+      categoryName: hintCat.name,
+      pfcPrimary: null,
+      pfcConfidence: null,
+      pfcMissing: true,
     });
   }
   if (stillUnmapped.length === 0) return;
@@ -250,7 +267,16 @@ export async function categorizeNewTransactions(
         data: { categoryId: aiCatId, source: "ai", needsConfirmation, dismissedUntil: null },
       });
       if (upd.count > 0) {
-        // allocation updated — no mirror-write needed (Task 8 dropped the columns)
+        const pfcSource = batch.find((bt) => bt.id === r.tx_id);
+        const pfcRaw = (pfcSource?.rawData as { personal_finance_category?: { primary?: string; confidence_level?: string } } | null | undefined)?.personal_finance_category;
+        emitCategorizeCompleted({
+          workspaceId,
+          source: "ai",
+          categoryName: aiCat?.name ?? "?",
+          pfcPrimary: pfcRaw?.primary ?? null,
+          pfcConfidence: pfcRaw?.confidence_level ?? null,
+          pfcMissing: !pfcRaw?.primary,
+        });
       }
     }
   }

@@ -13,6 +13,7 @@ import { editTransactionService, EditTxError, type EditTxInput, type EditTxInput
 import { removeTransactionService, RemoveTxError } from "../transactions/remove.js";
 import { checkLargeChargeAndPush } from "../push/anomaly.js";
 import { notifyTransactionAdded } from "../push/transaction-added.js";
+import { emitCategorizeConfirmed } from "../telemetry/categorize.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -279,6 +280,11 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         txId: params.txId,
         categoryName: parsed.data.categoryName,
       });
+      emitCategorizeConfirmed({
+        workspaceId: ctx.membership.workspaceId,
+        source: "manual",
+        action: "edit",
+      });
       return {
         transaction: {
           ...result.tx,
@@ -319,6 +325,18 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         data: { needsConfirmation: false, dismissedUntil: null },
       });
 
+      for (const a of tx.allocations) {
+        const allocAfter = await prisma.transactionAllocation.findUnique({
+          where: { id: a.id },
+          select: { source: true },
+        });
+        emitCategorizeConfirmed({
+          workspaceId: ctx.membership.workspaceId,
+          source: (allocAfter?.source ?? "ai") as "mapping" | "history" | "ai" | "manual",
+          action: "confirm",
+        });
+      }
+
       // Auto-promote per allocation (best-effort).
       if (tx.merchantNormalized) {
         for (const a of tx.allocations) {
@@ -348,6 +366,11 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       await prisma.transactionAllocation.updateMany({
         where: { transactionId: tx.id },
         data: { dismissedUntil },
+      });
+      emitCategorizeConfirmed({
+        workspaceId: ctx.membership.workspaceId,
+        source: "ai", // approximation — source isn't changed by snooze
+        action: "snooze",
       });
       return reply.code(200).send({ ok: true, dismissedUntil: dismissedUntil.toISOString() });
     },
