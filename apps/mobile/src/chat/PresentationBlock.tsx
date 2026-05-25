@@ -1,4 +1,5 @@
 import { View, Text, StyleSheet, Pressable } from "react-native";
+import { router } from "expo-router";
 import type { PresentationBlock as Block } from "@fina/shared";
 import { colors, space, type as type$ } from "../design/tokens";
 
@@ -46,6 +47,27 @@ export function PresentationBlock({ block, role, onAccept, onReject }: Props) {
             <Text style={styles.cardBtnAcceptText}>{block.accept_label}</Text>
           </Pressable>
         </View>
+      </View>
+    );
+  }
+  if (block.type === "categorize_confirm_card") {
+    return (
+      <View style={styles.catCard}>
+        <Text style={styles.catCardTitle}>오늘 분류한 {block.count}개 확인해주세요</Text>
+        {block.items.map((it) => (
+          <Text key={it.txId} style={styles.catCardItem}>
+            {it.merchant} → {it.categoryName}
+          </Text>
+        ))}
+        {block.moreCount > 0 && (
+          <Text style={styles.catCardMore}>외 {block.moreCount}건</Text>
+        )}
+        <Pressable
+          style={styles.catCardCta}
+          onPress={() => router.push("/(tabs)/activity" as never)}
+        >
+          <Text style={styles.catCardCtaText}>Activity에서 보기</Text>
+        </Pressable>
       </View>
     );
   }
@@ -102,6 +124,17 @@ const styles = StyleSheet.create({
   },
   cardBtnAcceptText: { ...type$.button, color: colors.onPrimary },
   cardBtnRejectText: { ...type$.button, color: colors.ink },
+  catCard: {
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 14,
+    padding: space.base,
+    gap: 6,
+  },
+  catCardTitle: { ...type$.titleSm, color: colors.ink },
+  catCardItem: { ...type$.bodySm, color: colors.body },
+  catCardMore: { ...type$.bodySm, color: colors.muted, fontStyle: "italic" },
+  catCardCta: { marginTop: space.sm, alignSelf: "flex-start" },
+  catCardCtaText: { ...type$.captionStrong, color: colors.primary },
   unknown: {
     padding: space.sm,
     borderRadius: 8,
