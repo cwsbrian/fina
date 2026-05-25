@@ -69,6 +69,7 @@ function toMeDTO(
       snoozeUntil: snoozeUntilStr,
       pauseEnabled: user.pauseEnabled,
       notificationPrefs: resolveNotificationPrefs(user.notificationPrefs),
+      categorizationMode: user.categorizationMode,
     },
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
@@ -184,6 +185,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
           ...current,
           ...body.notificationPrefs,
         } as unknown as Prisma.InputJsonValue;
+      }
+      if (body.categorizationMode !== undefined) {
+        data.categorizationMode = body.categorizationMode;
       }
       if (body.snoozeUntil !== undefined) {
         // null clears; "YYYY-MM-DD" sets to UTC noon in user's tz.

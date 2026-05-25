@@ -166,3 +166,50 @@ describe("PATCH /me", () => {
     await app.close();
   });
 });
+
+describe("categorizationMode", () => {
+  beforeEach(async () => {
+    await truncateAll();
+  });
+  afterAll(async () => {
+    await disconnect();
+  });
+
+  it("GET /me returns default 'flexible' for new user", async () => {
+    const app = await buildApp(testEnv());
+    const { cookie } = await signUpAndGetCookie(app, { email: "cm1@t.co", name: "T" });
+    const r = await app.inject({ method: "GET", url: "/me", headers: { cookie } });
+    expect(r.statusCode).toBe(200);
+    const body = JSON.parse(r.body);
+    expect(body.user.categorizationMode).toBe("flexible");
+    await app.close();
+  });
+
+  it("PATCH /me sets categorizationMode='strict'", async () => {
+    const app = await buildApp(testEnv());
+    const { cookie } = await signUpAndGetCookie(app, { email: "cm2@t.co", name: "T" });
+    const r = await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ categorizationMode: "strict" }),
+    });
+    expect(r.statusCode).toBe(200);
+    const me = await app.inject({ method: "GET", url: "/me", headers: { cookie } });
+    expect(JSON.parse(me.body).user.categorizationMode).toBe("strict");
+    await app.close();
+  });
+
+  it("PATCH /me rejects invalid categorizationMode", async () => {
+    const app = await buildApp(testEnv());
+    const { cookie } = await signUpAndGetCookie(app, { email: "cm3@t.co", name: "T" });
+    const r = await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ categorizationMode: "yolo" }),
+    });
+    expect(r.statusCode).toBe(400);
+    await app.close();
+  });
+});
