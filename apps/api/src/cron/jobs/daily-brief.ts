@@ -73,6 +73,56 @@ export async function runDailyBrief(env: Env): Promise<void> {
 
       const blocks: PresentationBlock[] = await generateBrief(env, context, recentTexts, briefType);
 
+      // Categorize confirm card (Plan 1F).
+      const u2 = await prisma.user.findUnique({
+        where: { id: u.id },
+        select: { categorizationMode: true },
+      });
+      const mode = u2?.categorizationMode ?? "flexible";
+      if (mode !== "auto") {
+        const lastBriefAgg = await prisma.brief.aggregate({
+          where: { userId: u.id },
+          _max: { createdAt: true },
+        });
+        const sinceMs = Math.max(
+          lastBriefAgg._max.createdAt?.getTime() ?? 0,
+          Date.now() - 7 * 24 * 60 * 60 * 1000,
+        );
+        const since = new Date(sinceMs);
+        const whereCard = {
+          needsConfirmation: true,
+          OR: [{ dismissedUntil: null }, { dismissedUntil: { lt: new Date() } }],
+          transaction: {
+            removedAt: null,
+            workspace: { memberships: { some: { userId: u.id } } },
+            createdAt: { gte: since },
+          },
+        };
+        const totalCount = await prisma.transactionAllocation.count({ where: whereCard });
+        if (totalCount > 0) {
+          const rows = await prisma.transactionAllocation.findMany({
+            where: whereCard,
+            take: 5,
+            select: {
+              transaction: { select: { id: true, merchantRaw: true, merchantNormalized: true } },
+              category: { select: { name: true } },
+            },
+            orderBy: { transaction: { occurredAt: "desc" } },
+          });
+          const items = rows.map((r) => ({
+            txId: r.transaction.id,
+            merchant: r.transaction.merchantNormalized ?? r.transaction.merchantRaw,
+            categoryName: r.category?.name ?? "Unknown",
+          }));
+          blocks.push({
+            type: "categorize_confirm_card",
+            count: totalCount,
+            items,
+            moreCount: Math.max(0, totalCount - items.length),
+          });
+        }
+      }
+
       // Find-or-create unbound thread. Race tolerated.
       let thread = await prisma.chatThread.findFirst({
         where: { userId: u.id, workspaceId: null, archivedAt: null },
