@@ -7,7 +7,7 @@
 
 `apps/api/src/goals/savings.ts:computeGoalSavings` (137 LOC) implements the savings-allocation algorithm with **zero direct test coverage**. Plan 1P mocked it via `vi.fn()` and pinned its `(workspaceId, goalId)` call signature, but the algorithm itself — competitor ordering, first-month proration, default-plan fallback, last-competitor overflow absorption, current-month skip — is unverified.
 
-Add **12 direct unit tests** in 1 commit. Tests use real Postgres (no Prisma mocks), `vi.setSystemTime` to control "today", and seed Goal/GoalAllocation/BudgetPlan/Transaction/TransactionAllocation rows directly.
+Add **14 direct unit tests** in 1 commit (12 + 2 per R2 review — multi-category single-month + true rounding test). Tests use real Postgres (no Prisma mocks), `vi.setSystemTime` to control "today", and seed Goal/GoalAllocation/BudgetPlan/Transaction/TransactionAllocation rows directly.
 
 **13 algorithm properties to cover** (production lines in comments):
 
@@ -212,15 +212,16 @@ const TODAY = new Date("2026-06-15T12:00:00.000Z");
 | 11 | Competitor ordering (older claims first) | createdAt May 1 for goal-A (older); goal-B createdAt May 2 (newer). Both target cat-X. cap=100, spend=70. savings=30. A.plan=20 (first, takes 20); B last (absorbs 10). Compute goal-A = 20, goal-B = 10. | A: 20, B: 10 |
 | 12 | Last competitor absorbs overflow | goal-A May 1 (older, plan=30); goal-B May 2 (newer, plan=30, LAST). cap=100, spend=20. savings=80. A takes min(80, 30)=30. B last absorbs remaining 50 (even > B.plan). | A: 30, B: 50 |
 
-**Test 13 reserved** if we discover an additional edge case during impl.
+| 13 | **Multi-category aggregation in ONE goal+month** (per R2 review — exercises the `for (catId of myCategoryIds)` inner loop with >1 entry) | createdAt May 1. Goal targets cat-X AND cat-Y. May plan: cat-X cap=50, cat-Y cap=50. May spend: cat-X 20 (savings 30), cat-Y 30 (savings 20). → total 50. | 50 |
+| 14 | **True rounding stress** (per R2 review — test 12 is integer-only; this produces non-integer competitor split) | createdAt May 1 (no proration). Goals A (createdAt May 1) + B (createdAt May 2, LAST). Both target cat-X. cap=100, spend=33.33 → savings 66.67. A.plan=20 takes 20. B last absorbs 46.67. | A: 20, B: 46.67 |
 
-**Cents rounding** is implicit in tests 8 + 12 (non-integer arithmetic).
+**Cents rounding** is explicitly stressed in test 14 (66.67 - 20 = 46.67) AND test 8 (51.61 from 16/31 ratio). Test 12 alone was integer-only — R2 caught the spec's hand-wave.
 
-**Multi-category aggregation** is covered partially by test 6 (one cat × 3 months). Adding test 13 with 2 categories in one month would be cleaner. Decision: 12 tests is enough; multi-cat case is mechanically the same as multi-month (sum of independent terms).
+**Multi-category aggregation** — test 13 fills the gap that test 6 (multi-MONTH) couldn't cover. Inner `for (catId of myCategoryIds)` loop is now exercised with both 1-entry (most tests) and 2-entry (test 13) sets.
 
-**Test 11 and 12 require TWO computeGoalSavings calls** — one per goal — to verify the per-goal allocation. Each test seeds both goals + 1 shared category + 1 shared spend, then asserts both return values.
+**Test 11, 12, 14 require TWO computeGoalSavings calls** — one per goal — to verify per-goal allocation. Each test seeds both goals + shared category + shared spend, then asserts both return values.
 
-**Commit:** `test(api): computeGoalSavings — 12 unit tests covering algorithm`
+**Commit:** `test(api): computeGoalSavings — 14 unit tests covering algorithm`
 
 ## 5. Risks
 
@@ -233,15 +234,15 @@ const TODAY = new Date("2026-06-15T12:00:00.000Z");
 | `BudgetPlan.periodStart` is `@db.Date` (date-only). Production uses `new Date("YYYY-MM-01T12:00:00.000Z")` in `firstOfMonth`. The Postgres `Date` column drops time-of-day; lookup `where: { workspaceId_periodStart }` matches by date only. | Helper passes `firstOfMonth(year, month)`-equivalent dates; Prisma serializes to date correctly. |
 | `categoryAllocations` Json column — production reads via `readCapsFromAllocations(raw as unknown)`. Helper serializes `[{categoryId, amount}]`. Prisma stores as JSONB. | Verified in `budget-plans/service.ts` precedent. |
 | `Transaction.rawData` required (no default) | Helper passes `rawData: {}`. Plan 1M precedent. |
-| `BankAccount.create` required fields | Helper seeds with required fields (workspaceId, name, type, currency, status). |
-| `TransactionAllocation.source` required | Helper passes `source: "manual"`. |
+| `BankAccount.create` — `workspaceId, name, type` strictly required; `currency` defaults to "CAD", `status` to `active` per schema. | Helper seeds all 5 explicitly for clarity. |
+| `TransactionAllocation.source` is nullable (`CategorizationSource?` in schema) but helper passes `"manual"` for parity with production-shape allocations. | Helper passes explicit value. |
 | Test 11 + 12 competitor ordering depends on goal.createdAt — `createdAt May 1` vs `May 2`. Make sure both helpers use UTC. | Helper accepts createdAt arg explicitly. |
 | `computeGoalSavings` returns `number`. Tests use `expect(result).toBe(N)`. Floating-point equality at 2-decimal precision after `Math.round(*100)/100` should be exact. | `Math.round` returns an integer; division by 100 yields binary-exact for ≤2 decimal places in normal range. Use `toBe`. |
 | `vi.useFakeTimers` reset between tests | `afterEach(vi.useRealTimers)`. |
 
 ## 6. Success criteria
 
-- 12 new tests pass.
+- 14 new tests pass.
 - Full `@fina/api` suite regression: 0 new fails.
 - Typecheck baseline unchanged.
 - 1 commit, test-only.
