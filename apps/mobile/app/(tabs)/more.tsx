@@ -315,6 +315,12 @@ export default function More() {
             title="Notifications"
             detail={notificationsDetail(me)}
             onPress={() => router.push("/notifications" as never)}
+          />
+          <SettingsRow
+            icon="construct-outline"
+            title="Categorization style"
+            detail={modeLabel(me)}
+            onPress={() => router.push("/categorization" as never)}
             last
           />
         </Group>
@@ -408,6 +414,15 @@ export default function More() {
       <View style={[styles.statusBarBg, { height: insets.top }]} />
     </View>
   );
+}
+
+function modeLabel(me: Me | null): string {
+  if (!me) return "—";
+  switch (me.user.categorizationMode) {
+    case "strict":   return "Strict";
+    case "flexible": return "Flexible";
+    case "auto":     return "Auto";
+  }
 }
 
 function notificationsDetail(me: Me | null): string {
