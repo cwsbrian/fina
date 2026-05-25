@@ -29,17 +29,18 @@ export type NotificationPrefs = {
 /** Conservative defaults: morning brief + account-state pushes are
  *  on by default (they're the "you'd want to know" kind). Marketing +
  *  goal milestones default off — the user has to opt in. */
+// All channels default to ON so a fresh user starts opted-in to
+// every push type. They can mute individual channels from
+// /notifications anytime.
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   morningBrief: true,
   bankReconnect: true,
   workspaceInvites: true,
   trialExpiring: true,
-  goalMilestones: false,
+  goalMilestones: true,
   largeCharges: true,
-  // Off by default — every new tx is a lot of pushes for a busy
-  // household; user opts in if they want a live feed.
-  transactionAdded: false,
-  productUpdates: false,
+  transactionAdded: true,
+  productUpdates: true,
 };
 
 export const NotificationPrefsSchema = z

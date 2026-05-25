@@ -106,35 +106,52 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       const body = (req.body ?? {}) as { channel?: string };
       const channel = body.channel as keyof NotificationPrefs;
       const env = app.fina.env;
+      let result: { sent: number; failed: number };
       switch (channel) {
         case "morningBrief":
-          await sendBriefPush(env, session.userId, "Test brief — yesterday looked normal.");
+          result = await sendBriefPush(env, session.userId, "Test brief — yesterday looked normal.");
           break;
         case "bankReconnect":
-          await sendBankReconnectPush(env, session.userId, "Test Bank");
+          result = await sendBankReconnectPush(env, session.userId, "Test Bank");
           break;
         case "workspaceInvites":
-          await sendWorkspaceInvitePush(env, session.userId, "Test inviter", "Test workspace");
+          result = await sendWorkspaceInvitePush(env, session.userId, "Test inviter", "Test workspace");
           break;
         case "trialExpiring":
-          await sendTrialExpiringPush(env, session.userId, 3);
+          result = await sendTrialExpiringPush(env, session.userId, 3);
           break;
         case "goalMilestones":
-          await sendGoalMilestonePush(env, session.userId, "Test goal", 50);
+          result = await sendGoalMilestonePush(env, session.userId, "Test goal", 50);
           break;
         case "largeCharges":
-          await sendLargeChargePush(env, session.userId, "Test merchant", "199.99", "Dining");
+          result = await sendLargeChargePush(env, session.userId, "Test merchant", "199.99", "Dining");
           break;
         case "transactionAdded":
-          await sendTransactionAddedPush(env, session.userId, "Test Merchant", "12.34", "Dining");
+          result = await sendTransactionAddedPush(env, session.userId, "Test Merchant", "12.34", "Dining");
           break;
         case "productUpdates":
-          await sendProductUpdatePush(env, session.userId, "What's new in Fina", "Test product update.");
+          result = await sendProductUpdatePush(env, session.userId, "What's new in Fina", "Test product update.");
           break;
         default:
           return reply.code(400).send({ error: "invalid_channel" });
       }
-      return { ok: true };
+      // Also surface device count so the caller can disambiguate
+      // "channel disabled" vs "no device registered".
+      const deviceCount = await prisma.userDevice.count({
+        where: { userId: session.userId },
+      });
+      const channelEnabled = resolveNotificationPrefs(
+        (await prisma.user.findUnique({
+          where: { id: session.userId },
+          select: { notificationPrefs: true },
+        }))?.notificationPrefs,
+      )[channel];
+      return {
+        sent: result.sent,
+        failed: result.failed,
+        deviceCount,
+        channelEnabled,
+      };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;

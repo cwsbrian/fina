@@ -231,20 +231,49 @@ export default function NotificationSettings() {
   );
 }
 
+type TestPushResult = {
+  sent: number;
+  failed: number;
+  deviceCount: number;
+  channelEnabled: boolean;
+};
+
 function DevTestButtons() {
   const [busy, setBusy] = useState<ToggleKey | null>(null);
   const send = async (channel: ToggleKey) => {
     if (busy) return;
     setBusy(channel);
     try {
-      await apiFetch("/me/test-push", {
+      const r = await apiFetch<TestPushResult>("/me/test-push", {
         method: "POST",
         body: JSON.stringify({ channel }),
       });
+      // Surface what happened so the user can disambiguate the
+      // common failure modes. Push notifications don't work in
+      // Expo Go on iOS since SDK 50 — a 0-device send usually
+      // means the user is on Expo Go and needs a dev build.
+      if (r.sent > 0) {
+        Alert.alert("Sent ✓", `Delivered to ${r.sent} device${r.sent === 1 ? "" : "s"}.`);
+      } else if (!r.channelEnabled) {
+        Alert.alert(
+          "Channel is off",
+          "Enable this channel in the toggles above before testing.",
+        );
+      } else if (r.deviceCount === 0) {
+        Alert.alert(
+          "No device registered",
+          "Push notifications need a development build — Expo Go on iOS doesn't receive them since SDK 50. Sign out / sign in once you build a dev client to register a device.",
+        );
+      } else {
+        Alert.alert(
+          "All sends failed",
+          `${r.failed} device(s) rejected — check API logs (likely a stale or invalid token).`,
+        );
+      }
     } catch (e) {
       Alert.alert(
         "Test push failed",
-        (e as { code?: string }).code ?? "Make sure the channel is enabled above.",
+        (e as { code?: string }).code ?? "API request failed.",
       );
     } finally {
       setBusy(null);
