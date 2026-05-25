@@ -134,13 +134,17 @@ Then add the 9 `it()` blocks below inside the describe:
 ```
 
 **Test 5 — daysLeft=5 first push:**
+
+**TypeScript note** (per R2 review): `mock.calls[0]` is `tuple | undefined` under `noUncheckedIndexedAccess` (this repo has it). Destructure to keep TS happy:
+
 ```ts
   it("daysLeft=5, never pushed → push + lastTrialPushDays=5", async () => {
     const userId = await createTrialUser({ trialEndsAt: trialEndsAtForDaysLeft(5) });
     const { runTrialExpiring } = await import("../src/cron/jobs/trial-expiring.js");
     await runTrialExpiring(env);
-    expect(vi.mocked(sendMod.sendTrialExpiringPush)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(sendMod.sendTrialExpiringPush).mock.calls[0]).toEqual([env, userId, 5]);
+    const calls = vi.mocked(sendMod.sendTrialExpiringPush).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual([env, userId, 5]);
     const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(fresh.lastTrialPushDays).toBe(5);
   });
@@ -168,8 +172,9 @@ Then add the 9 `it()` blocks below inside the describe:
     });
     const { runTrialExpiring } = await import("../src/cron/jobs/trial-expiring.js");
     await runTrialExpiring(env);
-    expect(vi.mocked(sendMod.sendTrialExpiringPush)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(sendMod.sendTrialExpiringPush).mock.calls[0]).toEqual([env, userId, 3]);
+    const calls = vi.mocked(sendMod.sendTrialExpiringPush).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual([env, userId, 3]);
     const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(fresh.lastTrialPushDays).toBe(3);
   });
@@ -181,8 +186,9 @@ Then add the 9 `it()` blocks below inside the describe:
     const userId = await createTrialUser({ trialEndsAt: trialEndsAtForDaysLeft(1) });
     const { runTrialExpiring } = await import("../src/cron/jobs/trial-expiring.js");
     await runTrialExpiring(env);
-    expect(vi.mocked(sendMod.sendTrialExpiringPush)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(sendMod.sendTrialExpiringPush).mock.calls[0]).toEqual([env, userId, 1]);
+    const calls = vi.mocked(sendMod.sendTrialExpiringPush).mock.calls;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toEqual([env, userId, 1]);
     const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(fresh.lastTrialPushDays).toBe(1);
   });
@@ -395,16 +401,19 @@ Then add the 9 `it()` blocks below:
 ```ts
   it("saved=30 of 100, prev=null → push at pct=25 + signature pinned", async () => {
     const { wsId, userIds } = await setupWorkspaceWithRoles(["owner"]);
+    const ownerId = userIds.owner!;  // helper guarantees owner exists when in roles array
     const goalId = await createGoal({ workspaceId: wsId, title: "Vacation", targetAmount: 100 });
     vi.mocked(savingsMod.computeGoalSavings).mockResolvedValue(30);
     const { runGoalMilestones } = await import("../src/cron/jobs/goal-milestones.js");
     await runGoalMilestones(env);
 
-    expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(sendMod.sendGoalMilestonePush).mock.calls[0]).toEqual([env, userIds.owner, "Vacation", 25]);
+    const pushCalls = vi.mocked(sendMod.sendGoalMilestonePush).mock.calls;
+    expect(pushCalls).toHaveLength(1);
+    expect(pushCalls[0]).toEqual([env, ownerId, "Vacation", 25]);
 
     // Signature pin per R2 review — guards against rename / arg-order drift.
-    expect(vi.mocked(savingsMod.computeGoalSavings).mock.calls[0]).toEqual([wsId, goalId]);
+    const savingsCalls = vi.mocked(savingsMod.computeGoalSavings).mock.calls;
+    expect(savingsCalls[0]).toEqual([wsId, goalId]);
 
     const fresh = await prisma.goal.findUniqueOrThrow({ where: { id: goalId } });
     expect(fresh.lastMilestonePct).toBe(25);
@@ -432,6 +441,8 @@ Then add the 9 `it()` blocks below:
 ```ts
   it("owner+editor+viewer + saved=100 → 2 pushes (viewer excluded)", async () => {
     const { wsId, userIds } = await setupWorkspaceWithRoles(["owner", "editor", "viewer"]);
+    const ownerId = userIds.owner!;
+    const editorId = userIds.editor!;
     await createGoal({ workspaceId: wsId, title: "Done", targetAmount: 100 });
     vi.mocked(savingsMod.computeGoalSavings).mockResolvedValue(100);
     const { runGoalMilestones } = await import("../src/cron/jobs/goal-milestones.js");
@@ -439,7 +450,7 @@ Then add the 9 `it()` blocks below:
 
     const calls = vi.mocked(sendMod.sendGoalMilestonePush).mock.calls;
     expect(calls).toHaveLength(2);
-    expect(calls.map((c) => c[1]).sort()).toEqual([userIds.owner, userIds.editor].sort());
+    expect(calls.map((c) => c[1]).sort()).toEqual([ownerId, editorId].sort());
     // Both calls carry pct=100
     expect(calls.every((c) => c[3] === 100)).toBe(true);
   });
@@ -457,17 +468,18 @@ Then add the 9 `it()` blocks below:
   });
 ```
 
-**Test 9 — error path containment + iteration continues:**
+**Test 9 — error path containment + iteration continues (order-agnostic per R2):**
 ```ts
-  it("push throws on goal A → logError + iteration continues to goal B", async () => {
-    const { wsId, userIds } = await setupWorkspaceWithRoles(["owner"]);
+  it("push throws on one goal → logError + iteration continues to the other", async () => {
+    const { wsId } = await setupWorkspaceWithRoles(["owner"]);
     const goalA = await createGoal({ workspaceId: wsId, title: "A", targetAmount: 100 });
     const goalB = await createGoal({ workspaceId: wsId, title: "B", targetAmount: 100 });
 
     // Both goals report saved=100 → both should cross 100% milestone.
     vi.mocked(savingsMod.computeGoalSavings).mockResolvedValue(100);
 
-    // First push throws, subsequent pushes succeed.
+    // First push throws, subsequent pushes succeed. (Which goal is "first"
+    // depends on findMany's scan order — we don't assume.)
     vi.mocked(sendMod.sendGoalMilestonePush)
       .mockRejectedValueOnce(new Error("boom"))
       .mockResolvedValue({ sent: 0, failed: 0 });
@@ -478,13 +490,16 @@ Then add the 9 `it()` blocks below:
     // Both goals attempted (push called for both).
     expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(2);
 
-    // Goal A's state NOT advanced (push threw before update).
-    const a = await prisma.goal.findUniqueOrThrow({ where: { id: goalA } });
-    expect(a.lastMilestonePct).toBeNull();
-
-    // Goal B's state advanced (push succeeded).
-    const b = await prisma.goal.findUniqueOrThrow({ where: { id: goalB } });
-    expect(b.lastMilestonePct).toBe(100);
+    // Exactly one goal's state was advanced; the other was preserved.
+    // Order-agnostic assertion — robust to Postgres scan-order shifts.
+    const [a, b] = await Promise.all([
+      prisma.goal.findUniqueOrThrow({ where: { id: goalA } }),
+      prisma.goal.findUniqueOrThrow({ where: { id: goalB } }),
+    ]);
+    const states = [a.lastMilestonePct, b.lastMilestonePct].sort(
+      (x, y) => (x ?? -1) - (y ?? -1),
+    );
+    expect(states).toEqual([null, 100]);
   });
 ```
 
