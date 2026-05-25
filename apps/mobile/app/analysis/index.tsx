@@ -20,6 +20,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
+import { MonthPickerSheet } from "../../src/datetime/MonthPickerSheet";
 
 type CategorySpend = {
   categoryId: string;
@@ -58,21 +59,6 @@ function nowYM(): { year: number; month: number } {
   return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
 }
 
-function prevYM(year: number, month: number): { year: number; month: number } {
-  if (month === 1) return { year: year - 1, month: 12 };
-  return { year, month: month - 1 };
-}
-
-function nextYM(year: number, month: number): { year: number; month: number } {
-  if (month === 12) return { year: year + 1, month: 1 };
-  return { year, month: month + 1 };
-}
-
-function isFutureMonth(year: number, month: number): boolean {
-  const now = nowYM();
-  return year > now.year || (year === now.year && month > now.month);
-}
-
 const UNCATEGORIZED_ID = "__uncategorized__";
 
 /** Append a synthetic Uncategorized row when the categorized totals
@@ -101,6 +87,7 @@ export default function AnalysisScreen() {
   const [data, setData] = useState<AnalysisResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -128,18 +115,16 @@ export default function AnalysisScreen() {
     setRefreshing(false);
   };
 
-  const goPrev = () => setYM(prevYM(year, month));
-  const goNext = () => {
-    const next = nextYM(year, month);
-    if (isFutureMonth(next.year, next.month)) return;
-    setYM(next);
-  };
-  const canGoNext = !isFutureMonth(nextYM(year, month).year, nextYM(year, month).month);
-
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <Header />
+      <Header onPickMonth={() => setPickerOpen(true)} />
+      <Text style={styles.monthLine}>
+        {new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(undefined, {
+          month: "long",
+          year: "numeric",
+        })}
+      </Text>
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={
@@ -150,14 +135,6 @@ export default function AnalysisScreen() {
           />
         }
       >
-        <PeriodBar
-          year={year}
-          month={month}
-          onPrev={goPrev}
-          onNext={goNext}
-          canGoNext={canGoNext}
-        />
-
         {err && !data ? (
           <View style={styles.fallback}>
             <Text style={styles.errTitle}>Couldn't load analysis</Text>
@@ -188,11 +165,21 @@ export default function AnalysisScreen() {
           </>
         )}
       </ScrollView>
+      <MonthPickerSheet
+        visible={pickerOpen}
+        year={year}
+        month={month}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(y, m) => {
+          setYM({ year: y, month: m });
+          setPickerOpen(false);
+        }}
+      />
     </SafeAreaView>
   );
 }
 
-function Header() {
+function Header({ onPickMonth }: { onPickMonth: () => void }) {
   return (
     <View style={styles.nav}>
       <HeaderIconButton
@@ -202,50 +189,12 @@ function Header() {
         variant="plain"
       />
       <Text style={styles.navTitle}>Analysis</Text>
-      <View style={{ width: 34 }} />
-    </View>
-  );
-}
-
-function PeriodBar({
-  year,
-  month,
-  onPrev,
-  onNext,
-  canGoNext,
-}: {
-  year: number;
-  month: number;
-  onPrev: () => void;
-  onNext: () => void;
-  canGoNext: boolean;
-}) {
-  const date = new Date(Date.UTC(year, month - 1, 1));
-  const label = date.toLocaleDateString(undefined, {
-    month: "long",
-    year: "numeric",
-  });
-  return (
-    <View style={styles.periodBar}>
-      <Pressable
-        onPress={onPrev}
-        hitSlop={12}
-        style={({ pressed }) => pressed && { opacity: 0.5 }}
-      >
-        <Ionicons name="chevron-back" size={20} color={colors.muted} />
-      </Pressable>
-      <Text style={styles.periodLabel}>{label}</Text>
-      <Pressable
-        onPress={onNext}
-        hitSlop={12}
-        disabled={!canGoNext}
-        style={({ pressed }) => [
-          !canGoNext && { opacity: 0.25 },
-          pressed && canGoNext && { opacity: 0.5 },
-        ]}
-      >
-        <Ionicons name="chevron-forward" size={20} color={colors.muted} />
-      </Pressable>
+      <HeaderIconButton
+        icon="calendar-outline"
+        accessibilityLabel="Pick a month"
+        onPress={onPickMonth}
+        variant="plain"
+      />
     </View>
   );
 }
@@ -624,17 +573,16 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  // Subtle text-only month stepper at the top of the body. No pill
-  // backgrounds — the user found the boxed-button look competed with
-  // the header. This row carries no nav weight, just text + chevrons.
-  periodBar: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 16,
-    marginBottom: space.lg,
+  // The month label that lives between the header and the body —
+  // calendar icon in the header opens a sheet picker; this just
+  // shows which month is currently displayed.
+  monthLine: {
+    ...type$.bodyMd,
+    color: colors.muted,
+    textAlign: "center",
+    paddingTop: space.base,
+    paddingBottom: space.sm,
   },
-  periodLabel: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
 
   sectionLabel: {
     ...type$.captionStrong,
