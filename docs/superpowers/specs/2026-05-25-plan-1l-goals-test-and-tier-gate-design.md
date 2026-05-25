@@ -144,12 +144,14 @@ Follows the `recurring.routes.test.ts` + `budget-plans.routes.test.ts` pattern:
 - **402 upgrade_required for Free tier (trial expired + consumed)**
 - 201 happy path (Pro): row persisted, `generateAndStoreGoalStrategy` fire-and-forget called once with `created.id`
 
-**PATCH update** (5):
+**PATCH update** (7):
 - 401 no session
 - 404 not_found (bogus goalId)
 - 400 invalid_body (dueDate < 1 calendar month from today)
 - **402 upgrade_required for Free tier**
-- 200 happy path (Pro): partial update (title only, then dueDate boundary at today+35d, then archived=true)
+- 200 happy path (Pro) — title-only patch: returns goal with updated title, other fields untouched
+- 200 happy path (Pro) — dueDate extension to today+45d (well past 1-month floor): returns goal with new dueDate
+- 200 happy path (Pro) — archived=true toggle: returns goal with `archivedAt` set
 
 **POST /strategy regen** (4):
 - 401 no session
@@ -159,12 +161,12 @@ Follows the `recurring.routes.test.ts` + `budget-plans.routes.test.ts` pattern:
 
 **DELETE** (3):
 - 401 no session
-- 404 not_found
-- 204 happy path (**Free tier user — verifies cleanup works for non-Pro**)
+- 404 not_found (bogus goalId in user's own workspace)
+- 204 happy path (**Free tier**): setup creates goal via `prisma.goal.create` direct DB insert (bypassing Pro-gated POST), then user expires trial + sets `trialConsumed=true` to confirm Free, then DELETE returns 204. Cleanup must work for non-Pro per user decision.
 
-**Cross-workspace isolation** (1): user A creates goal, user B GET/PATCH/DELETE that goalId with B's wsId → 404 / workspace_mismatch.
+**Cross-workspace isolation** (1): user A creates goal G1 in workspace W1; user B (signed in, owns workspace W2) calls `GET /workspaces/W2/goals/G1` (B's own wsId + foreign goalId) → **404 not_found** (goal G1 doesn't exist in W2's scope, the route's `findFirst({ id, workspaceId })` returns null). Verifies workspace scoping at the DB-query level.
 
-**Actual total**: 3 + 3 + 6 + 5 + 4 + 3 + 1 = **25 tests**.
+**Actual total**: 3 + 3 + 6 + 7 + 4 + 3 + 1 = **27 tests**.
 
 ## 5. Test mocking pattern
 
@@ -192,18 +194,27 @@ let app: FastifyInstance;
 beforeAll(async () => { app = await buildApp(env); await app.ready(); });
 afterAll(async () => { await app.close(); await disconnect(); });
 beforeEach(async () => { await truncateAll(); });
-afterEach(() => { vi.restoreAllMocks(); });
+// IMPORTANT: clearAllMocks (NOT restoreAllMocks) — the partial vi.mock
+// factory above replaces the export with vi.fn(). restoreAllMocks would
+// restore the ORIGINAL (Gemini-calling) implementation across tests, which
+// would (a) make subsequent tests hit the real Gemini API, (b) break the
+// fire-and-forget call-count assertions. clearAllMocks resets call history
+// but preserves the mock implementation.
+afterEach(() => { vi.clearAllMocks(); });
 
 function dateOnly(offsetDays: number): string {
   return new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
 }
 ```
 
-`dateOnly(35)` for happy path (just over 1 calendar month). `dateOnly(15)` for invalid_body. Avoids `vi.useFakeTimers()` to prevent interference with Prisma's internal date handling.
+`dateOnly(45)` for happy path (well past 1 calendar month, no boundary flake). `dateOnly(15)` for invalid_body. Avoids `vi.useFakeTimers()` to prevent interference with Prisma's internal date handling.
 
-`vi.spyOn(strategyMod, "generateAndStoreGoalStrategy")` for call/notCalled assertions per test.
-
-`vi.restoreAllMocks()` in `afterEach` per Vitest singleFork convention (matches established pattern in push.send.test.ts, cron.daily-brief.push.test.ts).
+**Call-count assertions** use `vi.mocked(strategyMod.generateAndStoreGoalStrategy).mock.calls` directly:
+```ts
+expect(vi.mocked(strategyMod.generateAndStoreGoalStrategy).mock.calls.length).toBe(1);
+expect(vi.mocked(strategyMod.generateAndStoreGoalStrategy).mock.calls[0]).toEqual([env, expect.any(String)]);
+```
+No separate `vi.spyOn(strategyMod, ...)` needed — the partial `vi.mock` factory already replaced the export with a `vi.fn()`. `clearAllMocks` in `afterEach` clears mock call history between tests but preserves the mock implementation.
 
 ## 6. Risks
 
@@ -218,7 +229,7 @@ function dateOnly(offsetDays: number): string {
 
 ## 7. Success criteria
 
-- 25 new tests pass, 0 fail.
+- 27 new tests pass, 0 fail.
 - 3 routes gated (POST create / PATCH / POST /strategy); 3 routes remain free (GET × 2 / DELETE).
 - `dueDate` 1-month refine enforced in both schemas; both web/mobile see the same validation as API.
 - Full API suite regression: 0 fail.
