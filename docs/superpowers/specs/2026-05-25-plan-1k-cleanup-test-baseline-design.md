@@ -27,26 +27,96 @@ Full API suite의 6 test failures를 fix해서 green baseline 복원. 모두 pro
 
 ### 3.1 `apps/api/tests/transactions.create-manual.test.ts` (5 fixes)
 
-**Tests #1, #2, #4, #5** — `name: "Cash"` 필터 추가. 테스트의 실제 intent은 "Cash 계정 정확히 하나" (현재 시드는 Cash+Debit+Checking+Savings+Credit 5개라 generic manual filter는 5 반환).
+**Tests #1, #2, #4, #5** — `name: "Cash"` 필터 추가는 **deceptive** (R1 발견). Production `createManualTransactionService`는 `MANUAL_WHERE = { plaidItemId: null, plaidAccountId: null, archivedAt: null }`에서 `orderBy: createdAt asc`로 첫 매치를 reuse. 시드된 5개는 단일 `createMany` 한 batch라 `createdAt` 동률 → tiebreaker undefined → race 테스트가 Cash 아닌 Debit 등을 선택 가능 → `name: "Cash"` 필터 시 0건 → assertion crash.
 
-Pattern (예: test #1):
+올바른 fix: **behavioral contract을 검증** — "service가 manual account 하나를 픽업 / 동일 wsId의 후속 호출은 같은 account를 reuse / 중복 row 안 만듦". 시드 이름이 아니라 reuse semantics.
+
+**Test #1** ("auto-creates a Cash manual account on first call"):
 ```ts
 // Before:
 const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId, plaidItemId: null } });
 expect(accounts).toHaveLength(1);
 expect(accounts[0]!.name).toBe("Cash");
+expect(accounts[0]!.type).toBe("depository");
+expect(accounts[0]!.currency).toBe("CAD");
 
 // After:
-const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId, name: "Cash", plaidItemId: null } });
-expect(accounts).toHaveLength(1);
-expect(accounts[0]!.type).toBe("depository");
+const manualAccounts = await prisma.bankAccount.findMany({
+  where: { workspaceId: wsId, plaidItemId: null, plaidAccountId: null, archivedAt: null },
+});
+// Bootstrap seeds 5 default manual accounts (Cash/Debit/Checking/Savings/
+// Credit); service reused one of them for this transaction.
+expect(manualAccounts.length).toBeGreaterThanOrEqual(1);
+const picked = manualAccounts.find((a) => a.id === result.transaction.accountId);
+expect(picked).toBeDefined();
+expect(picked!.type).toBe("depository");
+expect(picked!.currency).toBe("CAD");
+// Cash is among the seed defaults, confirming the bootstrap path:
+expect(manualAccounts.some((a) => a.name === "Cash")).toBe(true);
 ```
 
-**Test #2** (reuses on second call): 동일 — `name: "Cash"` 필터 추가.
+**Test #2** ("reuses the existing manual account on second call"): 두 transaction이 동일 accountId 갖는지 확인 — 이게 reuse의 진짜 시그니처. 시드 이름 무관:
+```ts
+// Before:
+const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId, plaidItemId: null } });
+expect(accounts).toHaveLength(1);
+const txs = await prisma.transaction.findMany({ where: { workspaceId: wsId } });
+expect(txs).toHaveLength(2);
+expect(new Set(txs.map((t) => t.accountId))).toEqual(new Set([accounts[0]!.id]));
 
-**Test #4** (ghost ex-Plaid account): `findMany({ workspaceId, plaidAccountId: null, archivedAt: null })`에 `name: "Cash"` 필터 추가. 기존 변수명 `cashAccts`도 이미 Cash specific 의도를 나타냄.
+// After:
+const txs = await prisma.transaction.findMany({ where: { workspaceId: wsId } });
+expect(txs).toHaveLength(2);
+// Both transactions reused the same manual account (reuse semantics);
+// account identity doesn't matter — just that they collapsed onto one.
+const accountIds = new Set(txs.map((t) => t.accountId));
+expect(accountIds.size).toBe(1);
+```
 
-**Test #5** (race two concurrent): 동일 — `name: "Cash"` 필터 추가.
+**Test #4** ("does NOT reuse a ghost ex-Plaid account"): 핵심은 ghost account가 픽업 안 되는 것. Reuse target이 어느 시드인지는 무관:
+```ts
+// Before:
+const cashAccts = await prisma.bankAccount.findMany({
+  where: { workspaceId: wsId, plaidAccountId: null, archivedAt: null },
+});
+expect(cashAccts).toHaveLength(1);
+expect(cashAccts[0]!.name).toBe("Cash");
+expect(result.transaction.accountId).toBe(cashAccts[0]!.id);
+
+// After:
+// The ghost (plaidAccountId set + archived) must NOT be picked. Bootstrap-
+// seeded accounts (plaidAccountId=null + active) are the only legal targets.
+const ghostId = (await prisma.bankAccount.findFirstOrThrow({
+  where: { workspaceId: wsId, plaidAccountId: { not: null } },
+})).id;
+expect(result.transaction.accountId).not.toBe(ghostId);
+const pickedAccount = await prisma.bankAccount.findUniqueOrThrow({
+  where: { id: result.transaction.accountId },
+});
+expect(pickedAccount.plaidAccountId).toBeNull();
+expect(pickedAccount.archivedAt).toBeNull();
+```
+
+**Test #5** ("race two concurrent first-time calls"): 두 동시 호출이 동일 account에 collapse:
+```ts
+// Before:
+const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId, plaidItemId: null } });
+expect(accounts).toHaveLength(1);
+expect(r1.transaction.accountId).toBe(accounts[0]!.id);
+expect(r2.transaction.accountId).toBe(accounts[0]!.id);
+
+// After:
+// Race semantics: both concurrent calls picked the SAME manual account
+// (no duplicate creation, no split between two seed accounts).
+expect(r1.transaction.accountId).toBe(r2.transaction.accountId);
+// And it's an active, non-Plaid account from the bootstrap seed pool.
+const picked = await prisma.bankAccount.findUniqueOrThrow({
+  where: { id: r1.transaction.accountId },
+});
+expect(picked.plaidItemId).toBeNull();
+expect(picked.plaidAccountId).toBeNull();
+expect(picked.archivedAt).toBeNull();
+```
 
 **Test #3** (Transaction.currency inherits Workspace.currency) — 재구조화:
 ```ts
@@ -71,7 +141,7 @@ expect(acct.currency).toBe("USD");
 
 ### 3.2 `apps/api/tests/recurring.routes.test.ts` (1 deletion)
 
-`it("POST 402 upgrade_required when trial expired (Free tier)", ...)` block 통째로 삭제. 위에 1줄 comment 추가:
+`it("POST 402 upgrade_required when trial expired (Free tier)", ...)` block 통째로 삭제. 해당 테스트는 inline로 trial expiry 처리하므로 cleanup할 shared helper 없음 (다른 테스트와 fixture 공유 안 함). 위에 1줄 comment 추가:
 
 ```ts
 // Recurring is free for all tiers (Plan 1K-cleanup-test-baseline 2026-05-25
@@ -118,7 +188,7 @@ describe("POST /workspaces/:id/budget-plans/suggest-split", () => {
       payload: { totalAmount: 1000 },
     });
     expect(res.statusCode).toBe(402);
-    expect(res.json().error).toBe("upgrade_required");
+    expect(res.json()).toEqual({ error: "upgrade_required" });  // strict shape — no extra payload
   });
 });
 ```
@@ -162,7 +232,7 @@ describe("POST /workspaces/:id/budget-plans/suggest-split", () => {
 
 - Full API suite: 0 failures.
 - 3 files changed: transactions.create-manual.test.ts (modified) + recurring.routes.test.ts (1 test deleted) + budget-plans.routes.test.ts (new).
-- Single commit OR 3 commits (per task) — 구현 디테일.
+- **3 commits, one per task** (Plan 1K-cleanup-chat-index의 single-commit과 달리 본 plan은 3개 독립 test 변경이라 per-task 분리 — cleaner revert paths).
 - No schema / migration / shared / production changes.
 
 ## 8. Follow-ups
