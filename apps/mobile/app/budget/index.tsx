@@ -184,22 +184,51 @@ export default function BudgetScreen() {
   const total = Number(data.current.plan.totalAmount);
   const spent = Number(data.current.totalSpent);
   const scheduled = Number(data.current.totalScheduled ?? "0");
-  const goalsTotal = Object.values(goalsByCategory)
-    .flat()
-    .reduce((s, g) => s + g.monthlyAmount, 0);
+  // Roll up goal allocations by goal across every category so each goal
+  // gets a single colored segment on the hero bar (chips below already
+  // show per-category breakdown).
+  const goalTotalsById = new Map<
+    string,
+    { goalId: string; color: string; amount: number }
+  >();
+  for (const chips of Object.values(goalsByCategory)) {
+    for (const c of chips) {
+      const cur =
+        goalTotalsById.get(c.goalId) ?? {
+          goalId: c.goalId,
+          color: c.color,
+          amount: 0,
+        };
+      cur.amount += c.monthlyAmount;
+      goalTotalsById.set(c.goalId, cur);
+    }
+  }
+  const goalsTotal = Array.from(goalTotalsById.values()).reduce(
+    (s, g) => s + g.amount,
+    0,
+  );
   const remaining = total - spent - scheduled;
   const pct = total > 0 ? Math.min(100, Math.round((spent / total) * 100)) : 0;
   const scheduledPct =
     total > 0
       ? Math.max(0, Math.min(100 - pct, (scheduled / total) * 100))
       : 0;
-  const goalsPct =
-    total > 0
-      ? Math.max(
-          0,
-          Math.min(100 - pct - scheduledPct, (goalsTotal / total) * 100),
-        )
-      : 0;
+  // Each goal claims its own bar slice in priority order (largest first)
+  // — clamped to the remaining cap space so segments don't run off.
+  const goalSegments: Array<{ goalId: string; color: string; pct: number }> = [];
+  if (total > 0) {
+    let used = pct + scheduledPct;
+    const ordered = Array.from(goalTotalsById.values()).sort(
+      (a, b) => b.amount - a.amount,
+    );
+    for (const g of ordered) {
+      const want = (g.amount / total) * 100;
+      const allowed = Math.max(0, Math.min(100 - used, want));
+      if (allowed <= 0) break;
+      goalSegments.push({ goalId: g.goalId, color: g.color, pct: allowed });
+      used += allowed;
+    }
+  }
   const over = spent > total;
   const willExceed = !over && spent + scheduled > total;
 
@@ -317,18 +346,19 @@ export default function BudgetScreen() {
                   ]}
                 />
               )}
-              {goalsPct > 0 && (
+              {goalSegments.map((g) => (
                 <View
+                  key={g.goalId}
                   style={[
                     styles.barSeg,
                     {
-                      width: `${goalsPct}%`,
-                      backgroundColor: colors.accentYellow,
+                      width: `${g.pct}%`,
+                      backgroundColor: g.color,
                       opacity: 0.7,
                     },
                   ]}
                 />
-              )}
+              ))}
             </View>
           </View>
           <View style={styles.heroFoot}>
@@ -410,13 +440,20 @@ function CategoryRow({
           Math.min(100 - pct, (row.scheduled / row.budget) * 100),
         )
       : 0;
-  const goalPct =
-    hasBudget && goalsSum > 0
-      ? Math.max(
-          0,
-          Math.min(100 - pct - schedPct, (goalsSum / row.budget) * 100),
-        )
-      : 0;
+  // Per-goal bar segments in their own colors. Same cascade rule:
+  // each segment claims its own slice up to what's left of the cap.
+  const goalSegs: Array<{ goalId: string; color: string; pct: number }> = [];
+  if (hasBudget && goalsSum > 0) {
+    let used = pct + schedPct;
+    const ordered = [...goals].sort((a, b) => b.monthlyAmount - a.monthlyAmount);
+    for (const g of ordered) {
+      const want = (g.monthlyAmount / row.budget) * 100;
+      const allowed = Math.max(0, Math.min(100 - used, want));
+      if (allowed <= 0) break;
+      goalSegs.push({ goalId: g.goalId, color: g.color, pct: allowed });
+      used += allowed;
+    }
+  }
   const over = hasBudget && row.spent > row.budget;
   const remaining = row.budget - row.spent - row.scheduled;
   const willExceed = hasBudget && !over && row.spent + row.scheduled > row.budget;
@@ -474,18 +511,19 @@ function CategoryRow({
                   ]}
                 />
               )}
-              {goalPct > 0 && (
+              {goalSegs.map((g) => (
                 <View
+                  key={g.goalId}
                   style={[
                     styles.catBarSeg,
                     {
-                      width: `${goalPct}%`,
-                      backgroundColor: colors.accentYellow,
+                      width: `${g.pct}%`,
+                      backgroundColor: g.color,
                       opacity: 0.7,
                     },
                   ]}
                 />
-              )}
+              ))}
             </View>
           </View>
           <View style={styles.catFoot}>
