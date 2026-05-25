@@ -524,8 +524,11 @@ function CategoryRow({
               style={[styles.goalChip, { borderColor: g.color }]}
             >
               <View style={[styles.goalChipDot, { backgroundColor: g.color }]} />
-              <Text style={[styles.goalChipText, { color: g.color }]}>
-                Saving ${g.monthlyAmount.toFixed(0)}/mo for {g.goalTitle}
+              <Text
+                style={[styles.goalChipText, { color: g.color }]}
+                numberOfLines={1}
+              >
+                {g.goalTitle} ${g.monthlyAmount.toFixed(0)}
               </Text>
             </View>
           ))}
@@ -710,20 +713,20 @@ const styles = StyleSheet.create({
   goalChips: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 6,
-    marginTop: 8,
+    gap: 4,
+    marginTop: 6,
   },
   goalChip: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    gap: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: 999,
     borderWidth: 1,
   },
-  goalChipDot: { width: 6, height: 6, borderRadius: 999 },
-  goalChipText: { ...type$.bodySm, fontWeight: "600" },
+  goalChipDot: { width: 5, height: 5, borderRadius: 999 },
+  goalChipText: { ...type$.caption, fontWeight: "600", maxWidth: 140 },
 
   noCats: {
     padding: space.lg,
