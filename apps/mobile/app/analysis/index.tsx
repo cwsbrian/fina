@@ -634,12 +634,12 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  // Month stepper sitting ABOVE the cashflow card, left-aligned —
+  // Month stepper sitting ABOVE the cashflow card, right-aligned —
   // chevrons flank the month label and step prev/next.
   stepper: {
     flexDirection: "row",
     alignItems: "center",
-    alignSelf: "flex-start",
+    alignSelf: "flex-end",
     gap: 10,
     paddingVertical: 6,
     marginBottom: space.sm,
