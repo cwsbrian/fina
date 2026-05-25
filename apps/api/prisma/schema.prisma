@@ -37,6 +37,8 @@ model User {
   snoozeUntil  DateTime?
   pauseEnabled Boolean   @default(false)
 
+  categorizationMode CategorizationMode @default(flexible)
+
   /// Per-type push notification preferences. Shape:
   ///   { morningBrief, bankReconnect, workspaceInvites, trialExpiring,
   ///     goalMilestones, largeCharges, productUpdates: boolean }
@@ -357,6 +359,8 @@ model TransactionAllocation {
   categoryId    String?
   amount        Decimal               @db.Decimal(14, 2)
   source        CategorizationSource?
+  needsConfirmation Boolean   @default(false)
+  dismissedUntil    DateTime?
   createdAt     DateTime              @default(now())
   updatedAt     DateTime              @updatedAt
 
@@ -595,6 +599,13 @@ enum CategorizationSource {
   mapping
   ai
   manual
+  history
+}
+
+enum CategorizationMode {
+  flexible
+  strict
+  auto
 }
 
 model ChatThread {
