@@ -7,7 +7,12 @@ export type AllocationDTO = {
   /** Decimal serialized as a string (e.g. "12.34"). */
   amount: string;
   /** Where the allocation came from. `null` for uncategorised. */
-  source: "manual" | "ai" | "mapping" | null;
+  source: "manual" | "ai" | "mapping" | "history" | null;
+  /** True when the allocation is awaiting user confirmation. */
+  needsConfirmation: boolean;
+  /** ISO 8601 timestamp. When in the future, this allocation is snoozed
+   *  (hidden from Activity pill and Daily Brief confirm card). */
+  dismissedUntil: string | null;
 };
 
 /** A row in `GET /workspaces/:id/transactions`. */

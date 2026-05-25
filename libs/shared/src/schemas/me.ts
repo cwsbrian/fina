@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { NotificationPrefsSchema } from "../notifications.js";
+import { CategorizationModeSchema } from "../categorization.js";
 
 // Note: `Intl.supportedValuesOf` is Node 20+ / modern browsers. Used at schema
 // build time (module load). If your env doesn't support it, replace this with
@@ -33,6 +34,7 @@ export const PatchMeBody = z.object({
     )
     .optional(),
   notificationPrefs: NotificationPrefsSchema.optional(),
+  categorizationMode: CategorizationModeSchema.optional(),
 }).strict();
 
 export type PatchMeBody = z.infer<typeof PatchMeBody>;

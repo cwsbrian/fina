@@ -36,4 +36,10 @@ export type PresentationBlock =
       reject_label: string;
       accept_intent: string;
       reject_intent?: string;
+    }
+  | {
+      type: "categorize_confirm_card";
+      count: number;
+      items: { txId: string; merchant: string; categoryName: string }[];
+      moreCount: number;
     };

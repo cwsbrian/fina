@@ -48,3 +48,5 @@ export * from "./http/api-client.js";
 
 // Logging
 export * from "./logging.js";
+
+export * from "./categorization.js";
