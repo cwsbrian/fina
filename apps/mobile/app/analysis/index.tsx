@@ -73,6 +73,29 @@ function isFutureMonth(year: number, month: number): boolean {
   return year > now.year || (year === now.year && month > now.month);
 }
 
+const UNCATEGORIZED_ID = "__uncategorized__";
+
+/** Append a synthetic Uncategorized row when the categorized totals
+ *  fall short of the month's total spend. Mirrored on both current
+ *  and previous so the compare list can show the delta on the
+ *  Uncategorized bucket too. */
+function withUncategorized(month: MonthAnalysis | null): CategorySpend[] {
+  if (!month) return [];
+  const sum = month.spendByCategory.reduce((s, c) => s + c.amount, 0);
+  const remaining = Math.max(0, month.spend - sum);
+  if (remaining < 0.005) return month.spendByCategory;
+  return [
+    ...month.spendByCategory,
+    {
+      categoryId: UNCATEGORIZED_ID,
+      categoryName: "Uncategorized",
+      icon: null,
+      color: null,
+      amount: Math.round(remaining * 100) / 100,
+    },
+  ];
+}
+
 export default function AnalysisScreen() {
   const [{ year, month }, setYM] = useState(() => nowYM());
   const [data, setData] = useState<AnalysisResp | null>(null);
@@ -116,13 +139,7 @@ export default function AnalysisScreen() {
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
-      <Header
-        year={year}
-        month={month}
-        onPrev={goPrev}
-        onNext={goNext}
-        canGoNext={canGoNext}
-      />
+      <Header />
       <ScrollView
         contentContainerStyle={styles.scroll}
         refreshControl={
@@ -133,6 +150,14 @@ export default function AnalysisScreen() {
           />
         }
       >
+        <PeriodBar
+          year={year}
+          month={month}
+          onPrev={goPrev}
+          onNext={goNext}
+          canGoNext={canGoNext}
+        />
+
         {err && !data ? (
           <View style={styles.fallback}>
             <Text style={styles.errTitle}>Couldn't load analysis</Text>
@@ -149,13 +174,16 @@ export default function AnalysisScreen() {
           <>
             <CashflowCard analysis={data.current} history={data.monthlyHistory} />
             <SectionLabel>Where it went</SectionLabel>
-            <SpendBreakdown spend={data.current.spend} byCategory={data.current.spendByCategory} />
+            <SpendBreakdown
+              spend={data.current.spend}
+              byCategory={withUncategorized(data.current)}
+            />
             <SectionLabel>
               vs {data.previous?.label.split(" ")[0] ?? "last month"}
             </SectionLabel>
             <CompareList
-              current={data.current.spendByCategory}
-              previous={data.previous?.spendByCategory ?? []}
+              current={withUncategorized(data.current)}
+              previous={withUncategorized(data.previous)}
             />
           </>
         )}
@@ -164,7 +192,22 @@ export default function AnalysisScreen() {
   );
 }
 
-function Header({
+function Header() {
+  return (
+    <View style={styles.nav}>
+      <HeaderIconButton
+        icon="chevron-back"
+        accessibilityLabel="Back"
+        onPress={() => router.back()}
+        variant="plain"
+      />
+      <Text style={styles.navTitle}>Analysis</Text>
+      <View style={{ width: 34 }} />
+    </View>
+  );
+}
+
+function PeriodBar({
   year,
   month,
   onPrev,
@@ -183,35 +226,26 @@ function Header({
     year: "numeric",
   });
   return (
-    <View style={styles.nav}>
-      <HeaderIconButton
-        icon="chevron-back"
-        accessibilityLabel="Back"
-        onPress={() => router.back()}
-        variant="plain"
-      />
-      <View style={styles.headCenter}>
-        <Pressable
-          onPress={onPrev}
-          hitSlop={10}
-          style={({ pressed }) => pressed && { opacity: 0.5 }}
-        >
-          <Ionicons name="chevron-back" size={18} color={colors.muted} />
-        </Pressable>
-        <Text style={styles.headMonth}>{label}</Text>
-        <Pressable
-          onPress={onNext}
-          hitSlop={10}
-          disabled={!canGoNext}
-          style={({ pressed }) => [
-            !canGoNext && { opacity: 0.25 },
-            pressed && canGoNext && { opacity: 0.5 },
-          ]}
-        >
-          <Ionicons name="chevron-forward" size={18} color={colors.muted} />
-        </Pressable>
-      </View>
-      <View style={{ width: 34 }} />
+    <View style={styles.periodBar}>
+      <Pressable
+        onPress={onPrev}
+        hitSlop={12}
+        style={({ pressed }) => pressed && { opacity: 0.5 }}
+      >
+        <Ionicons name="chevron-back" size={20} color={colors.muted} />
+      </Pressable>
+      <Text style={styles.periodLabel}>{label}</Text>
+      <Pressable
+        onPress={onNext}
+        hitSlop={12}
+        disabled={!canGoNext}
+        style={({ pressed }) => [
+          !canGoNext && { opacity: 0.25 },
+          pressed && canGoNext && { opacity: 0.5 },
+        ]}
+      >
+        <Ionicons name="chevron-forward" size={20} color={colors.muted} />
+      </Pressable>
     </View>
   );
 }
@@ -341,21 +375,19 @@ function SpendBreakdown({
     );
   }
 
-  // Pad with an "Uncategorized" segment if the sum of categorized
-  // allocations is less than total spend — otherwise the donut renders
-  // with a grey gap and looks incomplete. The gap is real spend on
-  // transactions that don't have a category allocation yet.
-  const categorizedSum = byCategory.reduce((s, c) => s + c.amount, 0);
-  const uncategorized = Math.max(0, spend - categorizedSum);
-  type Segment = {
-    key: string;
-    name: string;
-    amount: number;
-    color: string;
-    icon: string | null;
-    categoryColor: string | null;
-  };
+  // byCategory now includes the synthetic Uncategorized row (when
+  // applicable) injected upstream by withUncategorized. Just map each
+  // to the metadata the donut + legend need.
+  type Segment = { key: string; name: string; amount: number; color: string };
   const segments: Segment[] = byCategory.map((s) => {
+    if (s.categoryId === UNCATEGORIZED_ID) {
+      return {
+        key: s.categoryId,
+        name: s.categoryName,
+        amount: s.amount,
+        color: colors.mutedSoft,
+      };
+    }
     const meta = categoryMeta({
       id: s.categoryId,
       name: s.categoryName,
@@ -367,20 +399,8 @@ function SpendBreakdown({
       name: s.categoryName,
       amount: s.amount,
       color: meta.fg,
-      icon: s.icon,
-      categoryColor: s.color,
     };
   });
-  if (uncategorized > 0.005) {
-    segments.push({
-      key: "uncategorized",
-      name: "Uncategorized",
-      amount: uncategorized,
-      color: colors.mutedSoft,
-      icon: null,
-      categoryColor: null,
-    });
-  }
 
   const size = 140;
   const stroke = 18;
@@ -505,12 +525,19 @@ function CompareRow({
   flat: boolean;
   isLast: boolean;
 }) {
-  const meta = categoryMeta({
-    id: category.categoryId,
-    name: category.categoryName,
-    icon: category.icon,
-    color: category.color,
-  } as unknown as CategoryDTO);
+  const isUncategorized = category.categoryId === UNCATEGORIZED_ID;
+  const meta = isUncategorized
+    ? {
+        icon: "ellipsis-horizontal-outline" as const,
+        fg: colors.muted,
+        bg: colors.surfaceSoft,
+      }
+    : categoryMeta({
+        id: category.categoryId,
+        name: category.categoryName,
+        icon: category.icon,
+        color: category.color,
+      } as unknown as CategoryDTO);
   const up = delta > 0;
   const down = delta < 0;
   let deltaText: string;
@@ -593,12 +620,17 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 
-  headCenter: {
+  // Subtle text-only month stepper at the top of the body. No pill
+  // backgrounds — the user found the boxed-button look competed with
+  // the header. This row carries no nav weight, just text + chevrons.
+  periodBar: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 14,
+    justifyContent: "center",
+    gap: 16,
+    marginBottom: space.lg,
   },
-  headMonth: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+  periodLabel: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
 
   sectionLabel: {
     ...type$.captionStrong,
