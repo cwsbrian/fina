@@ -618,19 +618,19 @@ const styles = StyleSheet.create({
     color: colors.muted,
   },
 
-  // Confirm-category banner
+  // Confirm-category banner — matches `group` width/radius/bg so it sits
+  // flush with the other cards; the borderLeft is the only color signal.
   confirmBanner: {
-    marginHorizontal: space.lg,
+    marginHorizontal: space.base,
     marginTop: space.lg,
     padding: space.base,
-    borderRadius: 14,
-    backgroundColor: "rgba(230, 184, 92, 0.12)",
+    borderRadius: 16,
+    backgroundColor: colors.surfaceSoft,
     borderLeftWidth: 3,
     borderLeftColor: colors.accentYellow,
     gap: 6,
   },
   confirmBannerOther: {
-    backgroundColor: "rgba(207, 32, 47, 0.08)",
     borderLeftColor: colors.down,
   },
   confirmBannerTitle: { ...type$.titleSm, color: colors.ink },
