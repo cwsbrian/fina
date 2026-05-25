@@ -246,7 +246,7 @@ Branch confirmation: `git branch --show-current` must show `worktree-plan-1p-cro
 **Files:**
 - Create: `apps/api/tests/cron.goal-milestones.test.ts`
 
-- [ ] **Step 1: Read precedent + production code**
+- [x] **Step 1: Read precedent + production code**
 
 Read `apps/api/src/cron/jobs/goal-milestones.ts` end-to-end (61 LOC). Note: `MILESTONES = [100, 75, 50, 25] as const` is DESCENDING. `MILESTONES.find(m => pct >= m)` returns the **first** match — for pct=60, returns 50 (because [100,75 fail, 50 matches]). For pct=80, returns 75. For pct=100, returns 100.
 
@@ -256,7 +256,7 @@ Read `apps/api/prisma/schema.prisma` lines around `model Goal` (around line 470)
 
 **Guardrail:** Do NOT edit `apps/api/src/cron/jobs/goal-milestones.ts`, `apps/api/src/goals/savings.ts`, or `apps/api/src/push/send.ts`.
 
-- [ ] **Step 2: Create the test file**
+- [x] **Step 2: Create the test file**
 
 ```ts
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -503,7 +503,7 @@ Then add the 9 `it()` blocks below:
   });
 ```
 
-- [ ] **Step 3: Run the file**
+- [x] **Step 3: Run the file**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/cron.goal-milestones.test.ts`
 Expected: `Tests  9 passed (9)`.
@@ -513,17 +513,17 @@ If FAIL: read first error. Common gotchas:
 - `Prisma.Decimal` import path → `import { Prisma } from "@prisma/client"`.
 - `computeGoalSavings` mock not returning → use `mockResolvedValue`, not `mockReturnValue` (it's async).
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "cron.goal-milestones" | head -5`
 Expected: 0 lines.
 
-- [ ] **Step 5: Full file run together — verify no leak between T1 and T2**
+- [x] **Step 5: Full file run together — verify no leak between T1 and T2**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/cron.trial-expiring.test.ts tests/cron.goal-milestones.test.ts`
 Expected: `Tests  18 passed (18)`. Mock isolation across files verified.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/api/tests/cron.goal-milestones.test.ts
