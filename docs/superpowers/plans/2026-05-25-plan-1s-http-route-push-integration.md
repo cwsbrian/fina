@@ -23,7 +23,7 @@ No production code changes. No `@fina/shared` changes.
 **Files:**
 - Create: `apps/api/tests/http.push-integration.test.ts`
 
-- [ ] **Step 1: Read precedent + production**
+- [x] **Step 1: Read precedent + production**
 
 Read these files to ground the test:
 - `apps/api/src/routes/transactions.ts:395-450` — POST manual route, focusing on the `void checkLargeChargeAndPush(...)` + `void notifyTransactionAdded(...)` block at lines 421-440.
@@ -40,7 +40,7 @@ Read these files to ground the test:
 
 **Guardrail:** Do NOT edit any production file. Test-only addition.
 
-- [ ] **Step 2: Create the test file**
+- [x] **Step 2: Create the test file**
 
 ```ts
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -244,7 +244,7 @@ describe("POST /workspaces/:id/invites — push integration", () => {
 });
 ```
 
-- [ ] **Step 3: Run the file**
+- [x] **Step 3: Run the file**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/http.push-integration.test.ts`
 Expected: `Tests  6 passed (6)`.
@@ -256,12 +256,12 @@ Common gotchas:
 - `void` fire-and-forget: tests 1, 2, 3 need `drainFireAndForget`. Test 4, 5, 6 await directly (sendWorkspaceInvitePush is NOT fire-and-forget; it's `await`-ed inside the route).
 - `mockRejectedValueOnce` (test 6) → after the rejection, subsequent calls to the same mock fall back to `mockResolvedValue({ sent: 0, failed: 0 })` from the factory.
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "http.push-integration" | head -5`
 Expected: 0 lines.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Branch confirmation: `git branch --show-current` must show `worktree-plan-1s-http-route-push-integration`.
 
