@@ -4,8 +4,9 @@ import { CreateGoalBody, PatchGoalBody } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { generateAndStoreGoalStrategy } from "../goals/generate-strategy.js";
+import { computeGoalSavings } from "../goals/savings.js";
 
-function dto(g: {
+type GoalRow = {
   id: string;
   title: string;
   description: string | null;
@@ -18,13 +19,18 @@ function dto(g: {
   archivedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
-}): unknown {
+};
+
+/** Build the wire DTO. `computedSaved` overrides the stored amount —
+ *  goal savings are derived from actual under-budget behavior per the
+ *  goal's strategy (see goals/savings.ts), not from manual input. */
+function dto(g: GoalRow, computedSaved: number): unknown {
   return {
     id: g.id,
     title: g.title,
     description: g.description,
     targetAmount: g.targetAmount.toFixed(2),
-    savedAmount: g.savedAmount.toFixed(2),
+    savedAmount: computedSaved.toFixed(2),
     dueDate: g.dueDate.toISOString().slice(0, 10),
     icon: g.icon,
     color: g.color,
@@ -58,7 +64,16 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         // Soonest due first — matches the design's "list sorted by due date".
         orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
       });
-      return { goals: rows.map(dto) };
+      const goals = await Promise.all(
+        rows.map(async (g) => {
+          const saved = await computeGoalSavings(
+            ctx.membership.workspaceId,
+            g.id,
+          );
+          return dto(g, saved);
+        }),
+      );
+      return { goals };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
@@ -80,7 +95,11 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
           },
         });
         if (!row) return reply.code(404).send({ error: "not_found" });
-        return { goal: dto(row) };
+        const saved = await computeGoalSavings(
+          ctx.membership.workspaceId,
+          row.id,
+        );
+        return { goal: dto(row, saved) };
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
         throw e;
@@ -117,7 +136,11 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
           // Swallowed inside the helper, but belt-and-suspenders here too.
         },
       );
-      return reply.code(201).send({ goal: dto(created) });
+      const saved = await computeGoalSavings(
+        ctx.membership.workspaceId,
+        created.id,
+      );
+      return reply.code(201).send({ goal: dto(created, saved) });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
@@ -154,7 +177,11 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
           data.archivedAt = d.archived ? new Date() : null;
         }
         const updated = await prisma.goal.update({ where: { id: row.id }, data });
-        return reply.code(200).send({ goal: dto(updated) });
+        const saved = await computeGoalSavings(
+          ctx.membership.workspaceId,
+          updated.id,
+        );
+        return reply.code(200).send({ goal: dto(updated, saved) });
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
         throw e;
@@ -179,7 +206,11 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         // caller can refresh once and see the new plan, rather than poll.
         await generateAndStoreGoalStrategy(app.fina.env, row.id);
         const updated = await prisma.goal.findUniqueOrThrow({ where: { id: row.id } });
-        return reply.code(200).send({ goal: dto(updated) });
+        const saved = await computeGoalSavings(
+          ctx.membership.workspaceId,
+          updated.id,
+        );
+        return reply.code(200).send({ goal: dto(updated, saved) });
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
         throw e;

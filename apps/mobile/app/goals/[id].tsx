@@ -7,7 +7,6 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  TextInput,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useFocusEffect, useLocalSearchParams } from "expo-router";
@@ -30,9 +29,6 @@ export default function GoalDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [goal, setGoal] = useState<GoalDTO | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [editingSaved, setEditingSaved] = useState(false);
-  const [savedDraft, setSavedDraft] = useState("");
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -44,7 +40,6 @@ export default function GoalDetail() {
         `/workspaces/${wsId}/goals/${id}`,
       );
       setGoal(data.goal);
-      setSavedDraft(Number(data.goal.savedAmount).toFixed(2));
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -56,30 +51,6 @@ export default function GoalDetail() {
       load();
     }, [load]),
   );
-
-  const saveSaved = async () => {
-    if (!goal) return;
-    const n = Number(savedDraft);
-    if (!Number.isFinite(n) || n < 0) return;
-    setBusy(true);
-    try {
-      const wsId = await getActiveWorkspaceId();
-      if (!wsId) throw new Error("no_workspace");
-      const r = await apiFetch<{ goal: GoalDTO }>(
-        `/workspaces/${wsId}/goals/${goal.id}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({ savedAmount: n }),
-        },
-      );
-      setGoal(r.goal);
-      setEditingSaved(false);
-    } catch (e) {
-      Alert.alert("Couldn't save", (e as { code?: string }).code ?? "Try again.");
-    } finally {
-      setBusy(false);
-    }
-  };
 
   const onDelete = () => {
     if (!goal) return;
@@ -221,38 +192,14 @@ export default function GoalDetail() {
         <View style={styles.group}>
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Saved so far</Text>
-            {editingSaved ? (
-              <View style={styles.savedInputWrap}>
-                <Text style={styles.savedInputCurrency}>$</Text>
-                <TextInput
-                  style={styles.savedInput}
-                  value={savedDraft}
-                  onChangeText={(v) => {
-                    if (/^\d*\.?\d{0,2}$/.test(v)) setSavedDraft(v);
-                  }}
-                  keyboardType="decimal-pad"
-                  editable={!busy}
-                  autoFocus
-                  onBlur={saveSaved}
-                  returnKeyType="done"
-                  onSubmitEditing={saveSaved}
-                />
-              </View>
-            ) : (
-              <Pressable
-                onPress={() => setEditingSaved(true)}
-                style={({ pressed }) => [
-                  styles.rowValueBtn,
-                  pressed && { opacity: 0.6 },
-                ]}
-              >
-                <Text style={styles.rowValue}>
-                  {formatMoney(goal.savedAmount).display}
-                </Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} />
-              </Pressable>
-            )}
+            <Text style={styles.rowValue}>
+              {formatMoney(goal.savedAmount).display}
+            </Text>
           </View>
+          <Text style={styles.rowCaption}>
+            Auto-tallied from staying under budget on the categories in
+            your plan above.
+          </Text>
         </View>
 
         <Text style={styles.groupLabel}>Details</Text>
@@ -526,15 +473,12 @@ const styles = StyleSheet.create({
   },
   rowLabel: { ...type$.bodyMd, color: colors.ink },
   rowValue: { ...type$.bodyMd, color: colors.muted },
-  rowValueBtn: { flexDirection: "row", alignItems: "center", gap: 4 },
-  savedInputWrap: { flexDirection: "row", alignItems: "center", gap: 2 },
-  savedInputCurrency: { ...type$.bodyMd, color: colors.ink },
-  savedInput: {
-    ...type$.bodyMd,
-    color: colors.ink,
-    minWidth: 80,
-    textAlign: "right",
-    paddingVertical: 0,
+  rowCaption: {
+    ...type$.bodySm,
+    color: colors.muted,
+    paddingHorizontal: space.base,
+    paddingBottom: 12,
+    marginTop: -6,
   },
 
   // Path / strategy
