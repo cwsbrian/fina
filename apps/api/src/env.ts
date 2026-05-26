@@ -90,6 +90,23 @@ const Schema = z.object({
   // Plan 2C: optional. Expo Push works without auth on free tier; setting
   // this raises rate limits and unlocks receipt polling (v1.5+).
   EXPO_ACCESS_TOKEN: z.string().optional(),
+  // Apple IAP
+  APPLE_BUNDLE_ID: z.string().optional(),
+  APPLE_ASC_ISSUER_ID: z.string().optional(),
+  APPLE_ASC_KEY_ID: z.string().optional(),
+  // PEM-encoded .p8 — accept raw OR base64. The IAP env-guard verifies
+  // shape ("BEGIN PRIVATE KEY") without ever including the value in
+  // an error message.
+  APPLE_ASC_PRIVATE_KEY: z.string().optional(),
+  APPLE_ENV: z.enum(["sandbox", "production"]).optional(),
+  // Google IAP
+  GOOGLE_PACKAGE_NAME: z.string().optional(),
+  // JSON service-account key. Accept raw OR base64 (preferred for
+  // Vercel's 4 KB per-var cap). Loader tries base64 first.
+  GOOGLE_SERVICE_ACCOUNT_JSON: z.string().optional(),
+  GOOGLE_PUBSUB_VERIFY_AUDIENCE: z.string().optional(),
+  GOOGLE_PUBSUB_VERIFY_EMAIL: z.string().optional(),
+  GOOGLE_PUBSUB_SUBSCRIPTION_NAME: z.string().optional(),
 });
 
 const ParsedSchema = Schema.refine(
