@@ -24,7 +24,7 @@ No production code changes.
 **Files:**
 - Create: `apps/api/tests/push.transaction-added.test.ts`
 
-- [ ] **Step 1: Read precedent + production**
+- [x] **Step 1: Read precedent + production**
 
 Read these:
 - `apps/api/src/push/transaction-added.ts` (42 LOC) — full function. Note:
@@ -36,7 +36,7 @@ Read these:
 
 **Guardrail:** Do NOT edit any production file. Test-only addition.
 
-- [ ] **Step 2: Create the test file**
+- [x] **Step 2: Create the test file**
 
 ```ts
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -208,17 +208,17 @@ describe("notifyTransactionAdded", () => {
   });
 ```
 
-- [ ] **Step 3: Run the file**
+- [x] **Step 3: Run the file**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/push.transaction-added.test.ts`
 Expected: `Tests  6 passed (6)`.
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "push.transaction-added" | head -5`
 Expected: 0 lines.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Branch confirmation: `git branch --show-current` must show `worktree-plan-1t-notify-transaction-added-test`.
 
