@@ -64,7 +64,7 @@ Per the **Shared lib first** principle, all new wire types live in `libs/shared/
 - Apple: `Subscription.sourceSubscriptionId = originalTransactionId` ALWAYS. Never `transactionId` (which rotates per renewal). `originalTransactionId` is stable across renewals and is the subscription identity. The checkout route, the webhook handler, and `syncSubscriptionFromIAP` must all normalize to `originalTransactionId` before upserting — otherwise checkout-route and webhook target different rows and we get duplicate `Subscription` records per user.
 - Google: `Subscription.sourceSubscriptionId = purchaseToken`. But the v2 response may carry `linkedPurchaseToken` after an in-Play tier change — see §7 for the chain-rewrite handling.
 
-**Schema additions to `User` (one migration):**
+**Schema additions to `User` and new `IapDeletedBinding` model (one migration):**
 
 ```prisma
 model User {
@@ -72,9 +72,31 @@ model User {
   iapAppleAccountToken    String?  @unique   // uuidv5(userId, IAP_NAMESPACE) — written on first successful Apple checkout
   iapGoogleObfuscatedId   String?  @unique   // sha256(userId) hex — written on first successful Google checkout
 }
+
+/// Tombstone for IAP bindings whose `User` row was deleted. Webhook
+/// handlers consult this to stop retrying notifications for purchases
+/// that will never resolve to a Fina user. Forensic-only — never read
+/// by `/me` or any user-facing route.
+model IapDeletedBinding {
+  id        String   @id @default(cuid())
+  source    String   // "iap_apple" | "iap_google"
+  /// sha256(appAccountToken) for Apple, sha256(obfuscatedExternalAccountId)
+  /// for Google. We hash before storing so the deleted-user identifier
+  /// itself is not recoverable from this table.
+  tokenHash String
+  /// Original userId (also hashed if any retention concern). Useful for
+  /// audit/support replay. Optional.
+  userIdHash String?
+  deletedAt DateTime @default(now())
+
+  @@unique([source, tokenHash])
+  @@map("iap_deleted_bindings")
+}
 ```
 
-These columns are the **reverse-lookup binding** used by the webhook handlers to attribute a fresh purchase to a userId when the `Subscription` row doesn't exist yet (first-purchase race or Android resubscribe-after-expiry). They are written by `/billing/iap/checkout` after the verified-transaction check passes. Webhook does `prisma.user.findUnique({ where: { iapAppleAccountToken: ... } })` (or the Google equivalent) and creates the missing `Subscription` row in-place. Without this binding, an event whose corresponding checkout never lands (mobile crash, network mid-flight) drops on the floor permanently and the user is charged with no Fina record.
+The `User.iap*` columns are the **reverse-lookup binding** used by webhook handlers when the `Subscription` row doesn't yet exist (first-purchase race, Android resubscribe-after-expiry). Webhook does the 2-step resolution: (1) `Subscription` lookup by sourceSubscriptionId, (2) `User` lookup by binding column, (3) `IapDeletedBinding` tombstone (200), (4) 500 retry-then-give-up. Without the binding column, a webhook whose corresponding checkout never lands (mobile crash, network mid-flight) drops permanently and the user is charged with no Fina record. Without the tombstone, a webhook for a deleted user 500s forever.
+
+**Account-deletion writes the tombstone before dropping the User row** (see §12.1) — that's what gives webhooks a way to say "the user is gone, stop retrying" without 500-forever.
 
 `Subscription.sourceCustomerId` continues to hold the same `appAccountToken` / `obfuscatedAccountId` per-row for forensic/dedup convenience; the `User.iap*` columns are the canonical user→token binding.
 
@@ -179,7 +201,8 @@ Both webhook routes use a per-plugin `addContentTypeParser` with `parseAs: "buff
 4. Resolve userId, in order:
    1. `Subscription.findFirst({ where: { source: "iap_apple", sourceSubscriptionId: originalTransactionId }})` → existing sub, use its `userId`.
    2. Fallback: the verified JWS carries `appAccountToken`. `User.findUnique({ where: { iapAppleAccountToken: appAccountToken }})` → matched user, create the missing `Subscription` row here (covers webhook-before-checkout race and pure-resubscribe-from-Settings).
-   3. Still unknown → return **500** (NOT 200). Apple retries up to 5x over 3 days, giving `/billing/iap/checkout` time to land. Returning 200-and-drop silently loses the user's purchase forever if their client never reconnects. Cap log noise via per-`appAccountToken` counter.
+   3. Tombstone check: `IapDeletedBinding.findUnique({ where: { tokenHash: sha256(appAccountToken), source: "iap_apple" }})` → known-deleted user. Record a forensic `WebhookEvent` (source: `iap_apple`, type: `unattributable_after_delete`) carrying `appAccountToken` + `productId` + `notificationType`, and return **200** (stop retrying — the user is gone, no point hammering us).
+   4. Still unknown → return **500**. Apple retries up to 5x over 3 days, giving `/billing/iap/checkout` time to land. Cap by per-`appAccountToken` counter: after the 5th retry-induced 500 within 3 days, write a forensic `WebhookEvent` (type: `unattributable_giveup`) and start returning **200** to prevent indefinite log spam.
 5. Call `syncSubscriptionFromIAP({platform: "ios", originalTransactionId, userId})`.
 6. Record `WebhookEvent` after handler succeeds (same pattern as Stripe webhook).
 7. On handler exception → 500. On signature failure → 400 (no retry).
@@ -195,7 +218,8 @@ Both webhook routes use a per-plugin `addContentTypeParser` with `parseAs: "buff
 4. Resolve userId, in order:
    1. `Subscription.findFirst({ where: { source: "iap_google", sourceSubscriptionId: purchaseToken }})` → existing sub, use its `userId`. Also try the `linkedPurchaseToken` if present (handles in-Play tier change crossing events).
    2. Fallback: fetch the v2 purchase via `purchases.subscriptionsv2.get`, read `externalAccountIdentifiers.obfuscatedExternalAccountId`. `User.findUnique({ where: { iapGoogleObfuscatedId: ... }})` → matched user, create the missing `Subscription` row here (covers webhook-before-checkout race AND Android resubscribe-after-expiry, which always issues a brand-new purchaseToken).
-   3. Still unknown → return **500** (NOT 200). Pub/Sub retries per the subscription's retry policy. Cap log noise via per-`obfuscatedExternalAccountId` counter.
+   3. Tombstone check: `IapDeletedBinding.findUnique({ where: { tokenHash: obfuscatedExternalAccountId, source: "iap_google" }})` → known-deleted user. Record `WebhookEvent` (type: `unattributable_after_delete`), return **200**.
+   4. Still unknown → return **500**. Pub/Sub retries per the subscription's retry policy. Cap by per-`obfuscatedExternalAccountId` counter: after 5 retries write `unattributable_giveup` and start returning 200.
 5. Call `syncSubscriptionFromIAP({platform: "android", productId: subscriptionId, purchaseToken, userId})`.
 6. Record `WebhookEvent` after handler succeeds. On handler exception → 500 (Pub/Sub retries per subscription's ack-deadline + retry policy).
 
@@ -271,7 +295,8 @@ Google `SubscriptionPurchaseV2.subscriptionState`:
 The existing `/billing/checkout` already 409s if any active sub exists. Symmetric guard in `/billing/iap/checkout` (§5.3 step 2). The remaining edge: **inbound webhook for a source while another source is also active** (rare — user paid both web + mobile within a small window). Resolution:
 
 - Both subs are upserted normally.
-- **Deterministic source preference in `buildMeBody`** (`apps/api/src/routes/billing.ts:23-68`): when multiple active subs exist, pick by `(tier === "pro") > (tier === "lite")` first, then break ties by `source === "stripe" > "iap_apple" > "iap_google"`, then by `createdAt ASC`. The naive `find(pro) ?? activeSubs[0]` falls back to `currentPeriodEnd`-ordered first row — that's mid-month-flippable and breaks the `billingOwnedByMobile` gate in `more.tsx`. Stripe-first tiebreak means a user who has both keeps the web Stripe UX they originally signed up under.
+- **Deterministic source preference in `buildMeBody`** (`apps/api/src/routes/billing.ts:23-68`): when multiple active subs exist, **Stripe always wins regardless of tier**. Ordering rule: `source === "stripe"` first (any tier), then `(tier === "pro") > (tier === "lite")`, then `source === "iap_apple" > "iap_google"`, then `createdAt ASC`. Rationale: a user who originally signed up via Stripe must keep their Stripe Portal cancellation path. A cross-tier collision (Stripe-lite + IAP-pro, the case round-1 raised) currently shows the user the higher tier they're paying for *and* preserves the Stripe Manage Billing button — at the cost of the IAP-pro entitlement appearing as "lite" in the DTO. v1 product decision: that's acceptable for the rare double-purchase window. Support resolves which side to keep.
+- The naive `find(pro) ?? activeSubs[0]` falls back to `currentPeriodEnd`-ordered first row — that's mid-month-flippable and breaks the `billingOwnedByMobile` gate in `more.tsx`. Stripe-first preserves the web cancel path.
 - We log a `multi_source_active` warning per user when both `stripe` and `iap_*` subs are simultaneously active. Support task to reach out + ask which to keep.
 - We do **not** auto-cancel either side: that's Apple/Google's `auto_renew = false` flow + the user's own action.
 
