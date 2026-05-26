@@ -124,7 +124,13 @@ GOOGLE_PUBSUB_VERIFY_EMAIL      # the service account email we expect as `email`
 GOOGLE_PUBSUB_SUBSCRIPTION_NAME # full Pub/Sub subscription name (projects/.../subscriptions/...) — verified in the envelope to defend against a misconfigured second push pointing at our URL
 ```
 
-All new vars optional (z.string().optional()) so dev/test envs without store credentials don't blow up. Use-site throws `HttpError(500, "iap_not_configured")` when consumer code runs without them.
+All new vars optional (z.string().optional()) so dev/test envs without store credentials don't blow up. Use-site throws `HttpError(503, "iap_not_configured")` when consumer code runs without them (503 — service-not-configured semantics, not a generic 500).
+
+**Boot-time validation + log redaction (required):**
+- On boot, validate the shape of every IAP secret: `APPLE_ASC_PRIVATE_KEY` must contain `BEGIN PRIVATE KEY`; `GOOGLE_SERVICE_ACCOUNT_JSON` must JSON-parse and contain `client_email` + `private_key` keys. Fail loud at startup, not at first webhook.
+- `GOOGLE_SERVICE_ACCOUNT_JSON` is accepted in either form: a single-line JSON string OR a base64-encoded JSON string. The loader tries base64-decode first (Vercel's 4 KB per-var limit is tight for raw JSON, base64 is safer). Document the canonical form as base64 in the env example.
+- Extend the Pino logger `redact` config to cover: `APPLE_ASC_PRIVATE_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, every nested `*.private_key`, `purchaseToken`, `signedTransactionInfo`, and `appAccountToken`. Without redaction, a stray `app.log.error({ env }, ...)` leaks long-lived store credentials to the log aggregator.
+- Never serialize `app.fina.env` whole. If we ever need to print env for diagnostics, route it through a `redactEnv()` helper that strips the IAP secrets explicitly.
 
 ### 5.2 Modules (`apps/api/src/iap/`)
 
@@ -247,7 +253,8 @@ Google `SubscriptionPurchaseV2.subscriptionState`:
 
 The existing `/billing/checkout` already 409s if any active sub exists. Symmetric guard in `/billing/iap/checkout` (§5.3 step 2). The remaining edge: **inbound webhook for a source while another source is also active** (rare — user paid both web + mobile within a small window). Resolution:
 
-- Both subs are upserted normally. `buildMeBody` picks `pro > lite > first`, so the user sees their highest entitlement and isn't penalized.
+- Both subs are upserted normally.
+- **Deterministic source preference in `buildMeBody`** (`apps/api/src/routes/billing.ts:23-68`): when multiple active subs exist, pick by `(tier === "pro") > (tier === "lite")` first, then break ties by `source === "stripe" > "iap_apple" > "iap_google"`, then by `createdAt ASC`. The naive `find(pro) ?? activeSubs[0]` falls back to `currentPeriodEnd`-ordered first row — that's mid-month-flippable and breaks the `billingOwnedByMobile` gate in `more.tsx`. Stripe-first tiebreak means a user who has both keeps the web Stripe UX they originally signed up under.
 - We log a `multi_source_active` warning per user when both `stripe` and `iap_*` subs are simultaneously active. Support task to reach out + ask which to keep.
 - We do **not** auto-cancel either side: that's Apple/Google's `auto_renew = false` flow + the user's own action.
 
