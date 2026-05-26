@@ -83,6 +83,16 @@ export const API_ERROR_CODES = [
   "webhook_invalid_signature",
   "webhook_handler_failed",
   "already_subscribed",
+
+  // IAP (in-app purchase)
+  "invalid_receipt",
+  "expired_receipt",
+  "product_mismatch",
+  "already_subscribed_stripe",
+  "already_subscribed_iap",
+  "user_mismatch",
+  "platform_unavailable",
+  "iap_not_configured",
 ] as const;
 
 export type ApiErrorCode = (typeof API_ERROR_CODES)[number];

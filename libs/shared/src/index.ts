@@ -50,3 +50,8 @@ export * from "./http/api-client.js";
 export * from "./logging.js";
 
 export * from "./categorization.js";
+
+// IAP
+export * from "./iap/productIds.js";
+export * from "./iap/namespace.js";
+export * from "./schemas/iap.js";
