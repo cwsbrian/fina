@@ -125,42 +125,57 @@ export default function Chats() {
               progressViewOffset={totalHeader}
             />
           }
-          renderItem={({ item }) => (
-            <Pressable
-              style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
-              onPress={() =>
-                router.replace({
-                  pathname: "/(tabs)/chat",
-                  params: { thread: item.id },
-                } as never)
-              }
-            >
-              <View style={styles.rowGlyph}>
-                <Ionicons
-                  name="chatbubble-ellipses"
-                  size={20}
-                  color={colors.primary}
-                />
-              </View>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.rowTitle} numberOfLines={1}>
-                  {item.title ?? item.firstMessagePreview ?? "New chat"}
-                </Text>
-                <Text style={styles.rowMeta}>
-                  {item.messageCount} message
-                  {item.messageCount === 1 ? "" : "s"}
-                  {item.lastMessageAt
-                    ? ` · ${new Date(item.lastMessageAt).toLocaleDateString()}`
-                    : ""}
-                </Text>
-              </View>
-              <Ionicons
-                name="chevron-forward"
-                size={18}
-                color={colors.mutedSoft}
-              />
-            </Pressable>
-          )}
+          renderItem={({ item }) => {
+            const unread = item.unreadCount > 0;
+            return (
+              <Pressable
+                style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
+                onPress={() =>
+                  router.replace({
+                    pathname: "/(tabs)/chat",
+                    params: { thread: item.id },
+                  } as never)
+                }
+              >
+                <View style={styles.rowGlyph}>
+                  <Ionicons
+                    name="chatbubble-ellipses"
+                    size={20}
+                    color={colors.primary}
+                  />
+                  {unread && <View style={styles.unreadDot} />}
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text
+                    style={[styles.rowTitle, unread && styles.rowTitleUnread]}
+                    numberOfLines={1}
+                  >
+                    {item.title ?? item.firstMessagePreview ?? "New chat"}
+                  </Text>
+                  <Text style={styles.rowMeta}>
+                    {item.messageCount} message
+                    {item.messageCount === 1 ? "" : "s"}
+                    {item.lastMessageAt
+                      ? ` · ${new Date(item.lastMessageAt).toLocaleDateString()}`
+                      : ""}
+                  </Text>
+                </View>
+                {unread ? (
+                  <View style={styles.unreadBadge}>
+                    <Text style={styles.unreadBadgeText}>
+                      {item.unreadCount > 9 ? "9+" : item.unreadCount}
+                    </Text>
+                  </View>
+                ) : (
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={colors.mutedSoft}
+                  />
+                )}
+              </Pressable>
+            );
+          }}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
         />
       )}
@@ -217,6 +232,32 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   rowTitle: { ...type$.titleSm, color: colors.ink },
+  rowTitleUnread: { fontWeight: "700", color: colors.ink },
   rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   sep: { height: 1, backgroundColor: colors.hairlineSoft, marginLeft: 52 },
+  unreadDot: {
+    position: "absolute",
+    top: 2,
+    right: 2,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: colors.primary,
+    borderWidth: 2,
+    borderColor: colors.canvas,
+  },
+  unreadBadge: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  unreadBadgeText: {
+    ...type$.captionStrong,
+    color: colors.onPrimary,
+    fontSize: 11,
+  },
 });
