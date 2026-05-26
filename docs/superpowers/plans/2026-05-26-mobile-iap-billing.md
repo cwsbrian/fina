@@ -3066,28 +3066,41 @@ describe("POST /webhooks/iap/apple", () => {
     expect(tombstoneEvent).not.toBeNull();
   });
 
-  it("step 4.4 unknown user returns 500 first time, 200 after 5 retries", async () => {
+  it("step 4.4 unknown user returns 500 up to retry-cap, then forensic 200 (same UUID across retries — real Apple behavior)", async () => {
     await prisma.user.update({ where: { id: "u1" }, data: { iapAppleAccountToken: null } });
-    // Real Apple ASSN retries deliver the SAME notificationUUID — verify
-    // the retry-cap logic doesn't dedup on UUID. Counter must key on
-    // appAccountToken instead (see Task 10 step 10.2).
+    // Apple delivers the SAME notificationUUID on every retry. The counter
+    // must therefore key on the binding token (appAccountToken), not the
+    // UUID. The dedup row is written only AFTER successful sync — so 500
+    // responses do NOT create the dedup row, meaning retries are not
+    // short-circuited until the counter hits the cap.
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-4-stable", notificationType: "DID_RENEW",
       signedTransactionJws: "tx-jws", raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
+    // First 5 attempts: 500.
     for (let i = 0; i < 5; i++) {
       const res = await app.inject({
         method: "POST", url: "/webhooks/iap/apple",
-        payload: { signedPayload: "fake-jws", notificationUUID: `uuid-4-${i}` },
+        payload: { signedPayload: "fake-jws" },
       });
       expect(res.statusCode).toBe(500);
     }
+    // 6th attempt: counter > MAX_UNKNOWN_RETRIES (5) → forensic 200 +
+    // dedup row. Subsequent retries hit the dedup short-circuit.
     const res6 = await app.inject({
       method: "POST", url: "/webhooks/iap/apple",
-      payload: { signedPayload: "fake-jws", notificationUUID: "uuid-4-5" },
+      payload: { signedPayload: "fake-jws" },
     });
-    expect(res6.statusCode).toBe(200); // capped — forensic 200
+    expect(res6.statusCode).toBe(200);
+    const forensic = await prisma.webhookEvent.findFirst({ where: { type: "unattributable_giveup" } });
+    expect(forensic).not.toBeNull();
+    // 7th attempt: deduped via the giveup row.
+    const res7 = await app.inject({
+      method: "POST", url: "/webhooks/iap/apple",
+      payload: { signedPayload: "fake-jws" },
+    });
+    expect(res7.statusCode).toBe(200);
   });
 
   it("dedup — second delivery of same notificationUUID short-circuits", async () => {
@@ -3106,17 +3119,25 @@ describe("POST /webhooks/iap/apple", () => {
     expect(fakeAppleClient.getSubscriptionStatus).not.toHaveBeenCalled();
   });
 
-  it("Family Sharing subtype ignored (no crash, 200)", async () => {
+  it("Family Sharing revocation flips Subscription.status to canceled", async () => {
+    await prisma.subscription.create({ data: {
+      userId: "u1", tier: "pro", source: "iap_apple",
+      sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
+      status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
+    } });
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-fs", notificationType: "DID_CHANGE_RENEWAL_STATUS",
       subtype: "PRODUCT_NOT_FOR_SALE",
       signedTransactionJws: "tx-jws", raw: {},
     });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     const res = await app.inject({
       method: "POST", url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
     expect(res.statusCode).toBe(200);
+    const sub = await prisma.subscription.findFirst({ where: { source: "iap_apple", sourceSubscriptionId: "OT-1" } });
+    expect(sub!.status).toBe("canceled");
   });
 });
 
@@ -3238,21 +3259,33 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       // (NOT verifyAndDecodeNotification) below — different SDK API, different
       // payload validator. See spec §5.2 check #1-6 + Task 4 Step 4.6.
 
-      // Dedup
+      // Dedup — keyed on Apple's notificationUUID (stable across retries).
+      // IMPORTANT: dedup row is written AFTER successful handler, NOT here
+      // (matches Stripe webhook pattern at billing-webhook.ts:51). If we
+      // write the dedup row up front, the 500-retry path below would
+      // short-circuit on the second delivery before the counter can trip.
       const eventId = `apple:${notification.notificationUUID}`;
       const existing = await prisma.webhookEvent.findUnique({ where: { id: eventId } });
       if (existing) return { ok: true };
 
-      // Family Sharing — ignore
+      // Family Sharing — treat as canceled per spec §6. Do NOT just log
+      // and 200: round-2 §15.3 required actually flipping any matching
+      // Subscription row to status=canceled.
       if (
         notification.notificationType === "DID_CHANGE_RENEWAL_STATUS" &&
         notification.subtype === "PRODUCT_NOT_FOR_SALE"
       ) {
-        await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "ignored_family_sharing" } });
+        const verifiedTx = await appleClient.verifyAndDecodeTransaction(notification.signedTransactionJws, { context: "assn" });
+        await prisma.subscription.updateMany({
+          where: { source: "iap_apple", sourceSubscriptionId: verifiedTx.originalTransactionId },
+          data: { status: "canceled" },
+        });
+        await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "family_sharing_revoked" } });
         return { ok: true };
       }
 
       const verifiedTx = await appleClient.verifyAndDecodeTransaction(notification.signedTransactionJws, { context: "assn" });
+      const bindingHash = hashBindingToken(verifiedTx.appAccountToken);
 
       // 4-step resolution
       let userId: string | null = null;
@@ -3267,26 +3300,38 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         const user = await prisma.user.findUnique({ where: { iapAppleAccountToken: verifiedTx.appAccountToken } });
         if (user) userId = user.id;
       }
-      // 3. Tombstone
+      // 3. Tombstone — known-deleted user. Stop retrying.
       if (!userId) {
         const tombstone = await prisma.iapDeletedBinding.findUnique({
-          where: { source_tokenHash: { source: "iap_apple", tokenHash: hashBindingToken(verifiedTx.appAccountToken) } },
+          where: { source_tokenHash: { source: "iap_apple", tokenHash: bindingHash } },
         });
         if (tombstone) {
-          await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "unattributable_after_delete" } });
+          await prisma.webhookEvent.create({
+            data: { id: eventId, source: "iap_apple", type: "unattributable_after_delete", body: { tokenHash: bindingHash } as any },
+          });
           return reply.code(200).send({ ok: true });
         }
       }
-      // 4. 500 with retry cap
+      // 4. 500 with retry-cap keyed on the binding token. Apple retries
+      // deliver the SAME notificationUUID, so we cannot use eventId as
+      // the counter key (the dedup short-circuit would mask all retries
+      // after the first). IapRetryCounter is the per-token counter table.
       if (!userId) {
-        const priorCount = await prisma.webhookEvent.count({
-          where: { source: "iap_apple", type: "unattributable_retry", body: { path: ["appAccountToken"], equals: verifiedTx.appAccountToken } as any },
+        const counter = await prisma.iapRetryCounter.upsert({
+          where: { source_tokenHash: { source: "iap_apple", tokenHash: bindingHash } },
+          create: { source: "iap_apple", tokenHash: bindingHash, attempts: 1 },
+          update: { attempts: { increment: 1 }, lastAt: new Date() },
         });
-        if (priorCount >= MAX_UNKNOWN_RETRIES) {
-          await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "unattributable_giveup" } });
+        if (counter.attempts > MAX_UNKNOWN_RETRIES) {
+          // Cap reached — write a forensic dedup row so this UUID stops
+          // 500-ing on future retries. Subsequent attempts hit the dedup
+          // short-circuit above.
+          await prisma.webhookEvent.create({
+            data: { id: eventId, source: "iap_apple", type: "unattributable_giveup", body: { tokenHash: bindingHash, attempts: counter.attempts } as any },
+          });
           return reply.code(200).send({ ok: true });
         }
-        await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "unattributable_retry", body: { appAccountToken: verifiedTx.appAccountToken } as any } });
+        // Don't write dedup row — Apple retries are wanted while counter < cap.
         return reply.code(500).send({ error: "user_unknown" });
       }
 
@@ -3298,6 +3343,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         // webhook path does NOT pass expectedAppAccountToken (spec §12.3)
       }, deps());
 
+      // Dedup row AFTER successful sync (matches Stripe pattern).
       await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: notification.notificationType } });
       return reply.code(200).send({ ok: true });
     } catch (e) {
@@ -3333,37 +3379,40 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       // 4-step resolution mirrored from Apple side.
       let userId: string | null = null;
       const sub = await prisma.subscription.findFirst({
-        where: {
-          source: "iap_google",
-          OR: [{ sourceSubscriptionId: note.payload.purchaseToken }],
-        },
+        where: { source: "iap_google", sourceSubscriptionId: note.payload.purchaseToken },
         select: { userId: true },
       });
       if (sub) userId = sub.userId;
 
       const v2 = await googleClient.fetchAndNormalize(note.payload.purchaseToken);
+      const bindingHash = hashBindingToken(v2.obfuscatedExternalAccountId);
       if (!userId) {
         const user = await prisma.user.findUnique({ where: { iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId } });
         if (user) userId = user.id;
       }
       if (!userId) {
         const tombstone = await prisma.iapDeletedBinding.findUnique({
-          where: { source_tokenHash: { source: "iap_google", tokenHash: hashBindingToken(v2.obfuscatedExternalAccountId) } },
+          where: { source_tokenHash: { source: "iap_google", tokenHash: bindingHash } },
         });
         if (tombstone) {
-          await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: "unattributable_after_delete" } });
+          await prisma.webhookEvent.create({
+            data: { id: eventId, source: "iap_google", type: "unattributable_after_delete", body: { tokenHash: bindingHash } as any },
+          });
           return reply.code(200).send({ ok: true });
         }
       }
       if (!userId) {
-        const priorCount = await prisma.webhookEvent.count({
-          where: { source: "iap_google", type: "unattributable_retry", body: { path: ["obf"], equals: v2.obfuscatedExternalAccountId } as any },
+        const counter = await prisma.iapRetryCounter.upsert({
+          where: { source_tokenHash: { source: "iap_google", tokenHash: bindingHash } },
+          create: { source: "iap_google", tokenHash: bindingHash, attempts: 1 },
+          update: { attempts: { increment: 1 }, lastAt: new Date() },
         });
-        if (priorCount >= MAX_UNKNOWN_RETRIES) {
-          await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: "unattributable_giveup" } });
+        if (counter.attempts > MAX_UNKNOWN_RETRIES) {
+          await prisma.webhookEvent.create({
+            data: { id: eventId, source: "iap_google", type: "unattributable_giveup", body: { tokenHash: bindingHash, attempts: counter.attempts } as any },
+          });
           return reply.code(200).send({ ok: true });
         }
-        await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: "unattributable_retry", body: { obf: v2.obfuscatedExternalAccountId } as any } });
         return reply.code(500).send({ error: "user_unknown" });
       }
 
