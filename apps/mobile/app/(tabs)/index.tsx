@@ -136,6 +136,11 @@ export default function Home() {
     total: number;
     nextDate: string | null;
   } | null>(null);
+  const [analysis, setAnalysis] = useState<{
+    income: number;
+    net: number;
+    prevNet: number | null;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -193,6 +198,18 @@ export default function Home() {
             setScheduleSummary({ count, total, nextDate });
           })
           .catch(() => setScheduleSummary(null)),
+        apiFetch<{
+          current: { income: number; spend: number; net: number };
+          previous: { net: number } | null;
+        }>(`/workspaces/${wsId}/analysis`)
+          .then((r) =>
+            setAnalysis({
+              income: r.current.income,
+              net: r.current.net,
+              prevNet: r.previous?.net ?? null,
+            }),
+          )
+          .catch(() => setAnalysis(null)),
       ]);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -452,9 +469,47 @@ export default function Home() {
               </Pressable>
             )}
 
-            {/* 5. Glance (Spent/Income) — deferred to v2: Hero already shows
-                month spend; Spent-only glance was visually duplicative until
-                an income aggregate endpoint exists. */}
+            {/* 5. Glance — Income + Net (from /analysis endpoint) */}
+            {analysis && (
+              <Pressable
+                style={({ pressed }) => [{ marginTop: space.lg }, pressed && { opacity: 0.85 }]}
+                onPress={() => router.push("/analysis" as never)}
+              >
+                <View style={styles.eyebrowRow}>
+                  <Text style={styles.eyebrow}>This month</Text>
+                  <Text style={styles.eyebrowAction}>See analysis →</Text>
+                </View>
+                <View style={styles.glanceGrid}>
+                  <View style={styles.glanceCard}>
+                    <Text style={styles.glanceLabel}>Income</Text>
+                    <Text style={[styles.glanceValue, { color: colors.up }]}>
+                      {analysis.income > 0
+                        ? `+${formatMoney(analysis.income.toFixed(2), CURRENCY).display}`
+                        : formatMoney("0.00", CURRENCY).display}
+                    </Text>
+                  </View>
+                  <View style={styles.glanceCard}>
+                    <Text style={styles.glanceLabel}>Net</Text>
+                    <Text
+                      style={[
+                        styles.glanceValue,
+                        analysis.net < 0 && { color: colors.down },
+                        analysis.net > 0 && { color: colors.up },
+                      ]}
+                    >
+                      {analysis.net >= 0 ? "+" : "−"}
+                      {formatMoney(Math.abs(analysis.net).toFixed(2), CURRENCY).display}
+                    </Text>
+                    {analysis.prevNet !== null && (
+                      <Text style={styles.glanceTrend}>
+                        vs {analysis.prevNet >= 0 ? "+" : "−"}
+                        {formatMoney(Math.abs(analysis.prevNet).toFixed(2), CURRENCY).display} last month
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              </Pressable>
+            )}
 
             {/* 6. Top categories */}
             {topCategories.length > 0 && (

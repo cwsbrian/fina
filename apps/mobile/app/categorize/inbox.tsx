@@ -119,39 +119,54 @@ export default function CategorizeInbox() {
             return (
               <View key={tx.id} style={styles.card}>
                 <View style={styles.rowTop}>
-                  <Text style={styles.merchant} numberOfLines={1}>{merchant}</Text>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.merchant} numberOfLines={1}>{merchant}</Text>
+                    <View style={styles.rowMid}>
+                      <Text style={styles.catLabel}>{cat?.name ?? "Uncategorized"}</Text>
+                      {isOther && (
+                        <View style={styles.otherChip}>
+                          <Text style={styles.otherChipText}>Other</Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
                   <Text style={[styles.amount, money.isIncome && { color: colors.up }]}>
                     {money.isIncome ? "+" : "−"}{money.display}
                   </Text>
                 </View>
-                <View style={styles.rowMid}>
-                  <Text style={styles.catLabel}>{cat?.name ?? "Uncategorized"}</Text>
-                  {isOther && <View style={styles.otherChip}><Text style={styles.otherChipText}>Other</Text></View>}
-                </View>
                 <View style={styles.actions}>
                   <Pressable
-                    style={({ pressed }) => [styles.btn, styles.btnPrimary, pressed && { opacity: 0.7 }]}
+                    accessibilityLabel="Confirm category"
+                    style={({ pressed }) => [styles.iconBtn, styles.iconBtnPrimary, pressed && { opacity: 0.7 }]}
                     onPress={() => confirmRow(tx)}
                     disabled={busyTxId === tx.id}
+                    hitSlop={6}
                   >
-                    <Text style={styles.btnPrimaryText}>Confirm</Text>
+                    <Ionicons name="checkmark" size={20} color={colors.onPrimary} />
                   </Pressable>
                   <Pressable
-                    style={({ pressed }) => [styles.btn, styles.btnGhost, pressed && { opacity: 0.7 }]}
+                    accessibilityLabel="Change category"
+                    style={({ pressed }) => [styles.iconBtn, styles.iconBtnGhost, pressed && { opacity: 0.7 }]}
                     onPress={() => editRow(tx)}
                     disabled={busyTxId === tx.id}
+                    hitSlop={6}
                   >
-                    <Text style={styles.btnGhostText}>Edit</Text>
+                    <Ionicons name="pencil-outline" size={18} color={colors.ink} />
                   </Pressable>
                   <Pressable
-                    style={({ pressed }) => [styles.btn, styles.btnGhostMuted, pressed && { opacity: 0.7 }]}
+                    accessibilityLabel={cancelLabel}
+                    style={({ pressed }) => [styles.iconBtn, styles.iconBtnGhost, pressed && { opacity: 0.7 }]}
                     onPress={() => skipOrDismissRow(tx)}
                     disabled={busyTxId === tx.id}
+                    hitSlop={6}
                   >
-                    <Text style={styles.btnGhostMutedText}>{cancelLabel}</Text>
+                    <Ionicons
+                      name={data.mode === "auto" ? "close" : "time-outline"}
+                      size={18}
+                      color={colors.muted}
+                    />
                   </Pressable>
                 </View>
-                <Text style={styles.helper}>{cancelHelper}</Text>
               </View>
             );
           })
@@ -207,13 +222,23 @@ const styles = StyleSheet.create({
   catLabel: { ...type$.bodySm, color: colors.body },
   otherChip: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: "rgba(207, 32, 47, 0.10)" },
   otherChipText: { fontSize: 10, color: colors.down, fontWeight: "600" },
-  actions: { flexDirection: "row", gap: 6, marginTop: space.sm },
-  btn: { flex: 1, height: 40, alignItems: "center", justifyContent: "center", borderRadius: 10, minWidth: 0 },
-  btnPrimary: { backgroundColor: colors.primary },
-  btnPrimaryText: { ...type$.bodySm, color: colors.onPrimary, fontWeight: "600" },
-  btnGhost: { borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.canvas },
-  btnGhostText: { ...type$.bodySm, color: colors.ink, fontWeight: "600" },
-  btnGhostMuted: { borderWidth: 1, borderColor: colors.hairline, backgroundColor: colors.canvas },
-  btnGhostMutedText: { ...type$.bodySm, color: colors.muted, fontWeight: "600" },
-  helper: { ...type$.bodySm, fontSize: 11, color: colors.muted, textAlign: "right" },
+  actions: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: space.sm,
+    justifyContent: "flex-end",
+  },
+  iconBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  iconBtnPrimary: { backgroundColor: colors.primary },
+  iconBtnGhost: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.canvas,
+  },
 });

@@ -298,6 +298,12 @@ export default function More() {
             title="Analysis"
             subtitle="Patterns, trends, category breakdown"
             onPress={() => router.push("/analysis" as never)}
+          />
+          <SettingsRow
+            icon="list-outline"
+            title="Review queue"
+            detail={reviewQueueDetail(needsReviewCount)}
+            onPress={() => router.push("/categorize/inbox" as never)}
             last
           />
         </Group>
@@ -337,12 +343,6 @@ export default function More() {
             title="Categorization style"
             detail={modeLabel(me)}
             onPress={() => router.push("/categorization" as never)}
-          />
-          <SettingsRow
-            icon="list-outline"
-            title="Review queue"
-            detail={reviewQueueDetail(needsReviewCount)}
-            onPress={() => router.push("/categorize/inbox" as never)}
             last
           />
         </Group>
