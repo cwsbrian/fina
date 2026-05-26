@@ -3,6 +3,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
+import { setupWorkspaceWithRoles } from "./helpers/factories.js";
 import * as sendMod from "../src/push/send.js";
 import * as savingsMod from "../src/goals/savings.js";
 
@@ -28,38 +29,6 @@ beforeAll(async () => { await prisma.$connect(); });
 afterAll(async () => { await disconnect(); });
 beforeEach(async () => { await truncateAll(); });
 afterEach(() => { vi.clearAllMocks(); });
-
-let userCounter = 0;
-let wsCounter = 0;
-
-async function createUser(): Promise<string> {
-  userCounter++;
-  const id = `gm-u-${Date.now()}-${userCounter}`;
-  await prisma.user.create({
-    data: { id, email: `${id}@t.co`, name: `GM User ${userCounter}` },
-  });
-  return id;
-}
-
-async function setupWorkspaceWithRoles(
-  roles: Array<"owner" | "editor" | "viewer">,
-): Promise<{ wsId: string; userIds: Record<"owner" | "editor" | "viewer", string | undefined> }> {
-  wsCounter++;
-  const ws = await prisma.workspace.create({
-    data: { id: `gm-w-${Date.now()}-${wsCounter}`, name: `GM WS ${wsCounter}`, currency: "CAD" },
-  });
-  const userIds: Record<"owner" | "editor" | "viewer", string | undefined> = {
-    owner: undefined, editor: undefined, viewer: undefined,
-  };
-  for (const role of roles) {
-    const userId = await createUser();
-    await prisma.membership.create({
-      data: { userId, workspaceId: ws.id, role },
-    });
-    userIds[role] = userId;
-  }
-  return { wsId: ws.id, userIds };
-}
 
 async function createGoal(opts: {
   workspaceId: string;
@@ -120,7 +89,7 @@ describe("runGoalMilestones", () => {
 
   it("saved=30 of 100, prev=null → push at pct=25 + signature pinned", async () => {
     const { wsId, userIds } = await setupWorkspaceWithRoles(["owner"]);
-    const ownerId = userIds.owner!;  // helper guarantees owner exists when in roles array
+    const ownerId = userIds[0]!;  // helper guarantees owner exists when in roles array
     const goalId = await createGoal({ workspaceId: wsId, title: "Vacation", targetAmount: 100 });
     vi.mocked(savingsMod.computeGoalSavings).mockResolvedValue(30);
     const { runGoalMilestones } = await import("../src/cron/jobs/goal-milestones.js");
@@ -154,8 +123,8 @@ describe("runGoalMilestones", () => {
 
   it("owner+editor+viewer + saved=100 → 2 pushes (viewer excluded)", async () => {
     const { wsId, userIds } = await setupWorkspaceWithRoles(["owner", "editor", "viewer"]);
-    const ownerId = userIds.owner!;
-    const editorId = userIds.editor!;
+    const ownerId = userIds[0]!;
+    const editorId = userIds[1]!;
     await createGoal({ workspaceId: wsId, title: "Done", targetAmount: 100 });
     vi.mocked(savingsMod.computeGoalSavings).mockResolvedValue(100);
     const { runGoalMilestones } = await import("../src/cron/jobs/goal-milestones.js");
@@ -177,7 +146,7 @@ describe("runGoalMilestones", () => {
     expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(0);
   });
 
-  it("push throws on one goal → logError + iteration continues to the other", async () => {
+  it("push throws on one goal → caught + iteration continues, BOTH goals advance", async () => {
     const { wsId } = await setupWorkspaceWithRoles(["owner"]);
     const goalA = await createGoal({ workspaceId: wsId, title: "A", targetAmount: 100 });
     const goalB = await createGoal({ workspaceId: wsId, title: "B", targetAmount: 100 });
@@ -197,8 +166,33 @@ describe("runGoalMilestones", () => {
     // Both goals attempted (push called for both).
     expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(2);
 
-    // Exactly one goal's state was advanced; the other was preserved.
-    // Order-agnostic assertion — robust to Postgres scan-order shifts.
+    // Per-recipient containment — even though one push threw, BOTH goal.update
+    // calls fire because the inner catch lets the per-member loop complete.
+    const [a, b] = await Promise.all([
+      prisma.goal.findUniqueOrThrow({ where: { id: goalA } }),
+      prisma.goal.findUniqueOrThrow({ where: { id: goalB } }),
+    ]);
+    expect(a.lastMilestonePct).toBe(100);
+    expect(b.lastMilestonePct).toBe(100);
+  });
+
+  it("computeGoalSavings throws on goal A → per-goal catch + iteration continues to goal B", async () => {
+    const { wsId } = await setupWorkspaceWithRoles(["owner"]);
+    const goalA = await createGoal({ workspaceId: wsId, title: "A", targetAmount: 100 });
+    const goalB = await createGoal({ workspaceId: wsId, title: "B", targetAmount: 100 });
+
+    vi.mocked(savingsMod.computeGoalSavings)
+      .mockRejectedValueOnce(new Error("DB hiccup"))
+      .mockResolvedValue(100);
+
+    const { runGoalMilestones } = await import("../src/cron/jobs/goal-milestones.js");
+    await expect(runGoalMilestones(env)).resolves.not.toThrow();
+
+    // Goal A's per-goal catch fired BEFORE the fan-out — no push, no update.
+    // Goal B processed normally — 1 push + state advanced.
+    expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(1);
+
+    // Order-agnostic: one goal advanced, one didn't.
     const [a, b] = await Promise.all([
       prisma.goal.findUniqueOrThrow({ where: { id: goalA } }),
       prisma.goal.findUniqueOrThrow({ where: { id: goalB } }),

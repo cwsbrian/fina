@@ -41,4 +41,10 @@ export type LogContext = {
   receiptInvalidCreds?: boolean;
   receiptErrorCode?: string;
   deletedPushTickets?: number;
+  /** Fan-out push helpers (Plan 1U): per-recipient failure context. */
+  recipientUserId?: string;
+  goalId?: string;
+  transactionId?: string;
+  /** Goal milestone cron: percentage crossed. */
+  pct?: number;
 };

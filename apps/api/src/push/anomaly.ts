@@ -85,13 +85,22 @@ export async function checkLargeChargeAndPush(
       select: { userId: true },
     });
     for (const m of memberships) {
-      await sendLargeChargePush(
-        env,
-        m.userId,
-        args.merchant ?? "An unusual charge",
-        args.amount.toFixed(2),
-        categoryName,
-      );
+      // Per-recipient try/catch: a transient error on one member must NOT
+      // drop the tail of the fan-out (per Plan 1U).
+      try {
+        await sendLargeChargePush(
+          env,
+          m.userId,
+          args.merchant ?? "An unusual charge",
+          args.amount.toFixed(2),
+          categoryName,
+        );
+      } catch (err) {
+        logError(
+          { transactionId: args.transactionId, recipientUserId: m.userId, err },
+          "large-charge push to recipient failed",
+        );
+      }
     }
   } catch (err) {
     logError(
