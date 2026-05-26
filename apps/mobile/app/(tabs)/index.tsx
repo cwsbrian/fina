@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { displayName, trialDaysLeft, type MeDTO as Me, type PlaidItemDTO } from "@fina/shared";
 import { useSession } from "../../src/auth/client";
@@ -72,9 +72,7 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const greetingName =
     session?.user && me?.user
@@ -117,7 +115,7 @@ export default function Home() {
       key: "fina",
       icon: "chatbubble-outline",
       title: `Fina sent you ${unreadFina} message${unreadFina === 1 ? "" : "s"}`,
-      href: "/(tabs)/chat",
+      href: "/chats",
     });
   }
 
