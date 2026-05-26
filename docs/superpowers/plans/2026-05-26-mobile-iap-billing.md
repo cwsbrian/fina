@@ -1199,6 +1199,7 @@ describe("AppleClient.verifyAndDecodeTransaction", () => {
 
 ```ts
 // apps/api/src/iap/apple-client.ts
+import { createHash, X509Certificate } from "node:crypto";
 import {
   SignedDataVerifier,
   Environment,
@@ -1208,22 +1209,46 @@ import { HttpError } from "../auth/context.js";
 import type { AppleIapConfig } from "./env-guard.js";
 import { mapAppleStatus } from "./status-mapping.js";
 import type { MappedStatus } from "./status-mapping.js";
+import { APPLE_ROOT_CERTS, EXPECTED_APPLE_ROOT_SPKI_SHA256 } from "./apple-roots.js";
 
-/** Apple's WWDR-G6 root certificate, pinned by including its PEM here.
- *  Source: https://www.apple.com/certificateauthority/
- *  This is the AppleRootCA-G3 (RSA) — used for ASSN V2 signing. */
-const APPLE_ROOT_CERTS: Buffer[] = [
-  // Implementer: replace with the actual G3 root PEM at install time.
-  // The constant is wrapped in a Buffer[] because @apple's library
-  // expects raw DER/PEM bytes per cert. Pinning here means we never
-  // fetch certs at runtime — supply-chain risk minimized.
-  Buffer.from(
-    "-----BEGIN CERTIFICATE-----\n" +
-    "<<<APPLE_WWDR_G3_ROOT_PEM_HERE>>>\n" +
-    "-----END CERTIFICATE-----\n",
-    "utf8",
-  ),
-];
+/** Verify on module load that the pinned cert(s) parse + match the
+ *  expected SPKI SHA-256 hash. This is the "pinned by SPKI hash in
+ *  code" guarantee from spec §5.2 check #2 — a PEM-bytes mismatch
+ *  (re-encoded same cert) still validates iff the SPKI matches.
+ *  Throws at boot rather than at first webhook so misconfiguration
+ *  surfaces during deploy, not during a real Apple notification. */
+function validateAppleRoots(): void {
+  if (APPLE_ROOT_CERTS.length === 0) {
+    throw new Error(
+      "APPLE_ROOT_CERTS is empty — install the Apple root cert(s) per spec §5.2 check #2. " +
+        "See apps/api/src/iap/apple-roots.ts.",
+    );
+  }
+  for (const pem of APPLE_ROOT_CERTS) {
+    const pemStr = pem.toString("utf8");
+    if (pemStr.includes("<<<") || pemStr.includes(">>>")) {
+      throw new Error(
+        "APPLE_ROOT_CERTS contains a placeholder. Drop in the real Apple Inc. Root CA PEM. " +
+          "See https://www.apple.com/certificateauthority/",
+      );
+    }
+    let cert: X509Certificate;
+    try {
+      cert = new X509Certificate(pem);
+    } catch (e) {
+      throw new Error(`APPLE_ROOT_CERTS contains an unparseable certificate: ${(e as Error).message}`);
+    }
+    const spki = cert.publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const spkiHash = createHash("sha256").update(spki).digest("hex");
+    if (!EXPECTED_APPLE_ROOT_SPKI_SHA256.includes(spkiHash)) {
+      throw new Error(
+        `APPLE_ROOT_CERTS SPKI SHA-256 ${spkiHash.slice(0, 16)}… is not in the expected pinned set. ` +
+          `Refusing to start.`,
+      );
+    }
+  }
+}
+validateAppleRoots();
 
 export type VerifiedAppleTransaction = {
   bundleId: string;
@@ -1361,6 +1386,127 @@ function appleStatusFromCode(code: number): "SUBSCRIBED" | "BILLING_RETRY" | "EX
   }
 }
 ```
+
+Extend `AppleClient` with the **notification** and **renewal-info** verifiers — these are distinct SDK methods from `verifyAndDecodeTransaction` and MUST be used for ASSN payloads / ASC `signedRenewalInfo` respectively:
+
+```ts
+  /** Decodes an ASSN V2 signedPayload (the webhook outer JWS). Uses
+   *  the SDK's dedicated notification verifier — DO NOT route this
+   *  through verifyAndDecodeTransaction (different payload shape;
+   *  the transaction validator's bundleId/environment/appAccountToken
+   *  checks have no counterpart in notification payloads). */
+  async verifyAndDecodeNotification(signedPayload: string): Promise<{
+    notificationUUID: string;
+    notificationType: string;
+    subtype?: string;
+    signedTransactionJws: string;
+    signedRenewalInfoJws?: string;
+    raw: Record<string, unknown>;
+  }> {
+    const decoded = await this.verifier
+      .verifyAndDecodeNotification(signedPayload)
+      .catch((e) => {
+        throw new HttpError(400, "invalid_receipt", `apple notification verify failed: ${e?.name ?? "error"}`);
+      });
+    const data = ((decoded as any).data ?? {}) as Record<string, unknown>;
+    return {
+      notificationUUID: String((decoded as any).notificationUUID ?? ""),
+      notificationType: String((decoded as any).notificationType ?? ""),
+      subtype: typeof (decoded as any).subtype === "string" ? (decoded as any).subtype : undefined,
+      signedTransactionJws: String(data.signedTransactionInfo ?? ""),
+      signedRenewalInfoJws: typeof data.signedRenewalInfo === "string" ? data.signedRenewalInfo : undefined,
+      raw: decoded as Record<string, unknown>,
+    };
+  }
+
+  /** Decodes signedRenewalInfo. Distinct SDK method from
+   *  verifyAndDecodeTransaction — renewal-info payloads have their
+   *  own claim set (autoRenewProductId, offerType, autoRenewStatus). */
+  async verifyAndDecodeRenewalInfo(jws: string): Promise<Record<string, unknown>> {
+    return (await this.verifier
+      .verifyAndDecodeRenewalInfo(jws)
+      .catch((e) => {
+        throw new HttpError(400, "invalid_receipt", `apple renewal verify failed: ${e?.name ?? "error"}`);
+      })) as unknown as Record<string, unknown>;
+  }
+```
+
+Also update `getSubscriptionStatus` to call the dedicated decoders (replace the two `_decodeAndVerifyJws` calls with `verifyAndDecodeTransaction` for `signedTransactionInfo` and `verifyAndDecodeRenewalInfo` for `signedRenewalInfo`).
+
+- [ ] **Step 4.6b: Create `apple-roots.ts` with the real PEM + expected SPKI hash**
+
+```ts
+// apps/api/src/iap/apple-roots.ts
+//
+// Apple Inc. Root CA G3 — the root used by App Store Server Notifications V2.
+// Source: https://www.apple.com/certificateauthority/
+// File: AppleIncRootCertificate.cer (DER) → PEM-encode.
+//
+// IMPORTANT: This is the pinned root. To compute the expected SPKI SHA-256:
+//   openssl x509 -in AppleIncRootCertificate.pem -pubkey -noout \
+//     | openssl pkey -pubin -outform DER \
+//     | openssl dgst -sha256
+//
+// The constant below carries the EXPECTED hash; module-load validation
+// in apple-client.ts refuses to start if the PEM's actual SPKI hash
+// doesn't match. Re-running the openssl pipeline above gives the value
+// to paste here.
+
+export const APPLE_ROOT_CERTS: Buffer[] = [
+  Buffer.from(
+    `-----BEGIN CERTIFICATE-----
+<<INSTALLER: paste the real Apple Inc. Root CA G3 PEM here. Module-load
+ validation will throw "APPLE_ROOT_CERTS contains a placeholder" until
+ this is done — that's intentional.>>
+-----END CERTIFICATE-----
+`,
+    "utf8",
+  ),
+];
+
+/** SHA-256 of the SPKI (Subject Public Key Info) DER bytes of every
+ *  trusted Apple root. Validation succeeds when at least one entry in
+ *  APPLE_ROOT_CERTS hashes to a value in this set. Multiple entries
+ *  allow root rotation: register the next root + hash here BEFORE
+ *  Apple flips the signing chain, then retire the old one. */
+export const EXPECTED_APPLE_ROOT_SPKI_SHA256: ReadonlyArray<string> = [
+  // INSTALLER: run the openssl pipeline in the file header on the real
+  // PEM and paste the lowercase hex digest here.
+  "<INSTALLER_FILL_64_HEX_CHARS>",
+];
+```
+
+The placeholder strings cause `validateAppleRoots()` to throw at module load with a clear error message — fail-fast at deploy, not at first webhook.
+
+- [ ] **Step 4.6c: Add test for root-cert validation**
+
+```ts
+// apps/api/tests/iap/apple-roots.test.ts
+import { describe, it, expect } from "vitest";
+import { X509Certificate, createHash } from "node:crypto";
+import { APPLE_ROOT_CERTS, EXPECTED_APPLE_ROOT_SPKI_SHA256 } from "../../src/iap/apple-roots.js";
+
+describe("APPLE_ROOT_CERTS", () => {
+  it("contains no placeholder markers", () => {
+    for (const pem of APPLE_ROOT_CERTS) {
+      const s = pem.toString("utf8");
+      expect(s).not.toMatch(/<<</);
+      expect(s).not.toMatch(/INSTALLER/);
+    }
+  });
+
+  it("every cert parses as X.509 and its SPKI SHA-256 is in the expected pin set", () => {
+    for (const pem of APPLE_ROOT_CERTS) {
+      const cert = new X509Certificate(pem);
+      const spki = cert.publicKey.export({ type: "spki", format: "der" }) as Buffer;
+      const hash = createHash("sha256").update(spki).digest("hex");
+      expect(EXPECTED_APPLE_ROOT_SPKI_SHA256).toContain(hash);
+    }
+  });
+});
+```
+
+This test FAILS on a fresh checkout (placeholder still in place) — the engineer running the migration is forced to install the real PEM + hash before any other test runs. That's by design.
 
 - [ ] **Step 4.7: Run `apple-client.test.ts`, confirm pass**
 
@@ -1633,10 +1779,19 @@ const googleCfg: GoogleIapConfig = {
 describe("verifyApplePayload", () => {
   beforeEach(() => vi.restoreAllMocks());
 
-  it("decodes signedPayload through the Apple client", async () => {
-    const fakeClient = { verifyAndDecodeTransaction: vi.fn().mockResolvedValue({ raw: { notificationUUID: "uuid-1", data: { signedTransactionInfo: "tx-jws" } } }) };
+  it("delegates to AppleClient.verifyAndDecodeNotification and returns flat shape", async () => {
+    const fakeClient = {
+      verifyAndDecodeNotification: vi.fn().mockResolvedValue({
+        notificationUUID: "uuid-1",
+        notificationType: "DID_RENEW",
+        signedTransactionJws: "tx-jws",
+        raw: {},
+      }),
+    };
     const out = await verifyApplePayload("signed-payload-string", appleCfg, { appleClient: fakeClient as any });
-    expect(out.raw.notificationUUID).toBe("uuid-1");
+    expect(out.notificationUUID).toBe("uuid-1");
+    expect(out.signedTransactionJws).toBe("tx-jws");
+    expect(fakeClient.verifyAndDecodeNotification).toHaveBeenCalledWith("signed-payload-string");
   });
 });
 
@@ -1749,32 +1904,22 @@ export type AppleNotification = {
   raw: Record<string, unknown>;
 };
 
-/** Apple ASSN V2 verifier. Decodes signedPayload JWS via the Apple
- *  SDK (chain + alg already verified). The inner signedTransactionInfo
- *  JWS is decoded by the caller via apple-client when needed. */
+/** Thin wrapper that delegates to AppleClient.verifyAndDecodeNotification.
+ *  Kept as a free function so the webhook route's tests can pass a
+ *  mocked AppleClient without import cycles. The actual signature +
+ *  shape verification lives in apple-client.ts (Task 4 Step 4.6). */
 export async function verifyApplePayload(
   signedPayload: string,
-  cfg: AppleIapConfig,
-  deps: { appleClient: Pick<AppleClient, "verifyAndDecodeTransaction"> & { _decodeAndVerifyJws?: (s: string) => Promise<Record<string, unknown>> } },
+  _cfg: AppleIapConfig,
+  deps: { appleClient: Pick<AppleClient, "verifyAndDecodeNotification"> },
 ): Promise<AppleNotification> {
-  // ASSN V2 signedPayload is itself a JWS whose body has notificationUUID,
-  // notificationType, subtype, data.signedTransactionInfo, data.signedRenewalInfo.
-  // Apple's SDK exposes a notification-specific decoder; if not used,
-  // the appleClient's underlying _decodeAndVerifyJws (a JWS verifier)
-  // works for both transaction and notification payloads because
-  // ASSN signs with the same chain.
-  const decode = deps.appleClient._decodeAndVerifyJws
-    ?? ((s: string) => deps.appleClient.verifyAndDecodeTransaction(s, { context: "assn" }).then((r) => (r as any).raw));
-  const decoded = await decode(signedPayload).catch(() => {
-    throw new HttpError(400, "invalid_receipt", "apple notification signature failed");
-  });
-  const data = (decoded.data ?? {}) as Record<string, unknown>;
+  const n = await deps.appleClient.verifyAndDecodeNotification(signedPayload);
   return {
-    notificationUUID: String(decoded.notificationUUID ?? ""),
-    notificationType: String(decoded.notificationType ?? ""),
-    subtype: typeof decoded.subtype === "string" ? decoded.subtype : undefined,
-    signedTransactionJws: String(data.signedTransactionInfo ?? ""),
-    raw: decoded,
+    notificationUUID: n.notificationUUID,
+    notificationType: n.notificationType,
+    subtype: n.subtype,
+    signedTransactionJws: n.signedTransactionJws,
+    raw: n.raw,
   };
 }
 
@@ -2817,8 +2962,9 @@ import { deriveAppleToken, deriveGoogleToken, hashBindingToken } from "../../src
 let app: Awaited<ReturnType<typeof buildApp>>;
 const fakeAppleClient: any = {
   verifyAndDecodeTransaction: vi.fn(),
+  verifyAndDecodeNotification: vi.fn(),
+  verifyAndDecodeRenewalInfo: vi.fn(),
   getSubscriptionStatus: vi.fn(),
-  _decodeAndVerifyJws: vi.fn(),
 };
 const fakeGoogleClient: any = { fetchAndNormalize: vi.fn(), acknowledgeIfPending: vi.fn().mockResolvedValue(true) };
 const fakeOidcClient: any = { verifyIdToken: vi.fn() };
@@ -2844,9 +2990,9 @@ describe("POST /webhooks/iap/apple", () => {
       sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
       status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
     } });
-    fakeAppleClient._decodeAndVerifyJws.mockResolvedValue({
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-1", notificationType: "DID_RENEW",
-      data: { signedTransactionInfo: "tx-jws" },
+      signedTransactionJws: "tx-jws", raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
@@ -2861,9 +3007,9 @@ describe("POST /webhooks/iap/apple", () => {
   });
 
   it("step 4.2 fallback: webhook before checkout — finds user via binding", async () => {
-    fakeAppleClient._decodeAndVerifyJws.mockResolvedValue({
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-2", notificationType: "SUBSCRIBED",
-      data: { signedTransactionInfo: "tx-jws" },
+      signedTransactionJws: "tx-jws", raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
@@ -2884,9 +3030,9 @@ describe("POST /webhooks/iap/apple", () => {
     await prisma.iapDeletedBinding.create({
       data: { source: "iap_apple", tokenHash: hashBindingToken(deriveAppleToken("u1")) },
     });
-    fakeAppleClient._decodeAndVerifyJws.mockResolvedValue({
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-3", notificationType: "DID_RENEW",
-      data: { signedTransactionInfo: "tx-jws" },
+      signedTransactionJws: "tx-jws", raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     const res = await app.inject({
@@ -2902,9 +3048,12 @@ describe("POST /webhooks/iap/apple", () => {
 
   it("step 4.4 unknown user returns 500 first time, 200 after 5 retries", async () => {
     await prisma.user.update({ where: { id: "u1" }, data: { iapAppleAccountToken: null } });
-    fakeAppleClient._decodeAndVerifyJws.mockResolvedValue({
-      notificationUUID: "uuid-4", notificationType: "DID_RENEW",
-      data: { signedTransactionInfo: "tx-jws" },
+    // Real Apple ASSN retries deliver the SAME notificationUUID — verify
+    // the retry-cap logic doesn't dedup on UUID. Counter must key on
+    // appAccountToken instead (see Task 10 step 10.2).
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
+      notificationUUID: "uuid-4-stable", notificationType: "DID_RENEW",
+      signedTransactionJws: "tx-jws", raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     for (let i = 0; i < 5; i++) {
@@ -2922,9 +3071,9 @@ describe("POST /webhooks/iap/apple", () => {
   });
 
   it("dedup — second delivery of same notificationUUID short-circuits", async () => {
-    fakeAppleClient._decodeAndVerifyJws.mockResolvedValue({
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-dup", notificationType: "DID_RENEW",
-      data: { signedTransactionInfo: "tx-jws" },
+      signedTransactionJws: "tx-jws", raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
@@ -2938,10 +3087,10 @@ describe("POST /webhooks/iap/apple", () => {
   });
 
   it("Family Sharing subtype ignored (no crash, 200)", async () => {
-    fakeAppleClient._decodeAndVerifyJws.mockResolvedValue({
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-fs", notificationType: "DID_CHANGE_RENEWAL_STATUS",
       subtype: "PRODUCT_NOT_FOR_SALE",
-      data: { signedTransactionInfo: "tx-jws" },
+      signedTransactionJws: "tx-jws", raw: {},
     });
     const res = await app.inject({
       method: "POST", url: "/webhooks/iap/apple",
@@ -3065,6 +3214,9 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       if (!body?.signedPayload) return reply.code(400).send({ error: "invalid_body" });
 
       const notification = await verifyApplePayload(body.signedPayload, cfg.apple, { appleClient });
+      // notification.signedTransactionJws goes through verifyAndDecodeTransaction
+      // (NOT verifyAndDecodeNotification) below — different SDK API, different
+      // payload validator. See spec §5.2 check #1-6 + Task 4 Step 4.6.
 
       // Dedup
       const eventId = `apple:${notification.notificationUUID}`;
