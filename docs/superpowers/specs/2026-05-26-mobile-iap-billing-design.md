@@ -359,17 +359,18 @@ None. All major decisions resolved during brainstorming. Sync strategy = webhook
 
 ## 14. Plan slice (preview of writing-plans output)
 
-This spec slices into roughly 10 tasks. Order matters because of the shared-lib-first rule. The actual plan with code blocks lives in the next step.
+This spec slices into ~13 tasks. Order matters because of the shared-lib-first rule. Tasks marked `‖` are independent of each other and may execute in parallel under subagent-driven-development. The actual plan with code blocks lives in the next step.
 
-1. `@fina/shared` IAP types + DTOs (productIds, IAPCheckoutBody, IAPRestoreBody, IAPErrorCode).
-2. API env vars + `iap-not-configured` guard.
-3. `iap/pricing-map.ts` + tests.
-4. `iap/apple-client.ts` + tests (JWT signing, status mapping).
-5. `iap/google-client.ts` + tests (service-account auth, status mapping).
-6. `iap/sync-sub.ts` + tests (upsert, status mapping, cross-source 409 helper).
-7. `iap/webhook-verify.ts` + tests (Apple JWS, Google OIDC).
-8. Routes: `/billing/iap/checkout`, `/billing/iap/restore` + integration tests.
-9. Webhook routes: `/webhooks/iap/apple`, `/webhooks/iap/google` + integration tests.
-10. Mobile: `react-native-iap` install + config plugin, `src/iap/client.ts`, `src/api/billing.ts` IAP methods.
-11. Mobile UI: `/plan` picker, `/plan/restore`, More tab Restore row.
-12. End-to-end smoke (sandbox) — checklist in plan, not code.
+1. **`@fina/shared` additions** — `iap/productIds.ts`, `schemas/iap.ts` (IAPCheckoutBody, IAPRestoreBody), append IAP codes to `errors.ts` (`ApiErrorCode` union). Update existing `buildMeBody` precedence rules type-side if needed.
+2. **Prisma migration** — add `User.iapAppleAccountToken` (unique) + `User.iapGoogleObfuscatedId` (unique). Single migration, no data backfill needed.
+3. **API env vars + redact config** — extend `env.ts` with all `APPLE_*` / `GOOGLE_*` vars, accept base64 `GOOGLE_SERVICE_ACCOUNT_JSON`, boot-time shape validation, Pino redact rules. `iap_not_configured` 503 guard helper.
+4. **`apps/api/src/iap/apple-client.ts` + tests** ‖ — JWT signing, ASC API calls, JWS verification (six checks: alg, SPKI-pinned root, bundleId, environment, signedDate, appAccountToken), status mapping, Family Sharing subtype handling. APPLE_ENV → URL routing.
+5. **`apps/api/src/iap/google-client.ts` + tests** ‖ — service-account auth, `subscriptionsv2.get`, `subscriptionsv2.acknowledge`, `linkedPurchaseToken` chain rewrite, status mapping (including ON_HOLD product decision, CANCELED+expiryTime check, intro-offer fail-closed).
+6. **`apps/api/src/iap/webhook-verify.ts` + tests** — Apple ASSN JWS verification harness (reuses #4's checks), Google OIDC verification (audience + issuer + email + azp + exp + Pub/Sub subscription name).
+7. **`apps/api/src/iap/sync-sub.ts` + tests** — `syncSubscriptionFromIAP({platform, productId, receipt, userId, expectedAppAccountToken, expectedObfuscatedAccountId})`. Tier from verified-transaction productId only. Mandatory token match check. On first success, writes the `User.iap*` binding column. Returns upserted row.
+8. **`buildMeBody` precedence fix** ‖ — update `apps/api/src/routes/billing.ts:36-37` to use `(tier, source, createdAt)` ordering. Unit test multi-active scenarios.
+9. **Routes: `/billing/iap/checkout`, `/billing/iap/restore`** ‖ — integration tests cover 409 (Stripe+IAP cross-source), 403 (token mismatch), restore partial success, `product_mismatch` 400, mandatory acknowledge on Google (integration test asserts it runs).
+10. **Webhook routes: `/webhooks/iap/apple`, `/webhooks/iap/google`** ‖ — scoped raw-body parser. Integration tests cover: signature happy/sad, dedup, two-step userId resolution (Subscription → User binding → 500), Android resubscribe-after-expiry path, Family Sharing notification ignored.
+11. **Mobile: `react-native-iap` install + config plugin** — `apps/mobile/src/iap/client.ts`, `apps/mobile/src/api/billing.ts`. Deterministic `appAccountToken` / `obfuscatedAccountId` derivation. `IAP_NAMESPACE` constant lives in `@fina/shared/iap`. Document Expo Go limitation in repo CLAUDE.md.
+12. **Mobile UI** — `/plan` picker (with empty-state fallback + Restore button), `/plan/restore` screen, More tab Restore row (gated on `billingOwnedByMobile`), updated Manage Billing deep-link with current-product sku derivation.
+13. **End-to-end sandbox smoke** — manual checklist (in plan, not code). Covers all four launch gates in §11.
