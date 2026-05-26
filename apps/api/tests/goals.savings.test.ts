@@ -251,10 +251,13 @@ describe("computeGoalSavings", () => {
       periodStart: firstOfMonth(2026, 5),
       capsByCategoryId: { [catId]: 100 },
     });
-    // No spending — savings = full prorated cap
+    // No spending — savings = full prorated cap.
+    // Production: 100 * 16.5/31 = 53.2258... → Math.round * 100 / 100 = 53.23.
+    // `toBeCloseTo(N, 2)` instead of `toBe(N)` tolerates rounding-policy refactors
+    // (e.g., banker's rounding, Math.floor) within ±0.005.
     vi.setSystemTime(TODAY);
     const r = await computeGoalSavings(wsId, goalId);
-    expect(r).toBe(53.23);
+    expect(r).toBeCloseTo(53.23, 2);
   });
 
   it("createdAt in current month (June 1) → only June in months range → skipped → 0", async () => {
@@ -385,7 +388,8 @@ describe("computeGoalSavings", () => {
     });
     vi.setSystemTime(TODAY);
     // savings = 100 - 33.33 = 66.67. A takes min(66.67, 20) = 20. Remaining 46.67. B last absorbs 46.67.
-    expect(await computeGoalSavings(wsId, goalA)).toBe(20);
-    expect(await computeGoalSavings(wsId, goalB)).toBe(46.67);
+    // `toBeCloseTo(N, 2)` for B because IEEE 754 of (100 - 33.33 - 20) yields 46.67000000000002.
+    expect(await computeGoalSavings(wsId, goalA)).toBe(20);  // integer — toBe safe
+    expect(await computeGoalSavings(wsId, goalB)).toBeCloseTo(46.67, 2);
   });
 });

@@ -55,17 +55,19 @@ describe("POST /workspaces/:id/transactions/manual — push integration", () => 
 
     await drainFireAndForget();
 
+    // Per-arg assertions (vs. whole-tuple `toEqual([...])`) — tolerant of future
+    // helper signature changes that add a 3rd positional arg (e.g., requestId).
     const calls = vi.mocked(anomalyMod.checkLargeChargeAndPush).mock.calls;
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual([
-      env,
+    expect(calls[0]?.[0]).toBe(env);
+    expect(calls[0]?.[1]).toEqual(
       expect.objectContaining({
         transactionId: expect.any(String),
         workspaceId: wsId,
         amount: 30,
         merchant: expect.any(String),
       }),
-    ]);
+    );
 
     await app.close();
   });
@@ -87,8 +89,8 @@ describe("POST /workspaces/:id/transactions/manual — push integration", () => 
 
     const calls = vi.mocked(addedMod.notifyTransactionAdded).mock.calls;
     expect(calls).toHaveLength(1);
-    expect(calls[0]).toEqual([
-      env,
+    expect(calls[0]?.[0]).toBe(env);
+    expect(calls[0]?.[1]).toEqual(
       expect.objectContaining({
         workspaceId: wsId,
         merchant: expect.any(String),
@@ -96,7 +98,7 @@ describe("POST /workspaces/:id/transactions/manual — push integration", () => 
         categoryName: null,
         excludeUserId: owner.userId,
       }),
-    ]);
+    );
 
     await app.close();
   });
