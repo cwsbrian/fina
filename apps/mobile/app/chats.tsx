@@ -131,7 +131,7 @@ export default function Chats() {
               <Pressable
                 style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
                 onPress={() =>
-                  router.replace({
+                  router.push({
                     pathname: "/(tabs)/chat",
                     params: { thread: item.id },
                   } as never)
