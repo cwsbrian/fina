@@ -17,7 +17,6 @@
 ## File structure
 
 **Create:**
-- `apps/api/src/routes/chat-read.ts` — new `POST /chat/threads/:id/read` route (separate file for clean ownership)
 - `apps/mobile/app/categorize/inbox.tsx` — Categorize Inbox screen
 - `apps/mobile/app/workspace/incoming.tsx` — Pending invites screen
 - `apps/mobile/src/home/ActionItemCard.tsx` — reusable Home action item card
@@ -32,12 +31,12 @@
 - `libs/shared/src/dto/chat.ts` — add `lastReadAt` + `unreadCount` to ChatThreadDTO (or wherever the listing response shape lives — check existing first)
 - `apps/api/prisma/schema.prisma` — `ChatThread.lastReadAt` column
 - `apps/api/prisma/migrations/<ts>_chat_thread_lastreadat/migration.sql` — raw SQL ADD COLUMN
-- `apps/api/src/routes/chat.ts` — extend `GET /chat/threads` to include `unreadCount` via single GROUP BY query
-- `apps/api/src/routes/transactions.ts` — add `needsReview: BoolFlag` to `QuerySchema` + apply filter; add `POST /workspaces/:id/transactions/:txId/dismiss-category` route
-- `apps/api/src/routes/index.ts` (or wherever routes are registered) — register the new `chat-read` route
+- `apps/api/src/routes/chat.ts` — (a) add `POST /chat/threads/:tid/read` handler (b) extend local `serializeThread` (line 18) with `lastReadAt` (c) extend `GET /chat/threads` to include `unreadCount` via single GROUP BY query
+- `apps/api/src/routes/transactions.ts` — add `needsReview: BoolFlag` to `QuerySchema` + apply filter in the existing IIFE at line 142-149; add `POST /workspaces/:id/transactions/:txId/dismiss-category` route
+- `apps/api/src/telemetry/categorize.ts` — extend `emitCategorizeConfirmed` action union with `"dismiss-auto"`
 - `apps/mobile/app/(tabs)/index.tsx` — full Home redesign
 - `apps/mobile/app/(tabs)/more.tsx` — add "Review queue" row in AI group
-- `apps/mobile/app/chat/[tid].tsx` (or equivalent thread-detail screen) — call `POST /read` on mount
+- `apps/mobile/app/(tabs)/chat.tsx` — call `POST /chat/threads/:tid/read` when `params.thread` becomes set (existing single-file chat tab with `useLocalSearchParams<{ thread?: string }>`)
 
 **Test:**
 - `apps/api/tests/chat.read.test.ts` — POST /read endpoint
@@ -148,10 +147,10 @@ git commit -m "feat(db): ChatThread.lastReadAt nullable column"
 
 ---
 
-## Task 3: Backend — `POST /chat/threads/:id/read`
+## Task 3: Backend — `POST /chat/threads/:tid/read`
 
 **Files:**
-- Modify: `apps/api/src/routes/chat.ts` (add a new handler near existing chat routes; do NOT create a separate file — the existing routes/chat.ts is the canonical home)
+- Modify: `apps/api/src/routes/chat.ts` (add handler to existing file — no new file)
 - Create: `apps/api/tests/chat.read.test.ts`
 
 - [ ] **Step 1: Read existing `apps/api/src/routes/chat.ts` to find the right insertion point**
@@ -306,15 +305,34 @@ Then extend the response mapping:
       };
 ```
 
-- [ ] **Step 2: Ensure `serializeThread` exposes `lastReadAt`**
+- [ ] **Step 2: Extend `serializeThread` to expose `lastReadAt`**
 
-Find `serializeThread` (likely in `apps/api/src/chat/threads.ts` or near it via grep). It should produce the ISO string. Add:
+`serializeThread` is a local function in `apps/api/src/routes/chat.ts:18`. Its input type has explicit fields; both type and body need updating.
+
+Replace the existing function:
 
 ```ts
-    lastReadAt: t.lastReadAt ? t.lastReadAt.toISOString() : null,
+function serializeThread(t: {
+  id: string; userId: string; workspaceId: string | null; title: string | null;
+  lastMessageAt: Date | null; archivedAt: Date | null;
+  createdAt: Date; updatedAt: Date;
+  lastReadAt: Date | null;
+}) {
+  return {
+    id: t.id,
+    userId: t.userId,
+    workspaceId: t.workspaceId,
+    title: t.title,
+    lastMessageAt: t.lastMessageAt?.toISOString() ?? null,
+    archivedAt: t.archivedAt?.toISOString() ?? null,
+    createdAt: t.createdAt.toISOString(),
+    updatedAt: t.updatedAt.toISOString(),
+    lastReadAt: t.lastReadAt?.toISOString() ?? null,
+  };
+}
 ```
 
-(If `serializeThread` already destructures all fields and a passthrough, this may be a no-op — read first.)
+Prisma's `ChatThread` model (after Task 2 migration) automatically includes `lastReadAt` in `findMany` results, so no callsite changes needed beyond this serializer update.
 
 - [ ] **Step 3: Tests**
 
@@ -420,9 +438,25 @@ git commit -m "feat(api): GET /chat/threads returns unreadCount + lastReadAt"
 - Modify: `apps/api/src/routes/transactions.ts`
 - Create: `apps/api/tests/transactions.dismiss-category.test.ts`
 
-- [ ] **Step 1: Add handler in `routes/transactions.ts`**
+- [ ] **Step 1: Extend telemetry action union in `apps/api/src/telemetry/categorize.ts`**
 
-Place right after `POST /snooze-category` (the categorize-overhaul-added one). Pattern mirrors `snooze-category` but writes a different field:
+Current `emitCategorizeConfirmed` accepts `action: "confirm" | "edit" | "snooze"`. Add `"dismiss-auto"`:
+
+```ts
+export function emitCategorizeConfirmed(args: {
+  workspaceId: string;
+  source: "mapping" | "history" | "ai" | "manual";
+  action: "confirm" | "edit" | "snooze" | "dismiss-auto";
+}) {
+  logInfo({ event: "categorize.confirmed", ...args }, "categorize.confirmed");
+}
+```
+
+(Spec mentions `skip-client` as a v2 client-side telemetry — no backend wiring needed for v1.)
+
+- [ ] **Step 2: Add handler in `routes/transactions.ts`**
+
+Place right after `POST /snooze-category` (the categorize-overhaul-added one). Pattern mirrors `snooze-category` but writes a different field + emits dismiss-auto telemetry:
 
 ```ts
   app.post<{ Params: { id: string; txId: string } }>(
@@ -442,10 +476,24 @@ Place right after `POST /snooze-category` (the categorize-overhaul-added one). P
         where: { transactionId: tx.id },
         data: { needsConfirmation: false },
       });
+
+      emitCategorizeConfirmed({
+        workspaceId: ctx.membership.workspaceId,
+        source: "ai", // approximation — actual source may vary, snooze pattern
+        action: "dismiss-auto",
+      });
       return reply.code(200).send({ ok: true });
     },
   );
 ```
+
+Make sure `emitCategorizeConfirmed` is imported at the top:
+
+```ts
+import { emitCategorizeConfirmed } from "../telemetry/categorize.js";
+```
+
+(Likely already imported from previous categorize work.)
 
 `dismissedUntil` is NOT touched — semantically different from `snooze-category`.
 
@@ -546,11 +594,25 @@ In `apps/api/src/routes/transactions.ts`, find the `QuerySchema = z.object({ ...
 
 (Use the existing `BoolFlag` enum defined at line 28-32 — handles "true"/"false" strings correctly.)
 
-- [ ] **Step 2: Apply filter in the GET handler**
+- [ ] **Step 2: Apply filter in the GET handler IIFE at line 142-149**
 
-Find the `GET /workspaces/:id/transactions` handler. Locate where the Prisma `where` clause is constructed for the list query (look for `uncategorizedOnly` and `categoryId` handling). Add a sibling branch:
+The handler composes its `where` via an inline IIFE. Current code (line 142-149 of `apps/api/src/routes/transactions.ts`):
 
 ```ts
+        ...(() => {
+          if (q.uncategorizedOnly && q.categoryId) {
+            return { allocations: { some: { OR: [{ categoryId: null }, { categoryId: q.categoryId }] } } };
+          }
+          if (q.uncategorizedOnly) return { allocations: { some: { categoryId: null } } };
+          if (q.categoryId)        return { allocations: { some: { categoryId: q.categoryId } } };
+          return {};
+        })(),
+```
+
+Replace with (add the `needsReview` branch first — it's the most restrictive filter):
+
+```ts
+        ...(() => {
           if (q.needsReview) {
             return {
               allocations: {
@@ -565,9 +627,16 @@ Find the `GET /workspaces/:id/transactions` handler. Locate where the Prisma `wh
               },
             };
           }
+          if (q.uncategorizedOnly && q.categoryId) {
+            return { allocations: { some: { OR: [{ categoryId: null }, { categoryId: q.categoryId }] } } };
+          }
+          if (q.uncategorizedOnly) return { allocations: { some: { categoryId: null } } };
+          if (q.categoryId)        return { allocations: { some: { categoryId: q.categoryId } } };
+          return {};
+        })(),
 ```
 
-(The exact integration point depends on how the handler composes its `where` — look for the function that maps `uncategorizedOnly` to a where fragment and add `needsReview` to the same `if/else` chain. The query schema currently has `uncategorizedOnly` and `categoryId` as alternatives; treat `needsReview` as another alternative.)
+`needsReview` is an alternative to (not combinable with) the other filters; precedence is fine because UI screens that use `needsReview` don't pass `categoryId`/`uncategorizedOnly` together.
 
 - [ ] **Step 3: Tests**
 
@@ -880,56 +949,53 @@ import { ActionItemCard } from "../../src/home/ActionItemCard";
 import { SpendCard } from "../../src/home/SpendCard";
 ```
 
-- [ ] **Step 3: Replace the existing single-effect fetcher with parallel Promise.all**
+- [ ] **Step 3: Replace the existing single-effect fetcher with a `load()` callback + parallel Promise.all**
 
-Replace the `useEffect` body with:
+Wrap fetch logic in a `load` callback so the retry button (Step 5) can re-trigger it:
 
 ```tsx
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const wsId = await bootstrapActiveWorkspace();
-        const meData = await apiFetch<Me>("/me");
-        if (cancelled) return;
-        setMe(meData);
-        if (!wsId) return;
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const wsId = await bootstrapActiveWorkspace();
+      const meData = await apiFetch<Me>("/me");
+      setMe(meData);
+      if (!wsId) return;
 
-        // Each result is independently swallowed so one failure doesn't
-        // collapse the whole Home.
-        await Promise.all([
-          apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
-            .then((r) => !cancelled && setPlaidItems(r.plaidItems))
-            .catch(() => !cancelled && setPlaidItems([])),
-          apiFetch<{ transactions: unknown[] }>(`/workspaces/${wsId}/transactions?needsReview=true&limit=1`)
-            .then((r) => !cancelled && setNeedsReviewCount(r.transactions.length))
-            .catch(() => !cancelled && setNeedsReviewCount(0)),
-          apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
-            .then((r) => !cancelled && setPendingInvites(r.invites.length))
-            .catch(() => !cancelled && setPendingInvites(0)),
-          apiFetch<{ threads: Array<{ unreadCount: number }> }>("/chat/threads")
-            .then((r) => !cancelled && setUnreadFina(r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0)))
-            .catch(() => !cancelled && setUnreadFina(0)),
-          apiFetch<{ plan: unknown; totalSpent: string }>(`/workspaces/${wsId}/budget-plans/current`)
-            .then((r) => !cancelled && setBudgetCurrent({ plan: r.plan, totalSpent: r.totalSpent }))
-            .catch(() => !cancelled && setBudgetCurrent({ plan: null, totalSpent: "0.00" })),
-          apiFetch<{ goals: unknown[] }>(`/workspaces/${wsId}/goals`)
-            .then((r) => !cancelled && setHasGoal(r.goals.length > 0))
-            .catch(() => !cancelled && setHasGoal(false)),
-        ]);
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => { cancelled = true; };
+      // Each result is independently swallowed so one failure doesn't
+      // collapse the whole Home.
+      await Promise.all([
+        apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
+          .then((r) => setPlaidItems(r.plaidItems))
+          .catch(() => setPlaidItems([])),
+        apiFetch<{ transactions: unknown[] }>(`/workspaces/${wsId}/transactions?needsReview=true&limit=50`)
+          .then((r) => setNeedsReviewCount(r.transactions.length))
+          .catch(() => setNeedsReviewCount(0)),
+        apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
+          .then((r) => setPendingInvites(r.invites.length))
+          .catch(() => setPendingInvites(0)),
+        apiFetch<{ threads: Array<{ unreadCount: number }> }>("/chat/threads")
+          .then((r) => setUnreadFina(r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0)))
+          .catch(() => setUnreadFina(0)),
+        apiFetch<{ plan: { totalAmount?: number; categoryAllocations?: Array<{ amount: number }> } | null; totalSpent: string }>(`/workspaces/${wsId}/budget-plans/current`)
+          .then((r) => setBudgetCurrent({ plan: r.plan, totalSpent: r.totalSpent }))
+          .catch(() => setBudgetCurrent({ plan: null, totalSpent: "0.00" })),
+        apiFetch<{ goals: unknown[] }>(`/workspaces/${wsId}/goals`)
+          .then((r) => setHasGoal(r.goals.length > 0))
+          .catch(() => setHasGoal(false)),
+      ]);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 ```
 
-Goal endpoint may differ — check `apps/api/src/routes/goals.ts` for the exact list endpoint. Replace `r.goals` with the actual response field name.
-
-Note: `needsReviewCount` here uses `transactions.length` of a `limit=1` response, which gives at-most-1 ("any" boolean). For a real count, query without limit and use length, or expose a count field. v1 OK as boolean (since the card just says "Confirm N" — fetch the count up to 50 and display the actual length).
-
-Refinement: change to `limit=50` so we can show actual count in the card up to 50; "50+" displayed if length===50.
+Verified shapes:
+- `/budget-plans/current` returns `{ plan, totalSpent }` where `plan` shape is `{ totalAmount: number, categoryAllocations?: [{ categoryId, amount }] }` or `null` (see `apps/api/src/routes/budget-plans.ts:105` + service.ts plan body).
+- `/goals` returns `{ goals: GoalDTO[] }` — check `apps/api/src/routes/goals.ts` for the response shape if needed; `r.goals.length > 0` is the existence check.
+- `/transactions?needsReview=true&limit=50` — display "50+" if length===50, otherwise show the actual length.
 
 - [ ] **Step 4: Build the action items list**
 
@@ -1016,9 +1082,30 @@ After the state setup, derive cards:
   }
 ```
 
-- [ ] **Step 5: Replace the existing `checklist.map` with the new render**
+- [ ] **Step 5: Replace the existing `checklist.map` with the new render + add `/me` failure retry UI**
+
+When `err` is set AND `me` is null, show retry button instead of collapsed page:
 
 ```tsx
+        {!me && err && (
+          <View style={styles.errCard}>
+            <Text style={styles.errTitle}>Couldn't reach Fina</Text>
+            <Text style={styles.errBody}>{err}</Text>
+            <Pressable
+              style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.7 }]}
+              onPress={() => load()}
+            >
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {!me && !err && (
+          <View style={{ paddingVertical: space.xxl }}>
+            <ActivityIndicator color={colors.primary} />
+          </View>
+        )}
+
         {me && (
           <>
             {actionItems.length > 0 && (
@@ -1047,22 +1134,35 @@ After the state setup, derive cards:
         )}
 ```
 
-The `computeBudgetCap` helper extracts the plan's total cap; add it as a local function:
+Add the retry button styles to the existing `StyleSheet.create({ ... })`:
 
 ```ts
-function computeBudgetCap(plan: unknown): string | null {
-  if (!plan || typeof plan !== "object") return null;
-  const p = plan as { categories?: Array<{ amount?: string }>; totalAmount?: string };
-  if (typeof p.totalAmount === "string") return p.totalAmount;
-  if (Array.isArray(p.categories)) {
-    const sum = p.categories.reduce((s, c) => s + Number(c.amount ?? 0), 0);
+  retryBtn: {
+    marginTop: space.sm,
+    paddingHorizontal: space.base,
+    paddingVertical: space.sm,
+    borderRadius: 10,
+    backgroundColor: colors.primary,
+    alignSelf: "flex-start",
+  },
+  retryBtnText: { ...type$.bodySm, color: colors.onPrimary, fontWeight: "600" },
+```
+
+The `computeBudgetCap` helper extracts the plan's total cap. The plan shape (verified from `apps/api/src/routes/budget-plans.ts:28-29` schema and the `current` endpoint) is `{ totalAmount: number, categoryAllocations?: Array<{ categoryId: string, amount: number }> }` or `null`. Add as a local function in this file:
+
+```ts
+function computeBudgetCap(
+  plan: { totalAmount?: number; categoryAllocations?: Array<{ amount: number }> } | null,
+): string | null {
+  if (!plan) return null;
+  if (typeof plan.totalAmount === "number") return plan.totalAmount.toFixed(2);
+  if (Array.isArray(plan.categoryAllocations)) {
+    const sum = plan.categoryAllocations.reduce((s, c) => s + Number(c.amount ?? 0), 0);
     return sum > 0 ? sum.toFixed(2) : null;
   }
   return null;
 }
 ```
-
-Verify the actual shape of `plan` by reading `apps/api/src/routes/budget-plans.ts` and `apps/api/src/budgets/service.ts`. Adapt `computeBudgetCap` to match.
 
 - [ ] **Step 6: Typecheck + manual sanity**
 
@@ -1361,29 +1461,16 @@ useEffect(() => {
     try {
       const wsId = await getActiveWorkspaceId();
       if (!wsId) return;
-      const r = await apiFetch<{ transactions: unknown[] }>(`/workspaces/${wsId}/transactions?needsReview=true&limit=1`);
-      setNeedsReviewCount(r.transactions.length); // 0 or 1 (limit=1)
+      const r = await apiFetch<{ transactions: unknown[] }>(
+        `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
+      );
+      setNeedsReviewCount(r.transactions.length);
     } catch {
       // Non-fatal — Review queue row falls back to no count.
     }
   })();
 }, []);
 
-function reviewQueueDetail(n: number): string {
-  if (n === 0) return "0";
-  if (n === 1) return "1+";
-  return "";
-}
-```
-
-Use a `limit=1` since More tab only needs "any pending?" signal. For accurate count up to 50, change to `limit=50` and use `r.transactions.length`. For initial implementation `limit=1` + "1+" suffix is fine.
-
-Better: use `limit=50` and show actual count.
-
-```ts
-const r = await apiFetch<{ transactions: unknown[] }>(`/workspaces/${wsId}/transactions?needsReview=true&limit=50`);
-setNeedsReviewCount(r.transactions.length);
-// ...
 function reviewQueueDetail(n: number): string {
   if (n === 0) return "0";
   if (n >= 50) return "50+";
@@ -1536,41 +1623,33 @@ git commit -m "feat(mobile): /workspace/incoming pending invites screen"
 ## Task 13: Mobile — mark chat thread as read on view
 
 **Files:**
-- Modify: the chat thread detail screen — locate via `find apps/mobile/app/chat -type f -name "*.tsx"`
+- Modify: `apps/mobile/app/(tabs)/chat.tsx` (verified location — uses `useLocalSearchParams<{ thread?: string }>()` at line 17)
 
-- [ ] **Step 1: Locate the thread detail screen**
+- [ ] **Step 1: Add mark-read effect**
 
-```bash
-find apps/mobile/app -type d -name "chat" -not -path "*/node_modules/*"
-ls apps/mobile/app/chat/ 2>/dev/null
-ls apps/mobile/app/\(tabs\)/chat* 2>/dev/null
-```
-
-Find where the user opens a specific chat thread. Likely at `apps/mobile/app/chat/[tid].tsx` or similar.
-
-- [ ] **Step 2: Add mark-read effect**
-
-In the thread detail screen, add an effect that fires once when the thread mounts and the data is loaded:
+In `apps/mobile/app/(tabs)/chat.tsx`, find the existing `useLocalSearchParams<{ thread?: string }>()` block. The `params.thread` is the active thread id. Add an effect that fires when a thread becomes selected:
 
 ```tsx
-import { useEffect } from "react";
-// ...inside the component...
+import { useEffect } from "react"; // confirm already imported; if not, add to existing imports
+// ...inside the component, after params is destructured...
 useEffect(() => {
-  if (!threadId) return;
-  apiFetch(`/chat/threads/${threadId}/read`, { method: "POST" }).catch(() => {
+  if (!params.thread) return;
+  apiFetch(`/chat/threads/${params.thread}/read`, { method: "POST" }).catch(() => {
     // swallow — read mark is best-effort
   });
-}, [threadId]);
+}, [params.thread]);
 ```
 
-- [ ] **Step 3: Typecheck + commit**
+Confirm `apiFetch` is already imported in this file (likely yes via existing chat API calls). If not, add: `import { apiFetch } from "../../src/api/client";`.
+
+- [ ] **Step 2: Typecheck + commit**
 
 ```bash
 pnpm typecheck
 ```
 
 ```bash
-git add apps/mobile/app/chat
+git add apps/mobile/app/\(tabs\)/chat.tsx
 git commit -m "feat(mobile): mark chat thread as read on view"
 ```
 
