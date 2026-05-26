@@ -4363,7 +4363,7 @@ git commit -m "feat(api): writeAccountDeletionTombstones helper + future-impl ru
 - §12.2 account merge: documented in spec, no code task (manual support v1).
 - §12.3 webhook trust chain: implemented in Task 10's omission of `expectedAppAccountToken` on the webhook path.
 
-**Placeholder scan:** No "TBD"/"TODO"/"similar to" markers. One known gap acknowledged inline: the Apple G3 root cert PEM is a placeholder `<<<APPLE_WWDR_G3_ROOT_PEM_HERE>>>` in Task 4 Step 4.6 — implementer drops in the real PEM at install time (downloadable from Apple's certificate authority page).
+**Placeholder scan:** No "TBD"/"TODO"/"similar to" markers in the code blocks. One install-time gap intentionally surfaced as a fail-fast: `apple-roots.ts` (Task 4 Step 4.6b) ships with a literal placeholder marker `<<<INSTALLER: paste the real Apple Inc. Root CA G3 PEM here.>>>` and the matching `EXPECTED_APPLE_ROOT_SPKI_SHA256` constant set to `"<INSTALLER_FILL_64_HEX_CHARS>"`. `validateAppleRoots()` runs at module load and throws a clear error pointing at this file until the installer drops in the real PEM + SHA-256. The Task 4.6c test (`apple-roots.test.ts`) also fails until both are populated — by design, so no later task can land while the cert is still a placeholder.
 
 **Type consistency:** `syncSubscriptionFromIAP(cfg, args, deps)` signature is identical across Task 7 definition, Task 9 callers, Task 10 callers. `IapDeletedBinding` model fields match across Task 2 (schema) and Task 10 (read). `deriveAppleToken` / `deriveGoogleToken` signatures match between API (Task 7) and mobile (Task 11). `MeDTO` shape unchanged.
 
