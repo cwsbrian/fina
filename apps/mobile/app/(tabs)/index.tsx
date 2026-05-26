@@ -382,7 +382,7 @@ export default function Home() {
 
             {/* Review queue card — categorize alert (action item) */}
             {needsReviewCount > 0 && (
-              <View style={{ marginTop: space.lg }}>
+              <View style={{ marginTop: space.base }}>
                 <ActionItemCard
                   icon="construct-outline"
                   title={`Confirm ${needsReviewCount >= 50 ? "50+" : needsReviewCount} categorization${needsReviewCount === 1 ? "" : "s"}`}
@@ -482,7 +482,12 @@ export default function Home() {
                 <View style={styles.glanceGrid}>
                   <View style={styles.glanceCard}>
                     <Text style={styles.glanceLabel}>Income</Text>
-                    <Text style={[styles.glanceValue, { color: colors.up }]}>
+                    <Text
+                      style={[styles.glanceValue, { color: colors.up }]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.6}
+                    >
                       {analysis.income > 0
                         ? `+${formatMoney(analysis.income.toFixed(2), CURRENCY).display}`
                         : formatMoney("0.00", CURRENCY).display}
@@ -496,6 +501,9 @@ export default function Home() {
                         analysis.net < 0 && { color: colors.down },
                         analysis.net > 0 && { color: colors.up },
                       ]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.6}
                     >
                       {analysis.net >= 0 ? "+" : "−"}
                       {formatMoney(Math.abs(analysis.net).toFixed(2), CURRENCY).display}
@@ -920,7 +928,7 @@ const styles = StyleSheet.create({
   },
   glanceLabel: { ...type$.captionStrong, color: colors.muted, textTransform: "uppercase" },
   glanceValue: {
-    ...type$.titleLg,
+    ...type$.titleMd,
     color: colors.ink,
     marginTop: 4,
     fontVariant: ["tabular-nums"],
