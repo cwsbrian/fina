@@ -384,3 +384,71 @@ describe("channel gate (notificationPrefs)", () => {
     });
   });
 });
+
+describe("sendTransactionAddedPush payload shape", () => {
+  it("title='$merchant · $$amount', body='New transaction · category', dataType='transaction-added'", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-ta-1" }]);
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[ta-payload-1]", platform: "ios" },
+    ]);
+
+    const { sendTransactionAddedPush } = await import("../src/push/send.js");
+    await sendTransactionAddedPush(testEnv(), u.id, "Starbucks", "5.50", "Coffee");
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    const calls = spy.mock.calls;
+    const firstCall = calls[0]!;
+    const chunk = firstCall[0] as Array<Record<string, unknown>>;
+    expect(chunk).toHaveLength(1);
+    const msg = chunk[0]!;
+    expect(msg).toEqual(expect.objectContaining({
+      title: "Starbucks · $5.50",
+      body: "New transaction · Coffee",
+      data: { type: "transaction-added" },
+    }));
+  });
+
+  it("categoryName=null → body='New transaction' (no category suffix)", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-ta-2" }]);
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[ta-payload-2]", platform: "ios" },
+    ]);
+
+    const { sendTransactionAddedPush } = await import("../src/push/send.js");
+    await sendTransactionAddedPush(testEnv(), u.id, "Anon Shop", "1.00", null);
+
+    const calls = spy.mock.calls;
+    const firstCall = calls[0]!;
+    const chunk = firstCall[0] as Array<Record<string, unknown>>;
+    const msg = chunk[0]!;
+    expect(msg).toEqual(expect.objectContaining({
+      title: "Anon Shop · $1.00",
+      body: "New transaction",
+    }));
+  });
+
+  it("priority='high', sound='default' (regression guard against payload defaults change)", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-ta-3" }]);
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[ta-payload-3]", platform: "ios" },
+    ]);
+
+    const { sendTransactionAddedPush } = await import("../src/push/send.js");
+    await sendTransactionAddedPush(testEnv(), u.id, "Test", "1.00", null);
+
+    const calls = spy.mock.calls;
+    const firstCall = calls[0]!;
+    const chunk = firstCall[0] as Array<Record<string, unknown>>;
+    const msg = chunk[0]!;
+    expect(msg).toEqual(expect.objectContaining({
+      priority: "high",
+      sound: "default",
+    }));
+  });
+});
