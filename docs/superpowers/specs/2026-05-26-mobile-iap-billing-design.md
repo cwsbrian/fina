@@ -201,32 +201,43 @@ Apple App Store Server API → `SubscriptionStatus`:
 | ASSN/ASS API state | Our enum |
 |---|---|
 | `SUBSCRIBED` (no `expires_date` in past) | `active` |
-| `SUBSCRIBED` + trial period | `trialing` |
+| `SUBSCRIBED` + trial period OR `offerType=1` (introductory) | `trialing` |
 | `BILLING_RETRY` / grace period | `past_due` |
 | `EXPIRED` (voluntary or involuntary) | `canceled` |
 | `REVOKED` (refunded) | `canceled` |
 | `PAUSED` | `paused` |
 
+If `signedRenewalInfo.offerType != null` and we don't recognize it (future Apple addition), fail closed: treat as `trialing` rather than `active` so we never grant paid entitlement based on an unrecognized offer.
+
 Google `SubscriptionPurchaseV2.subscriptionState`:
 | Google state | Our enum |
 |---|---|
 | `SUBSCRIPTION_STATE_ACTIVE` | `active` |
-| `SUBSCRIPTION_STATE_IN_GRACE_PERIOD` | `past_due` |
-| `SUBSCRIPTION_STATE_ON_HOLD` | `past_due` |
+| `SUBSCRIPTION_STATE_ACTIVE` + `lineItems[].offerDetails.basePlanId` indicates intro/trial | `trialing` |
+| `SUBSCRIPTION_STATE_IN_GRACE_PERIOD` | `past_due` (entitlement retained, ≤14d) |
+| `SUBSCRIPTION_STATE_ON_HOLD` | `past_due` (entitlement retained, ≤30d) — see product decision below |
 | `SUBSCRIPTION_STATE_PAUSED` | `paused` |
 | `SUBSCRIPTION_STATE_EXPIRED` | `canceled` |
-| `SUBSCRIPTION_STATE_CANCELED` (still in current period) | `active` + `cancelAtPeriodEnd = true` |
+| `SUBSCRIPTION_STATE_CANCELED` AND `expiryTime > now` | `active` + `cancelAtPeriodEnd = true` |
+| `SUBSCRIPTION_STATE_CANCELED` AND `expiryTime <= now` | `canceled` (late-arriving event, period already over) |
 | `SUBSCRIPTION_STATE_PENDING` | `incomplete` |
+
+**Product decision (documented):** We honor entitlement for the entire Play `ON_HOLD` window (up to 30 days) and the full Apple `BILLING_RETRY` window. Rationale: Stripe's `past_due` Smart Retries treats users as active during retry, so source parity. If retention data shows abuse, we'll flip `ON_HOLD → unpaid` in v1.5 and revoke immediately.
 
 `currentPeriodEnd`:
 - Apple: `signedRenewalInfo.expiresDate` (ms epoch).
 - Google: `lineItems[0].expiryTime` (ISO timestamp).
 
-`pendingTier` / `pendingTierAt`: IAP v1 doesn't expose tier changes the way Stripe Subscription Schedules do (users cancel + buy a new product). Always `null` for `source !== "stripe"`.
+`pendingTier` / `pendingTierAt`:
+- IAP v1 product choice: we don't offer in-app tier changes (user must cancel + re-purchase). Always `null` for `source !== "stripe"`.
+- This is a product choice, NOT a platform limitation. Google Play Billing v6+ supports deferred upgrades via `SubscriptionUpdateParams` with `DEFERRED` replacement mode (the v2 response surfaces this via `lineItems[]` showing current + upcoming items). Apple expresses upgrade-within-group via `signedRenewalInfo.autoRenewProductId` differing from `signedTransactionInfo.productId`.
+- v1.5 will populate `pendingTier` from both sources when we wire in-app upgrade flows.
 
 `cancelAtPeriodEnd`:
 - Apple: `signedRenewalInfo.autoRenewStatus === 0` AND `subscriptionStatus === SUBSCRIBED`.
-- Google: explicit `subscriptionState === CANCELED`.
+- Google: explicit `subscriptionState === CANCELED` AND `expiryTime > now`.
+
+**`cancellationReason` (NEW column, v1.5):** Apple distinguishes voluntary vs involuntary cancellation via `signedRenewalInfo.expirationIntent` (1=voluntary, 2=billing error, 3=price increase declined, 4=product unavailable). v1 collapses both flavors to `canceled` and loses this distinction. v1.5 will add a nullable `Subscription.cancellationReason` text column to support "your card failed, here's a one-tap return link" emails. **Out of scope for v1**, documented here so the future change is anticipated.
 
 ## 6. Apple-specific contract
 
