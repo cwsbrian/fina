@@ -128,7 +128,7 @@ export default function CategorizeInbox() {
                   <Ionicons name="close" size={16} color={colors.muted} />
                 </Pressable>
                 <View style={styles.rowTop}>
-                  <View style={{ flex: 1, minWidth: 0, marginRight: 28 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
                     <Text style={styles.merchant} numberOfLines={1}>{merchant}</Text>
                     <View style={styles.rowMid}>
                       <Text style={styles.catLabel}>{cat?.name ?? "Uncategorized"}</Text>
@@ -209,19 +209,29 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: space.base,
     marginBottom: space.sm,
+    marginTop: 10,
     gap: 6,
     position: "relative",
+    overflow: "visible",
   },
   dismissCorner: {
     position: "absolute",
-    top: 8,
-    right: 8,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    top: -10,
+    right: -10,
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: colors.canvas,
+    borderWidth: 1,
+    borderColor: colors.hairline,
     alignItems: "center",
     justifyContent: "center",
-    zIndex: 2,
+    zIndex: 3,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 3,
+    elevation: 2,
   },
   rowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   merchant: { ...type$.titleSm, color: colors.ink, flex: 1, marginRight: space.sm },
