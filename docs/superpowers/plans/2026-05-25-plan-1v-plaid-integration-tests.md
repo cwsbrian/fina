@@ -393,7 +393,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 **Files:**
 - Create: `apps/api/tests/cron.scheduled-spend-match.test.ts`
 
-- [ ] **Step 1: Read production**
+- [x] **Step 1: Read production**
 
 Read `apps/api/src/cron/jobs/scheduled-spend-match.ts` (full file, 33 LOC). Note:
 - L13: signature `(_env: Env): Promise<void>` (env unused).
@@ -403,7 +403,7 @@ Read `apps/api/src/cron/jobs/scheduled-spend-match.ts` (full file, 33 LOC). Note
 
 Read `apps/api/src/schedules/match.ts:matchScheduledSpends` signature: `(workspaceId, today) → Promise<{matched, unresolved}>`.
 
-- [ ] **Step 2: Create the test file**
+- [x] **Step 2: Create the test file**
 
 ```ts
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -469,7 +469,7 @@ describe("runScheduledSpendMatch", () => {
 });
 ```
 
-- [ ] **Step 3: Run + typecheck + commit**
+- [x] **Step 3: Run + typecheck + commit**
 
 ```bash
 pnpm --filter @fina/api exec vitest run tests/cron.scheduled-spend-match.test.ts
