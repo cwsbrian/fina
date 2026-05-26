@@ -39,6 +39,14 @@ model User {
 
   categorizationMode CategorizationMode @default(flexible)
 
+  // IAP binding tokens — deterministic per-user identifiers used by
+  // webhook handlers as the fallback path when the Subscription row
+  // doesn't yet exist (first-purchase race, Android resubscribe).
+  // Written on first successful /billing/iap/checkout. Identifiers,
+  // not authenticators — see spec §3.
+  iapAppleAccountToken    String?  @unique
+  iapGoogleObfuscatedId   String?  @unique
+
   /// Per-type push notification preferences. Shape:
   ///   { morningBrief, bankReconnect, workspaceInvites, trialExpiring,
   ///     goalMilestones, largeCharges, productUpdates: boolean }
@@ -699,6 +707,14 @@ model Subscription {
   pendingTier   String?
   pendingTierAt DateTime?
 
+  /// "Production" | "Sandbox" — derived from verified transaction's
+  /// `environment` claim (Apple) or v2 response's sandbox flag (Google).
+  /// Defaults to "Production" for existing Stripe rows. buildMeBody /
+  /// effectiveTier filter out rows where this disagrees with the
+  /// runtime APPLE_ENV / google env to prevent stale sandbox rows
+  /// from granting prod entitlement.
+  environment       String   @default("Production")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -714,6 +730,12 @@ model WebhookEvent {
   source      String
   type        String
   receivedAt  DateTime @default(now())
+
+  /// Optional structured payload for forensic event types
+  /// (unattributable_after_delete / unattributable_giveup / etc.).
+  /// Existing Stripe dedup rows leave this null. PII fields covered
+  /// by Pino redact list (Task 0).
+  body  Json?
 
   @@index([source, type])
   @@map("webhook_events")
@@ -786,4 +808,43 @@ model PushTicket {
 
   @@index([polledAt, sentAt])
   @@map("push_tickets")
+}
+
+/// Tombstone for IAP bindings whose `User` row was deleted. Webhook
+/// handlers consult this to stop retrying notifications for purchases
+/// that will never resolve to a Fina user. Forensic-only — never read
+/// by /me or any user-facing route.
+model IapDeletedBinding {
+  id         String   @id @default(cuid())
+  source     String   // "iap_apple" | "iap_google"
+  /// SHA-256 of the binding token. Hashed so the deleted-user
+  /// identifier is not recoverable from this table.
+  tokenHash  String
+  /// Optional SHA-256 of the original userId for support-replay.
+  userIdHash String?
+  deletedAt  DateTime @default(now())
+
+  @@unique([source, tokenHash])
+  @@index([source])
+  @@map("iap_deleted_bindings")
+}
+
+/// Tracks per-binding-token retry counts for the IAP unattributable-
+/// renewal fallback (spec §5.3 step 4). Distinct from WebhookEvent
+/// (which is keyed on notificationUUID/messageId and is the DEDUP
+/// surface) — Apple's real retries deliver the SAME notificationUUID,
+/// so retry-cap must be keyed on the binding token instead. After
+/// MAX_UNKNOWN_RETRIES (5) the webhook returns 200 with a forensic
+/// WebhookEvent so the store stops retrying.
+model IapRetryCounter {
+  id         String   @id @default(cuid())
+  source     String   // "iap_apple" | "iap_google"
+  /// SHA-256 of the binding token (appAccountToken / obfuscatedExternalAccountId).
+  tokenHash  String
+  attempts   Int      @default(0)
+  firstAt    DateTime @default(now())
+  lastAt     DateTime @default(now())
+
+  @@unique([source, tokenHash])
+  @@map("iap_retry_counters")
 }
