@@ -112,7 +112,7 @@ All new vars optional (z.string().optional()) so dev/test envs without store cre
 ### 5.2 Modules (`apps/api/src/iap/`)
 
 - `apple-client.ts` — Calls App Store Server API `inApps/v1/transactions/{transactionId}` + `inApps/v1/subscriptions/{originalTransactionId}` with JWT auth (JWT signed each call, 5-min expiry, cached). Verifies `signedTransactionInfo` JWS using Apple's root certs.
-- `google-client.ts` — Calls Google Play Developer API `purchases.subscriptionsv2.get(packageName, token)` with service-account auth (googleapis lib). Returns the v2 SubscriptionPurchaseV2 shape.
+- `google-client.ts` — Calls Google Play Developer API `purchases.subscriptionsv2.get(packageName, token)` with service-account auth (googleapis lib). Returns the v2 SubscriptionPurchaseV2 shape. **Also calls `purchases.subscriptionsv2.acknowledge` after every successful upsert when the validated `acknowledgementState === ACKNOWLEDGEMENT_STATE_PENDING`** — Google auto-refunds and revokes the purchase if not acknowledged within 3 days. The call is idempotent so we run it on every sync (initial + webhook). Acknowledge failure is non-fatal (logged + retried on next webhook), but acknowledge MUST run **after** the local upsert lands so we never acknowledge a purchase we couldn't record.
 - `pricing-map.ts` — Maps `productId → tier` from `IAP_PRODUCT_IDS` (single import from @fina/shared).
 - `sync-sub.ts` — Mirror of `apps/api/src/stripe/sync-sub.ts`. Signature: `syncSubscriptionFromIAP(env, args, userId, log)`. Takes either Apple (`{platform: "ios", originalTransactionId}`) or Google (`{platform: "android", productId, purchaseToken}`). Re-fetches from the store, normalizes status (see §5.4), upserts.
 - `webhook-verify.ts` — Apple ASSN V2 JWS verification + Google RTDN OIDC token verification.
@@ -196,7 +196,13 @@ Google `SubscriptionPurchaseV2.subscriptionState`:
 - Mobile uses `obfuscatedAccountId` (Fina userId, hashed via SHA-256 hex, max 64 chars per Google's limit). Server reads it back from `purchases.subscriptionsv2.get` → stores as `sourceCustomerId`.
 - We use Subscriptions v2 (not v1) — single base plan per product for v1.
 - Pub/Sub topic: `projects/{gcp-project}/topics/fina-iap-rtdn`. Configured in Play Console → Monetization setup. Push subscription with OIDC auth → our `/webhooks/iap/google` URL.
-- Service account permissions: `androidpublisher.subscriptions.get` only — least privilege.
+- **Acknowledgment is mandatory.** Every new subscription purchase MUST be acknowledged within 3 days or Google auto-refunds. Our flow:
+  1. Mobile calls `requestSubscription` → receives purchase callback → does NOT call `finishTransaction` yet.
+  2. Mobile POSTs `/billing/iap/checkout` with the purchase token.
+  3. Server validates, upserts `Subscription`, calls `purchases.subscriptionsv2.acknowledge`, returns 2xx.
+  4. Mobile only then calls `react-native-iap.finishTransaction({ isConsumable: false })` (which is a no-op for already-acknowledged subs — the server-side acknowledge already cleared the window).
+  5. Every webhook re-acknowledges if `acknowledgementState === ACKNOWLEDGEMENT_STATE_PENDING` — idempotent safety net.
+- Service account permissions: `androidpublisher.subscriptions.get` **and** `androidpublisher.subscriptions.update` (the latter is required by the acknowledge call — `.get` alone is insufficient).
 
 ## 8. Cross-source guard (Stripe ↔ IAP)
 
@@ -240,7 +246,7 @@ This is a checklist for whoever ships, not a code task:
 
 **Google (Play Console):**
 1. Create subscription products with the same IDs.
-2. Service account (Google Cloud → IAM → Service Accounts) → grant `androidpublisher.subscriptions.get`. Download JSON key.
+2. Service account (Google Cloud → IAM → Service Accounts) → grant `androidpublisher.subscriptions.get` **and** `androidpublisher.subscriptions.update` (acknowledge needs `.update`). Download JSON key.
 3. GCP project → Pub/Sub → create topic `fina-iap-rtdn`, push subscription to `https://api.fina.app/webhooks/iap/google`, OIDC auth with the same service account email.
 4. Play Console → Monetization setup → paste the topic name.
 
