@@ -1,49 +1,52 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   View,
   Text,
+  TextInput,
   Pressable,
   StyleSheet,
   ActivityIndicator,
+  ScrollView,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import type { MeDTO } from "@fina/shared";
-import { apiFetch } from "../../src/api/client";
+import { passwordStrength, meetsPasswordPolicy, MIN_PASSWORD_LENGTH } from "@fina/shared";
 import { authClient } from "../../src/auth/client";
-import { env } from "../../src/env";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
 export default function ResetPasswordScreen() {
-  const [email, setEmail] = useState<string | null>(null);
-  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [sendErr, setSendErr] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [showNext, setShowNext] = useState(false);
 
-  useEffect(() => {
-    apiFetch<MeDTO>("/me")
-      .then((m) => setEmail(m.user.email))
-      .catch((e) => setLoadErr((e as { code?: string }).code ?? "load_error"));
-  }, []);
+  const strength = passwordStrength(next);
+  const meetsPolicy = meetsPasswordPolicy(next);
+  const matches = next.length > 0 && next === confirm;
+  const canSubmit =
+    current.length > 0 && meetsPolicy && matches && !busy;
 
-  async function send() {
-    if (!email || busy) return;
+  async function submit() {
+    if (!canSubmit) return;
     setBusy(true);
-    setSendErr(null);
+    setErr(null);
     try {
-      const result = await authClient.requestPasswordReset({
-        email,
-        redirectTo: `${env.EXPO_PUBLIC_WEB_URL}/reset-password`,
+      const result = await authClient.changePassword({
+        currentPassword: current,
+        newPassword: next,
       });
       if (result.error) {
-        throw new Error(result.error.message ?? "Could not send reset link");
+        throw new Error(result.error.message ?? "Could not change password");
       }
-      setSent(true);
+      router.back();
     } catch (e) {
-      setSendErr(e instanceof Error ? e.message : "Could not send reset link");
+      setErr(e instanceof Error ? e.message : "Could not change password");
     } finally {
       setBusy(false);
     }
@@ -55,60 +58,137 @@ export default function ResetPasswordScreen() {
       <View style={styles.head}>
         <HeaderIconButton icon="chevron-back" variant="plain" onPress={() => router.back()} />
         <Text style={styles.title}>Reset password</Text>
+        <Pressable
+          onPress={submit}
+          disabled={!canSubmit}
+          style={({ pressed }) => [
+            styles.saveBtn,
+            !canSubmit && { opacity: 0.4 },
+            pressed && canSubmit && { opacity: 0.7 },
+          ]}
+        >
+          {busy ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.saveBtnText}>Save</Text>
+          )}
+        </Pressable>
       </View>
 
-      <View style={styles.body}>
-        {!email && !loadErr && <ActivityIndicator color={colors.primary} />}
-        {loadErr && <Text style={styles.errText}>Couldn't load ({loadErr})</Text>}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          contentContainerStyle={styles.scroll}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Text style={styles.eyebrow}>Current password</Text>
+          <View style={styles.field}>
+            <TextInput
+              value={current}
+              onChangeText={setCurrent}
+              placeholder="••••••••"
+              placeholderTextColor={colors.mutedSoft}
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry
+              editable={!busy}
+              textContentType="password"
+            />
+          </View>
 
-        {email && !sent && (
-          <>
-            <Ionicons name="lock-closed-outline" size={48} color={colors.primary} style={{ marginBottom: space.base }} />
-            <Text style={styles.heading}>Send a reset link?</Text>
-            <Text style={styles.sub}>
-              We&apos;ll email a link to{" "}
-              <Text style={styles.emailEmphasis}>{email}</Text>. Tap it from any
-              device to set a new password.
-            </Text>
-            {sendErr && <Text style={styles.errText}>{sendErr}</Text>}
+          <Text style={[styles.eyebrow, { marginTop: space.lg }]}>
+            New password
+          </Text>
+          <View style={styles.field}>
+            <TextInput
+              value={next}
+              onChangeText={setNext}
+              placeholder={`At least ${MIN_PASSWORD_LENGTH} characters`}
+              placeholderTextColor={colors.mutedSoft}
+              style={[styles.input, { flex: 1 }]}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={!showNext}
+              editable={!busy}
+              textContentType="newPassword"
+            />
             <Pressable
-              style={({ pressed }) => [
-                styles.btnPrimary,
-                pressed && { opacity: 0.7 },
-                busy && { opacity: 0.6 },
-              ]}
-              onPress={send}
-              disabled={busy}
+              onPress={() => setShowNext((v) => !v)}
+              hitSlop={8}
+              style={styles.eyeBtn}
             >
-              {busy ? (
-                <ActivityIndicator color={colors.onPrimary} />
-              ) : (
-                <Text style={styles.btnPrimaryText}>Send reset link</Text>
-              )}
+              <Ionicons
+                name={showNext ? "eye-off-outline" : "eye-outline"}
+                size={18}
+                color={colors.muted}
+              />
             </Pressable>
-          </>
-        )}
+          </View>
+          {strength && (
+            <View style={styles.strengthRow}>
+              {(["weak", "fair", "good", "strong"] as const).map((b, i) => {
+                const lit =
+                  (strength === "weak" && i === 0) ||
+                  (strength === "fair" && i <= 1) ||
+                  (strength === "good" && i <= 2) ||
+                  (strength === "strong" && i <= 3);
+                const color = strengthColor(strength);
+                return (
+                  <View
+                    key={b}
+                    style={[
+                      styles.strengthBar,
+                      { backgroundColor: lit ? color : colors.surfaceStrong },
+                    ]}
+                  />
+                );
+              })}
+              <Text style={[styles.strengthLabel, { color: strengthColor(strength) }]}>
+                {strength}
+              </Text>
+            </View>
+          )}
 
-        {sent && (
-          <>
-            <Ionicons name="mail-outline" size={48} color={colors.primary} style={{ marginBottom: space.base }} />
-            <Text style={styles.heading}>Check your inbox</Text>
-            <Text style={styles.sub}>
-              A reset link is on its way to{" "}
-              <Text style={styles.emailEmphasis}>{email}</Text>. The link is
-              good for one hour.
-            </Text>
-            <Pressable
-              style={({ pressed }) => [styles.btnGhost, pressed && { opacity: 0.7 }]}
-              onPress={() => router.back()}
-            >
-              <Text style={styles.btnGhostText}>Done</Text>
-            </Pressable>
-          </>
-        )}
-      </View>
+          <Text style={[styles.eyebrow, { marginTop: space.lg }]}>
+            Confirm new password
+          </Text>
+          <View style={styles.field}>
+            <TextInput
+              value={confirm}
+              onChangeText={setConfirm}
+              placeholder="Repeat new password"
+              placeholderTextColor={colors.mutedSoft}
+              style={styles.input}
+              autoCapitalize="none"
+              autoCorrect={false}
+              secureTextEntry={!showNext}
+              editable={!busy}
+              textContentType="newPassword"
+              returnKeyType="done"
+              onSubmitEditing={submit}
+            />
+          </View>
+          {confirm.length > 0 && !matches && (
+            <Text style={styles.helperError}>Passwords don&apos;t match</Text>
+          )}
+
+          {err && <Text style={styles.errText}>{err}</Text>}
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
+}
+
+function strengthColor(s: "weak" | "fair" | "good" | "strong"): string {
+  switch (s) {
+    case "weak": return colors.down;
+    case "fair": return colors.accentYellow;
+    case "good": return colors.softBlue;
+    case "strong": return colors.up;
+  }
 }
 
 const styles = StyleSheet.create({
@@ -120,52 +200,62 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     gap: space.sm,
   },
-  title: { ...type$.titleMd, color: colors.ink },
-  body: {
-    flex: 1,
-    padding: space.lg,
+  title: { ...type$.titleMd, color: colors.ink, flex: 1 },
+  saveBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    minWidth: 56,
     alignItems: "center",
     justifyContent: "center",
   },
-  heading: {
-    ...type$.titleMd,
-    color: colors.ink,
-    textAlign: "center",
-    marginBottom: space.sm,
+  saveBtnText: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
+  scroll: { padding: space.lg, paddingBottom: space.xxl },
+  eyebrow: {
+    ...type$.captionStrong,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+    marginBottom: space.xs,
   },
-  sub: {
-    ...type$.bodyMd,
-    color: colors.body,
-    textAlign: "center",
-    marginBottom: space.lg,
-    maxWidth: 320,
+  field: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 12,
+    paddingHorizontal: space.base,
+    paddingVertical: 12,
   },
-  emailEmphasis: { fontWeight: "600", color: colors.ink },
-  errText: {
+  input: { ...type$.bodyMd, color: colors.ink, padding: 0, flex: 1 },
+  eyeBtn: { paddingLeft: space.sm },
+  strengthRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: space.xs,
+    paddingHorizontal: 4,
+  },
+  strengthBar: {
+    flex: 1,
+    height: 4,
+    borderRadius: 2,
+  },
+  strengthLabel: {
+    ...type$.bodySm,
+    fontSize: 11,
+    fontWeight: "600",
+    textTransform: "uppercase",
+    marginLeft: 8,
+  },
+  helperError: {
     ...type$.bodySm,
     color: colors.down,
+    marginTop: space.xs,
+    paddingHorizontal: 4,
+  },
+  errText: {
+    ...type$.bodyMd,
+    color: colors.down,
     textAlign: "center",
-    marginBottom: space.base,
+    marginTop: space.lg,
   },
-  btnPrimary: {
-    backgroundColor: colors.primary,
-    paddingHorizontal: space.xl,
-    paddingVertical: 14,
-    borderRadius: 999,
-    minWidth: 220,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  btnPrimaryText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
-  btnGhost: {
-    paddingHorizontal: space.xl,
-    paddingVertical: 14,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    minWidth: 220,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  btnGhostText: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
 });
