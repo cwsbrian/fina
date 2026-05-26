@@ -245,6 +245,8 @@ Google `SubscriptionPurchaseV2.subscriptionState`:
 - Mobile derives `appAccountToken` deterministically from Fina `userId` via `uuidv5(userId, IAP_NAMESPACE)` where `IAP_NAMESPACE` is a hard-coded UUID constant in `@fina/shared/iap`. Deterministic derivation survives reinstalls without AsyncStorage state. Passed to `requestSubscription`. Server reads it from the verified transaction and stores it as `Subscription.sourceCustomerId`.
 - For the App Store Server API JWT: we re-sign per call (5-min expiry) and cache in-memory for ~4 min. No persistence.
 - Tax / VAT: Apple handles; we trust their `currency` field but display only the storefront's `localizedPrice` to the user.
+- **Family Sharing boundary** (Family Sharing is OOS in §12): `apple-client.ts` MUST ignore notifications with `notificationType=DID_CHANGE_RENEWAL_STATUS` `subtype=PRODUCT_NOT_FOR_SALE` (Family Sharing revocation). Treat like a regular `EXPIRED` (status → `canceled`). Do not crash on the subtype.
+- **ASC API roundtrip is a deliberate choice, not redundancy.** StoreKit 2's JWS technically contains everything we need for first-purchase validation, and ASSN V2 webhooks carry fresh JWS for renewals — so we could skip the `inApps/v1/transactions` round-trip and validate JWS-only. We choose the round-trip because: (a) symmetry with Google (which has no JWS-only path), (b) the support-tool / refund-lookup case eventually needs ASC anyway, (c) it gives a server-side timestamp anchor independent of the client-supplied JWS. The cost is an extra ASC API call per checkout + per webhook — bounded, fine for v1.
 
 ## 7. Google-specific contract
 
@@ -312,13 +314,26 @@ Both: store credentials in Vercel env vars before flipping to production envs in
 ## 12. Out of scope (explicit)
 
 - Annual plans (v1.5+).
-- Family Sharing.
-- Promo offers / introductory offers configured via App Store Connect (we'll wire them in v1.5).
+- Family Sharing (notifications ignored — see §6).
+- Promo offers / introductory offers configured via App Store Connect (we'll wire them in v1.5; v1 fails closed to `trialing` if accidentally attached).
 - Server-side reconciliation cron (only added if drift complaints surface).
+- In-app tier change (upgrade / downgrade) — v1 requires cancel + re-purchase. Wiring `pendingTier` for IAP deferred to v1.5.
 - Cross-platform transfer (e.g., Apple → Google migration).
 - Refund automation — refunds happen via Apple/Google; webhook flips `status=canceled` and that's enough for v1.
+- `cancellationReason` column (voluntary vs involuntary cancel) — v1.5.
 - Receipt audit logging beyond `WebhookEvent` dedup.
+- `WebhookEvent` retention policy (existing table has none; IAP roughly doubles inflow, retention cron added if growth requires).
 - StoreKit 1 fallback for iOS 14 and earlier.
+
+## 12.1 Account deletion + GDPR
+
+IAP subs **cannot** be canceled server-side — only the user via Apple Settings or Google Play. The existing account-deletion flow (if/when added) must, BEFORE confirming deletion:
+
+1. Check if any active `iap_apple` / `iap_google` Subscription rows exist.
+2. If so, show a blocking banner: "Cancel your subscription in [Apple Settings / Google Play] first. We can't cancel it for you." Deep-link to the platform's subscription UI.
+3. Only after the user confirms ("I've canceled — delete anyway") do we proceed with row deletion. We null out `Subscription.sourceCustomerId` and drop the row; the user keeps paying Apple/Google until they actually cancel.
+
+This is a UX contract for the account-deletion flow (whenever that's built), not a v1 IAP feature. Documented here so the IAP and account-deletion teams don't ship in isolation.
 
 ## 13. Open decisions (default = listed first)
 
