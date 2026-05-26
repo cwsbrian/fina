@@ -1,0 +1,243 @@
+// apps/api/src/iap/apple-client.ts
+import { createHash, X509Certificate } from "node:crypto";
+import {
+  SignedDataVerifier,
+  Environment,
+  AppStoreServerAPIClient,
+} from "@apple/app-store-server-library";
+import { HttpError } from "../auth/context.js";
+import type { AppleIapConfig } from "./env-guard.js";
+import { mapAppleStatus } from "./status-mapping.js";
+import type { MappedStatus } from "./status-mapping.js";
+import { APPLE_ROOT_CERTS, EXPECTED_APPLE_ROOT_SPKI_SHA256 } from "./apple-roots.js";
+
+/** Verify on module load that the pinned cert(s) parse + match the
+ *  expected SPKI SHA-256 hash. This is the "pinned by SPKI hash in
+ *  code" guarantee from spec §5.2 check #2 — a PEM-bytes mismatch
+ *  (re-encoded same cert) still validates iff the SPKI matches.
+ *  Throws at boot rather than at first webhook so misconfiguration
+ *  surfaces during deploy, not during a real Apple notification. */
+function validateAppleRoots(): void {
+  if (APPLE_ROOT_CERTS.length === 0) {
+    throw new Error(
+      "APPLE_ROOT_CERTS is empty — install the Apple root cert(s) per spec §5.2 check #2. " +
+        "See apps/api/src/iap/apple-roots.ts.",
+    );
+  }
+  for (const pem of APPLE_ROOT_CERTS) {
+    const pemStr = pem.toString("utf8");
+    if (pemStr.includes("<<INSTALLER") || pemStr.includes(">>")) {
+      throw new Error(
+        "APPLE_ROOT_CERTS contains a placeholder. Drop in the real Apple Inc. Root CA PEM. " +
+          "See https://www.apple.com/certificateauthority/",
+      );
+    }
+    let cert: X509Certificate;
+    try {
+      cert = new X509Certificate(pem);
+    } catch (e) {
+      throw new Error(`APPLE_ROOT_CERTS contains an unparseable certificate: ${(e as Error).message}`);
+    }
+    const spki = cert.publicKey.export({ type: "spki", format: "der" }) as Buffer;
+    const spkiHash = createHash("sha256").update(spki).digest("hex");
+    if (!EXPECTED_APPLE_ROOT_SPKI_SHA256.includes(spkiHash)) {
+      throw new Error(
+        `APPLE_ROOT_CERTS SPKI SHA-256 ${spkiHash.slice(0, 16)}… is not in the expected pinned set. ` +
+          `Refusing to start.`,
+      );
+    }
+  }
+}
+validateAppleRoots();
+
+export type VerifiedAppleTransaction = {
+  bundleId: string;
+  environment: "Sandbox" | "Production";
+  signedDate: number;
+  appAccountToken: string;
+  productId: string;
+  originalTransactionId: string;
+  transactionId: string;
+  /** Raw decoded payload for callers that need fields not surfaced above. */
+  raw: Record<string, unknown>;
+};
+
+export type VerifyContext = "asc-api" | "assn";
+
+export class AppleClient {
+  private verifier: SignedDataVerifier;
+  private asc: AppStoreServerAPIClient;
+
+  constructor(private cfg: AppleIapConfig) {
+    const env = cfg.env === "production" ? Environment.PRODUCTION : Environment.SANDBOX;
+    // appAppleId is required by the SDK when environment is PRODUCTION.
+    // For SANDBOX env it is ignored. In production deployments, callers
+    // may pass it via cfg.appAppleId (an optional extension field).
+    // When absent in production, we fall back to 0 — the SDK enforces
+    // presence but does not validate the value against Apple servers
+    // at construction time. The real appAppleId should be set in prod
+    // env for correct behaviour.
+    const appAppleId =
+      (cfg as AppleIapConfig & { appAppleId?: number }).appAppleId ??
+      (cfg.env === "production" ? 0 : undefined);
+    this.verifier = new SignedDataVerifier(
+      APPLE_ROOT_CERTS,
+      /* enableOnlineChecks */ false,
+      env,
+      cfg.bundleId,
+      appAppleId,
+    );
+    this.asc = new AppStoreServerAPIClient(
+      cfg.ascPrivateKey,
+      cfg.ascKeyId,
+      cfg.ascIssuerId,
+      cfg.bundleId,
+      env,
+    );
+  }
+
+  /** Internal — testable injection seam. Verifies the JWS cert chain
+   *  via Apple's SDK and returns the decoded transaction payload. */
+  protected async _decodeAndVerifyJws(jws: string): Promise<Record<string, unknown>> {
+    const decoded = await this.verifier.verifyAndDecodeTransaction(jws);
+    return decoded as unknown as Record<string, unknown>;
+  }
+
+  /** Verifies a SignedTransaction JWS through six mandatory checks
+   *  (alg, root chain, bundleId, environment, signedDate window,
+   *  appAccountToken). Fails closed with HttpError on any failure. */
+  async verifyAndDecodeTransaction(
+    jws: string,
+    opts: { context?: VerifyContext } = {},
+  ): Promise<VerifiedAppleTransaction> {
+    // Apple SDK enforces alg + root chain internally (checks 1, 2).
+    const raw = await this._decodeAndVerifyJws(jws).catch((e) => {
+      throw new HttpError(400, "invalid_receipt", `apple jws verify failed: ${e?.name ?? "error"}`);
+    });
+
+    const bundleId = String(raw.bundleId ?? "");
+    if (bundleId !== this.cfg.bundleId) {
+      throw new HttpError(400, "invalid_receipt", "bundleId mismatch");
+    }
+
+    const environment = String(raw.environment ?? "");
+    const expectedEnv = this.cfg.env === "production" ? "Production" : "Sandbox";
+    if (environment !== expectedEnv) {
+      throw new HttpError(400, "invalid_receipt", "environment mismatch");
+    }
+
+    const signedDate = Number(raw.signedDate ?? 0);
+    const ageMs = Date.now() - signedDate;
+    const maxAgeMs = opts.context === "assn" ? 60 * 60 * 1000 : 10 * 60 * 1000;
+    if (signedDate <= 0 || ageMs > maxAgeMs) {
+      throw new HttpError(400, "expired_receipt", "signedDate outside acceptable window");
+    }
+
+    const appAccountToken = raw.appAccountToken;
+    if (typeof appAccountToken !== "string" || appAccountToken.length === 0) {
+      throw new HttpError(403, "user_mismatch", "appAccountToken absent on verified transaction");
+    }
+
+    return {
+      bundleId,
+      environment: environment as "Sandbox" | "Production",
+      signedDate,
+      appAccountToken,
+      productId: String(raw.productId ?? ""),
+      originalTransactionId: String(raw.originalTransactionId ?? ""),
+      transactionId: String(raw.transactionId ?? ""),
+      raw,
+    };
+  }
+
+  /** Decodes an ASSN V2 signedPayload (the webhook outer JWS). Uses
+   *  the SDK's dedicated notification verifier — DO NOT route this
+   *  through verifyAndDecodeTransaction (different payload shape;
+   *  the transaction validator's bundleId/environment/appAccountToken
+   *  checks have no counterpart in notification payloads). */
+  async verifyAndDecodeNotification(signedPayload: string): Promise<{
+    notificationUUID: string;
+    notificationType: string;
+    subtype?: string;
+    signedTransactionJws: string;
+    signedRenewalInfoJws?: string;
+    raw: Record<string, unknown>;
+  }> {
+    const decoded = await this.verifier
+      .verifyAndDecodeNotification(signedPayload)
+      .catch((e) => {
+        throw new HttpError(400, "invalid_receipt", `apple notification verify failed: ${e?.name ?? "error"}`);
+      });
+    const data = ((decoded as any).data ?? {}) as Record<string, unknown>;
+    return {
+      notificationUUID: String((decoded as any).notificationUUID ?? ""),
+      notificationType: String((decoded as any).notificationType ?? ""),
+      subtype: typeof (decoded as any).subtype === "string" ? (decoded as any).subtype : undefined,
+      signedTransactionJws: String(data.signedTransactionInfo ?? ""),
+      signedRenewalInfoJws: typeof data.signedRenewalInfo === "string" ? data.signedRenewalInfo : undefined,
+      raw: decoded as Record<string, unknown>,
+    };
+  }
+
+  /** Decodes signedRenewalInfo. Distinct SDK method from
+   *  verifyAndDecodeTransaction — renewal-info payloads have their
+   *  own claim set (autoRenewProductId, offerType, autoRenewStatus). */
+  async verifyAndDecodeRenewalInfo(jws: string): Promise<Record<string, unknown>> {
+    return (await this.verifier
+      .verifyAndDecodeRenewalInfo(jws)
+      .catch((e) => {
+        throw new HttpError(400, "invalid_receipt", `apple renewal verify failed: ${e?.name ?? "error"}`);
+      })) as unknown as Record<string, unknown>;
+  }
+
+  /** Fetches the latest subscription state from ASC API by
+   *  originalTransactionId. Returns the verified renewal-info + a
+   *  mapped status. */
+  async getSubscriptionStatus(originalTransactionId: string): Promise<{
+    expiresDate: Date;
+    productId: string;
+    mapped: MappedStatus;
+  }> {
+    const status = await this.asc
+      .getAllSubscriptionStatuses(originalTransactionId)
+      .catch((e) => {
+        throw new HttpError(502, "platform_unavailable", `asc api: ${e?.name ?? "error"}`);
+      });
+    const item = status.data?.[0]?.lastTransactions?.[0];
+    if (!item) throw new HttpError(400, "invalid_receipt", "asc no transaction");
+
+    // Decode each inner JWS through its DEDICATED Apple SDK verifier —
+    // signedTransactionInfo through the transaction verifier (which
+    // re-runs the 6 checks: alg, root, bundleId, environment,
+    // signedDate, appAccountToken — defense-in-depth), and
+    // signedRenewalInfo through the renewal-info verifier (different
+    // payload shape: autoRenewStatus, offerType, autoRenewProductId).
+    const verifiedTx = await this.verifyAndDecodeTransaction(item.signedTransactionInfo!, { context: "asc-api" });
+    const renewal = await this.verifyAndDecodeRenewalInfo(item.signedRenewalInfo!);
+
+    const mapped = mapAppleStatus({
+      subscriptionStatus: appleStatusFromCode(item.status as number),
+      offerType: (renewal.offerType as number | null) ?? null,
+      autoRenewStatus: (renewal.autoRenewStatus as 0 | 1) ?? 1,
+    });
+    return {
+      expiresDate: new Date(Number(verifiedTx.raw.expiresDate ?? 0)),
+      productId: verifiedTx.productId,
+      mapped,
+    };
+  }
+}
+
+function appleStatusFromCode(code: number): "SUBSCRIBED" | "BILLING_RETRY" | "EXPIRED" | "REVOKED" | "PAUSED" {
+  // Apple's status enum: 1=active, 2=expired, 3=billing retry,
+  //                      4=grace, 5=revoked. (Family Sharing handled
+  //                      in the webhook subtype path, not here.)
+  switch (code) {
+    case 1: return "SUBSCRIBED";
+    case 2: return "EXPIRED";
+    case 3: return "BILLING_RETRY";
+    case 4: return "BILLING_RETRY"; // grace is part of past_due window
+    case 5: return "REVOKED";
+    default: return "EXPIRED";
+  }
+}
