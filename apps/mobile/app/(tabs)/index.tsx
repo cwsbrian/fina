@@ -14,11 +14,13 @@ import { Ionicons } from "@expo/vector-icons";
 import {
   displayName,
   trialDaysLeft,
+  tierAtLeast,
   type MeDTO as Me,
   type CategoryDTO,
   type TransactionDTO,
   type ChatThreadDTO,
   type PlaidItemDTO,
+  type Tier,
 } from "@fina/shared";
 import { useSession } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
@@ -145,6 +147,7 @@ export default function Home() {
   const [unreadFina, setUnreadFina] = useState(0);
   const [pendingInvites, setPendingInvites] = useState(0);
   const [hasGoal, setHasGoal] = useState<boolean | null>(null);
+  const [hasChattedState, setHasChattedState] = useState(false);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -175,10 +178,18 @@ export default function Home() {
             setUnreadFina(
               r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0),
             );
+            // hasChatted = any thread (across all workspaces / unbound) has
+            // a user-role first message preview — i.e. the user typed at
+            // least once. Daily-brief threads carry only assistant messages
+            // so firstMessagePreview stays null for them.
+            setHasChattedState(
+              r.threads.some((t) => t.firstMessagePreview !== null),
+            );
           })
           .catch(() => {
             setLatestUnboundThread(null);
             setUnreadFina(0);
+            setHasChattedState(false);
           }),
         apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
           .then((r) => setPlaidItems(r.plaidItems))
@@ -295,6 +306,12 @@ export default function Home() {
   const hasBudget =
     budgetCurrent?.plan !== null && budgetCurrent?.plan !== undefined;
   const bankCount = plaidItems?.length ?? 0;
+  // Effective tier: trial active grants Pro features regardless of base tier.
+  const effectiveTier: Tier = me?.trial?.active ? "pro" : (me?.tier ?? "free");
+  const canConnectBanks = tierAtLeast(effectiveTier, "lite");
+  const canUseGoals = tierAtLeast(effectiveTier, "pro");
+  // Has the user chatted at least once? See setHasChattedState above.
+  const hasChatted = hasChattedState;
 
   type ActionItem = {
     key: string;
@@ -368,7 +385,8 @@ export default function Home() {
       href: "/budget",
     });
   }
-  if (plaidItems !== null && bankCount === 0) {
+  // Connect a bank — gated to Lite+ (Free tier can't connect Plaid items).
+  if (plaidItems !== null && bankCount === 0 && canConnectBanks) {
     actionItems.push({
       key: "ob-bank",
       icon: "card-outline",
@@ -377,7 +395,19 @@ export default function Home() {
       href: "/banks",
     });
   }
-  if (hasGoal === false) {
+  // Try chatting with Fina — Pro feature; hides once the user has typed
+  // at least once. (Trial grants effective Pro so the card shows.)
+  if (canUseGoals && !hasChatted) {
+    actionItems.push({
+      key: "ob-chat",
+      icon: "chatbubble-ellipses-outline",
+      title: "Chat with Fina",
+      subtitle: "Ask anything about your spending — Fina answers.",
+      href: "/(tabs)/chat",
+    });
+  }
+  // Set a goal — Pro only.
+  if (hasGoal === false && canUseGoals) {
     actionItems.push({
       key: "ob-goal",
       icon: "flag-outline",
@@ -600,8 +630,9 @@ export default function Home() {
               </Pressable>
             )}
 
-            {/* 5. Glance — Income + Net (from /analysis endpoint) */}
-            {analysis && (
+            {/* 5. Glance — Income + Net (from /analysis endpoint).
+                Hide on fresh accounts with no transactions this month. */}
+            {analysis && (analysis.income !== 0 || analysis.net !== 0) && (
               <Pressable
                 style={({ pressed }) => [{ marginTop: space.lg }, pressed && { opacity: 0.85 }]}
                 onPress={() => router.push("/analysis" as never)}
