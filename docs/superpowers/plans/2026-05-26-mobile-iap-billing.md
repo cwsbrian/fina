@@ -2601,9 +2601,8 @@ export function pickPrimarySub<T extends Sub>(subs: ReadonlyArray<T>): T | null 
 
 /** Filter out rows whose `environment` doesn't match the runtime.
  *  Stripe rows default to "Production" so they're always kept in prod.
- *  v1 doesn't filter Google sandbox rows (no per-row env split in the
- *  v2 response) — they're already tagged via NormalizedGooglePurchase.environment. */
-export function filterEnvironmentRows<T extends Sub>(
+ *  Generic over the minimal shape — accepts anything with `environment`. */
+export function filterEnvironmentRows<T extends { environment: string }>(
   rows: ReadonlyArray<T>,
   runtime: "sandbox" | "production",
 ): T[] {
@@ -2619,32 +2618,62 @@ npx vitest run test/billing/precedence.test.ts
 ```
 Expected: PASS 7/7.
 
-- [ ] **Step 8.4: Wire into `billing.ts buildMeBody`**
+- [ ] **Step 8.4: Rewire `billing.ts buildMeBody` (exported, takes runtimeEnv)**
 
-In `apps/api/src/routes/billing.ts:36-37`, replace the primary-pick line:
+In `apps/api/src/routes/billing.ts`, change the function declaration AND every call site:
 
 ```ts
-// before
-const primary = activeSubs.find((s) => s.tier === "pro") ?? activeSubs[0];
-
-// after — import at top:
+// Top of file — add import:
 import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
 
-// inside buildMeBody, after the findMany:
-const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
-const filtered = filterEnvironmentRows(activeSubs, runtimeEnv);
-const primary = pickPrimarySub(filtered);
+// Replace the declaration (currently `async function buildMeBody(userId: string)`):
+export async function buildMeBody(
+  userId: string,
+  runtimeEnv: "sandbox" | "production",
+): Promise<MeDTO> {
+  const [user, activeSubs] = await Promise.all([
+    prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+    prisma.subscription.findMany({
+      where: {
+        userId,
+        status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+      },
+      orderBy: { currentPeriodEnd: "desc" },
+    }),
+  ]);
+  const t = computeEffectiveTier(user, activeSubs);
+  // Sandbox env filter MUST run before precedence — stale sandbox rows
+  // should not influence the primary pick or the EffectiveTier.
+  const filtered = filterEnvironmentRows(activeSubs, runtimeEnv);
+  const primary = pickPrimarySub(filtered);
+  // ... rest of the existing body, replacing the find(pro) ?? activeSubs[0] line ...
+}
 ```
 
-Note: `buildMeBody` doesn't have direct `app` access — pass `app.fina.env.APPLE_ENV` as a parameter, OR read from a module-scope env. Cleanest: change `buildMeBody(userId)` → `buildMeBody(userId, runtimeEnv)` and pass from each caller. Existing callers in `billing.ts` already have `app.fina.env` in scope.
+Update **every call site** of `buildMeBody` in the file (each Stripe-route handler that returns the MeDTO):
+
+```ts
+// /billing/sync handler (around line ~157):
+const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
+return await buildMeBody(user.id, runtimeEnv);
+```
+
+There is only one existing call site in `billing.ts` (`/billing/sync`). The new IAP routes (Task 9) call this function too.
+
+Note: `effectiveTier` (in `auth/tier.ts`) ALSO needs the env filter — handled in Step 8.5 below.
 
 - [ ] **Step 8.5: Update `auth/tier.ts` to apply the same filter**
 
-In `apps/api/src/auth/tier.ts`, change `effectiveTier`:
+Now that `filterEnvironmentRows` is generic over `{environment: string}` (P6), the synthetic-fields hack is gone. In `apps/api/src/auth/tier.ts`:
 
 ```ts
 import { filterEnvironmentRows } from "../billing/precedence.js";
-import { env as _env } from "../env.js"; // OR pass runtime in
+import { loadEnv } from "../env.js";
+
+// Cache the runtime env at module load — `loadEnv()` is the same
+// validator buildApp uses, so the value matches everywhere.
+const _runtimeEnv: "sandbox" | "production" =
+  loadEnv().APPLE_ENV === "production" ? "production" : "sandbox";
 
 export async function effectiveTier(userId: string): Promise<EffectiveTier> {
   const [user, activeSubs] = await Promise.all([
@@ -2654,12 +2683,7 @@ export async function effectiveTier(userId: string): Promise<EffectiveTier> {
       select: { tier: true, environment: true },
     }),
   ]);
-  const runtimeEnv = (process.env.APPLE_ENV === "production" ? "production" : "sandbox") as "sandbox" | "production";
-  // augment subs with createdAt/source minimal shape for the filter (only environment matters here)
-  const filtered = filterEnvironmentRows(
-    activeSubs.map((s) => ({ ...s, source: "", createdAt: new Date(), sourceSubscriptionId: "" })),
-    runtimeEnv,
-  );
+  const filtered = filterEnvironmentRows(activeSubs, _runtimeEnv);
   return computeEffectiveTier(user, filtered);
 }
 ```
