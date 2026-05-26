@@ -439,29 +439,9 @@ export default function Home() {
               </Pressable>
             )}
 
-            {/* 5. Glance — this month */}
-            {budgetCurrent && (
-              <>
-                <Text style={[styles.eyebrow, { marginTop: space.lg }]}>This month</Text>
-                <View style={styles.glanceGrid}>
-                  <View style={styles.glanceCard}>
-                    <Text style={styles.glanceLabel}>Spent</Text>
-                    <Text style={styles.glanceValue}>
-                      {formatMoney(budgetCurrent.totalSpent, CURRENCY).display}
-                    </Text>
-                    {cap !== null && remainingDisplay ? (
-                      <Text style={styles.glanceTrend}>
-                        {over
-                          ? `${remainingDisplay} over budget`
-                          : `${remainingDisplay} of budget left`}
-                      </Text>
-                    ) : (
-                      <Text style={styles.glanceTrend}>No budget set</Text>
-                    )}
-                  </View>
-                </View>
-              </>
-            )}
+            {/* 5. Glance (Spent/Income) — deferred to v2: Hero already shows
+                month spend; Spent-only glance was visually duplicative until
+                an income aggregate endpoint exists. */}
 
             {/* 6. Top categories */}
             {topCategories.length > 0 && (
