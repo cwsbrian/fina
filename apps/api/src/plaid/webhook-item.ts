@@ -31,8 +31,17 @@ async function notifyReconnectNeeded(
       },
     });
     if (!item) return;
+    // Per-recipient try/catch: a transient error on one member must NOT
+    // drop the tail of the fan-out (per Plan 1U / 1V).
     for (const m of item.workspace.memberships) {
-      await sendBankReconnectPush(env, m.userId, item.institutionName);
+      try {
+        await sendBankReconnectPush(env, m.userId, item.institutionName);
+      } catch (err) {
+        logError(
+          { plaidItemId, recipientUserId: m.userId, err },
+          "bank-reconnect push to recipient failed",
+        );
+      }
     }
   } catch (err) {
     logError(
