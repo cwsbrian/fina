@@ -137,34 +137,30 @@ export default function CategorizeInbox() {
                 <View style={styles.actions}>
                   <Pressable
                     accessibilityLabel="Confirm category"
-                    style={({ pressed }) => [styles.iconBtn, styles.iconBtnPrimary, pressed && { opacity: 0.7 }]}
+                    style={({ pressed }) => [styles.confirmPill, pressed && { opacity: 0.7 }]}
                     onPress={() => confirmRow(tx)}
                     disabled={busyTxId === tx.id}
                     hitSlop={6}
                   >
-                    <Ionicons name="checkmark" size={20} color={colors.onPrimary} />
+                    <Text style={styles.confirmPillText}>Confirm</Text>
                   </Pressable>
                   <Pressable
                     accessibilityLabel="Change category"
-                    style={({ pressed }) => [styles.iconBtn, styles.iconBtnGhost, pressed && { opacity: 0.7 }]}
+                    style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
                     onPress={() => editRow(tx)}
                     disabled={busyTxId === tx.id}
-                    hitSlop={6}
+                    hitSlop={8}
                   >
-                    <Ionicons name="pencil-outline" size={18} color={colors.ink} />
+                    <Ionicons name="pencil-outline" size={18} color={colors.muted} />
                   </Pressable>
                   <Pressable
                     accessibilityLabel={cancelLabel}
-                    style={({ pressed }) => [styles.iconBtn, styles.iconBtnGhost, pressed && { opacity: 0.7 }]}
+                    style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
                     onPress={() => skipOrDismissRow(tx)}
                     disabled={busyTxId === tx.id}
-                    hitSlop={6}
+                    hitSlop={8}
                   >
-                    <Ionicons
-                      name={data.mode === "auto" ? "close" : "time-outline"}
-                      size={18}
-                      color={colors.muted}
-                    />
+                    <Ionicons name="close" size={20} color={colors.muted} />
                   </Pressable>
                 </View>
               </View>
@@ -224,21 +220,30 @@ const styles = StyleSheet.create({
   otherChipText: { fontSize: 10, color: colors.down, fontWeight: "600" },
   actions: {
     flexDirection: "row",
-    gap: 8,
-    marginTop: space.sm,
+    alignItems: "center",
     justifyContent: "flex-end",
+    gap: 4,
+    marginTop: space.sm,
   },
-  iconBtn: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+  confirmPill: {
+    paddingHorizontal: 14,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
+    marginRight: 4,
   },
-  iconBtnPrimary: { backgroundColor: colors.primary },
-  iconBtnGhost: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    backgroundColor: colors.canvas,
+  confirmPillText: {
+    ...type$.bodySm,
+    color: colors.onPrimary,
+    fontWeight: "600",
+    fontSize: 13,
+  },
+  iconBtn: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
   },
 });
