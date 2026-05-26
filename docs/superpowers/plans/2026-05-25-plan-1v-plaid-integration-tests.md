@@ -217,7 +217,7 @@ Read existing `apps/api/tests/plaid.webhook.item.test.ts`. Note:
 - 7 existing `it()` blocks at lines 28, 39, 47, 56, 64, 71, 78.
 - Existing tests call `dispatchItemEvent(item, body)` (2-arg, missing env).
 
-- [ ] **Step 2: Apply production fix to `webhook-item.ts`**
+- [x] **Step 2: Apply production fix to `webhook-item.ts`**
 
 Replace L34-36:
 ```ts
@@ -241,7 +241,7 @@ With:
     }
 ```
 
-- [ ] **Step 3: Add module-level vi.mock + namespace import in test file**
+- [x] **Step 3: Add module-level vi.mock + namespace import in test file**
 
 After existing imports at the top, add:
 ```ts
@@ -253,17 +253,17 @@ vi.mock("../src/push/send.js", async (importOriginal) => {
 });
 ```
 
-- [ ] **Step 4: Add `afterEach` and `clearAllMocks`**
+- [x] **Step 4: Add `afterEach` and `clearAllMocks`**
 
 If the file doesn't already have `afterEach(vi.clearAllMocks)`, add it (per Plan 1M pattern for partial vi.mock).
 
-- [ ] **Step 5: Clean up existing tests to use 3-arg env**
+- [x] **Step 5: Clean up existing tests to use 3-arg env**
 
 For each of the 7 existing `dispatchItemEvent(item, body)` calls, update to `dispatchItemEvent(item, body, env)` where `env = testEnv()`. Add `const env = testEnv();` at file scope (after imports) if not present.
 
 This is a precondition for Step 6's new tests to share consistent setup.
 
-- [ ] **Step 6: Add 5 new push-integration tests in a new describe block**
+- [x] **Step 6: Add 5 new push-integration tests in a new describe block**
 
 Append after the existing describe:
 
@@ -368,7 +368,7 @@ async function seedItem(wsId: string) {
 
 Use `setupWorkspaceWithRoles` from `./helpers/factories.js` (Plan 1U).
 
-- [ ] **Step 7: Run + typecheck + commit**
+- [x] **Step 7: Run + typecheck + commit**
 
 ```bash
 pnpm --filter @fina/api exec vitest run tests/plaid.webhook.item.test.ts
