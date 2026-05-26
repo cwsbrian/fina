@@ -379,15 +379,39 @@ Both: store credentials in Vercel env vars before flipping to production envs in
 - `WebhookEvent` retention policy (existing table has none; IAP roughly doubles inflow, retention cron added if growth requires).
 - StoreKit 1 fallback for iOS 14 and earlier.
 
-## 12.1 Account deletion + GDPR
+## 12.1 Account deletion + GDPR retention
 
 IAP subs **cannot** be canceled server-side — only the user via Apple Settings or Google Play. The existing account-deletion flow (if/when added) must, BEFORE confirming deletion:
 
 1. Check if any active `iap_apple` / `iap_google` Subscription rows exist.
 2. If so, show a blocking banner: "Cancel your subscription in [Apple Settings / Google Play] first. We can't cancel it for you." Deep-link to the platform's subscription UI.
-3. Only after the user confirms ("I've canceled — delete anyway") do we proceed with row deletion. We null out `Subscription.sourceCustomerId` and drop the row; the user keeps paying Apple/Google until they actually cancel.
+3. After the user confirms ("I've canceled — delete anyway"):
+   - Write an `IapDeletedBinding` row for each `User.iapAppleAccountToken` / `User.iapGoogleObfuscatedId` present (so webhooks know to stop retrying — see §5.3 webhook step 4.3).
+   - **Retain** the `Subscription` rows. Null out `Subscription.sourceCustomerId` and any future PII-bearing fields, but keep the row itself with `userId` set to a tombstone marker or reassigned to a system "deleted users" sentinel (Prisma onDelete: SetNull or a dedicated sentinel row — implementer's choice).
+   - GDPR Art. 17(3)(b) tax-retention exemption applies: subscription billing records are kept for **6 years** for Canadian CRA compliance (and to support Apple/Google refund-dispute audits). Hard-delete only after the retention window expires.
+   - The user keeps paying Apple/Google until they actually cancel — that's not our system to control.
 
-This is a UX contract for the account-deletion flow (whenever that's built), not a v1 IAP feature. Documented here so the IAP and account-deletion teams don't ship in isolation.
+## 12.2 Account merge / userId migration
+
+If two Fina accounts merge or a user's `userId` changes (account migration, identity provider switch), the IAP bindings do NOT transfer automatically. `User.iapAppleAccountToken` and `User.iapGoogleObfuscatedId` are deterministically derived from the **old** userId — they cannot be re-derived for the new userId from the same Apple/Google receipts.
+
+v1 policy: **manual support ticket only**. There is no automated migration path. The runbook step:
+
+1. Move all `Subscription` rows from `oldUserId` to `newUserId` (UPDATE … SET userId).
+2. Clear `User.iapAppleAccountToken` / `User.iapGoogleObfuscatedId` on `newUserId` (set to NULL — never copy old values).
+3. Write `IapDeletedBinding` rows for the old token values so any in-flight webhook for the old userId resolves correctly (tombstone path → 200).
+4. On the next mobile session for `newUserId`, the Restore flow will fail with `user_mismatch` because the receipts carry `uuidv5(oldUserId)`. Support escalates: either tell the user to wait for their existing sub to expire and re-subscribe, or coordinate with Apple/Google to refund + re-issue.
+
+This is **explicitly out of scope** for v1 self-service. Documented here so the support team and any future merge implementation know the constraints.
+
+## 12.3 Webhook trust-chain (clarification)
+
+The `expectedAppAccountToken` / `expectedObfuscatedAccountId` enforcement lives in `/billing/iap/checkout` step 3 (and the symmetric `/billing/iap/restore`). The **webhook path** does NOT re-verify the binding against the resolved userId, because:
+
+1. If userId came from `Subscription.sourceSubscriptionId` lookup (step 4.1), the binding was already verified when that row was created (in checkout).
+2. If userId came from `User.iap*` binding lookup (step 4.2), the verified-JWS / verified-Pub/Sub `appAccountToken` / `obfuscatedExternalAccountId` literally IS the binding — re-comparing it to `uuidv5(userId)` would be a tautology.
+
+So the webhook trust chain is: signature-verified payload → token-via-binding → resolved userId. The mandatory binding check at checkout is the single entry-gate that authenticates the user→token relationship; downstream syncs trust it.
 
 ## 13. Open decisions (default = listed first)
 
