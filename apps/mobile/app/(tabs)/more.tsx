@@ -383,6 +383,11 @@ export default function More() {
             onPress={() => router.push("/profile/edit" as never)}
           />
           <SettingsRow
+            icon="lock-closed-outline"
+            title="Reset password"
+            onPress={() => router.push("/profile/reset-password" as never)}
+          />
+          <SettingsRow
             icon="download-outline"
             title="Export data"
             onPress={comingSoon("Export")}

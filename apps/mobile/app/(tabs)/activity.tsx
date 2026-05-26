@@ -594,7 +594,7 @@ const styles = StyleSheet.create({
     ...type$.bodyMd, color: colors.body, textAlign: "center",
     maxWidth: 320, marginBottom: space.lg,
   },
-  listContent: { padding: space.lg, paddingTop: space.sm },
+  listContent: { padding: space.lg, paddingTop: space.sm, flexGrow: 1 },
   banner: {
     flexDirection: "row",
     alignItems: "center",
