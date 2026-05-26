@@ -2,6 +2,7 @@ import { betterAuth, APIError } from "better-auth";
 import { createAuthMiddleware } from "better-auth/api";
 import { prismaAdapter } from "better-auth/adapters/prisma";
 import { magicLink, emailOTP } from "better-auth/plugins";
+import { expo } from "@better-auth/expo";
 import { prisma } from "./db.js";
 import type { Env } from "./env.js";
 import { sendEmail } from "./email/send.js";
@@ -62,6 +63,12 @@ export function createAuth(env: Env) {
     },
     socialProviders,
     plugins: [
+      // Expo plugin enables mobile native scheme (e.g. `fina://`) as a
+      // trusted origin and stops Better Auth from rejecting requests with
+      // "missing or null origin" — React Native fetch doesn't send Origin
+      // headers the same way browsers do. Must be paired with the same
+      // expoClient() plugin on the mobile client (already configured).
+      expo(),
       magicLink({
         sendMagicLink: async ({ email, url }) => {
           await sendEmail(env.RESEND_API_KEY, env.EMAIL_FROM, {
