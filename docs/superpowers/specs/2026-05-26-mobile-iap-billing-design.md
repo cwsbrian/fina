@@ -84,21 +84,31 @@ These columns are the **reverse-lookup binding** used by the webhook handlers to
 - `expo-in-app-purchases` — deprecated by Expo.
 - `expo-iap` — newer fork, smaller community, less battle-tested.
 
+**⚠ Dev workflow break — Expo Go cannot exercise IAP.** `react-native-iap` is a native module requiring a custom dev client (`expo prebuild` or `eas build --profile development`). The current Fina mobile dev workflow runs Expo Go over Tailscale (per `project_mobile_dev_network.md`). Implications:
+- The plan picker screen can be loaded under Expo Go for layout work, but `getSubscriptions` will throw "module not linked" and the empty-state fallback will render.
+- Purchase flows can ONLY be tested via the dev client / TestFlight / Play internal track.
+- Every developer who needs to exercise IAP must `eas build --profile development` once to get a custom dev client, then load that build instead of Expo Go.
+- This is loud in the spec because the workflow surprise is real — silent feature gating in Expo Go is the most expected failure mode.
+
 **App config (`apps/mobile/app.json`):**
 - iOS: `usesAppleSignIn` not required, but `expo.ios.bundleIdentifier` must match the Apple bundle ID configured in App Store Connect.
 - Android: add `"BILLING"` permission via the config plugin (auto-injected).
-- EAS profile: build with `eas build --profile production` after adding the StoreKit configuration for sandbox testing.
+- EAS profile: build with `eas build --profile production` for store submission, `eas build --profile development` for IAP-capable dev client.
 
 **Mobile units:**
 - `apps/mobile/src/iap/client.ts` — thin wrapper around `react-native-iap` (init, getSubscriptions, requestSubscription, getAvailablePurchases, finishTransaction). All async-safe with `useEffect` cleanup.
 - `apps/mobile/src/iap/types.ts` — re-exports `IAPProductId` + a `LocalProduct` shape (productId + tier + storefront localizedPrice + localizedTitle from the store, not from server).
-- `apps/mobile/app/plan/index.tsx` — Plan picker screen: lists Lite/Pro from `getSubscriptions`, shows store-localized price, "Subscribe" button per product.
-- `apps/mobile/app/plan/restore.tsx` — Restore Purchases screen with a single button + status text. Also reachable as a row in More → Subscription.
+- `apps/mobile/app/plan/index.tsx` — Plan picker screen. Lists Lite/Pro from `getSubscriptions`, shows store-localized price, "Subscribe" button per product. **Empty-state fallback:** if `getSubscriptions` returns `[]` (misconfigured ASC/Play products, sandbox tester not signed in, Expo Go runtime, network failure), render an inline "Subscriptions aren't available right now — try again later" message rather than a blank screen. Do **not** add a web Stripe link on iOS (Apple guideline violation under Reader-app policy).
+- `apps/mobile/app/plan/restore.tsx` — Restore Purchases screen with a single button + status text.
 - `apps/mobile/src/api/billing.ts` — typed wrappers for the two new endpoints (`postIAPCheckout`, `postIAPRestore`).
+
+**Restore Purchases discoverability (Apple guideline 3.1.1):**
+- A "Restore purchases" button MUST appear on the plan picker screen (`/plan`) regardless of subscription state — new mobile users reinstalling who had a prior purchase land here, not in More tab. This is the placement Apple's reviewers actually check.
+- The same row also appears in More → Subscription when `billingOwnedByMobile` (already in §4 — preserved).
 
 **Subscription group in More tab:**
 - Add a "Restore purchases" row below "Manage billing" (visible only when `billingOwnedByMobile`).
-- "Manage billing" row deep-links to the platform's native subscription management (`https://apps.apple.com/account/subscriptions` for iOS, `https://play.google.com/store/account/subscriptions?package=...&sku=...` for Android). Per Apple guidelines we cannot host an in-app cancel UI for IAP subs.
+- "Manage billing" row deep-links to the platform's native subscription management. iOS: `https://apps.apple.com/account/subscriptions`. Android: `https://play.google.com/store/account/subscriptions?package=...&sku=<currentProductId>` where `currentProductId` is derived from `me.subscription.tier` via the inverse of `IAP_PRODUCT_IDS` — hard-coding the wrong sku 404s the deep link. Per Apple guidelines we cannot host an in-app cancel UI for IAP subs.
 - "Plan" row routes to `/plan` (picker) when `subscription === null`, otherwise to a read-only plan summary screen.
 
 ## 5. Backend additions
@@ -110,7 +120,7 @@ APPLE_BUNDLE_ID                 # com.fina.app — must match Xcode bundle id
 APPLE_ASC_ISSUER_ID             # App Store Connect API issuer UUID
 APPLE_ASC_KEY_ID                # ASC API key ID
 APPLE_ASC_PRIVATE_KEY           # PEM string (base64-decoded at boot)
-APPLE_ENV                       # sandbox | production
+APPLE_ENV                       # sandbox | production — routes apple-client between api.storekit-itc.apple.com (sandbox) and api.storekit.itunes.apple.com (prod). MUST also match the `environment` claim in verified JWS (see §5.2 check #4).
 GOOGLE_PACKAGE_NAME             # app.fina (Play Console package name)
 GOOGLE_SERVICE_ACCOUNT_JSON     # full JSON blob (single-line, escaped) for Play Developer API
 GOOGLE_PUBSUB_VERIFY_AUDIENCE   # the audience claim we expect in Google's OIDC JWT (set when subscribing to Pub/Sub)
@@ -283,9 +293,10 @@ The existing `/billing/checkout` already 409s if any active sub exists. Symmetri
 - `routes/billing-iap.integration.test.ts` (lives under `apps/api/test/`) — Full Fastify inject with mocked store clients. Covers: checkout 409 when Stripe active, restore partial success, webhook dedup, webhook unknown originalTransactionId path.
 
 **Manual (sandbox):**
-- iOS: Apple sandbox tester accounts (App Store Connect → Users and Access → Sandbox Testers). One per env; tests can be reset.
+- iOS: Apple sandbox tester accounts (App Store Connect → Users and Access → Sandbox Testers). Each developer needs their **own** sandbox tester — login state caches per device and team-sharing is not supported. Tests can be reset from device Settings.
 - Android: License-test accounts (Play Console → Setup → License testing). Free trial cycle compresses to minutes in test mode.
 - Both: webhook tunneling via Tailscale Funnel (same setup as Plaid).
+- Both: requires a dev client build, NOT Expo Go (see §4 warning).
 
 ## 11. Operational setup
 
@@ -303,7 +314,18 @@ This is a checklist for whoever ships, not a code task:
 3. GCP project → Pub/Sub → create topic `fina-iap-rtdn`, push subscription to `https://api.fina.app/webhooks/iap/google`, OIDC auth with the same service account email.
 4. Play Console → Monetization setup → paste the topic name.
 
-Both: store credentials in Vercel env vars before flipping to production envs in `apps/api/src/env.ts`.
+Both: store credentials in Vercel env vars before flipping to production envs in `apps/api/src/env.ts`. `GOOGLE_SERVICE_ACCOUNT_JSON` should be base64-encoded — raw JSON is ~2.5 KB which is tight against Vercel's 4 KB per-var limit.
+
+**Launch gates (manual smoke):**
+1. App Store Server Notifications V2 endpoint configured in ASC before first sandbox purchase — Apple does not back-fill historical notifications.
+2. First sandbox purchase round-trips successfully: client `requestSubscription` → server `/billing/iap/checkout` 2xx → `finishTransaction` → ASSN V2 webhook hits us within 60s.
+3. Android first sandbox purchase: same round-trip, plus verify `acknowledgementState` flips from `PENDING` to `ACKNOWLEDGED` in the next webhook within minutes.
+4. Both: confirm a force-cancel from the platform UI flips our `Subscription.status` within 60s via webhook.
+
+**Credential rotation (postlaunch runbook):**
+- ASC API key: issue new → update env var → revoke old (3-step).
+- Pub/Sub OIDC service account: same.
+- Document in the team runbook; not in this spec.
 
 ## 12. Out of scope (explicit)
 
