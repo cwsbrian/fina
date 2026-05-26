@@ -14,7 +14,7 @@ export function emitCategorizeCompleted(args: {
 export function emitCategorizeConfirmed(args: {
   workspaceId: string;
   source: "mapping" | "history" | "ai" | "manual";
-  action: "confirm" | "edit" | "snooze";
+  action: "confirm" | "edit" | "snooze" | "dismiss-auto";
 }) {
   logInfo({ event: "categorize.confirmed", ...args }, "categorize.confirmed");
 }
