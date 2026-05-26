@@ -428,11 +428,11 @@ EOF
 **Files:**
 - Modify: `apps/api/tests/push.send.test.ts` (append helper + new describe block)
 
-- [ ] **Step 1: Read current state**
+- [x] **Step 1: Read current state**
 
 Verify push.send.test.ts ends after the `sendTransactionAddedPush payload shape` describe block from Plan 1T (around line 454). New tests go AFTER it.
 
-- [ ] **Step 2: Add `firstPushMessage(spy)` helper**
+- [x] **Step 2: Add `firstPushMessage(spy)` helper**
 
 **Prereq**: T2 commit must be landed (provides the `makeUserWithDevices` factory import that T3 tests use).
 
@@ -453,7 +453,7 @@ function firstPushMessage(spy: MockInstance): Record<string, unknown> {
 }
 ```
 
-- [ ] **Step 3: Append 7-wrapper payload-shape describe block**
+- [x] **Step 3: Append 7-wrapper payload-shape describe block**
 
 After the existing `describe("sendTransactionAddedPush payload shape", ...)` block, add:
 
@@ -632,17 +632,17 @@ describe("payload-shape coverage for remaining wrappers", () => {
 });
 ```
 
-- [ ] **Step 4: Run push.send.test.ts**
+- [x] **Step 4: Run push.send.test.ts**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/push.send.test.ts`
 Expected: 25 + 9 = **34 passed** (Plan 1T 3 + 7 wrappers' 9).
 
-- [ ] **Step 5: Typecheck**
+- [x] **Step 5: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "push.send" | head -5`
 Expected: 0 lines.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/api/tests/push.send.test.ts
