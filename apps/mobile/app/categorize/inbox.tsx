@@ -135,24 +135,26 @@ export default function CategorizeInbox() {
                   </Text>
                 </View>
                 <View style={styles.actions}>
-                  <Pressable
-                    accessibilityLabel="Confirm category"
-                    style={({ pressed }) => [styles.confirmPill, pressed && { opacity: 0.7 }]}
-                    onPress={() => confirmRow(tx)}
-                    disabled={busyTxId === tx.id}
-                    hitSlop={6}
-                  >
-                    <Text style={styles.confirmPillText}>Confirm</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityLabel="Change category"
-                    style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
-                    onPress={() => editRow(tx)}
-                    disabled={busyTxId === tx.id}
-                    hitSlop={8}
-                  >
-                    <Ionicons name="pencil-outline" size={18} color={colors.muted} />
-                  </Pressable>
+                  <View style={styles.actionsLeft}>
+                    <Pressable
+                      accessibilityLabel="Confirm category"
+                      style={({ pressed }) => [styles.confirmPill, pressed && { opacity: 0.7 }]}
+                      onPress={() => confirmRow(tx)}
+                      disabled={busyTxId === tx.id}
+                      hitSlop={6}
+                    >
+                      <Text style={styles.confirmPillText}>Confirm</Text>
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel="Change category"
+                      style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
+                      onPress={() => editRow(tx)}
+                      disabled={busyTxId === tx.id}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="pencil-outline" size={18} color={colors.muted} />
+                    </Pressable>
+                  </View>
                   <Pressable
                     accessibilityLabel={cancelLabel}
                     style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
@@ -221,9 +223,13 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "flex-end",
-    gap: 4,
+    justifyContent: "space-between",
     marginTop: space.sm,
+  },
+  actionsLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
   },
   confirmPill: {
     paddingHorizontal: 14,
