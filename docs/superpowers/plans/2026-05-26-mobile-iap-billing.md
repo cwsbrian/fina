@@ -1599,17 +1599,23 @@ describe("GoogleClient.fetchAndNormalize", () => {
 
   it("acknowledges when state is PENDING", async () => {
     const c = new GoogleClient(cfg);
-    vi.spyOn(c as any, "_getV2").mockResolvedValue(mkV2({ acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING" }));
     const ackSpy = vi.spyOn(c as any, "_acknowledge").mockResolvedValue(undefined);
-    await c.acknowledgeIfPending("token-abc");
-    expect(ackSpy).toHaveBeenCalledWith("token-abc");
+    await c.acknowledgeIfPending({
+      purchaseToken: "token-abc",
+      productId: "pro_monthly",
+      acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
+    });
+    expect(ackSpy).toHaveBeenCalledWith("token-abc", "pro_monthly");
   });
 
   it("does not acknowledge when state is already ACKNOWLEDGED", async () => {
     const c = new GoogleClient(cfg);
-    vi.spyOn(c as any, "_getV2").mockResolvedValue(mkV2({ acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED" }));
     const ackSpy = vi.spyOn(c as any, "_acknowledge").mockResolvedValue(undefined);
-    await c.acknowledgeIfPending("token-abc");
+    await c.acknowledgeIfPending({
+      purchaseToken: "token-abc",
+      productId: "pro_monthly",
+      acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+    });
     expect(ackSpy).not.toHaveBeenCalled();
   });
 
@@ -1670,12 +1676,16 @@ export class GoogleClient {
     return res.data as Record<string, unknown>;
   }
 
-  /** Testable seam — invoke the acknowledge call. */
-  protected async _acknowledge(purchaseToken: string): Promise<void> {
+  /** Testable seam — invoke the acknowledge call. Must pass the
+   *  product's subscriptionId (NOT an empty string) per the v1
+   *  endpoint contract; v2 has no acknowledge method as of
+   *  `googleapis@^140`. We always have the productId at the call
+   *  site because the prior fetchAndNormalize surfaces it. */
+  protected async _acknowledge(purchaseToken: string, productId: string): Promise<void> {
     await this.androidPublisher.purchases.subscriptions
       .acknowledge({
         packageName: this.cfg.packageName,
-        subscriptionId: "", // v1 endpoint requires subId; v2 doesn't surface it cleanly — pass empty
+        subscriptionId: productId,
         token: purchaseToken,
         requestBody: {},
       })
@@ -1713,16 +1723,19 @@ export class GoogleClient {
     };
   }
 
-  /** Idempotent acknowledge — checks state, calls API only when
-   *  PENDING. Spec §7 requires this after every successful upsert so
-   *  Google doesn't auto-refund within 3 days. */
-  async acknowledgeIfPending(purchaseToken: string): Promise<boolean> {
-    const v2 = await this.fetchAndNormalize(purchaseToken);
-    if (v2.acknowledgementState === "ACKNOWLEDGEMENT_STATE_PENDING") {
-      await this._acknowledge(purchaseToken);
-      return true;
-    }
-    return false;
+  /** Idempotent acknowledge — caller passes the already-fetched
+   *  state to avoid a second fetchAndNormalize round-trip (TOCTOU
+   *  window + ~150ms latency). Calls API only when PENDING. Spec
+   *  §7 requires this after every successful upsert so Google
+   *  doesn't auto-refund within 3 days. */
+  async acknowledgeIfPending(args: {
+    purchaseToken: string;
+    productId: string;
+    acknowledgementState: string;
+  }): Promise<boolean> {
+    if (args.acknowledgementState !== "ACKNOWLEDGEMENT_STATE_PENDING") return false;
+    await this._acknowledge(args.purchaseToken, args.productId);
+    return true;
   }
 }
 ```
@@ -2221,7 +2234,11 @@ describe("syncSubscriptionFromIAP — Google checkout path", () => {
     expect(sub!.sourceSubscriptionId).toBe("pt-1");
     const user = await prisma.user.findUnique({ where: { id: "u1" } });
     expect(user!.iapGoogleObfuscatedId).toBe(deriveGoogleToken("u1"));
-    expect(fakeGoogleClient.acknowledgeIfPending).toHaveBeenCalledWith("pt-1");
+    expect(fakeGoogleClient.acknowledgeIfPending).toHaveBeenCalledWith({
+      purchaseToken: "pt-1",
+      productId: "pro_monthly",
+      acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
+    });
   });
 
   it("acknowledge runs AFTER upsert succeeds (not before)", async () => {
@@ -2454,10 +2471,13 @@ async function syncGoogle(_cfg: IapConfig, args: SyncArgsGoogle, deps: SyncDeps)
     });
   });
 
-  // AFTER upsert lands — never before. Spec §7 step 3.
-  if (v2.acknowledgementState === "ACKNOWLEDGEMENT_STATE_PENDING") {
-    await deps.googleClient.acknowledgeIfPending(args.receipt);
-  }
+  // AFTER upsert lands — never before. Spec §7 step 3. Pass the
+  // already-fetched state so the client doesn't re-roundtrip.
+  await deps.googleClient.acknowledgeIfPending({
+    purchaseToken: args.receipt,
+    productId: v2.productId,
+    acknowledgementState: v2.acknowledgementState,
+  });
 }
 ```
 
