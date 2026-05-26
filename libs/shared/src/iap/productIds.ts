@@ -7,10 +7,15 @@ import type { PaidTier } from "../pricing.js";
  *  Subscription.billingPeriod at upsert time. */
 export const IAP_PRODUCT_IDS = {
   lite_monthly: { tier: "lite" as const },
-  pro_monthly:  { tier: "pro"  as const },
+  pro_monthly: { tier: "pro" as const },
 } as const;
 
-export type IAPProductId = keyof typeof IAP_PRODUCT_IDS;
+/** Tuple of IAP product IDs. Mirrors `keyof typeof IAP_PRODUCT_IDS` at
+ *  runtime so zod schemas can iterate or pass it to `z.enum`. Keep in
+ *  sync with IAP_PRODUCT_IDS — if a SKU is added there, append it here too. */
+export const IAP_PRODUCT_IDS_TUPLE = ["lite_monthly", "pro_monthly"] as const;
+
+export type IAPProductId = (typeof IAP_PRODUCT_IDS_TUPLE)[number];
 
 export function tierForIapProductId(id: IAPProductId | string): PaidTier | null {
   if (id === "lite_monthly") return "lite";

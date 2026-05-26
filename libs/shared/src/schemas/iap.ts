@@ -1,9 +1,10 @@
 import { z } from "zod";
+import { IAP_PRODUCT_IDS_TUPLE } from "../iap/productIds.js";
 
 export const IAPPlatform = z.enum(["ios", "android"]);
 export type IAPPlatform = z.infer<typeof IAPPlatform>;
 
-const IAPProductIdEnum = z.enum(["lite_monthly", "pro_monthly"]);
+const IAPProductIdEnum = z.enum(IAP_PRODUCT_IDS_TUPLE);
 
 export const IAPCheckoutBody = z.object({
   platform: IAPPlatform,
