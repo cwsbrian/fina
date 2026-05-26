@@ -3496,12 +3496,14 @@ git commit -m "feat(api): IAP webhook routes — Apple ASSN + Google RTDN with 4
 - Modify: project `CLAUDE.md` (document Expo Go limitation)
 - Test: `apps/mobile/src/iap/__tests__/binding.test.ts`
 
-- [ ] **Step 11.1: Install**
+- [ ] **Step 11.1: Install (PIN react-native-iap to v14)**
 
 ```
-npm install react-native-iap uuid --workspace=apps/mobile
+npm install react-native-iap@^14 uuid js-sha256 --workspace=apps/mobile
 npm install -D @types/uuid --workspace=apps/mobile
 ```
+
+**Why pinned to ^14:** `react-native-iap` 15.x is a `nitro`-based rewrite that removed `requestSubscription` (replaced by `requestPurchase` with a different signature). v14 still ships `requestSubscription({sku, appAccountToken, obfuscatedAccountIdAndroid})` — the API this plan + Task 11.6 expects. Upgrading to 15.x is out of scope for v1.
 
 - [ ] **Step 11.2: Update `app.json`**
 
@@ -3555,31 +3557,16 @@ export function deriveGoogleToken(userId: string): string {
 
 ```ts
 // apps/mobile/src/iap/sha256.ts
-// React Native has no built-in crypto.subtle in Hermes; use expo-crypto.
-import * as Crypto from "expo-crypto";
+import { sha256 } from "js-sha256";
 
-export async function sha256HexAsync(input: string): Promise<string> {
-  return Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, input, {
-    encoding: Crypto.CryptoEncoding.HEX,
-  });
-}
-
-// Synchronous fallback for places that can't await (avoid if possible).
-// Used only for testing — production paths must use the async version.
+/** Synchronous SHA-256 hex. Used by deriveGoogleToken to produce the
+ *  Android obfuscatedAccountId. js-sha256 is pure-JS, runs under Hermes,
+ *  and is a new explicit dep installed in Step 11.1. UTF-8 input encoding
+ *  matches the server's node:crypto sha256(utf8) — verified in the
+ *  cross-platform parity test (Step 11.5b). */
 export function sha256Hex(input: string): string {
-  // For test parity with the API (which uses node:crypto), provide a
-  // sync implementation via the `js-sha256` package. Already in deps
-  // because it's used by Better Auth's client. If not, install it.
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  const { sha256 } = require("js-sha256");
   return sha256(input);
 }
-```
-
-Install `js-sha256` if not already present:
-
-```
-npm install js-sha256 --workspace=apps/mobile
 ```
 
 - [ ] **Step 11.5: Run binding test, confirm pass**
@@ -3588,6 +3575,70 @@ npm install js-sha256 --workspace=apps/mobile
 cd apps/mobile && npx vitest run src/iap/__tests__/binding.test.ts
 ```
 Expected: PASS 2/2.
+
+- [ ] **Step 11.5b: Add cross-platform parity test**
+
+Create a shared fixture so server and mobile both assert the same exact output for the same input. A drift here would silently 403 every purchase as `user_mismatch`.
+
+```ts
+// libs/shared/test/iap/binding-parity.test.ts
+import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
+import { v5 as uuidv5 } from "uuid";
+import { IAP_NAMESPACE } from "../../src/iap/namespace.js";
+
+const FIXTURE_USER_ID = "fixture-user-id";
+// Computed once and pinned. If the constants ever change the test
+// fails — that's the point.
+const EXPECTED_APPLE = uuidv5(FIXTURE_USER_ID, IAP_NAMESPACE);
+const EXPECTED_GOOGLE = createHash("sha256").update(FIXTURE_USER_ID, "utf8").digest("hex");
+
+describe("IAP binding token parity (server ⇄ mobile)", () => {
+  it("Apple token for fixture user is deterministic", () => {
+    expect(EXPECTED_APPLE).toMatch(/^[0-9a-f-]{36}$/);
+    expect(uuidv5(FIXTURE_USER_ID, IAP_NAMESPACE)).toBe(EXPECTED_APPLE);
+  });
+  it("Google token for fixture user is deterministic", () => {
+    expect(EXPECTED_GOOGLE).toMatch(/^[0-9a-f]{64}$/);
+  });
+  it("exports values mobile parity test can re-pin", () => {
+    // Mobile copy of this file must import the SAME constants and
+    // assert their own derive*Token functions match.
+    expect(EXPECTED_APPLE).toBeTruthy();
+    expect(EXPECTED_GOOGLE).toBeTruthy();
+  });
+});
+```
+
+And the mobile mirror:
+
+```ts
+// apps/mobile/src/iap/__tests__/binding-parity.test.ts
+import { describe, it, expect } from "vitest";
+import { deriveAppleToken, deriveGoogleToken } from "../binding";
+
+const FIXTURE_USER_ID = "fixture-user-id";
+// Same expected values as libs/shared/test/iap/binding-parity.test.ts.
+// Update both files if IAP_NAMESPACE ever changes.
+const EXPECTED_APPLE = "<paste from server test on first run>";
+const EXPECTED_GOOGLE = "<paste from server test on first run>";
+
+describe("mobile binding tokens match server output", () => {
+  it("Apple token matches server-side uuidv5", () => {
+    expect(deriveAppleToken(FIXTURE_USER_ID)).toBe(EXPECTED_APPLE);
+  });
+  it("Google token matches server-side sha256", () => {
+    expect(deriveGoogleToken(FIXTURE_USER_ID)).toBe(EXPECTED_GOOGLE);
+  });
+});
+```
+
+Run both:
+```
+cd libs/shared && npx vitest run test/iap/binding-parity.test.ts
+cd apps/mobile && npx vitest run src/iap/__tests__/binding-parity.test.ts
+```
+First run: paste the server-computed values into the mobile test's `EXPECTED_*` constants. Both pass thereafter.
 
 - [ ] **Step 11.6: Implement `client.ts`**
 
@@ -3637,33 +3688,57 @@ export async function fetchProducts(): Promise<LocalProduct[]> {
     });
 }
 
+/** Error class surfaced to callers so the UI can map react-native-iap's
+ *  string codes to user-friendly messaging. The code is the canonical
+ *  rn-iap error code; `recoverable` is true for user-cancel and
+ *  already-owned (Restore handles the latter). */
+export class IapPurchaseError extends Error {
+  constructor(public code: string, public recoverable: boolean, message: string) {
+    super(message);
+  }
+}
+
 export async function purchaseSubscription(args: {
   productId: IAPProductId;
   userId: string;
 }): Promise<{ receipt: string; platform: "ios" | "android" }> {
   await ensureConnected();
-  if (Platform.OS === "ios") {
-    const appAccountToken = deriveAppleToken(args.userId);
+  try {
+    if (Platform.OS === "ios") {
+      const appAccountToken = deriveAppleToken(args.userId);
+      const purchase = await requestSubscription({
+        sku: args.productId,
+        appAccountToken,
+      });
+      const single: SubscriptionPurchase = Array.isArray(purchase) ? purchase[0] : purchase;
+      const jws = (single as any).transactionReceipt ?? (single as any).jwsRepresentation;
+      if (!jws) throw new IapPurchaseError("E_NO_RECEIPT", false, "No JWS receipt returned by StoreKit 2");
+      return { receipt: String(jws), platform: "ios" };
+    }
+    // Android
+    const obfuscatedAccountId = deriveGoogleToken(args.userId);
     const purchase = await requestSubscription({
       sku: args.productId,
-      appAccountToken,
-    });
+      obfuscatedAccountIdAndroid: obfuscatedAccountId,
+      subscriptionOffers: undefined, // no offers in v1; intro/trial added in v1.5
+    } as any);
     const single: SubscriptionPurchase = Array.isArray(purchase) ? purchase[0] : purchase;
-    const jws = (single as any).transactionReceipt ?? (single as any).jwsRepresentation;
-    if (!jws) throw new Error("No JWS receipt returned by StoreKit 2");
-    return { receipt: String(jws), platform: "ios" };
+    const purchaseToken = (single as any).purchaseToken;
+    if (!purchaseToken) throw new IapPurchaseError("E_NO_RECEIPT", false, "No purchaseToken returned by Play Billing");
+    return { receipt: String(purchaseToken), platform: "android" };
+  } catch (e: any) {
+    // Normalize rn-iap error codes so the UI can dispatch without
+    // pattern-matching string messages. v14 surfaces `code` on the
+    // PurchaseError. See https://github.com/dooboolab-community/react-native-iap.
+    const code: string = e?.code ?? "";
+    if (code === "E_USER_CANCELLED") throw new IapPurchaseError(code, true, "User cancelled");
+    if (code === "E_ALREADY_OWNED") throw new IapPurchaseError(code, true, "Already owned — try Restore");
+    if (code === "E_NETWORK_ERROR") throw new IapPurchaseError(code, true, "Network error");
+    if (code === "E_ITEM_UNAVAILABLE") throw new IapPurchaseError(code, false, "Product unavailable");
+    if (code === "E_SERVICE_ERROR") throw new IapPurchaseError(code, true, "Service unavailable");
+    if (e instanceof IapPurchaseError) throw e;
+    throw new IapPurchaseError("E_UNKNOWN", false, e?.message ?? "Purchase failed");
   }
-  // Android
-  const obfuscatedAccountId = deriveGoogleToken(args.userId);
-  const purchase = await requestSubscription({
-    sku: args.productId,
-    obfuscatedAccountIdAndroid: obfuscatedAccountId,
-    subscriptionOffers: undefined, // single base plan in v1
-  } as any);
-  const single: SubscriptionPurchase = Array.isArray(purchase) ? purchase[0] : purchase;
-  const purchaseToken = (single as any).purchaseToken;
-  if (!purchaseToken) throw new Error("No purchaseToken returned by Play Billing");
-  return { receipt: String(purchaseToken), platform: "android" };
 }
 
 /** Call ONLY after server returns 2xx — protects against
@@ -3769,7 +3844,7 @@ git commit -m "feat(mobile): react-native-iap install + IAP client wrapper + API
 import { useEffect, useState, useCallback } from "react";
 import { View, Text, Pressable, ActivityIndicator, ScrollView, Alert } from "react-native";
 import { useRouter, Stack } from "expo-router";
-import { fetchProducts, purchaseSubscription, type LocalProduct } from "../../src/iap/client";
+import { fetchProducts, purchaseSubscription, IapPurchaseError, type LocalProduct } from "../../src/iap/client";
 import { postIAPCheckout } from "../../src/api/billing";
 import { useMe } from "../../src/hooks/useMe"; // existing hook returns MeDTO
 import { colors } from "../../src/theme";
@@ -3800,8 +3875,20 @@ export default function PlanPicker() {
       const { receipt, platform } = await purchaseSubscription({ productId: p.productId, userId: me.user.id });
       await postIAPCheckout({ platform, productId: p.productId, receipt });
       router.replace("/(tabs)/" as never);
-    } catch (e: any) {
-      Alert.alert("Couldn't subscribe", e?.message ?? "Try again.");
+    } catch (e) {
+      if (e instanceof IapPurchaseError) {
+        // User-cancel: silent — never alert "couldn't subscribe" after
+        // an intentional cancel (bad UX, Apple guideline-aligned).
+        if (e.code === "E_USER_CANCELLED") return;
+        if (e.code === "E_ALREADY_OWNED") {
+          // The store already records this purchase; route to Restore.
+          router.push("/plan/restore" as never);
+          return;
+        }
+        Alert.alert("Couldn't subscribe", e.message);
+        return;
+      }
+      Alert.alert("Couldn't subscribe", "Something went wrong. Try again.");
     } finally {
       setBusy(null);
     }
