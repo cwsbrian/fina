@@ -48,9 +48,9 @@ export default function Landing() {
       <div className={styles.center}>
         <div className={styles.eyebrow}>Now accepting early access</div>
         <h1 className={styles.headline}>
-          Every morning,
+          You look at your account
           <br />
-          <em>before</em> you open your wallet.
+          <em>only</em> when it matters.
         </h1>
         <p className={styles.sub}>
           Fina, your financial companion for everyday money. We&apos;re

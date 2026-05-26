@@ -11,7 +11,7 @@ const inter = Inter({
 export const metadata = {
   title: "Fina · Your financial companion for everyday money",
   description:
-    "Every morning, before you open your wallet. Join the waitlist for early access.",
+    "You look at your account only when it matters. Join the waitlist for early access.",
 };
 
 export default function RootLayout({
