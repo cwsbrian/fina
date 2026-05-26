@@ -66,7 +66,11 @@ Per the **Shared lib first** principle, all new wire types live in `libs/shared/
     | "platform_unavailable"; // App Store / Play returned 5xx
   ```
 
-**No schema changes.** `enum SubscriptionSource { stripe iap_apple iap_google }` and `Subscription` model already support IAP (added in earlier plan as future-proofing). `Subscription.sourceCustomerId` will hold `appAccountToken` (iOS) or `obfuscatedAccountId` (Android) — both are UUIDs we generate per user to bind purchases to our `userId`.
+**Subscription ID contract:**
+- Apple: `Subscription.sourceSubscriptionId = originalTransactionId` ALWAYS. Never `transactionId` (which rotates per renewal). `originalTransactionId` is stable across renewals and is the subscription identity. The checkout route, the webhook handler, and `syncSubscriptionFromIAP` must all normalize to `originalTransactionId` before upserting — otherwise checkout-route and webhook target different rows and we get duplicate `Subscription` records per user.
+- Google: `Subscription.sourceSubscriptionId = purchaseToken`. But the v2 response may carry `linkedPurchaseToken` after an in-Play tier change — see §7 for the chain-rewrite handling.
+
+**No schema changes** to `Subscription` itself — `enum SubscriptionSource { stripe iap_apple iap_google }` already exists. `Subscription.sourceCustomerId` will hold `appAccountToken` (iOS) or `obfuscatedAccountId` (Android) — both are deterministic per-user UUIDs (see §6, §7).
 
 ## 4. Mobile library + config
 
@@ -208,6 +212,7 @@ Google `SubscriptionPurchaseV2.subscriptionState`:
 
 - Mobile uses `obfuscatedAccountId` (Fina userId, hashed via SHA-256 hex, max 64 chars per Google's limit). Server reads it back from `purchases.subscriptionsv2.get` → stores as `sourceCustomerId`.
 - We use Subscriptions v2 (not v1) — single base plan per product for v1.
+- **`linkedPurchaseToken` chain handling.** When a user upgrades/downgrades inside Play (or our future in-app tier-change flow uses `SubscriptionUpdateParams`), Google issues a NEW `purchaseToken` and references the prior one via `linkedPurchaseToken` in the v2 response. Naive keying on `purchaseToken` would create a duplicate `Subscription` row and trip the active-sub 409 guard. `google-client.ts` MUST, before any insert, check for `linkedPurchaseToken` and rewrite the existing row via `prisma.subscription.update({ where: { source_sourceSubscriptionId: { source: "iap_google", sourceSubscriptionId: linkedPurchaseToken } }, data: { sourceSubscriptionId: newToken, ... }})`. If the linked row doesn't exist (out-of-order delivery), fall through to upsert under the new token and rely on the eventually-consistent reconciliation by the next sync.
 - Pub/Sub topic: `projects/{gcp-project}/topics/fina-iap-rtdn`. Configured in Play Console → Monetization setup. Push subscription with OIDC auth → our `/webhooks/iap/google` URL.
 - **Acknowledgment is mandatory.** Every new subscription purchase MUST be acknowledged within 3 days or Google auto-refunds. Our flow:
   1. Mobile calls `requestSubscription` → receives purchase callback → does NOT call `finishTransaction` yet.
