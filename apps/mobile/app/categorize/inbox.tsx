@@ -118,8 +118,17 @@ export default function CategorizeInbox() {
             const isOther = (cat?.name ?? "").trim().toLowerCase() === "other";
             return (
               <View key={tx.id} style={styles.card}>
+                <Pressable
+                  accessibilityLabel={cancelLabel}
+                  style={({ pressed }) => [styles.dismissCorner, pressed && { opacity: 0.5 }]}
+                  onPress={() => skipOrDismissRow(tx)}
+                  disabled={busyTxId === tx.id}
+                  hitSlop={10}
+                >
+                  <Ionicons name="close" size={16} color={colors.muted} />
+                </Pressable>
                 <View style={styles.rowTop}>
-                  <View style={{ flex: 1, minWidth: 0 }}>
+                  <View style={{ flex: 1, minWidth: 0, marginRight: 28 }}>
                     <Text style={styles.merchant} numberOfLines={1}>{merchant}</Text>
                     <View style={styles.rowMid}>
                       <Text style={styles.catLabel}>{cat?.name ?? "Uncategorized"}</Text>
@@ -135,34 +144,23 @@ export default function CategorizeInbox() {
                   </Text>
                 </View>
                 <View style={styles.actions}>
-                  <View style={styles.actionsLeft}>
-                    <Pressable
-                      accessibilityLabel="Confirm category"
-                      style={({ pressed }) => [styles.confirmPill, pressed && { opacity: 0.7 }]}
-                      onPress={() => confirmRow(tx)}
-                      disabled={busyTxId === tx.id}
-                      hitSlop={6}
-                    >
-                      <Text style={styles.confirmPillText}>Confirm</Text>
-                    </Pressable>
-                    <Pressable
-                      accessibilityLabel="Change category"
-                      style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
-                      onPress={() => editRow(tx)}
-                      disabled={busyTxId === tx.id}
-                      hitSlop={8}
-                    >
-                      <Ionicons name="pencil-outline" size={18} color={colors.muted} />
-                    </Pressable>
-                  </View>
                   <Pressable
-                    accessibilityLabel={cancelLabel}
+                    accessibilityLabel="Confirm category"
+                    style={({ pressed }) => [styles.confirmPill, pressed && { opacity: 0.7 }]}
+                    onPress={() => confirmRow(tx)}
+                    disabled={busyTxId === tx.id}
+                    hitSlop={6}
+                  >
+                    <Text style={styles.confirmPillText}>Confirm</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityLabel="Change category"
                     style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
-                    onPress={() => skipOrDismissRow(tx)}
+                    onPress={() => editRow(tx)}
                     disabled={busyTxId === tx.id}
                     hitSlop={8}
                   >
-                    <Ionicons name="close" size={20} color={colors.muted} />
+                    <Ionicons name="pencil-outline" size={18} color={colors.muted} />
                   </Pressable>
                 </View>
               </View>
@@ -212,6 +210,18 @@ const styles = StyleSheet.create({
     padding: space.base,
     marginBottom: space.sm,
     gap: 6,
+    position: "relative",
+  },
+  dismissCorner: {
+    position: "absolute",
+    top: 8,
+    right: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 2,
   },
   rowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
   merchant: { ...type$.titleSm, color: colors.ink, flex: 1, marginRight: space.sm },
@@ -223,13 +233,8 @@ const styles = StyleSheet.create({
   actions: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    marginTop: space.sm,
-  },
-  actionsLeft: {
-    flexDirection: "row",
-    alignItems: "center",
     gap: 4,
+    marginTop: space.sm,
   },
   confirmPill: {
     paddingHorizontal: 14,
