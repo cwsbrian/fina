@@ -885,40 +885,16 @@ npx vitest run tests/iap/env-guard.test.ts
 ```
 Expected: PASS 4/4.
 
-- [ ] **Step 3.8: Extend Pino `redact` config**
+- [ ] **Step 3.8: Run full API test suite (smoke)**
 
-Locate the Pino logger init (search: `pino(` or `import pino`). Add to the `redact.paths` array:
-
-```ts
-// apps/api/src/server.ts (or wherever pino is initialized)
-const log = pino({
-  // ... existing config
-  redact: {
-    paths: [
-      // ... existing
-      "env.APPLE_ASC_PRIVATE_KEY",
-      "env.GOOGLE_SERVICE_ACCOUNT_JSON",
-      "*.APPLE_ASC_PRIVATE_KEY",
-      "*.GOOGLE_SERVICE_ACCOUNT_JSON",
-      "*.private_key",
-      "*.purchaseToken",
-      "*.signedTransactionInfo",
-      "*.appAccountToken",
-      "*.receipt",
-    ],
-    censor: "[REDACTED]",
-  },
-});
-```
-
-- [ ] **Step 3.9: Run full API test suite (smoke)**
+Pino redact paths are already wired in Step 0.4 (Task 0). No additional logger configuration needed here.
 
 ```
 cd apps/api && npx vitest run
 ```
 Expected: zero new failures (pre-existing tests untouched).
 
-- [ ] **Step 3.10: Commit**
+- [ ] **Step 3.9: Commit**
 
 ```
 git add apps/api/src/env.ts apps/api/src/iap/redactEnv.ts apps/api/src/iap/env-guard.ts apps/api/src/server.ts apps/api/tests/iap/env.test.ts apps/api/tests/iap/env-guard.test.ts
@@ -1526,7 +1502,7 @@ Expected: PASS 6/6.
 - [ ] **Step 4.8: Commit**
 
 ```
-git add apps/api/package.json apps/api/src/iap/apple-client.ts apps/api/src/iap/status-mapping.ts apps/api/tests/iap/apple-client.test.ts apps/api/tests/iap/status-mapping.test.ts
+git add apps/api/package.json apps/api/src/iap/apple-client.ts apps/api/src/iap/status-mapping.ts apps/api/src/iap/apple-roots.ts apps/api/tests/iap/apple-client.test.ts apps/api/tests/iap/status-mapping.test.ts apps/api/tests/iap/apple-roots.test.ts
 git commit -m "feat(api): Apple StoreKit 2 client — verifyAndDecodeTransaction with 6 mandatory checks"
 ```
 
@@ -3623,30 +3599,41 @@ And the mobile mirror:
 ```ts
 // apps/mobile/src/iap/__tests__/binding-parity.test.ts
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
+import { v5 as uuidv5 } from "uuid";
+import { IAP_NAMESPACE } from "@fina/shared";
 import { deriveAppleToken, deriveGoogleToken } from "../binding";
 
 const FIXTURE_USER_ID = "fixture-user-id";
-// Same expected values as libs/shared/src/iap/binding-parity.test.ts.
-// Update both files if IAP_NAMESPACE ever changes.
-const EXPECTED_APPLE = "<paste from server test on first run>";
-const EXPECTED_GOOGLE = "<paste from server test on first run>";
+// Compute expected values inline using the same primitives the server
+// uses (uuidv5 + node:crypto sha256). No copy-paste literals — if
+// IAP_NAMESPACE ever changes, both sides re-derive together and the
+// test catches any encoding divergence (UTF-8 vs UTF-16, normalization).
+const EXPECTED_APPLE = uuidv5(FIXTURE_USER_ID, IAP_NAMESPACE);
+const EXPECTED_GOOGLE = createHash("sha256").update(FIXTURE_USER_ID, "utf8").digest("hex");
 
 describe("mobile binding tokens match server output", () => {
-  it("Apple token matches server-side uuidv5", () => {
+  it("Apple token matches uuidv5(userId, IAP_NAMESPACE)", () => {
     expect(deriveAppleToken(FIXTURE_USER_ID)).toBe(EXPECTED_APPLE);
   });
-  it("Google token matches server-side sha256", () => {
+  it("Google token (js-sha256) matches node:crypto sha256(userId, utf8) hex", () => {
     expect(deriveGoogleToken(FIXTURE_USER_ID)).toBe(EXPECTED_GOOGLE);
   });
 });
 ```
 
+Note: the mobile test runs under Vitest's Node environment (not the
+React Native runtime), so `node:crypto` is available for the parity
+assertion. The check is "mobile's js-sha256 produces the same bytes as
+node:crypto for the same UTF-8 input" — verifying the cross-runtime
+encoding parity that production purchase-binding depends on.
+
 Run both:
 ```
-cd libs/shared && npx vitest run tests/iap/binding-parity.test.ts
+cd libs/shared && npx vitest run src/iap/binding-parity.test.ts
 cd apps/mobile && npx vitest run src/iap/__tests__/binding-parity.test.ts
 ```
-First run: paste the server-computed values into the mobile test's `EXPECTED_*` constants. Both pass thereafter.
+Both pass on first run.
 
 - [ ] **Step 11.6: Implement `client.ts`**
 
@@ -4121,7 +4108,7 @@ Gate the four launch checks from spec §11 before flipping `APPLE_ENV=production
 - [ ] Launch dev-client build on an Android device with the Google account added to Play license-testers.
 - [ ] Subscribe lite_monthly.
 - [ ] Within 5 seconds: `POST /billing/iap/checkout` 200.
-- [ ] Within 5 minutes: API calls `purchases.subscriptionsv2.acknowledge` (verify via API log line `iap_acknowledge_ok`).
+- [ ] Within 5 minutes: API calls `purchases.subscriptions.acknowledge(packageName, subscriptionId=productId, token)` for the new sub. Verify by directly re-fetching the purchase via `purchases.subscriptionsv2.get` (gcloud CLI or googleapis quickstart) and confirming `acknowledgementState === ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED`. (No custom log line — the call lives inside `google-client.ts._acknowledge` and surfaces only errors.)
 - [ ] DB: `Subscription.acknowledgementState` indirectly verified — re-fetch via `purchases.subscriptionsv2.get` and confirm `ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED`.
 - [ ] Pub/Sub: subsequent RTDN notifications dedup correctly (no duplicate `Subscription` rows).
 
@@ -4395,7 +4382,10 @@ Plan saved to `docs/superpowers/plans/2026-05-26-mobile-iap-billing.md`.
 - `02ff6e0` — P5 — Webhook dedup vs retry-counter separation; Family Sharing → canceled.
 - `409c472` — P6 — buildMeBody signature + caller updates; filterEnvironmentRows type narrowed.
 - `418582a` — P7 — react-native-iap@^14 pin; sha256 top-level; parity tests; IapPurchaseError UX.
-- This commit — P8 — Task 14 (account-deletion tombstone helper + runbook) + ApiErrorCode mapping check.
+- `90676b4` — P8 — Task 14 (account-deletion tombstone helper + runbook) + ApiErrorCode mapping check.
+- `8fc2230` — P9 — Test path consistency (tests/ plural, libs/shared src/ colocation, remaining resetTestDb → truncateAll).
+- `5c68280` — P10 — getSubscriptionStatus dedicated decoders + account-deletion in $transaction.
+- This commit — P11 — Doc cleanups (delete dead Step 3.8 redact block, Step 4.8 git-add includes apple-roots files, mobile parity test computes expected inline, sandbox-smoke Gate 3 dropped fake `iap_acknowledge_ok` log line).
 
 **Two execution options:**
 
