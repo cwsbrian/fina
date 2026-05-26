@@ -36,7 +36,14 @@ export async function POST(req: Request): Promise<NextResponse> {
 
   const apiKey = process.env.RESEND_API_KEY;
   const to = process.env.WAITLIST_TO ?? "cwsbrian@gmail.com";
-  const from = process.env.WAITLIST_FROM ?? "Fina waitlist <onboarding@resend.dev>";
+  // Prefer the per-feature override (WAITLIST_FROM), then fall back to the
+  // shared transactional sender (EMAIL_FROM, e.g. no-reply@withfina.com),
+  // and finally Resend's sandbox sender for dev convenience.
+  const emailFromShared = process.env.EMAIL_FROM
+    ? `Fina <${process.env.EMAIL_FROM.replace(/^["']|["']$/g, "")}>`
+    : null;
+  const from =
+    process.env.WAITLIST_FROM ?? emailFromShared ?? "Fina <onboarding@resend.dev>";
 
   if (!apiKey) {
     // Dev fallback — still ack the user so the form gives feedback.
@@ -57,8 +64,8 @@ export async function POST(req: Request): Promise<NextResponse> {
       body: JSON.stringify({
         from,
         to,
-        subject: `New Fina waitlist signup: ${parsed.email}`,
-        text: `${parsed.email} just joined the Fina waitlist.\n\nReply directly if you want to reach out.`,
+        subject: `Fina · New waitlist signup`,
+        text: `${parsed.email} joined the Fina waitlist.\n\nReply directly to reach them.`,
         reply_to: parsed.email,
       }),
     });
