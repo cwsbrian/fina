@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, afterAll, vi } from "vites
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
+import { makeUserWithDevices } from "./helpers/factories.js";
 
 // Hoisted mock — expo-server-sdk must be mocked before push/send.ts loads.
 // IMPORTANT: sendPushNotificationsAsync is a PROTOTYPE method (not a class
@@ -27,28 +28,6 @@ vi.mock("expo-server-sdk", () => {
 beforeEach(async () => { await truncateAll(); });
 afterEach(() => { vi.restoreAllMocks(); });  // Vitest singleFork — prevent spy leakage across files.
 afterAll(async () => { await disconnect(); });
-
-async function makeUserWithDevices(
-  tokens: Array<{ token: string; platform: "ios" | "android" }>,
-  notificationPrefs?: Record<string, boolean>,
-) {
-  const u = await prisma.user.create({
-    data: { id: `push-${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
-            email: `push-${Date.now()}@t.co`, name: "P" },
-  });
-  for (const t of tokens) {
-    await prisma.userDevice.create({
-      data: { userId: u.id, expoPushToken: t.token, platform: t.platform },
-    });
-  }
-  if (notificationPrefs) {
-    await prisma.user.update({
-      where: { id: u.id },
-      data: { notificationPrefs },
-    });
-  }
-  return u;
-}
 
 describe("sendBriefPush", () => {
   it("no devices — no-op + logs zero count", async () => {

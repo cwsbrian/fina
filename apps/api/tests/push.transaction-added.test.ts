@@ -5,6 +5,7 @@ import { testEnv } from "./helpers/test-env.js";
 import { notifyTransactionAdded } from "../src/push/transaction-added.js";
 import * as sendMod from "../src/push/send.js";
 import * as loggerMod from "../src/logger.js";
+import { setupWorkspaceWithRoles } from "./helpers/factories.js";
 
 const env = testEnv();
 
@@ -20,38 +21,6 @@ beforeAll(async () => { await prisma.$connect(); });
 afterAll(async () => { await disconnect(); });
 beforeEach(async () => { await truncateAll(); });
 afterEach(() => { vi.clearAllMocks(); });
-
-let counter = 0;
-
-async function createUser(): Promise<string> {
-  counter++;
-  const u = await prisma.user.create({
-    data: {
-      id: `nta-u-${Date.now()}-${counter}`,
-      email: `nta-${Date.now()}-${counter}@t.co`,
-      name: `NTA User ${counter}`,
-    },
-  });
-  return u.id;
-}
-
-async function setupWorkspaceWithRoles(
-  roles: Array<"owner" | "editor" | "viewer">,
-): Promise<{ wsId: string; userIds: string[] }> {
-  counter++;
-  const ws = await prisma.workspace.create({
-    data: { id: `nta-w-${Date.now()}-${counter}`, name: `NTA WS ${counter}`, currency: "CAD" },
-  });
-  const userIds: string[] = [];
-  for (const role of roles) {
-    const userId = await createUser();
-    await prisma.membership.create({
-      data: { userId, workspaceId: ws.id, role },
-    });
-    userIds.push(userId);
-  }
-  return { wsId: ws.id, userIds };
-}
 
 describe("notifyTransactionAdded", () => {
   it("workspace with 0 memberships → no push", async () => {

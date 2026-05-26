@@ -279,7 +279,7 @@ EOF
 - Modify: `apps/api/tests/push.send.test.ts` (replace `makeUserWithDevices` with import)
 - **NOT modified** (per R2 review): `apps/api/tests/cron.push-receipts.test.ts` — tight User+Device+Ticket fixture coupling; defer to Plan 1V era.
 
-- [ ] **Step 1: Create `factories.ts`**
+- [x] **Step 1: Create `factories.ts`**
 
 ```ts
 import { prisma } from "../../src/db.js";
@@ -358,7 +358,7 @@ export async function makeUserWithDevices(
 }
 ```
 
-- [ ] **Step 2: Migrate `push.transaction-added.test.ts`**
+- [x] **Step 2: Migrate `push.transaction-added.test.ts`**
 
 Remove the inline `createUser` (lines ~25-35) + `setupWorkspaceWithRoles` (lines ~37-53) + the `counter` global. Replace with:
 ```ts
@@ -367,7 +367,7 @@ import { setupWorkspaceWithRoles } from "./helpers/factories.js";
 
 Update each `setupWorkspaceWithRoles(roles)` call to use the imported version — signatures match.
 
-- [ ] **Step 3: Migrate `cron.goal-milestones.test.ts`**
+- [x] **Step 3: Migrate `cron.goal-milestones.test.ts`**
 
 Same migration: remove inline helpers, import from factories.js. Update calls to use `setupWorkspaceWithRoles`. Note: existing helper returned `{ wsId, userIds: Record<...> }` — factory returns `{ wsId, userIds: string[] }`. Update call sites that used `userIds.owner` to use `userIds[0]!`, etc.
 
@@ -376,13 +376,13 @@ This is the LARGEST migration in T2 — careful with helper-shape change. Trace 
 - `userIds.editor` → `userIds[1]!` (when "editor" is 2nd in roles)
 - `userIds.viewer` → `userIds[2]!`
 
-- [ ] **Step 4: SKIP `cron.push-receipts.test.ts` migration** (per R2 review)
+- [x] **Step 4: SKIP `cron.push-receipts.test.ts` migration** (per R2 review)
 
 This file's `createUserDevice` + `createTicket` + `mockReceipts` helpers form a tight User+Device+Ticket fixture trio with 11+ call sites and structural divergence (createUserDevice returns just `deviceId`, factory returns `User`). Migrating creates churn without test improvement.
 
 **Decision**: keep `cron.push-receipts.test.ts` inline helpers as-is. Migrate during Plan 1V era when this file is next touched. T2's scope is now **3 test files**, not 4.
 
-- [ ] **Step 5: Migrate `push.send.test.ts`**
+- [x] **Step 5: Migrate `push.send.test.ts`**
 
 The `makeUserWithDevices` helper at lines 31-51 is identical to the factories version. Replace with:
 ```ts
@@ -391,17 +391,17 @@ import { makeUserWithDevices } from "./helpers/factories.js";
 
 No call-site changes needed — signature matches.
 
-- [ ] **Step 6: Run all affected tests**
+- [x] **Step 6: Run all affected tests**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/push.transaction-added.test.ts tests/cron.goal-milestones.test.ts tests/push.send.test.ts`
 Expected: all pass (counts: 6 + 10 + 25 = 41). cron.push-receipts.test.ts unchanged in T2 (10 tests still pass independently).
 
-- [ ] **Step 7: Typecheck**
+- [x] **Step 7: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep -E "factories|push.send|push.transaction|cron.goal" | head -10`
 Expected: 0 lines.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add apps/api/tests/helpers/factories.ts apps/api/tests/push.transaction-added.test.ts apps/api/tests/cron.goal-milestones.test.ts apps/api/tests/push.send.test.ts
