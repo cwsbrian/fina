@@ -52,6 +52,7 @@ export default function More() {
   const [activeWs, setActiveWs] = useState<ActiveWorkspace | null>(null);
   const [banks, setBanks] = useState<PlaidItemSummary[] | null>(null);
   const [openingBilling, setOpeningBilling] = useState(false);
+  const [needsReviewCount, setNeedsReviewCount] = useState(0);
 
   const loadMe = useCallback(() => {
     apiFetch<Me>("/me").then(setMe).catch(() => {});
@@ -90,11 +91,25 @@ export default function More() {
     }
   }, []);
 
+  const loadNeedsReview = useCallback(async () => {
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) return;
+      const r = await apiFetch<{ transactions: unknown[] }>(
+        `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
+      );
+      setNeedsReviewCount(r.transactions.length);
+    } catch {
+      // Non-fatal — Review queue row falls back to no count.
+    }
+  }, []);
+
   useEffect(() => {
     loadMe();
     loadActiveWorkspace();
     loadBanks();
-  }, [loadMe, loadActiveWorkspace, loadBanks]);
+    loadNeedsReview();
+  }, [loadMe, loadActiveWorkspace, loadBanks, loadNeedsReview]);
 
   // Refresh on focus so a bank disconnected / billing portal change shows fresh.
   useFocusEffect(
@@ -102,7 +117,8 @@ export default function More() {
       loadMe();
       loadActiveWorkspace();
       loadBanks();
-    }, [loadMe, loadActiveWorkspace, loadBanks]),
+      loadNeedsReview();
+    }, [loadMe, loadActiveWorkspace, loadBanks, loadNeedsReview]),
   );
 
   const onSignOut = () => {
@@ -321,6 +337,12 @@ export default function More() {
             title="Categorization style"
             detail={modeLabel(me)}
             onPress={() => router.push("/categorization" as never)}
+          />
+          <SettingsRow
+            icon="list-outline"
+            title="Review queue"
+            detail={reviewQueueDetail(needsReviewCount)}
+            onPress={() => router.push("/categorize/inbox" as never)}
             last
           />
         </Group>
@@ -423,6 +445,12 @@ function modeLabel(me: Me | null): string {
     case "flexible": return "Flexible";
     case "auto":     return "Auto";
   }
+}
+
+function reviewQueueDetail(n: number): string {
+  if (n === 0) return "0";
+  if (n >= 50) return "50+";
+  return String(n);
 }
 
 function notificationsDetail(me: Me | null): string {
