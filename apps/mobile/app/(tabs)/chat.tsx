@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, router, useNavigation } from "expo-router";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { ThreadView } from "../../src/chat/ThreadView";
+import { apiFetch } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
@@ -32,6 +33,13 @@ export default function ChatTab() {
       setCurrentThreadId(params.thread);
       router.setParams({ thread: undefined } as never);
     }
+  }, [params.thread]);
+
+  useEffect(() => {
+    if (!params.thread) return;
+    apiFetch(`/chat/threads/${params.thread}/read`, { method: "POST" }).catch(() => {
+      // swallow — read mark is best-effort
+    });
   }, [params.thread]);
 
   const onNewChat = useCallback(() => {
