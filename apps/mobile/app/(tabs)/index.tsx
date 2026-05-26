@@ -18,6 +18,7 @@ import {
   type CategoryDTO,
   type TransactionDTO,
   type ChatThreadDTO,
+  type PlaidItemDTO,
 } from "@fina/shared";
 import { useSession } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
@@ -141,6 +142,10 @@ export default function Home() {
     net: number;
     prevNet: number | null;
   } | null>(null);
+  const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
+  const [unreadFina, setUnreadFina] = useState(0);
+  const [pendingInvites, setPendingInvites] = useState(0);
+  const [hasGoal, setHasGoal] = useState<boolean | null>(null);
 
   const load = useCallback(async () => {
     setErr(null);
@@ -168,8 +173,23 @@ export default function Home() {
             // Threads are returned newest-first by lastMessageAt.
             const unbound = r.threads.find((t) => t.workspaceId === null) ?? null;
             setLatestUnboundThread(unbound);
+            setUnreadFina(
+              r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0),
+            );
           })
-          .catch(() => setLatestUnboundThread(null)),
+          .catch(() => {
+            setLatestUnboundThread(null);
+            setUnreadFina(0);
+          }),
+        apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
+          .then((r) => setPlaidItems(r.plaidItems))
+          .catch(() => setPlaidItems([])),
+        apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
+          .then((r) => setPendingInvites(r.invites.length))
+          .catch(() => setPendingInvites(0)),
+        apiFetch<{ goals: unknown[] }>(`/workspaces/${wsId}/goals`)
+          .then((r) => setHasGoal(r.goals.length > 0))
+          .catch(() => setHasGoal(false)),
         apiFetch<{ transactions: unknown[] }>(
           `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
         )
@@ -267,6 +287,109 @@ export default function Home() {
     .slice()
     .sort((a, b) => Number(b.spent) - Number(a.spent))
     .slice(0, 4);
+
+  // ── Action Items derive ────────────────────────────────────
+  const bankReconnects = (plaidItems ?? []).filter(
+    (p) =>
+      p.status === "error" ||
+      p.errorCode === "ITEM_LOGIN_REQUIRED" ||
+      p.errorCode === "PENDING_EXPIRATION",
+  );
+  const trialUrgent = !!(me?.trial?.active && days !== null && days <= 5);
+  const hasBudget =
+    budgetCurrent?.plan !== null && budgetCurrent?.plan !== undefined;
+  const bankCount = plaidItems?.length ?? 0;
+
+  type ActionItem = {
+    key: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    title: string;
+    subtitle?: string;
+    href: string;
+  };
+  const actionItems: ActionItem[] = [];
+
+  if (bankReconnects.length === 1) {
+    actionItems.push({
+      key: "bank",
+      icon: "alert-circle-outline",
+      title: `Reconnect ${bankReconnects[0]!.institutionName}`,
+      href: "/banks",
+    });
+  } else if (bankReconnects.length > 1) {
+    actionItems.push({
+      key: "bank",
+      icon: "alert-circle-outline",
+      title: `Reconnect ${bankReconnects.length} banks`,
+      href: "/banks",
+    });
+  }
+
+  if (unreadFina > 0) {
+    actionItems.push({
+      key: "fina",
+      icon: "chatbubble-outline",
+      title: `Fina sent you ${unreadFina} message${unreadFina === 1 ? "" : "s"}`,
+      href: "/chats",
+    });
+  }
+
+  if (needsReviewCount > 0) {
+    const label = needsReviewCount >= 50 ? "50+" : `${needsReviewCount}`;
+    actionItems.push({
+      key: "categorize",
+      icon: "construct-outline",
+      title: `Confirm ${label} categorization${needsReviewCount === 1 ? "" : "s"}`,
+      subtitle: "Fina auto-categorized these — confirm or change.",
+      href: "/categorize/inbox",
+    });
+  }
+
+  if (trialUrgent && days !== null) {
+    actionItems.push({
+      key: "trial",
+      icon: "sparkles-outline",
+      title: `Trial ends in ${days} day${days === 1 ? "" : "s"}`,
+      href: "/subscriptions",
+    });
+  }
+
+  if (pendingInvites > 0) {
+    actionItems.push({
+      key: "invites",
+      icon: "mail-outline",
+      title: `${pendingInvites} workspace invite${pendingInvites === 1 ? "" : "s"}`,
+      href: "/workspace/incoming",
+    });
+  }
+
+  if (budgetCurrent !== null && !hasBudget) {
+    actionItems.push({
+      key: "ob-budget",
+      icon: "wallet-outline",
+      title: "Set a monthly budget",
+      subtitle: "Pick a total. Fina tracks every spend.",
+      href: "/budget",
+    });
+  }
+  if (plaidItems !== null && bankCount === 0) {
+    actionItems.push({
+      key: "ob-bank",
+      icon: "card-outline",
+      title: "Connect a bank",
+      subtitle: "Plaid securely imports your transactions.",
+      href: "/banks",
+    });
+  }
+  if (hasGoal === false) {
+    actionItems.push({
+      key: "ob-goal",
+      icon: "flag-outline",
+      title: "Set your first goal",
+      subtitle: "Save for something. Pro feature, free during trial.",
+      href: "/(tabs)/goals",
+    });
+  }
 
   // ── Schedule deep-link copy ────────────────────────────────
   const scheduleMeta = scheduleSummary
@@ -380,15 +503,19 @@ export default function Home() {
               </View>
             )}
 
-            {/* Review queue card — categorize alert (action item) */}
-            {needsReviewCount > 0 && (
+            {/* Action Items — what needs the user's attention */}
+            {actionItems.length > 0 && (
               <View style={{ marginTop: space.base }}>
-                <ActionItemCard
-                  icon="construct-outline"
-                  title={`Confirm ${needsReviewCount >= 50 ? "50+" : needsReviewCount} categorization${needsReviewCount === 1 ? "" : "s"}`}
-                  subtitle="Fina auto-categorized these — confirm or change."
-                  onPress={() => router.push("/categorize/inbox" as never)}
-                />
+                <Text style={styles.eyebrow}>Your queue</Text>
+                {actionItems.map((it) => (
+                  <ActionItemCard
+                    key={it.key}
+                    icon={it.icon}
+                    title={it.title}
+                    {...(it.subtitle ? { subtitle: it.subtitle } : {})}
+                    onPress={() => router.push(it.href as never)}
+                  />
+                ))}
               </View>
             )}
 
