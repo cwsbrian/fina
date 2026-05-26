@@ -125,26 +125,57 @@ Files:
 - Modify: `apps/api/tests/push.transaction-added.test.ts` (test 5 contract change)
 - Modify: `apps/api/tests/cron.goal-milestones.test.ts` (test 9 contract change)
 
-Test 5 (transaction-added) update:
+Test 5 (transaction-added) update — also rename it title to reflect new behavior:
 ```ts
-// Before:
-expect(vi.mocked(sendMod.sendTransactionAddedPush)).toHaveBeenCalledTimes(1);
+// Title change: "first push throws → loop exits, 2nd member NOT attempted, error swallowed"
+//             → "first push throws → caught + logged, 2nd member still attempted"
 
-// After:
+// Body update:
 expect(vi.mocked(sendMod.sendTransactionAddedPush)).toHaveBeenCalledTimes(2);
-// Comment: per-recipient try/catch — first throws, second still attempted.
+// Per-recipient try/catch — first throws, second still attempted.
+
+// R2 ADD: assert logError was called with recipientUserId metadata.
+const logErrorSpy = vi.spyOn(loggerMod, "logError");
+// (Move setup BEFORE the function call. Then after:)
+expect(logErrorSpy).toHaveBeenCalledWith(
+  expect.objectContaining({ recipientUserId: expect.any(String) }),
+  expect.stringContaining("recipient"),
+);
 ```
 
-Test 9 (goal-milestones) update:
-```ts
-// Before:
-const states = [a.lastMilestonePct, b.lastMilestonePct].sort((x, y) => (x ?? -1) - (y ?? -1));
-expect(states).toEqual([null, 100]);
+Test 9 (goal-milestones) update — and ADD test 10:
 
-// After:
+```ts
+// Test 9 body update:
 expect(a.lastMilestonePct).toBe(100);
 expect(b.lastMilestonePct).toBe(100);
-// Comment: per-recipient try/catch — even though one push threw, the goal.update STILL fires for both goals.
+// Per-recipient try/catch — even though one push threw, the goal.update STILL fires for both goals.
+
+// R2 ADD test 10: per-goal catch path coverage (computeGoalSavings throws).
+it("computeGoalSavings throws on goal A → per-goal catch + iteration continues to goal B", async () => {
+  const { wsId } = await setupWorkspaceWithRoles(["owner"]);
+  const goalA = await createGoal({ workspaceId: wsId, title: "A", targetAmount: 100 });
+  const goalB = await createGoal({ workspaceId: wsId, title: "B", targetAmount: 100 });
+
+  // computeGoalSavings throws on FIRST call (goalA), then resolves for goalB.
+  vi.mocked(savingsMod.computeGoalSavings)
+    .mockRejectedValueOnce(new Error("DB hiccup"))
+    .mockResolvedValue(100);
+
+  await expect(runGoalMilestones(env)).resolves.not.toThrow();
+
+  // Goal A's catch fired BEFORE the fan-out — no push attempted, no update.
+  // Goal B processed normally — 1 push + state advanced.
+  expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(1);
+
+  // Order-agnostic: exactly one goal advanced.
+  const [a, b] = await Promise.all([
+    prisma.goal.findUniqueOrThrow({ where: { id: goalA } }),
+    prisma.goal.findUniqueOrThrow({ where: { id: goalB } }),
+  ]);
+  const states = [a.lastMilestonePct, b.lastMilestonePct].sort((x, y) => (x ?? -1) - (y ?? -1));
+  expect(states).toEqual([null, 100]);
+});
 ```
 
 **Commit:** `fix(push): per-recipient try/catch in 3 fan-out helpers + update test contracts`
@@ -168,10 +199,13 @@ export async function setupWorkspaceWithRoles(
   prefix = "w",
 ): Promise<{ wsId: string; userIds: string[] }> { ... }
 export async function createTestCategory(wsId: string, name?: string): Promise<string> { ... }
+
+// Return shape matches push.send.test.ts's current helper (returns the full User
+// object) to minimize migration churn. Callers do `u.id` not `u.userId`.
 export async function makeUserWithDevices(
   tokens: Array<{ token: string; platform: "ios" | "android" }>,
   notificationPrefs?: Record<string, boolean>,
-): Promise<{ userId: string; deviceIds: string[] }> { ... }
+): Promise<import("@prisma/client").User> { ... }
 ```
 
 Migrated files drop their inline helpers (saves ~120 LOC across 4 files).
@@ -185,9 +219,11 @@ Migrated files drop their inline helpers (saves ~120 LOC across 4 files).
 Files:
 - Modify: `apps/api/tests/push.send.test.ts` (append new describe + helper)
 
-Add helper at top of file (or in `factories.ts` if generally useful — leaning toward push.send.test.ts since it's spy-specific):
+Add helper at top of file (or in `factories.ts` if generally useful — leaning toward push.send.test.ts since it's spy-specific). Use `MockInstance` from `vitest` (codebase precedent in `cron.push-receipts.test.ts:2`):
 ```ts
-function firstPushMessage(spy: ReturnType<typeof vi.spyOn>): Record<string, unknown> {
+import type { MockInstance } from "vitest";
+
+function firstPushMessage(spy: MockInstance): Record<string, unknown> {
   const calls = spy.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
   const firstCall = calls[0]!;
