@@ -1,66 +1,80 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Animated } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { displayName, trialDaysLeft, type MeDTO as Me } from "@fina/shared";
+import { displayName, trialDaysLeft, type MeDTO as Me, type PlaidItemDTO } from "@fina/shared";
 import { useSession } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+import { ActionItemCard } from "../../src/home/ActionItemCard";
+import { SpendCard } from "../../src/home/SpendCard";
 
 const HEADER_HEIGHT = 84;
 
-type ChecklistItem = {
-  id: "set-budget" | "connect-bank" | "set-goal" | "morning-brief";
-  title: string;
-  subtitle: string;
-  cta: string;
-  href: string;
-  done: boolean;
-};
+function computeBudgetCap(
+  plan: { totalAmount?: number; categoryAllocations?: Array<{ amount: number }> } | null,
+): string | null {
+  if (!plan) return null;
+  if (typeof plan.totalAmount === "number") return plan.totalAmount.toFixed(2);
+  if (Array.isArray(plan.categoryAllocations)) {
+    const sum = plan.categoryAllocations.reduce((s, c) => s + Number(c.amount ?? 0), 0);
+    return sum > 0 ? sum.toFixed(2) : null;
+  }
+  return null;
+}
 
 export default function Home() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
-  const [bankCount, setBankCount] = useState<number | null>(null);
-  const [hasBudget, setHasBudget] = useState<boolean | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
+  const [needsReviewCount, setNeedsReviewCount] = useState(0);
+  const [pendingInvites, setPendingInvites] = useState(0);
+  const [unreadFina, setUnreadFina] = useState(0);
+  const [budgetCurrent, setBudgetCurrent] = useState<{
+    plan: { totalAmount?: number; categoryAllocations?: Array<{ amount: number }> } | null;
+    totalSpent: string;
+  } | null>(null);
+  const [hasGoal, setHasGoal] = useState<boolean | null>(null);
+
+  const load = useCallback(async () => {
+    setErr(null);
+    try {
+      const wsId = await bootstrapActiveWorkspace();
+      const meData = await apiFetch<Me>("/me");
+      setMe(meData);
+      if (!wsId) return;
+
+      await Promise.all([
+        apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
+          .then((r) => setPlaidItems(r.plaidItems))
+          .catch(() => setPlaidItems([])),
+        apiFetch<{ transactions: unknown[] }>(`/workspaces/${wsId}/transactions?needsReview=true&limit=50`)
+          .then((r) => setNeedsReviewCount(r.transactions.length))
+          .catch(() => setNeedsReviewCount(0)),
+        apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
+          .then((r) => setPendingInvites(r.invites.length))
+          .catch(() => setPendingInvites(0)),
+        apiFetch<{ threads: Array<{ unreadCount: number }> }>("/chat/threads")
+          .then((r) => setUnreadFina(r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0)))
+          .catch(() => setUnreadFina(0)),
+        apiFetch<{ plan: { totalAmount?: number; categoryAllocations?: Array<{ amount: number }> } | null; totalSpent: string }>(`/workspaces/${wsId}/budget-plans/current`)
+          .then((r) => setBudgetCurrent({ plan: r.plan, totalSpent: r.totalSpent }))
+          .catch(() => setBudgetCurrent({ plan: null, totalSpent: "0.00" })),
+        apiFetch<{ goals: unknown[] }>(`/workspaces/${wsId}/goals`)
+          .then((r) => setHasGoal(r.goals.length > 0))
+          .catch(() => setHasGoal(false)),
+      ]);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const activeId = await bootstrapActiveWorkspace();
-        const meData = await apiFetch<Me>("/me");
-        if (cancelled) return;
-        setMe(meData);
-        if (activeId) {
-          try {
-            const banks = await apiFetch<{ plaidItems: unknown[] }>(
-              `/workspaces/${activeId}/plaid-items`,
-            );
-            if (!cancelled) setBankCount(banks.plaidItems.length);
-          } catch {
-            if (!cancelled) setBankCount(0);
-          }
-          try {
-            const def = await apiFetch<{ plan: unknown }>(
-              `/workspaces/${activeId}/budget-plans/default`,
-            );
-            if (!cancelled) setHasBudget(def.plan !== null);
-          } catch {
-            if (!cancelled) setHasBudget(false);
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    load();
+  }, [load]);
 
   const greetingName =
     session?.user && me?.user
@@ -68,42 +82,102 @@ export default function Home() {
       : "";
 
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
+  const trialUrgent = !!(me?.trial?.active && days !== null && days <= 5);
 
-  const checklist: ChecklistItem[] = [
-    {
-      id: "set-budget",
+  const bankReconnects = (plaidItems ?? []).filter(
+    (p) => p.status === "error" || p.errorCode === "ITEM_LOGIN_REQUIRED" || p.errorCode === "PENDING_EXPIRATION",
+  );
+
+  const actionItems: Array<{
+    key: string;
+    icon: Parameters<typeof ActionItemCard>[0]["icon"];
+    title: string;
+    subtitle?: string;
+    href: string;
+  }> = [];
+
+  if (bankReconnects.length === 1) {
+    actionItems.push({
+      key: "bank",
+      icon: "alert-circle-outline",
+      title: `Reconnect ${bankReconnects[0]!.institutionName}`,
+      href: "/banks",
+    });
+  } else if (bankReconnects.length > 1) {
+    actionItems.push({
+      key: "bank",
+      icon: "alert-circle-outline",
+      title: `Reconnect ${bankReconnects.length} banks`,
+      href: "/banks",
+    });
+  }
+
+  if (unreadFina > 0) {
+    actionItems.push({
+      key: "fina",
+      icon: "chatbubble-outline",
+      title: `Fina sent you ${unreadFina} message${unreadFina === 1 ? "" : "s"}`,
+      href: "/(tabs)/chat",
+    });
+  }
+
+  if (needsReviewCount > 0) {
+    const label = needsReviewCount >= 50 ? "50+" : `${needsReviewCount}`;
+    actionItems.push({
+      key: "categorize",
+      icon: "construct-outline",
+      title: `Confirm ${label} categorization${needsReviewCount === 1 ? "" : "s"}`,
+      href: "/categorize/inbox",
+    });
+  }
+
+  if (trialUrgent && days !== null) {
+    actionItems.push({
+      key: "trial",
+      icon: "sparkles-outline",
+      title: `Trial ends in ${days} day${days === 1 ? "" : "s"}`,
+      href: "/subscriptions",
+    });
+  }
+
+  if (pendingInvites > 0) {
+    actionItems.push({
+      key: "invites",
+      icon: "mail-outline",
+      title: `${pendingInvites} workspace invite${pendingInvites === 1 ? "" : "s"}`,
+      href: "/workspace/incoming",
+    });
+  }
+
+  const hasBudget = budgetCurrent?.plan !== null && budgetCurrent?.plan !== undefined;
+  const bankCount = plaidItems?.length ?? 0;
+  if (budgetCurrent !== null && !hasBudget) {
+    actionItems.push({
+      key: "ob-budget",
+      icon: "wallet-outline",
       title: "Set a monthly budget",
-      subtitle:
-        "Pick a total. Fina tracks every spend against it and can suggest a category split.",
-      cta: "Set budget",
+      subtitle: "Pick a total. Fina tracks every spend.",
       href: "/budget",
-      done: hasBudget === true,
-    },
-    {
-      id: "connect-bank",
+    });
+  }
+  if (plaidItems !== null && bankCount === 0) {
+    actionItems.push({
+      key: "ob-bank",
+      icon: "card-outline",
       title: "Connect a bank",
       subtitle: "Plaid securely imports your transactions.",
-      cta: "Connect",
       href: "/banks",
-      done: bankCount !== null && bankCount > 0,
-    },
-    {
-      id: "morning-brief",
-      title: "Try your first morning brief",
-      subtitle: "Tap Chat to see what Fina has to say about today.",
-      cta: "Open chat",
-      href: "/(tabs)/chat",
-      done: false,
-    },
-    {
-      id: "set-goal",
+    });
+  }
+  if (hasGoal === false) {
+    actionItems.push({
+      key: "ob-goal",
+      icon: "flag-outline",
       title: "Set your first goal",
       subtitle: "Save for something. Pro feature, free during trial.",
-      cta: "Set goal",
       href: "/(tabs)/goals",
-      done: false,
-    },
-  ];
+    });
+  }
 
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
@@ -125,49 +199,49 @@ export default function Home() {
           </View>
         )}
 
+        {!me && err && (
+          <View style={styles.errCard}>
+            <Text style={styles.errTitle}>Couldn't reach Fina</Text>
+            <Text style={styles.errBody}>{err}</Text>
+            <Pressable
+              style={({ pressed }) => [styles.retryBtn, pressed && { opacity: 0.7 }]}
+              onPress={() => load()}
+            >
+              <Text style={styles.retryBtnText}>Try again</Text>
+            </Pressable>
+          </View>
+        )}
+
         {!me && !err && (
           <View style={{ paddingVertical: space.xxl }}>
             <ActivityIndicator color={colors.primary} />
           </View>
         )}
 
-        {err && (
-          <View style={styles.errCard}>
-            <Text style={styles.errTitle}>Couldn't reach Fina</Text>
-            <Text style={styles.errBody}>{err}</Text>
-          </View>
-        )}
-
         {me && (
           <>
-            <Text style={styles.sectionTitle}>Get started</Text>
-            {checklist.map((item) => (
-              <Pressable
-                key={item.id}
-                style={({ pressed }) => [
-                  styles.card,
-                  pressed && { opacity: 0.7 },
-                ]}
-                onPress={() => router.push(item.href as never)}
-              >
-                <View style={styles.cardLeft}>
-                  <View style={[styles.cardGlyph, item.done && styles.cardGlyphDone]}>
-                    <Ionicons
-                      name={item.done ? "checkmark" : "arrow-forward"}
-                      size={18}
-                      color={item.done ? colors.onPrimary : colors.primary}
-                    />
-                  </View>
-                </View>
-                <View style={styles.cardBody}>
-                  <Text style={[styles.cardTitle, item.done && styles.cardTitleDone]}>
-                    {item.title}
-                  </Text>
-                  <Text style={styles.cardSub}>{item.subtitle}</Text>
-                </View>
-                <Text style={styles.cardCta}>{item.cta}</Text>
-              </Pressable>
-            ))}
+            {actionItems.length > 0 && (
+              <>
+                <Text style={styles.sectionTitle}>Your queue</Text>
+                {actionItems.map((it) => (
+                  <ActionItemCard
+                    key={it.key}
+                    icon={it.icon}
+                    title={it.title}
+                    {...(it.subtitle !== undefined ? { subtitle: it.subtitle } : {})}
+                    onPress={() => router.push(it.href as never)}
+                  />
+                ))}
+              </>
+            )}
+
+            {budgetCurrent && (
+              <SpendCard
+                currency="CAD"
+                totalSpent={budgetCurrent.totalSpent}
+                budgetCap={computeBudgetCap(budgetCurrent.plan)}
+              />
+            )}
           </>
         )}
       </ScrollView>
@@ -250,32 +324,13 @@ const styles = StyleSheet.create({
     marginBottom: space.sm,
     marginTop: space.base,
   },
-  card: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: colors.canvas,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 16,
-    padding: space.base,
-    marginBottom: space.sm,
-    gap: space.sm,
-  },
-  cardLeft: {},
-  cardGlyph: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: colors.surfaceSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  cardGlyphDone: {
+  retryBtn: {
+    marginTop: space.sm,
+    paddingHorizontal: space.base,
+    paddingVertical: space.sm,
+    borderRadius: 10,
     backgroundColor: colors.primary,
+    alignSelf: "flex-start",
   },
-  cardBody: { flex: 1 },
-  cardTitle: { ...type$.titleSm, color: colors.ink },
-  cardTitleDone: { color: colors.muted, textDecorationLine: "line-through" },
-  cardSub: { ...type$.bodySm, color: colors.body, marginTop: 2 },
-  cardCta: { ...type$.captionStrong, color: colors.primary, paddingLeft: 4 },
+  retryBtnText: { ...type$.bodySm, color: colors.onPrimary, fontWeight: "600" },
 });
