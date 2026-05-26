@@ -23,6 +23,7 @@ import { useSession } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+import { ActionItemCard } from "../../src/home/ActionItemCard";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 
@@ -362,8 +363,20 @@ export default function Home() {
               </View>
             )}
 
-            {/* 3. Brief card — deep-link to chat */}
-            {latestUnboundThread && (
+            {/* Review queue card — categorize alert (action item) */}
+            {needsReviewCount > 0 && (
+              <View style={{ marginTop: space.lg }}>
+                <ActionItemCard
+                  icon="construct-outline"
+                  title={`Confirm ${needsReviewCount >= 50 ? "50+" : needsReviewCount} categorization${needsReviewCount === 1 ? "" : "s"}`}
+                  subtitle="Fina auto-categorized these — confirm or change."
+                  onPress={() => router.push("/categorize/inbox" as never)}
+                />
+              </View>
+            )}
+
+            {/* 3. Brief card — only when there's an unread brief to read */}
+            {latestUnboundThread && latestUnboundThread.unreadCount > 0 && (
               <Pressable
                 style={({ pressed }) => [styles.briefCard, pressed && { opacity: 0.85 }]}
                 onPress={() =>
