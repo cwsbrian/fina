@@ -11,8 +11,10 @@ R2 post-merge review identified 2 remaining gaps in the push subsystem:
 2. **`sendTransactionAddedPush` payload shape** — Plan 1N tests `sendBriefPush` end-to-end through `sendToUserDevices`, but the other 7 wrappers' specific `title`/`body`/`dataType` formatting is untested (only the channel-gate Plan 1O verified).
 
 Add **2 tasks** in 2 commits:
-- **T1**: `tests/push.transaction-added.test.ts` (new) — 5 tests for `notifyTransactionAdded` internals.
+- **T1**: `tests/push.transaction-added.test.ts` (new) — **6 tests** for `notifyTransactionAdded` internals (R2 added "solo actor" common case).
 - **T2**: extend `tests/push.send.test.ts` — 3 payload-shape tests for `sendTransactionAddedPush` (pins `title`, `body`, `dataType` format strings against accidental edits).
+
+**Intentional design note (R2 review)**: `notifyTransactionAdded` notifies **all roles** (owner + editor + viewer) — unlike `goal-milestones` and `anomaly` which filter to owner+editor. This is **intentional**: read-only viewers still want awareness of spending activity. Do NOT "fix" via consistency PR.
 
 **Out of scope:**
 - Payload-shape tests for the other 6 wrappers (`sendBankReconnectPush`, `sendTrialExpiringPush`, etc.) — same code path, low marginal value. T2's spot-check of `sendTransactionAddedPush` proves the wrappers can vary independently.
@@ -101,11 +103,12 @@ async function setupWorkspaceWithRoles(
 | 2 | 1 member + no `excludeUserId` | Called once. Args: `(env, ownerId, "Coffee", "5.50", "Food")`. `amount.toFixed(2)` → string. |
 | 3 | 3 members (owner, editor, viewer) + `excludeUserId = ownerId` | Called 2 times. `calls.map(c => c[1]).sort()` = `[editorId, viewerId].sort()`. (Note: notifyTransactionAdded does NOT filter by role — sends to ALL non-excluded members regardless of role, unlike anomaly/goal which filter to owner+editor.) |
 | 4 | 3 members + `excludeUserId` matches NONE (random uuid not in workspace) | Called 3 times. All members notified. |
-| 5 | `prisma.membership.findMany` throws (force via category seed conflict OR similar) — actually need a way to inject error without `vi.spyOn(prisma)`. Use: pass a workspaceId of `"nonexistent"` → findMany returns empty array, no error. **Alternative**: assert via `mockRejectedValueOnce` on the sender — if first push throws (rejected), the `await sendTransactionAddedPush(...)` in the loop rejects, and the outer try/catch swallows it. Test: 2 members, first push throws, second push NOT attempted (loop exits via thrown exception caught at top level). | Called 1 time (first only). No throw at the call site. logError called (not asserted; Plan 1P precedent). |
+| 5 | 2 members. `vi.mocked(sendMod.sendTransactionAddedPush).mockRejectedValueOnce(new Error("boom"))` — first call rejects, fallback resolves. | Called 1 time (first only — loop exits when send throws; outer try/catch swallows). **Test pins fail-stop semantics — see §7 follow-up about latent bug**. |
+| 6 | **Solo actor (common case)**: 1 member who IS the only owner, `excludeUserId = ownerId`. | Called 0 times. Manual-tx-by-solo-workspace-owner correctly skips self-notify. |
 
-**Note on test 5**: the production try/catch wraps the ENTIRE for-loop including the per-user sends. If one `sendTransactionAddedPush` rejects, the catch fires and the loop ends. This is "fail-stop" semantics, NOT per-user error containment. Test 5 pins this behavior.
+**Note on test 5**: the production try/catch wraps the ENTIRE for-loop including the per-user sends. If one `sendTransactionAddedPush` rejects, the catch fires and the loop ends. This is "fail-stop" semantics, NOT per-user error containment. Test 5 pins this behavior. The same pattern exists in `anomaly.ts` and `goal-milestones.ts` — R2 review flagged this as a latent bug (transient DB error drops tail members from the fan-out). See §7 for the follow-up.
 
-**Commit:** `test(api): notifyTransactionAdded — 5 tests covering fan-out + exclude + error containment`
+**Commit:** `test(api): notifyTransactionAdded — 6 tests covering fan-out + exclude + error containment + solo actor`
 
 ### T2 — `apps/api/tests/push.send.test.ts` extension (3 payload-shape tests)
 
@@ -133,14 +136,13 @@ Append to the existing `describe("channel gate (notificationPrefs)", ...)` block
 | `amount.toFixed(2)` — production at `transaction-added.ts:32` formats `args.amount` (number). T1 test 2 passes `5.5` (number) → expects `"5.50"`. | Helper arg uses literal `5.5`. |
 | Production try/catch is at the FUNCTION level — one push throw halts the loop, NOT per-iteration containment. | T1 test 5 explicitly pins this behavior. |
 | T2 payload-shape assertions — production string template at `send.ts:74-78` and wrapper at `send.ts:258-262`. Brittle to format changes. | Acceptable — that IS the contract this plan locks. Format changes should require updating these tests. |
-| T2 assertion via spy.mock.calls — chunk is array of 1 message. Verify shape via `spy.mock.calls[0][0][0]` (first call → first arg array → first message). Use `expect.objectContaining({title, body, data})`. | Plan documents indexing pattern explicitly. |
-| TypeScript `noUncheckedIndexedAccess` — `spy.mock.calls[0]` is `tuple \| undefined`. Use destructured `const [chunk] = spy.mock.calls[0]; const [msg] = chunk;` pattern. | Plan adopts the destructured pattern. |
+| T2 assertion via spy.mock.calls — chunk is array of 1 message. Plan: `expect(spy).toHaveBeenCalledTimes(1); const calls = spy.mock.calls; const firstCall = calls[0]!; const chunk = firstCall[0] as Array<unknown>; const msg = chunk[0]; expect(msg).toEqual(expect.objectContaining({title, body, data, priority, sound}));` Non-null assertion `!` on `calls[0]` is sound because we asserted `toHaveBeenCalledTimes(1)` first. | Spec documents this exact indexing pattern under `noUncheckedIndexedAccess`. |
 | Singleton `counter` module global in T1 — Plan 1Q precedent shows this is safe under `truncateAll` per beforeEach. | Helper declares `let counter = 0` at module scope. |
 | Helper `setupWorkspaceWithRoles` duplicates Plan 1P. R1 review flagged this. | Acknowledged. Extract to `tests/helpers/factories.ts` in a separate refactor PR (not this plan). |
 
 ## 6. Success criteria
 
-- T1: 5 new tests pass.
+- T1: 6 new tests pass.
 - T2: 3 new tests pass (push.send.test.ts goes from 22 to 25 tests).
 - Full `@fina/api` suite regression: 0 new fails.
 - Typecheck baseline unchanged.
@@ -148,6 +150,7 @@ Append to the existing `describe("channel gate (notificationPrefs)", ...)` block
 
 ## 7. Follow-ups (별도 plans)
 
+- **Latent bug — fail-stop fan-out**: `notifyTransactionAdded`, `anomaly.checkLargeChargeAndPush`, `goal-milestones.runGoalMilestones` all share the "outer try/catch wraps the entire for-loop" pattern. A transient DB error or unhandled rejection on member 1 silently halts pushes to members 2..N. Consider per-iteration try/catch in fan-out helpers. Plan 1T pins current behavior as the contract — fix is a separate decision.
 - **Plan 1U (R2 #2-4)**: Plaid-sync→anomaly integration (`daily-refresh.ts:108`), Plaid webhook→sendBankReconnect (`webhook-item.ts:35`), `scheduled-spend-match` cron behavior.
 - **`tests/helpers/factories.ts` extraction** (R1 review): `createTestUser`, `createTestWorkspace`, `setupWorkspaceWithRoles`, `createTestCategory`. Migrate 3 newest files; rest stay until they need a touch.
 - **Brittleness fixes** (R2 review): `goals.savings.test.ts` proration assertions → `toBeCloseTo`; `http.push-integration.test.ts` tuple assertions → `calls[0]?.[1]` style.
