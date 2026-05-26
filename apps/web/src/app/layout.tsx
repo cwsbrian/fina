@@ -12,6 +12,11 @@ export const metadata = {
   title: "Fina · Your financial companion for everyday money",
   description:
     "You look at your account only when it matters. Join the waitlist for early access.",
+  icons: {
+    icon: "/images/icon-logo-light.png",
+    shortcut: "/images/icon-logo-light.png",
+    apple: "/images/icon-logo-light.png",
+  },
 };
 
 export default function RootLayout({
