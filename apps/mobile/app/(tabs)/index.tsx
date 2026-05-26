@@ -46,11 +46,14 @@ type ChatThreadWithPreview = ChatThreadDTO & {
   firstMessagePreview: string | null;
 };
 
-type Schedule = {
+type GoalSummary = {
   id: string;
-  amount: string;
-  scheduledDate: string;
-  status: string;
+  title: string;
+  icon: string | null;
+  color: string | null;
+  savedAmount: string;
+  targetAmount: string;
+  dueDate: string;
 };
 
 function computeBudgetCap(plan: BudgetCurrent["plan"]): number | null {
@@ -132,11 +135,7 @@ export default function Home() {
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
   const [recentTxs, setRecentTxs] = useState<TransactionDTO[] | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
-  const [scheduleSummary, setScheduleSummary] = useState<{
-    count: number;
-    total: number;
-    nextDate: string | null;
-  } | null>(null);
+  const [goals, setGoals] = useState<GoalSummary[]>([]);
   const [analysis, setAnalysis] = useState<{
     income: number;
     net: number;
@@ -187,9 +186,19 @@ export default function Home() {
         apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
           .then((r) => setPendingInvites(r.invites.length))
           .catch(() => setPendingInvites(0)),
-        apiFetch<{ goals: unknown[] }>(`/workspaces/${wsId}/goals`)
-          .then((r) => setHasGoal(r.goals.length > 0))
-          .catch(() => setHasGoal(false)),
+        apiFetch<{ goals: GoalSummary[] }>(`/workspaces/${wsId}/goals`)
+          .then((r) => {
+            // Surface up to 3 active (non-archived) goals on Home.
+            const active = r.goals
+              .filter((g) => !(g as { archivedAt?: string | null }).archivedAt)
+              .slice(0, 3);
+            setGoals(active);
+            setHasGoal(r.goals.length > 0);
+          })
+          .catch(() => {
+            setGoals([]);
+            setHasGoal(false);
+          }),
         apiFetch<{ transactions: unknown[] }>(
           `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
         )
@@ -205,19 +214,6 @@ export default function Home() {
             setCategories(Object.fromEntries(r.categories.map((c) => [c.id, c]))),
           )
           .catch(() => setCategories({})),
-        apiFetch<{ schedules: Schedule[] }>(
-          `/workspaces/${wsId}/schedules?status=upcoming`,
-        )
-          .then((r) => {
-            const count = r.schedules.length;
-            const total = r.schedules.reduce((s, x) => s + Number(x.amount), 0);
-            const nextDate =
-              r.schedules
-                .map((s) => s.scheduledDate)
-                .sort()[0] ?? null;
-            setScheduleSummary({ count, total, nextDate });
-          })
-          .catch(() => setScheduleSummary(null)),
         apiFetch<{
           current: { income: number; spend: number; net: number };
           previous: { net: number } | null;
@@ -391,21 +387,10 @@ export default function Home() {
     });
   }
 
-  // ── Schedule deep-link copy ────────────────────────────────
-  const scheduleMeta = scheduleSummary
-    ? (() => {
-        const parts = [
-          `${scheduleSummary.count} scheduled`,
-        ];
-        if (scheduleSummary.nextDate) {
-          const d = new Date(`${scheduleSummary.nextDate}T12:00:00Z`);
-          if (!Number.isNaN(d.getTime())) {
-            parts.push(`next ${formatMonthDay(d)}`);
-          }
-        }
-        return parts.join(" · ");
-      })()
-    : null;
+  // ── Section gating ─────────────────────────────────────────
+  // Hero (This month) requires real spending data — show only when
+  // we have at least one transaction this month.
+  const heroVisible = budgetCurrent !== null && spentNum > 0;
 
   return (
     <View style={styles.safe}>
@@ -444,8 +429,8 @@ export default function Home() {
 
         {me && (
           <>
-            {/* 2. Hero — month spending */}
-            {budgetCurrent && (
+            {/* 2. Hero — month spending; only when there is actual spend */}
+            {heroVisible && (
               <View style={styles.hero}>
                 <Text style={styles.heroLabel}>{monthLabel} spending</Text>
                 <Text style={styles.heroValue}>
@@ -569,30 +554,49 @@ export default function Home() {
               </Pressable>
             )}
 
-            {/* 4. Schedule deep-link */}
-            {scheduleSummary && scheduleSummary.count > 0 && (
+            {/* 4. Goals summary — only when at least one active goal exists */}
+            {goals.length > 0 && (
               <Pressable
-                style={({ pressed }) => [styles.scheduleRow, pressed && { opacity: 0.7 }]}
-                onPress={() => router.push("/scheduled" as never)}
-                accessibilityLabel="View schedule"
+                style={({ pressed }) => [{ marginTop: space.lg }, pressed && { opacity: 0.85 }]}
+                onPress={() => router.push("/(tabs)/goals" as never)}
               >
-                <View style={styles.scheduleGlyph}>
-                  <Ionicons name="calendar" size={16} color={colors.primary} />
+                <View style={styles.eyebrowRow}>
+                  <Text style={styles.eyebrow}>Goals</Text>
+                  <Text style={styles.eyebrowAction}>See all →</Text>
                 </View>
-                <View style={styles.scheduleBody}>
-                  <View style={styles.scheduleTitleLine}>
-                    <Text style={styles.scheduleTitle}>Upcoming this month</Text>
-                    <Text style={styles.scheduleAmount}>
-                      −{formatMoney(scheduleSummary.total.toFixed(2), CURRENCY).display}
-                    </Text>
-                  </View>
-                  {scheduleMeta && (
-                    <Text style={styles.scheduleMeta} numberOfLines={1}>
-                      {scheduleMeta}
-                    </Text>
-                  )}
+                <View style={styles.goalList}>
+                  {goals.map((g) => {
+                    const saved = Number(g.savedAmount);
+                    const target = Number(g.targetAmount);
+                    const gpct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
+                    const due = new Date(`${g.dueDate}T12:00:00Z`);
+                    const daysLeft = Math.max(
+                      0,
+                      Math.ceil((due.getTime() - Date.now()) / 86_400_000),
+                    );
+                    return (
+                      <View key={g.id} style={styles.goalRow}>
+                        <View style={styles.goalGlyph}>
+                          <Ionicons name="flag-outline" size={16} color={colors.primary} />
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                          <View style={styles.goalTitleLine}>
+                            <Text style={styles.goalTitle} numberOfLines={1}>{g.title}</Text>
+                            <Text style={styles.goalAmount}>
+                              {formatMoney(g.savedAmount, CURRENCY).display} / {formatMoney(g.targetAmount, CURRENCY).display}
+                            </Text>
+                          </View>
+                          <View style={styles.goalBarTrack}>
+                            <View style={[styles.goalBarFill, { width: `${gpct}%` }]} />
+                          </View>
+                          <Text style={styles.goalMeta}>
+                            {gpct.toFixed(0)}% saved · {daysLeft} day{daysLeft === 1 ? "" : "s"} left
+                          </Text>
+                        </View>
+                      </View>
+                    );
+                  })}
                 </View>
-                <Ionicons name="chevron-forward" size={14} color={colors.mutedSoft} />
               </Pressable>
             )}
 
@@ -986,8 +990,9 @@ const styles = StyleSheet.create({
   briefCta: { flexDirection: "row", alignItems: "center", gap: 2 },
   briefCtaText: { ...type$.captionStrong, color: colors.primary },
 
-  // ── Schedule deep-link ────────────────────────────────
-  scheduleRow: {
+  // ── Goals summary ─────────────────────────────────────
+  goalList: { gap: space.sm },
+  goalRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: space.sm,
@@ -995,31 +1000,49 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     backgroundColor: colors.surfaceSoft,
     borderRadius: 12,
-    marginBottom: space.base,
   },
-  scheduleGlyph: {
-    width: 28,
-    height: 28,
+  goalGlyph: {
+    width: 32,
+    height: 32,
     borderRadius: 999,
     backgroundColor: "rgba(62, 179, 139, 0.16)",
     alignItems: "center",
     justifyContent: "center",
   },
-  scheduleBody: { flex: 1, minWidth: 0 },
-  scheduleTitleLine: {
+  goalTitleLine: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     gap: 8,
   },
-  scheduleTitle: { ...type$.bodySm, color: colors.body, flex: 1 },
-  scheduleAmount: {
-    ...type$.bodySm,
+  goalTitle: {
+    ...type$.bodyMd,
     color: colors.ink,
     fontWeight: "600",
+    flex: 1,
+  },
+  goalAmount: {
+    ...type$.caption,
+    color: colors.muted,
     fontVariant: ["tabular-nums"],
   },
-  scheduleMeta: { ...type$.caption, color: colors.muted, marginTop: 2 },
+  goalBarTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.surfaceStrong,
+    marginTop: 6,
+    overflow: "hidden",
+  },
+  goalBarFill: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.primary,
+  },
+  goalMeta: {
+    ...type$.caption,
+    color: colors.muted,
+    marginTop: 4,
+  },
 
   // ── Section eyebrows ──────────────────────────────────
   eyebrow: {
