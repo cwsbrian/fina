@@ -53,8 +53,8 @@ export default function Landing() {
           <em>before</em> you open your wallet.
         </h1>
         <p className={styles.sub}>
-          Fina, your financial advisor. We&apos;re opening the waitlist in
-          small batches.
+          Fina, your financial companion for everyday money. We&apos;re
+          opening the waitlist in small batches.
         </p>
         <form className={styles.form} onSubmit={onSubmit}>
           <input
