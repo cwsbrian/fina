@@ -65,6 +65,7 @@ const QuerySchema = z.object({
   to: IsoDate.optional(),
   includeRemoved: BoolFlag,
   uncategorizedOnly: BoolFlag,
+  needsReview: BoolFlag,
   categoryId: z.string().optional(),
   /** Free-text search across merchantRaw + merchantNormalized
    *  (case-insensitive substring). 1-character min keeps trivial
@@ -140,6 +141,20 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             }
           : {}),
         ...(() => {
+          if (q.needsReview) {
+            return {
+              allocations: {
+                some: {
+                  needsConfirmation: true,
+                  categoryId: { not: null },
+                  OR: [
+                    { dismissedUntil: null },
+                    { dismissedUntil: { lt: new Date() } },
+                  ],
+                },
+              },
+            };
+          }
           if (q.uncategorizedOnly && q.categoryId) {
             return { allocations: { some: { OR: [{ categoryId: null }, { categoryId: q.categoryId }] } } };
           }
