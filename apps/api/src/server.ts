@@ -30,7 +30,14 @@ import { billingRoutes } from "./routes/billing.js";
 import { billingWebhookRoutes } from "./routes/billing-webhook.js";
 import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 
-export type AppCtx = { env: Env; auth: FinaAuth };
+export type AppCtx = {
+  env: Env;
+  auth: FinaAuth;
+  /** Test-injection seam — populated only when `buildApp` is called
+   *  with `opts.iap`. Kept `unknown`-typed to avoid a cross-cycle import
+   *  from the IAP modules; route handlers narrow it at use site. */
+  iap?: unknown;
+};
 
 /**
  * Bridge Fastify request → Web Fetch handler that Better Auth expects.
@@ -120,7 +127,7 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
   const auth = createAuth(env);
   app.decorate("fina", { env, auth });
   if (opts.iap) {
-    (app as any).fina.iap = opts.iap;
+    app.fina.iap = opts.iap;
   }
 
   await app.register(helmet, {
