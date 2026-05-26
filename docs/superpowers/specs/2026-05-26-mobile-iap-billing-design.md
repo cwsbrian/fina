@@ -64,13 +64,24 @@ Per the **Shared lib first** principle, all new wire types live in `libs/shared/
 - Apple: `Subscription.sourceSubscriptionId = originalTransactionId` ALWAYS. Never `transactionId` (which rotates per renewal). `originalTransactionId` is stable across renewals and is the subscription identity. The checkout route, the webhook handler, and `syncSubscriptionFromIAP` must all normalize to `originalTransactionId` before upserting — otherwise checkout-route and webhook target different rows and we get duplicate `Subscription` records per user.
 - Google: `Subscription.sourceSubscriptionId = purchaseToken`. But the v2 response may carry `linkedPurchaseToken` after an in-Play tier change — see §7 for the chain-rewrite handling.
 
-**Schema additions to `User` and new `IapDeletedBinding` model (one migration):**
+**Schema additions to `User`, `Subscription`, and new `IapDeletedBinding` model (one migration):**
 
 ```prisma
 model User {
   // ...existing fields...
   iapAppleAccountToken    String?  @unique   // uuidv5(userId, IAP_NAMESPACE) — written on first successful Apple checkout
   iapGoogleObfuscatedId   String?  @unique   // sha256(userId) hex — written on first successful Google checkout
+}
+
+model Subscription {
+  // ...existing fields...
+  /// "Production" | "Sandbox" — derived from verified transaction's
+  /// `environment` (Apple) or sandbox flag in v2 response (Google).
+  /// Defaults to "Production" for existing Stripe rows on migration.
+  /// `buildMeBody` / `effectiveTier` filter out rows whose environment
+  /// doesn't match the runtime APPLE_ENV / GOOGLE env to prevent stale
+  /// sandbox rows from granting prod entitlement.
+  environment             String   @default("Production")
 }
 
 /// Tombstone for IAP bindings whose `User` row was deleted. Webhook
@@ -154,6 +165,7 @@ All new vars optional (z.string().optional()) so dev/test envs without store cre
 
 **Boot-time validation + log redaction (required):**
 - On boot, validate the shape of every IAP secret: `APPLE_ASC_PRIVATE_KEY` must contain `BEGIN PRIVATE KEY`; `GOOGLE_SERVICE_ACCOUNT_JSON` must JSON-parse and contain `client_email` + `private_key` keys. Fail loud at startup, not at first webhook.
+- **Boot-time validation errors MUST NOT contain any portion of the env value** — not even a prefix. `throw new Error("APPLE_ASC_PRIVATE_KEY shape invalid")` is fine; `throw new Error(\`APPLE_ASC_PRIVATE_KEY shape invalid: ${value.slice(0,32)}…\`)` leaks the .p8 prefix to container logs via stderr (Pino's redact config does NOT apply to raw stderr writes). The validator should name the env var by key only and route any diagnostic detail through a `redactEnv()` helper that strips secrets.
 - `GOOGLE_SERVICE_ACCOUNT_JSON` is accepted in either form: a single-line JSON string OR a base64-encoded JSON string. The loader tries base64-decode first (Vercel's 4 KB per-var limit is tight for raw JSON, base64 is safer). Document the canonical form as base64 in the env example.
 - Extend the Pino logger `redact` config to cover: `APPLE_ASC_PRIVATE_KEY`, `GOOGLE_SERVICE_ACCOUNT_JSON`, every nested `*.private_key`, `purchaseToken`, `signedTransactionInfo`, and `appAccountToken`. Without redaction, a stray `app.log.error({ env }, ...)` leaks long-lived store credentials to the log aggregator.
 - Never serialize `app.fina.env` whole. If we ever need to print env for diagnostics, route it through a `redactEnv()` helper that strips the IAP secrets explicitly.
@@ -295,7 +307,8 @@ Google `SubscriptionPurchaseV2.subscriptionState`:
 The existing `/billing/checkout` already 409s if any active sub exists. Symmetric guard in `/billing/iap/checkout` (§5.3 step 2). The remaining edge: **inbound webhook for a source while another source is also active** (rare — user paid both web + mobile within a small window). Resolution:
 
 - Both subs are upserted normally.
-- **Deterministic source preference in `buildMeBody`** (`apps/api/src/routes/billing.ts:23-68`): when multiple active subs exist, **Stripe always wins regardless of tier**. Ordering rule: `source === "stripe"` first (any tier), then `(tier === "pro") > (tier === "lite")`, then `source === "iap_apple" > "iap_google"`, then `createdAt ASC`. Rationale: a user who originally signed up via Stripe must keep their Stripe Portal cancellation path. A cross-tier collision (Stripe-lite + IAP-pro, the case round-1 raised) currently shows the user the higher tier they're paying for *and* preserves the Stripe Manage Billing button — at the cost of the IAP-pro entitlement appearing as "lite" in the DTO. v1 product decision: that's acceptable for the rare double-purchase window. Support resolves which side to keep.
+- **Sandbox-environment filter:** `buildMeBody` and `effectiveTier` MUST exclude `Subscription` rows whose `environment === "Sandbox"` when `env.APPLE_ENV === "production"` (and the symmetric Google case via `environment` field on the row). Rationale: a developer who tested IAP in sandbox using their real Fina account leaves an `active`-sandbox row that would otherwise grant Pro entitlement in prod after launch. The `Subscription.environment` column is populated from the verified transaction's `environment` claim on every upsert (Apple) or from the v2 response's `regionCode` / sandbox flag (Google — derive at sync time). Stale sandbox rows are NOT garbage-collected by v1; they're treated as inactive in prod. This adds a column to `Subscription` (text, default `"Production"` for backfill).
+- **Deterministic source preference in `buildMeBody`** (`apps/api/src/routes/billing.ts:23-68`): when multiple active subs exist (after the sandbox filter), **Stripe always wins regardless of tier**. Ordering rule: `source === "stripe"` first (any tier), then `(tier === "pro") > (tier === "lite")`, then `source === "iap_apple" > "iap_google"`, then `createdAt ASC`. Rationale: a user who originally signed up via Stripe must keep their Stripe Portal cancellation path. A cross-tier collision (Stripe-lite + IAP-pro, the case round-1 raised) currently shows the user the higher tier they're paying for *and* preserves the Stripe Manage Billing button — at the cost of the IAP-pro entitlement appearing as "lite" in the DTO. v1 product decision: that's acceptable for the rare double-purchase window. Support resolves which side to keep.
 - The naive `find(pro) ?? activeSubs[0]` falls back to `currentPeriodEnd`-ordered first row — that's mid-month-flippable and breaks the `billingOwnedByMobile` gate in `more.tsx`. Stripe-first preserves the web cancel path.
 - We log a `multi_source_active` warning per user when both `stripe` and `iap_*` subs are simultaneously active. Support task to reach out + ask which to keep.
 - We do **not** auto-cancel either side: that's Apple/Google's `auto_renew = false` flow + the user's own action.
