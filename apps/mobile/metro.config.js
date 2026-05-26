@@ -15,6 +15,16 @@ config.resolver.nodeModulesPaths = [
   path.resolve(workspaceRoot, "node_modules"),
 ];
 
+// Exclude git worktrees from Metro's file watcher. Each worktree has its
+// own node_modules; pnpm install/upgrade in the parent repo writes
+// short-lived tmp files inside those nested node_modules, which Metro's
+// FallbackWatcher crashes on (ENOENT during fs.watch). Block them here.
+config.resolver.blockList = [
+  ...(Array.isArray(config.resolver.blockList) ? config.resolver.blockList : []),
+  /\/\.claude\/worktrees\/.*/,
+  /\/\.worktrees\/.*/,
+];
+
 // SVG support via react-native-svg-transformer
 const { assetExts, sourceExts } = config.resolver;
 config.transformer = {
