@@ -18,6 +18,20 @@ vi.mock("../src/plaid/items.js", () => ({
 }));
 import { removeItemForBilling } from "../src/plaid/items.js";
 
+vi.mock("../src/push/anomaly.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/push/anomaly.js")>();
+  return { ...actual, checkLargeChargeAndPush: vi.fn().mockResolvedValue(undefined) };
+});
+
+vi.mock("../src/push/transaction-added.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/push/transaction-added.js")>();
+  return { ...actual, notifyTransactionAdded: vi.fn().mockResolvedValue(undefined) };
+});
+
+import * as anomalyMod from "../src/push/anomaly.js";
+import * as addedMod from "../src/push/transaction-added.js";
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { syncTransactions } from "../src/plaid/sync.js";
@@ -66,17 +80,70 @@ async function seedActiveItem(connectedBy: string | null = "user-a") {
   return { wsId: ws.id, itemId: item.id };
 }
 
+async function seedTxWithCategory(opts: {
+  workspaceId: string;
+  txId: string;
+  amount: number;
+  merchant: string;
+  categoryName: string;
+}): Promise<void> {
+  const cat = await prisma.category.create({
+    data: { workspaceId: opts.workspaceId, name: opts.categoryName },
+  });
+  let bankAccount = await prisma.bankAccount.findFirst({
+    where: { workspaceId: opts.workspaceId },
+  });
+  if (!bankAccount) {
+    bankAccount = await prisma.bankAccount.create({
+      data: {
+        workspaceId: opts.workspaceId,
+        name: "Test Acct",
+        type: "depository",
+        currency: "CAD",
+        status: "active",
+      },
+    });
+  }
+  await prisma.transaction.create({
+    data: {
+      id: opts.txId,
+      workspaceId: opts.workspaceId,
+      accountId: bankAccount.id,
+      amount: new Prisma.Decimal(opts.amount),
+      merchantRaw: opts.merchant,
+      merchantNormalized: opts.merchant.toLowerCase(),
+      occurredAt: new Date(),
+      pending: false,
+      source: "plaid",
+      rawData: {},
+    },
+  });
+  await prisma.transactionAllocation.create({
+    data: {
+      transactionId: opts.txId,
+      categoryId: cat.id,
+      amount: new Prisma.Decimal(opts.amount),
+      source: "manual",
+    },
+  });
+}
+
 beforeEach(async () => {
   seedCounter = 0;
   await truncateAll();
   resetPlaidMock();
   vi.mocked(syncTransactions).mockReset();
   vi.mocked(categorizeNewTransactions).mockReset();
+  vi.mocked(categorizeNewTransactions).mockResolvedValue(undefined as never);
   vi.mocked(checkBackgroundSyncGate).mockReset();
   // Default: all users are Pro
   vi.mocked(checkBackgroundSyncGate).mockResolvedValue({ ok: true });
   vi.mocked(removeItemForBilling).mockReset();
   vi.mocked(removeItemForBilling).mockResolvedValue(undefined);
+  vi.mocked(anomalyMod.checkLargeChargeAndPush).mockReset();
+  vi.mocked(anomalyMod.checkLargeChargeAndPush).mockResolvedValue(undefined);
+  vi.mocked(addedMod.notifyTransactionAdded).mockReset();
+  vi.mocked(addedMod.notifyTransactionAdded).mockResolvedValue(undefined);
 });
 
 afterAll(async () => { await disconnect(); });
@@ -250,5 +317,94 @@ describe("runDailyRefresh — Step 0 trial expiry cleanup", () => {
     // syncTransactions was still called for the active item.
     expect(syncTransactions).toHaveBeenCalled();
     void activeItemId;
+  });
+});
+
+describe("runDailyRefresh — push integration", () => {
+  it("syncTransactions returns newTxIds → checkLargeChargeAndPush + notifyTransactionAdded called once each", async () => {
+    const { wsId } = await seedActiveItem();
+    const txId = `tx-${Date.now()}-1`;
+    await seedTxWithCategory({
+      workspaceId: wsId,
+      txId,
+      amount: 50.5,
+      merchant: "Coffee",
+      categoryName: "Food",
+    });
+    vi.mocked(syncTransactions).mockResolvedValue({
+      added: 1,
+      modified: 0,
+      removed: 0,
+      newTxIds: [txId],
+    });
+
+    await runDailyRefresh(env);
+
+    const anomalyCalls = vi.mocked(anomalyMod.checkLargeChargeAndPush).mock.calls;
+    expect(anomalyCalls).toHaveLength(1);
+    expect(anomalyCalls[0]).toEqual([
+      env,
+      expect.objectContaining({
+        transactionId: txId,
+        workspaceId: wsId,
+        amount: 50.5,
+        merchant: "coffee",
+      }),
+    ]);
+
+    const notifyCalls = vi.mocked(addedMod.notifyTransactionAdded).mock.calls;
+    expect(notifyCalls).toHaveLength(1);
+    expect(notifyCalls[0]).toEqual([
+      env,
+      expect.objectContaining({
+        workspaceId: wsId,
+        merchant: "coffee",
+        amount: 50.5,
+        categoryName: "Food",
+      }),
+    ]);
+    // No excludeUserId — Plaid-synced txs have no actor.
+    expect(notifyCalls[0]?.[1]).not.toHaveProperty("excludeUserId");
+  });
+
+  it("syncTransactions returns no newTxIds → neither push helper called", async () => {
+    await seedActiveItem();
+    vi.mocked(syncTransactions).mockResolvedValue({
+      added: 0,
+      modified: 0,
+      removed: 0,
+      newTxIds: [],
+    });
+
+    await runDailyRefresh(env);
+
+    expect(vi.mocked(anomalyMod.checkLargeChargeAndPush)).toHaveBeenCalledTimes(0);
+    expect(vi.mocked(addedMod.notifyTransactionAdded)).toHaveBeenCalledTimes(0);
+  });
+
+  it("checkLargeChargeAndPush throws → notifyTransactionAdded NOT called (fail-stop within tx; pinned for future fix)", async () => {
+    const { wsId } = await seedActiveItem();
+    const txId = `tx-${Date.now()}-fail`;
+    await seedTxWithCategory({
+      workspaceId: wsId,
+      txId,
+      amount: 50,
+      merchant: "Z",
+      categoryName: "X",
+    });
+    vi.mocked(syncTransactions).mockResolvedValue({
+      added: 1,
+      modified: 0,
+      removed: 0,
+      newTxIds: [txId],
+    });
+    vi.mocked(anomalyMod.checkLargeChargeAndPush).mockRejectedValueOnce(new Error("boom"));
+
+    // Outer per-item try/catch swallows.
+    await expect(runDailyRefresh(env)).resolves.toBeUndefined();
+
+    expect(vi.mocked(anomalyMod.checkLargeChargeAndPush)).toHaveBeenCalledTimes(1);
+    // Pinned: notify NOT called because anomaly throw aborted the for-loop iteration.
+    expect(vi.mocked(addedMod.notifyTransactionAdded)).toHaveBeenCalledTimes(0);
   });
 });

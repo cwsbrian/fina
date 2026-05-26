@@ -29,7 +29,7 @@ No `@fina/shared` changes.
 **Files:**
 - Modify: `apps/api/tests/cron.daily-refresh.test.ts`
 
-- [ ] **Step 1: Read precedent + production**
+- [x] **Step 1: Read precedent + production**
 
 Read `apps/api/src/cron/jobs/daily-refresh.ts` (full file, ~140 LOC). Note especially:
 - L9-10: imports `checkLargeChargeAndPush` from `../../push/anomaly.js` + `notifyTransactionAdded` from `../../push/transaction-added.js`.
@@ -39,7 +39,7 @@ Read existing `apps/api/tests/cron.daily-refresh.test.ts` lines 1-90 to understa
 
 **Guardrail:** Do NOT modify production code in T1.
 
-- [ ] **Step 2: Add two new module-level `vi.mock` calls**
+- [x] **Step 2: Add two new module-level `vi.mock` calls**
 
 After the existing 5 `vi.mock` calls (around line 17), append:
 ```ts
@@ -60,7 +60,7 @@ import * as anomalyMod from "../src/push/anomaly.js";
 import * as addedMod from "../src/push/transaction-added.js";
 ```
 
-- [ ] **Step 3: Add mock-reset entries to `beforeEach`**
+- [x] **Step 3: Add mock-reset entries to `beforeEach`**
 
 The existing `beforeEach` (around L70-80) explicitly resets each mock. Add:
 ```ts
@@ -70,7 +70,7 @@ vi.mocked(addedMod.notifyTransactionAdded).mockReset();
 vi.mocked(addedMod.notifyTransactionAdded).mockResolvedValue(undefined);
 ```
 
-- [ ] **Step 4: Add helper for seeding a Transaction + Allocation**
+- [x] **Step 4: Add helper for seeding a Transaction + Allocation**
 
 Add near other helpers (around L60 or top of describe block):
 ```ts
@@ -122,7 +122,7 @@ async function seedTxWithCategory(opts: {
 }
 ```
 
-- [ ] **Step 5: Add new describe block**
+- [x] **Step 5: Add new describe block**
 
 At the end of the file (after the existing 2 describe blocks), append:
 
@@ -182,7 +182,7 @@ describe("runDailyRefresh — push integration", () => {
 
 **Note**: `seedActiveItem` is an existing helper in the file — use as-is. If it doesn't return `{wsId, itemId}` in the expected shape, adjust the destructuring or add the missing return.
 
-- [ ] **Step 6: Run + typecheck + commit**
+- [x] **Step 6: Run + typecheck + commit**
 
 ```bash
 pnpm --filter @fina/api exec vitest run tests/cron.daily-refresh.test.ts
@@ -206,7 +206,7 @@ Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
 - Modify: `apps/api/src/plaid/webhook-item.ts` (per-recipient try/catch)
 - Modify: `apps/api/tests/plaid.webhook.item.test.ts` (add module-level vi.mock + 5 new tests + 3-arg env cleanup for existing tests)
 
-- [ ] **Step 1: Read precedent + production**
+- [x] **Step 1: Read precedent + production**
 
 Read `apps/api/src/plaid/webhook-item.ts` end-to-end. Note:
 - L26: `role: { in: ["owner", "editor"] }` filter.
