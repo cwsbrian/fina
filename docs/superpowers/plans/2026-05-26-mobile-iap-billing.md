@@ -1356,9 +1356,16 @@ export class AppleClient {
     const item = status.data?.[0]?.lastTransactions?.[0];
     if (!item) throw new HttpError(400, "invalid_receipt", "asc no transaction");
 
-    // Decode the signedTransactionInfo + signedRenewalInfo JWS payloads.
-    const tx = await this._decodeAndVerifyJws(item.signedTransactionInfo);
-    const renewal = await this._decodeAndVerifyJws(item.signedRenewalInfo);
+    // Decode each inner JWS through its DEDICATED Apple SDK verifier —
+    // signedTransactionInfo through the transaction verifier (which
+    // re-runs the 6 checks: alg, root, bundleId, environment,
+    // signedDate, appAccountToken — defense-in-depth), and
+    // signedRenewalInfo through the renewal-info verifier (different
+    // payload shape: autoRenewStatus, offerType, autoRenewProductId).
+    // Do NOT use _decodeAndVerifyJws — that's the generic JWS seam
+    // used only by the public verifier methods.
+    const verifiedTx = await this.verifyAndDecodeTransaction(item.signedTransactionInfo, { context: "asc-api" });
+    const renewal = await this.verifyAndDecodeRenewalInfo(item.signedRenewalInfo);
 
     const mapped = mapAppleStatus({
       subscriptionStatus: appleStatusFromCode(item.status),
@@ -1366,8 +1373,8 @@ export class AppleClient {
       autoRenewStatus: (renewal.autoRenewStatus as 0 | 1) ?? 1,
     });
     return {
-      expiresDate: new Date(Number(tx.expiresDate ?? 0)),
-      productId: String(tx.productId ?? ""),
+      expiresDate: new Date(Number(verifiedTx.raw.expiresDate ?? 0)),
+      productId: verifiedTx.productId,
       mapped,
     };
   }
@@ -4236,13 +4243,22 @@ export async function writeAccountDeletionTombstones(userId: string): Promise<vo
   if (tombstones.length === 0) return;
   // Hash userId for support-replay; not reversible without the original userId.
   const userIdHash = hashBindingToken(userId);
-  for (const t of tombstones) {
-    await prisma.iapDeletedBinding.upsert({
-      where: { source_tokenHash: { source: t.source, tokenHash: t.tokenHash } },
-      create: { source: t.source, tokenHash: t.tokenHash, userIdHash },
-      update: {}, // idempotent
-    });
-  }
+  // Wrap in $transaction so a failure on the Google tombstone doesn't
+  // leave a half-tombstoned user (Apple tombstone committed, Google
+  // missing → Google webhooks 500 for 5 retries before the per-token
+  // cap trips). Batch transaction is atomic across both upserts at the
+  // SQL layer — no nested global-prisma writes (see billing-webhook.ts:42-47
+  // for the rationale Prisma's interactive tx-with-global-client deadlock
+  // pattern we deliberately avoid).
+  await prisma.$transaction(
+    tombstones.map((t) =>
+      prisma.iapDeletedBinding.upsert({
+        where: { source_tokenHash: { source: t.source, tokenHash: t.tokenHash } },
+        create: { source: t.source, tokenHash: t.tokenHash, userIdHash },
+        update: {}, // idempotent
+      }),
+    ),
+  );
 }
 ```
 
