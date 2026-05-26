@@ -41,6 +41,8 @@ export async function runGoalMilestones(env: Env): Promise<void> {
         select: { userId: true },
       });
       for (const m of memberships) {
+        // Per-recipient try/catch: a transient error on one member must NOT
+        // drop the tail of the fan-out (per Plan 1U).
         try {
           await sendGoalMilestonePush(env, m.userId, g.title, crossed);
         } catch (err) {

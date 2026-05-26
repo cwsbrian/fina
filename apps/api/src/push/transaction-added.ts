@@ -25,6 +25,8 @@ export async function notifyTransactionAdded(
     });
     for (const m of members) {
       if (args.excludeUserId && m.userId === args.excludeUserId) continue;
+      // Per-recipient try/catch: a transient error on one member must NOT
+      // drop the tail of the fan-out (per Plan 1U).
       try {
         await sendTransactionAddedPush(
           env,

@@ -667,7 +667,7 @@ EOF
 **Files:**
 - Modify: `apps/api/src/push/transaction-added.ts` (1-line comment near line 26)
 
-- [ ] **Step 1: Add design-intent comment to all 3 files** (per R2 review — make decision concrete)
+- [x] **Step 1: Add design-intent comment to all 3 files** (per R2 review — make decision concrete)
 
 Add this 2-line comment ABOVE the inner `try` introduced in T1 in all 3 production files (`transaction-added.ts`, `anomaly.ts`, `goal-milestones.ts`):
 ```ts

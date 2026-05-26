@@ -85,6 +85,8 @@ export async function checkLargeChargeAndPush(
       select: { userId: true },
     });
     for (const m of memberships) {
+      // Per-recipient try/catch: a transient error on one member must NOT
+      // drop the tail of the fan-out (per Plan 1U).
       try {
         await sendLargeChargePush(
           env,
