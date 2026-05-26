@@ -614,6 +614,7 @@ model ChatThread {
   workspaceId   String?
   title         String?
   lastMessageAt DateTime?
+  lastReadAt    DateTime?
   archivedAt    DateTime?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
