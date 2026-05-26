@@ -19,6 +19,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import {
   displayName,
+  localPartOfEmail,
   initials,
   tierLabel,
   trialDaysLeft,
@@ -194,8 +195,8 @@ export default function More() {
               </Text>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.profileName}>
-                {displayName({ name: me.user.name, email: me.user.email })}
+              <Text style={styles.profileName} numberOfLines={1}>
+                {me.user.name?.trim() || localPartOfEmail(me.user.email)}
               </Text>
               <Text style={styles.profileEmail}>{me.user.email}</Text>
               <View style={styles.pill}>
