@@ -20,6 +20,7 @@ const VALID_TZS = new Set<string>(
  *                   User.snoozeUntil DateTime?.
  */
 export const PatchMeBody = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
   morningTime: z
     .string()
     .regex(/^([01]\d|2[0-3]):[0-5]\d$/, "HH:mm 24h required")

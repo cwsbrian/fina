@@ -170,6 +170,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       // the body. snoozeUntil has tri-state (undefined no-op, null clear,
       // string set).
       const data: Prisma.UserUpdateInput = {};
+      if (body.name !== undefined) data.name = body.name;
       if (body.morningTime !== undefined) data.morningTime = body.morningTime;
       if (body.pauseEnabled !== undefined) data.pauseEnabled = body.pauseEnabled;
       if (body.tz !== undefined) data.tz = body.tz;

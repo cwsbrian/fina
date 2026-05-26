@@ -184,7 +184,10 @@ export default function More() {
       >
         {/* Profile card */}
         {me && (
-          <View style={styles.profileCard}>
+          <Pressable
+            style={({ pressed }) => [styles.profileCard, pressed && { opacity: 0.7 }]}
+            onPress={() => router.push("/profile/edit" as never)}
+          >
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>
                 {initials(me.user.name, me.user.email)}
@@ -202,7 +205,8 @@ export default function More() {
                 </Text>
               </View>
             </View>
-          </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} />
+          </Pressable>
         )}
 
         {/* Workspace */}
@@ -375,7 +379,7 @@ export default function More() {
           <SettingsRow
             icon="person-outline"
             title="Edit profile"
-            onPress={comingSoon("Profile")}
+            onPress={() => router.push("/profile/edit" as never)}
           />
           <SettingsRow
             icon="download-outline"
