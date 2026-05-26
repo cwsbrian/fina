@@ -500,7 +500,7 @@ Add to `model Subscription` (before `createdAt`):
   environment       String   @default("Production")
 ```
 
-- [ ] **Step 2.3: Add `IapDeletedBinding` model**
+- [ ] **Step 2.3: Add `IapDeletedBinding` model + `WebhookEvent.body` column**
 
 Append at end of file:
 
@@ -523,7 +523,39 @@ model IapDeletedBinding {
   @@index([source])
   @@map("iap_deleted_bindings")
 }
+
+/// Tracks per-binding-token retry counts for the IAP unattributable-
+/// renewal fallback (spec §5.3 step 4). Distinct from WebhookEvent
+/// (which is keyed on notificationUUID/messageId and is the DEDUP
+/// surface) — Apple's real retries deliver the SAME notificationUUID,
+/// so retry-cap must be keyed on the binding token instead. After
+/// MAX_UNKNOWN_RETRIES (5) the webhook returns 200 with a forensic
+/// WebhookEvent so the store stops retrying.
+model IapRetryCounter {
+  id         String   @id @default(cuid())
+  source     String   // "iap_apple" | "iap_google"
+  /// SHA-256 of the binding token (appAccountToken / obfuscatedExternalAccountId).
+  tokenHash  String
+  attempts   Int      @default(0)
+  firstAt    DateTime @default(now())
+  lastAt     DateTime @default(now())
+
+  @@unique([source, tokenHash])
+  @@map("iap_retry_counters")
+}
 ```
+
+Also modify `model WebhookEvent` (find it in the existing file around `// Stores enough to dedupe` near line 711) and add a `body Json?` column INSIDE the model braces:
+
+```prisma
+  /// Optional structured payload for forensic event types
+  /// (unattributable_after_delete / unattributable_giveup / etc.).
+  /// Existing Stripe dedup rows leave this null. PII fields covered
+  /// by Pino redact list (Task 0).
+  body  Json?
+```
+
+Single migration covers all four schema changes (User.iap*, Subscription.environment, IapDeletedBinding, IapRetryCounter, WebhookEvent.body).
 
 - [ ] **Step 2.4: Generate the migration**
 
@@ -3183,37 +3215,26 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
 }
 ```
 
-Note: `WebhookEvent.body` is `Json?` per `schema.prisma:268` — the type cast above works because Prisma accepts JSON-typed `data`. If the existing schema doesn't have `body` on `WebhookEvent` (it doesn't — re-read `schema.prisma:711-720`), add it as part of this task's migration: a small ALTER TABLE adding `body Json?`.
+Note: `WebhookEvent.body` is the `Json?` column added by Task 2's migration. The forensic-event JSON predicates depend on it.
 
-- [ ] **Step 10.3: If needed, extend `WebhookEvent` schema**
-
-In `apps/api/prisma/schema.prisma` `model WebhookEvent`, add:
-
-```prisma
-  /// Optional structured payload for unattributable / retry-cap state.
-  body  Json?
-```
-
-Then `npx prisma migrate dev --name webhook_event_body`.
-
-- [ ] **Step 10.4: Register plugin in `server.ts`**
+- [ ] **Step 10.3: Register plugin in `server.ts`**
 
 ```ts
 import { billingIapWebhookRoutes } from "./routes/billing-iap-webhook.js";
 await app.register(billingIapWebhookRoutes);
 ```
 
-- [ ] **Step 10.5: Run webhook integration tests, confirm pass**
+- [ ] **Step 10.4: Run webhook integration tests, confirm pass**
 
 ```
 npx vitest run test/iap/billing-iap-webhook.test.ts
 ```
 Expected: PASS 8/8 (6 Apple + 2 Google).
 
-- [ ] **Step 10.6: Commit**
+- [ ] **Step 10.5: Commit**
 
 ```
-git add apps/api/src/routes/billing-iap-webhook.ts apps/api/src/server.ts apps/api/prisma apps/api/tests/iap/billing-iap-webhook.test.ts
+git add apps/api/src/routes/billing-iap-webhook.ts apps/api/src/server.ts apps/api/tests/iap/billing-iap-webhook.test.ts
 git commit -m "feat(api): IAP webhook routes — Apple ASSN + Google RTDN with 4-step userId resolution"
 ```
 
