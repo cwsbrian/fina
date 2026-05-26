@@ -79,13 +79,49 @@ declare module "fastify" {
   }
 }
 
-export async function buildApp(env: Env): Promise<FastifyInstance> {
+export type BuildAppOpts = {
+  /** Test seam — when present, the IAP route + webhook handlers
+   *  consume these mocks via `app.fina.iap` instead of constructing
+   *  real Apple/Google clients from env. Untyped here to avoid a
+   *  cross-cycle import; the IAP routes do the precise narrowing. */
+  iap?: { appleClient: unknown; googleClient: unknown; oidcClient: unknown };
+};
+
+export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: env.NODE_ENV === "test" ? false : { level: "info" },
+    logger:
+      env.NODE_ENV === "test"
+        ? false
+        : {
+            level: "info",
+            redact: {
+              paths: [
+                "env.APPLE_ASC_PRIVATE_KEY",
+                "env.GOOGLE_SERVICE_ACCOUNT_JSON",
+                "*.APPLE_ASC_PRIVATE_KEY",
+                "*.GOOGLE_SERVICE_ACCOUNT_JSON",
+                "*.private_key",
+                "*.purchaseToken",
+                "*.linkedPurchaseToken",
+                "*.signedTransactionInfo",
+                "*.signedRenewalInfo",
+                "*.signedPayload",
+                "*.appAccountToken",
+                "*.receipt",
+                "*.jwsRepresentation",
+                "*.body.appAccountToken",
+                "*.body.obf",
+              ],
+              censor: "[REDACTED]",
+            },
+          },
     trustProxy: env.TRUST_PROXY,
   });
   const auth = createAuth(env);
   app.decorate("fina", { env, auth });
+  if (opts.iap) {
+    (app as any).fina.iap = opts.iap;
+  }
 
   await app.register(helmet, {
     contentSecurityPolicy: {

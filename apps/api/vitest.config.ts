@@ -10,6 +10,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@fina/shared": path.resolve(__dirname, "../../libs/shared/src/index.ts"),
+      "@better-auth/expo": path.resolve(
+        __dirname,
+        "../../apps/mobile/node_modules/@better-auth/expo",
+      ),
     },
   },
   test: {
