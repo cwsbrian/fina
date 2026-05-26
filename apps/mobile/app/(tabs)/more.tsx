@@ -352,27 +352,39 @@ export default function More() {
           />
         </Group>
 
-        {/* Subscription */}
-        <GroupLabel>Subscription</GroupLabel>
-        <Group>
-          <SettingsRow
-            icon="star-outline"
-            title="Plan"
-            detail={me ? tierLabel(me.tier, me.trial.active) : "—"}
-            onPress={comingSoon("Plan")}
-          />
-          <SettingsRow
-            icon="card-outline"
-            title="Manage billing"
-            detail={
-              openingBilling ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : undefined
-            }
-            onPress={onManageBilling}
-            last
-          />
-        </Group>
+        {/* Subscription — hidden when billing is owned by web (Stripe).
+            Show on mobile only when the user is on trial / no sub yet,
+            or when they're already subscribed via IAP. */}
+        {(() => {
+          const sub = me?.subscription;
+          const billingOwnedByMobile =
+            !sub || sub.source === "iap_apple" || sub.source === "iap_google";
+          if (!billingOwnedByMobile) return null;
+          return (
+            <>
+              <GroupLabel>Subscription</GroupLabel>
+              <Group>
+                <SettingsRow
+                  icon="star-outline"
+                  title="Plan"
+                  detail={me ? tierLabel(me.tier, me.trial.active) : "—"}
+                  onPress={comingSoon("Plan")}
+                />
+                <SettingsRow
+                  icon="card-outline"
+                  title="Manage billing"
+                  detail={
+                    openingBilling ? (
+                      <ActivityIndicator size="small" color={colors.primary} />
+                    ) : undefined
+                  }
+                  onPress={onManageBilling}
+                  last
+                />
+              </Group>
+            </>
+          );
+        })()}
 
         {/* Account */}
         <GroupLabel>Account</GroupLabel>
