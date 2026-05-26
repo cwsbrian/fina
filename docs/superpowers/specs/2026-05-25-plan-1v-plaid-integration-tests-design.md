@@ -11,7 +11,7 @@ Close 3 remaining integration gaps in the push subsystem identified by Plan 1Q+1
 2. **`webhook-item.ts:35`** — ITEM_LOGIN_REQUIRED + PENDING_EXPIRATION webhooks → `sendBankReconnectPush` fan-out to owner+editor. Existing tests cover status updates but NOT the push side-effect.
 3. **`scheduled-spend-match.ts`** — cron iterates workspaces calling `matchScheduledSpends`. Registered in `cron.scheduler.test.ts` but cron logic itself untested.
 
-Add **11 tests** across 3 commits.
+Add **11 tests** across 3 commits + **1 production fix** (R2 review caught the 4th fan-out helper Plan 1U missed — see T2).
 
 **Out of scope:**
 - `matchScheduledSpends` internal algorithm — covered indirectly by `chat.tools.scheduled-spends.test.ts` (lists endpoint exercises same query).
@@ -26,7 +26,28 @@ Add **11 tests** across 3 commits.
 
 ## 3. Production change
 
-**없음.** No edits to source code.
+**T2 only — 1 file** (per R2 review). `webhook-item.ts:34-36` has the SAME unguarded fan-out loop pattern that Plan 1U fixed in 3 of 4 fan-out helpers. Plan 1U missed this 4th one. Plan 1V closes the gap:
+
+```ts
+// Before (webhook-item.ts:33-37):
+for (const m of item.workspace.memberships) {
+  await sendBankReconnectPush(env, m.userId, item.institutionName);
+}
+
+// After:
+for (const m of item.workspace.memberships) {
+  try {
+    await sendBankReconnectPush(env, m.userId, item.institutionName);
+  } catch (err) {
+    logError(
+      { plaidItemId, recipientUserId: m.userId, err },
+      "bank-reconnect push to recipient failed",
+    );
+  }
+}
+```
+
+Outer `try/catch` (lines 18-43) remains. The inner catch makes the fan-out resilient to per-recipient errors, matching the Plan 1U pattern across all 4 fan-out helpers.
 
 ## 4. Tasks
 
@@ -60,10 +81,15 @@ Add new describe block "runDailyRefresh — push integration" with 3 tests:
 
 **Commit:** `test(api): daily-refresh push integration — 3 tests covering Plaid-sync→anomaly+notify`
 
-### T2 — `plaid.webhook.item.test.ts` extension (4 tests)
+### T2 — Production fix + `plaid.webhook.item.test.ts` extension (5 tests, 1 commit)
 
 **Files:**
+- Modify: `apps/api/src/plaid/webhook-item.ts` (per-recipient try/catch — see §3)
 - Modify: `apps/api/tests/plaid.webhook.item.test.ts`
+
+**Existing test signature note (per R2)**: existing tests call `dispatchItemEvent(item, body)` (2-arg). Production signature is `(item, body, env)` (3-arg). Existing tests pass because the unused-env paths don't hit `notifyReconnectNeeded`. **Plan 1V's new tests MUST pass `env` (3-arg).** Also clean up existing tests to consistently pass env.
+
+**PlaidItem schema fields** (R1 fix): required fields are `workspaceId`, `accessTokenCiphertext: Bytes`, `accessTokenIv: Bytes`, `itemId @unique`, `institutionId`, `institutionName`. Seed helper passes `Buffer.from(...)` for the Bytes fields.
 
 Add at top:
 ```ts
@@ -81,10 +107,11 @@ Then new describe block "dispatchItemEvent — push integration":
 | 2 | Same setup. | `PENDING_EXPIRATION` | Status `"relink_required"`. `sendBankReconnectPush` called 2 times (owner + editor). |
 | 3 | Same setup. | `ERROR` with `error_code: "ITEM_NOT_FOUND"` (any non-LOGIN_REQUIRED) | Status `"error"`. `sendBankReconnectPush` called 0 times — `notifyReconnectNeeded` skipped (production line 64). |
 | 4 | Same setup. | `USER_PERMISSION_REVOKED` | Status `"disconnected"`. `sendBankReconnectPush` called 0 times. |
+| 5 | Same as #1 but `vi.mocked(sendMod.sendBankReconnectPush).mockRejectedValueOnce(new Error("boom"))` on first call. | `ITEM_LOGIN_REQUIRED` | **Pins the new per-recipient containment (production fix above).** `dispatchItemEvent(...)` resolves without throwing. Spy called 2 times — second member STILL attempted after first throws. |
 
-Reuse the existing test file's setup helpers (seed PlaidItem with workspace). Add owner/editor/viewer memberships via existing or new helper.
+Reuse `setupWorkspaceWithRoles` from `tests/helpers/factories.js` (Plan 1U) for the workspace + memberships. Seed PlaidItem inline (schema-specific to this test file).
 
-**Commit:** `test(api): plaid webhook ITEM → bank-reconnect push fan-out (4 tests)`
+**Commit:** `fix(plaid)+test: webhook-item per-recipient try/catch + bank-reconnect fan-out tests (5 tests)`
 
 ### T3 — `cron.scheduled-spend-match.test.ts` (new, 4 tests)
 
@@ -123,9 +150,9 @@ afterEach(() => { vi.clearAllMocks(); });
 | 1 | No workspaces | — | `matchScheduledSpends` called 0 times. `runScheduledSpendMatch(env)` resolves without error. |
 | 2 | 1 workspace (no membership setup needed) | `mockResolvedValue({matched: 3, unresolved: 1})` | Called once. `calls[0]` = `[wsId, Date]` (today). |
 | 3 | 2 workspaces. `mockRejectedValueOnce(new Error("boom")).mockResolvedValue({matched: 0, unresolved: 0})` (first workspace throws, second succeeds). | First throws, second resolves. | Called 2 times. Cron resolves without throwing (per-workspace try/catch swallows). |
-| 4 | 2 workspaces, both resolve. Verify the `today` arg is the same Date instance across both calls. | `mockResolvedValue` | `calls[0][1]` deep-equals `calls[1][1]`. Single `today = new Date()` is shared per `scheduled-spend-match.ts:13`. |
+| ~~4~~ DROPPED per R2 — was testing structural "same `today` instance" which would break a defensible refactor (per-workspace `new Date()`). 3 tests sufficient for T3. |
 
-**Commit:** `test(api): cron/scheduled-spend-match — 4 tests covering workspace iteration + error containment`
+**Commit:** `test(api): cron/scheduled-spend-match — 3 tests covering workspace iteration + error containment`
 
 ## 5. Risks
 
@@ -144,8 +171,8 @@ afterEach(() => { vi.clearAllMocks(); });
 ## 6. Success criteria
 
 - T1: 3 new tests pass. Existing daily-refresh tests still pass.
-- T2: 4 new tests pass. Existing webhook-item tests still pass.
-- T3: 4 new tests pass.
+- T2: 5 new tests pass (4 fan-out + 1 per-recipient containment). 1 production file modified. Existing webhook-item tests still pass (with 3-arg env signature cleanup).
+- T3: 3 new tests pass.
 - Full `@fina/api` suite regression: 0 new fails.
 - Typecheck baseline unchanged.
 - 3 commits, test-only.
