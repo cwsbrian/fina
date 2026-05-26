@@ -276,8 +276,8 @@ EOF
 - Create: `apps/api/tests/helpers/factories.ts`
 - Modify: `apps/api/tests/push.transaction-added.test.ts` (replace inline `createUser`/`setupWorkspaceWithRoles` with imports)
 - Modify: `apps/api/tests/cron.goal-milestones.test.ts` (replace inline helpers with imports)
-- Modify: `apps/api/tests/cron.push-receipts.test.ts` (replace inline `createUserDevice` + `createTicket` stays inline — only `createUser`-equivalent migrates)
 - Modify: `apps/api/tests/push.send.test.ts` (replace `makeUserWithDevices` with import)
+- **NOT modified** (per R2 review): `apps/api/tests/cron.push-receipts.test.ts` — tight User+Device+Ticket fixture coupling; defer to Plan 1V era.
 
 - [ ] **Step 1: Create `factories.ts`**
 
@@ -376,19 +376,11 @@ This is the LARGEST migration in T2 — careful with helper-shape change. Trace 
 - `userIds.editor` → `userIds[1]!` (when "editor" is 2nd in roles)
 - `userIds.viewer` → `userIds[2]!`
 
-- [ ] **Step 4: Migrate `cron.push-receipts.test.ts`**
+- [ ] **Step 4: SKIP `cron.push-receipts.test.ts` migration** (per R2 review)
 
-This file's `createUserDevice` helper is structurally different (creates User + UserDevice atomically). Use `makeUserWithDevices` from factories instead:
-```ts
-// Before:
-const deviceId = await createUserDevice();
+This file's `createUserDevice` + `createTicket` + `mockReceipts` helpers form a tight User+Device+Ticket fixture trio with 11+ call sites and structural divergence (createUserDevice returns just `deviceId`, factory returns `User`). Migrating creates churn without test improvement.
 
-// After:
-const u = await makeUserWithDevices([{ token: `ExponentPushToken[pr-${counter}]`, platform: "ios" }]);
-const deviceId = (await prisma.userDevice.findFirstOrThrow({ where: { userId: u.id } })).id;
-```
-
-Or keep the inline `createUserDevice` helper if migration is too invasive — judgment call during impl. Document the decision in the commit message.
+**Decision**: keep `cron.push-receipts.test.ts` inline helpers as-is. Migrate during Plan 1V era when this file is next touched. T2's scope is now **3 test files**, not 4.
 
 - [ ] **Step 5: Migrate `push.send.test.ts`**
 
@@ -401,24 +393,26 @@ No call-site changes needed — signature matches.
 
 - [ ] **Step 6: Run all affected tests**
 
-Run: `pnpm --filter @fina/api exec vitest run tests/push.transaction-added.test.ts tests/cron.goal-milestones.test.ts tests/cron.push-receipts.test.ts tests/push.send.test.ts`
-Expected: all pass (counts: 6 + 10 + 10 + 25 = 51).
+Run: `pnpm --filter @fina/api exec vitest run tests/push.transaction-added.test.ts tests/cron.goal-milestones.test.ts tests/push.send.test.ts`
+Expected: all pass (counts: 6 + 10 + 25 = 41). cron.push-receipts.test.ts unchanged in T2 (10 tests still pass independently).
 
 - [ ] **Step 7: Typecheck**
 
-Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep -E "factories|push.send|push.transaction|cron.goal|cron.push-receipts" | head -10`
+Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep -E "factories|push.send|push.transaction|cron.goal" | head -10`
 Expected: 0 lines.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add apps/api/tests/helpers/factories.ts apps/api/tests/push.transaction-added.test.ts apps/api/tests/cron.goal-milestones.test.ts apps/api/tests/cron.push-receipts.test.ts apps/api/tests/push.send.test.ts
+git add apps/api/tests/helpers/factories.ts apps/api/tests/push.transaction-added.test.ts apps/api/tests/cron.goal-milestones.test.ts apps/api/tests/push.send.test.ts
 git commit -m "$(cat <<'EOF'
-refactor(api/tests): extract tests/helpers/factories.ts + migrate 4 test files
+refactor(api/tests): extract tests/helpers/factories.ts + migrate 3 test files
 
 createTestUser, setupWorkspaceWithRoles, createTestCategory, makeUserWithDevices
-extracted to apps/api/tests/helpers/factories.ts. 4 newest test files
-(Plan 1Q-1T era) migrated; older Plan 1L-1M tests stay until next touch.
+extracted to apps/api/tests/helpers/factories.ts. 3 newer test files migrated
+(push.transaction-added, cron.goal-milestones, push.send). cron.push-receipts
+deferred (tight User+Device+Ticket fixture coupling). Older Plan 1L-1M tests
+stay until next touch.
 
 Net LOC reduction across migrated files. No behavior change.
 
@@ -440,10 +434,15 @@ Verify push.send.test.ts ends after the `sendTransactionAddedPush payload shape`
 
 - [ ] **Step 2: Add `firstPushMessage(spy)` helper**
 
-Insert AFTER the existing module-scope imports + factory imports:
+**Prereq**: T2 commit must be landed (provides the `makeUserWithDevices` factory import that T3 tests use).
+
+Add this import immediately after the existing `import { describe, expect, it, ... } from "vitest"` line at the top of `push.send.test.ts` (R2 review verified that `MockInstance` is NOT currently imported):
 ```ts
 import type { MockInstance } from "vitest";
+```
 
+Then add the helper function near the top of the file (after the `makeUserWithDevices` import from factories — itself added in T2):
+```ts
 function firstPushMessage(spy: MockInstance): Record<string, unknown> {
   const calls = spy.mock.calls;
   expect(calls.length).toBeGreaterThan(0);
@@ -453,8 +452,6 @@ function firstPushMessage(spy: MockInstance): Record<string, unknown> {
   return chunk[0]!;
 }
 ```
-
-If `import type { MockInstance } from "vitest"` already present, skip.
 
 - [ ] **Step 3: Append 7-wrapper payload-shape describe block**
 
@@ -670,15 +667,15 @@ EOF
 **Files:**
 - Modify: `apps/api/src/push/transaction-added.ts` (1-line comment near line 26)
 
-- [ ] **Step 1: Add design-intent comment**
+- [ ] **Step 1: Add design-intent comment to all 3 files** (per R2 review — make decision concrete)
 
-In `apps/api/src/push/transaction-added.ts`, ABOVE the inner `try` introduced in T1, add:
+Add this 2-line comment ABOVE the inner `try` introduced in T1 in all 3 production files (`transaction-added.ts`, `anomaly.ts`, `goal-milestones.ts`):
 ```ts
 // Per-recipient try/catch: a transient error on one member must NOT
-// drop the tail of the fan-out (per Plan 1U review).
+// drop the tail of the fan-out (per Plan 1U).
 ```
 
-Optional: similar 1-line comment in `anomaly.ts` and `goal-milestones.ts` at the corresponding try blocks. Keep brief.
+Keep verbatim — `git add` step lists all 3 files.
 
 - [ ] **Step 2: Full suite regression**
 
