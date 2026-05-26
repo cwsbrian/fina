@@ -12,6 +12,13 @@ export type ChatThreadDTO = {
   archivedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** ISO 8601 timestamp the user last marked this thread as read, or null
+   *  if the thread has never been opened. */
+  lastReadAt: string | null;
+  /** Server-computed count of assistant messages in this thread whose
+   *  createdAt is after lastReadAt (or all assistant messages if
+   *  lastReadAt is null). user/tool role messages are NOT counted. */
+  unreadCount: number;
 };
 
 /** A row from `GET /chat/threads/:tid` messages list, or the user/assistant
