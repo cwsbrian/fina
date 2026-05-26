@@ -1,5 +1,6 @@
 import "./global.css";
 import { Inter } from "next/font/google";
+import { GoogleAnalytics } from "@next/third-parties/google";
 import { Toaster } from "../components/Toaster.client";
 
 const inter = Inter({
@@ -30,6 +31,9 @@ export default function RootLayout({
         {children}
         <Toaster richColors position="bottom-right" />
       </body>
+      {process.env.NODE_ENV === "production" && (
+        <GoogleAnalytics gaId="G-FGTLC7PSLB" />
+      )}
     </html>
   );
 }
