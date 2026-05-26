@@ -41,7 +41,14 @@ export async function runGoalMilestones(env: Env): Promise<void> {
         select: { userId: true },
       });
       for (const m of memberships) {
-        await sendGoalMilestonePush(env, m.userId, g.title, crossed);
+        try {
+          await sendGoalMilestonePush(env, m.userId, g.title, crossed);
+        } catch (err) {
+          logError(
+            { cron: CRON_NAME, goalId: g.id, recipientUserId: m.userId, err },
+            "goal-milestone push to recipient failed",
+          );
+        }
       }
       await prisma.goal.update({
         where: { id: g.id },

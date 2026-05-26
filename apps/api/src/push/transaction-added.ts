@@ -25,13 +25,20 @@ export async function notifyTransactionAdded(
     });
     for (const m of members) {
       if (args.excludeUserId && m.userId === args.excludeUserId) continue;
-      await sendTransactionAddedPush(
-        env,
-        m.userId,
-        args.merchant,
-        args.amount.toFixed(2),
-        args.categoryName,
-      );
+      try {
+        await sendTransactionAddedPush(
+          env,
+          m.userId,
+          args.merchant,
+          args.amount.toFixed(2),
+          args.categoryName,
+        );
+      } catch (err) {
+        logError(
+          { workspaceId: args.workspaceId, recipientUserId: m.userId, err },
+          "transaction-added push to recipient failed",
+        );
+      }
     }
   } catch (err) {
     logError(

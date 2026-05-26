@@ -177,7 +177,7 @@ describe("runGoalMilestones", () => {
     expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(0);
   });
 
-  it("push throws on one goal → logError + iteration continues to the other", async () => {
+  it("push throws on one goal → caught + iteration continues, BOTH goals advance", async () => {
     const { wsId } = await setupWorkspaceWithRoles(["owner"]);
     const goalA = await createGoal({ workspaceId: wsId, title: "A", targetAmount: 100 });
     const goalB = await createGoal({ workspaceId: wsId, title: "B", targetAmount: 100 });
@@ -197,8 +197,33 @@ describe("runGoalMilestones", () => {
     // Both goals attempted (push called for both).
     expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(2);
 
-    // Exactly one goal's state was advanced; the other was preserved.
-    // Order-agnostic assertion — robust to Postgres scan-order shifts.
+    // Per-recipient containment — even though one push threw, BOTH goal.update
+    // calls fire because the inner catch lets the per-member loop complete.
+    const [a, b] = await Promise.all([
+      prisma.goal.findUniqueOrThrow({ where: { id: goalA } }),
+      prisma.goal.findUniqueOrThrow({ where: { id: goalB } }),
+    ]);
+    expect(a.lastMilestonePct).toBe(100);
+    expect(b.lastMilestonePct).toBe(100);
+  });
+
+  it("computeGoalSavings throws on goal A → per-goal catch + iteration continues to goal B", async () => {
+    const { wsId } = await setupWorkspaceWithRoles(["owner"]);
+    const goalA = await createGoal({ workspaceId: wsId, title: "A", targetAmount: 100 });
+    const goalB = await createGoal({ workspaceId: wsId, title: "B", targetAmount: 100 });
+
+    vi.mocked(savingsMod.computeGoalSavings)
+      .mockRejectedValueOnce(new Error("DB hiccup"))
+      .mockResolvedValue(100);
+
+    const { runGoalMilestones } = await import("../src/cron/jobs/goal-milestones.js");
+    await expect(runGoalMilestones(env)).resolves.not.toThrow();
+
+    // Goal A's per-goal catch fired BEFORE the fan-out — no push, no update.
+    // Goal B processed normally — 1 push + state advanced.
+    expect(vi.mocked(sendMod.sendGoalMilestonePush)).toHaveBeenCalledTimes(1);
+
+    // Order-agnostic: one goal advanced, one didn't.
     const [a, b] = await Promise.all([
       prisma.goal.findUniqueOrThrow({ where: { id: goalA } }),
       prisma.goal.findUniqueOrThrow({ where: { id: goalB } }),

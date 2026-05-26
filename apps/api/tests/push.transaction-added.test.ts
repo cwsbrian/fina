@@ -4,6 +4,7 @@ import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 import { notifyTransactionAdded } from "../src/push/transaction-added.js";
 import * as sendMod from "../src/push/send.js";
+import * as loggerMod from "../src/logger.js";
 
 const env = testEnv();
 
@@ -112,11 +113,11 @@ describe("notifyTransactionAdded", () => {
     expect(calls.map((c) => c[1]).sort()).toEqual([...userIds].sort());
   });
 
-  it("first push throws → loop exits, 2nd member NOT attempted, error swallowed", async () => {
+  it("first push throws → caught + logged, 2nd member still attempted (per-recipient containment)", async () => {
     const { wsId } = await setupWorkspaceWithRoles(["owner", "editor"]);
+    const logErrorSpy = vi.spyOn(loggerMod, "logError");
     vi.mocked(sendMod.sendTransactionAddedPush).mockRejectedValueOnce(new Error("boom"));
 
-    // Should NOT throw.
     await expect(
       notifyTransactionAdded(env, {
         workspaceId: wsId,
@@ -126,8 +127,11 @@ describe("notifyTransactionAdded", () => {
       }),
     ).resolves.toBeUndefined();
 
-    // Fail-stop semantics: 2nd member never attempted.
-    expect(vi.mocked(sendMod.sendTransactionAddedPush)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendMod.sendTransactionAddedPush)).toHaveBeenCalledTimes(2);
+    expect(logErrorSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ recipientUserId: expect.any(String) }),
+      expect.stringContaining("recipient"),
+    );
   });
 
   it("solo owner is the actor (excludeUserId=ownerId) → 0 pushes", async () => {

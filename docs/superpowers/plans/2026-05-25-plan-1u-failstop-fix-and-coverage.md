@@ -34,7 +34,7 @@
 - Modify: `apps/api/tests/push.transaction-added.test.ts` (test 5)
 - Modify: `apps/api/tests/cron.goal-milestones.test.ts` (test 9 + ADD test 10)
 
-- [ ] **Step 1: Read production + tests**
+- [x] **Step 1: Read production + tests**
 
 Read all 5 files to understand the current shape. Note especially:
 - `transaction-added.ts`: outer try/catch at L21-41. For-loop L26-35. Inner await L28-34.
@@ -43,7 +43,7 @@ Read all 5 files to understand the current shape. Note especially:
 - `push.transaction-added.test.ts:115`: test 5 `mockRejectedValueOnce(boom)` + `expect(...).toHaveBeenCalledTimes(1)`.
 - `cron.goal-milestones.test.ts` (around L195-209): test 9 with `mockRejectedValueOnce(boom).mockResolvedValue(...)` + order-agnostic state assertion.
 
-- [ ] **Step 2: Apply production fix to `transaction-added.ts`**
+- [x] **Step 2: Apply production fix to `transaction-added.ts`**
 
 Edit `apps/api/src/push/transaction-added.ts` for-loop. Replace:
 ```ts
@@ -79,7 +79,7 @@ With:
     }
 ```
 
-- [ ] **Step 3: Apply production fix to `anomaly.ts`**
+- [x] **Step 3: Apply production fix to `anomaly.ts`**
 
 Edit `apps/api/src/push/anomaly.ts` for-loop at lines 87-95. Replace:
 ```ts
@@ -113,7 +113,7 @@ With:
     }
 ```
 
-- [ ] **Step 4: Apply production fix to `goal-milestones.ts`**
+- [x] **Step 4: Apply production fix to `goal-milestones.ts`**
 
 Edit `apps/api/src/cron/jobs/goal-milestones.ts` for-loop at lines 43-45. Replace:
 ```ts
@@ -135,7 +135,7 @@ With:
       }
 ```
 
-- [ ] **Step 5: Update Plan 1T test 5 in `push.transaction-added.test.ts`**
+- [x] **Step 5: Update Plan 1T test 5 in `push.transaction-added.test.ts`**
 
 Find the existing test 5:
 ```ts
@@ -175,7 +175,7 @@ Also add the import at the top of the file (near the other imports):
 import * as loggerMod from "../src/logger.js";
 ```
 
-- [ ] **Step 6: Update Plan 1P test 9 in `cron.goal-milestones.test.ts`**
+- [x] **Step 6: Update Plan 1P test 9 in `cron.goal-milestones.test.ts`**
 
 Find the existing test 9 (around lines 195-210). The current body uses order-agnostic state sort. Replace the assertion block:
 ```ts
@@ -194,7 +194,7 @@ Find the existing test 9 (around lines 195-210). The current body uses order-agn
 
 Update the `it()` title from "push throws on one goal → logError + iteration continues to the other" to "push throws on one goal → caught + iteration continues, BOTH goals advance".
 
-- [ ] **Step 7: ADD test 10 to `cron.goal-milestones.test.ts`**
+- [x] **Step 7: ADD test 10 to `cron.goal-milestones.test.ts`**
 
 Insert AFTER the modified test 9. This pins the still-live per-goal catch path:
 ```ts
@@ -225,7 +225,7 @@ Insert AFTER the modified test 9. This pins the still-live per-goal catch path:
   });
 ```
 
-- [ ] **Step 8: Run affected tests**
+- [x] **Step 8: Run affected tests**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/push.transaction-added.test.ts tests/cron.goal-milestones.test.ts tests/push.anomaly.test.ts`
 Expected:
@@ -233,7 +233,7 @@ Expected:
 - `cron.goal-milestones.test.ts`: 10/10 (test 9 updated + test 10 new)
 - `push.anomaly.test.ts`: 8/8 (no contract change — anomaly's outer try/catch still works for non-push errors)
 
-- [ ] **Step 9: Typecheck**
+- [x] **Step 9: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep -E "push.transaction-added|cron.goal-milestones|push.anomaly|transaction-added\.ts|anomaly\.ts|goal-milestones\.ts" | head -10`
 Expected: 0 lines.
@@ -241,7 +241,7 @@ Expected: 0 lines.
 Also: `pnpm --filter @fina/api exec tsc -p tsconfig.app.json --noEmit 2>&1 | head -10`
 Expected: baseline unchanged (production source typechecks).
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 Branch confirmation: `git branch --show-current` must show `worktree-plan-1u-failstop-fix-and-coverage`.
 
