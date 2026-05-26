@@ -243,7 +243,7 @@ EOF
 **Files:**
 - Modify: `apps/api/tests/push.send.test.ts` (append new describe block AFTER existing `channel gate (notificationPrefs)` block)
 
-- [ ] **Step 1: Read existing file structure**
+- [x] **Step 1: Read existing file structure**
 
 Read `apps/api/tests/push.send.test.ts` end-to-end (~22 tests currently). Note:
 - Module-level `vi.mock("expo-server-sdk")` at lines 12-25 — defines Expo class with prototype `sendPushNotificationsAsync` returning `[]`.
@@ -256,7 +256,7 @@ Read `apps/api/tests/push.send.test.ts` end-to-end (~22 tests currently). Note:
 - Calls `sendToUserDevices(env, userId, {title, body, dataType: "transaction-added"})`.
 - `sendToUserDevices` builds carrier message with `data: { type: payload.dataType }`, `priority: "high"`, `sound: "default"`.
 
-- [ ] **Step 2: Append new describe block**
+- [x] **Step 2: Append new describe block**
 
 Locate the closing `});` of the `channel gate (notificationPrefs)` block. Insert AFTER that closing brace (sibling of `describe("channel gate ...")` and `describe("sendBriefPush")`):
 
@@ -330,17 +330,17 @@ describe("sendTransactionAddedPush payload shape", () => {
 });
 ```
 
-- [ ] **Step 3: Run the file**
+- [x] **Step 3: Run the file**
 
 Run: `pnpm --filter @fina/api exec vitest run tests/push.send.test.ts`
 Expected: `Tests  25 passed (25)` (22 existing + 3 new).
 
-- [ ] **Step 4: Typecheck**
+- [x] **Step 4: Typecheck**
 
 Run: `pnpm --filter @fina/api exec tsc -p tsconfig.spec.json --noEmit 2>&1 | grep "push.send" | head -5`
 Expected: 0 lines.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/tests/push.send.test.ts
