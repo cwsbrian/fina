@@ -70,22 +70,15 @@ export class AppleClient {
 
   constructor(private cfg: AppleIapConfig) {
     const env = cfg.env === "production" ? Environment.PRODUCTION : Environment.SANDBOX;
-    // appAppleId is required by the SDK when environment is PRODUCTION.
-    // For SANDBOX env it is ignored. In production deployments, callers
-    // may pass it via cfg.appAppleId (an optional extension field).
-    // When absent in production, we fall back to 0 — the SDK enforces
-    // presence but does not validate the value against Apple servers
-    // at construction time. The real appAppleId should be set in prod
-    // env for correct behaviour.
-    const appAppleId =
-      (cfg as AppleIapConfig & { appAppleId?: number }).appAppleId ??
-      (cfg.env === "production" ? 0 : undefined);
+    // appAppleId: only meaningful in production (the SDK skips the check
+    // in sandbox). Pass undefined → SDK accepts it for sandbox; pass the
+    // configured value for production (requireIapEnv guarantees it's set).
     this.verifier = new SignedDataVerifier(
       APPLE_ROOT_CERTS,
       /* enableOnlineChecks */ false,
       env,
       cfg.bundleId,
-      appAppleId,
+      cfg.appAppleId,
     );
     this.asc = new AppStoreServerAPIClient(
       cfg.ascPrivateKey,
@@ -129,7 +122,8 @@ export class AppleClient {
     const signedDate = Number(raw.signedDate ?? 0);
     const ageMs = Date.now() - signedDate;
     const maxAgeMs = opts.context === "assn" ? 60 * 60 * 1000 : 10 * 60 * 1000;
-    if (signedDate <= 0 || ageMs > maxAgeMs) {
+    const maxFutureSkewMs = 30_000; // 30s clock skew tolerance for "future" payloads
+    if (signedDate <= 0 || ageMs > maxAgeMs || ageMs < -maxFutureSkewMs) {
       throw new HttpError(400, "expired_receipt", "signedDate outside acceptable window");
     }
 

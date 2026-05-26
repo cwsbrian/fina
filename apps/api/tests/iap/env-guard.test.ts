@@ -55,4 +55,36 @@ describe("requireIapEnv", () => {
     const msg = String(err?.message ?? "") + String(err?.stack ?? "");
     expect(msg).not.toContain("leak-this-prefix");
   });
+
+  it("throws when APPLE_APP_APPLE_ID is missing in production", () => {
+    const env: any = {
+      ...APPLE_ONLY,
+      APPLE_ENV: "production",
+      APPLE_APP_APPLE_ID: undefined,
+      GOOGLE_PACKAGE_NAME: "app.fina",
+      GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"x@y","private_key":"-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----\\n"}',
+      GOOGLE_PUBSUB_VERIFY_AUDIENCE: "x",
+      GOOGLE_PUBSUB_VERIFY_EMAIL: "y@z",
+      GOOGLE_PUBSUB_SUBSCRIPTION_NAME: "n",
+    };
+    let err: any;
+    try { requireIapEnv(env); } catch (e) { err = e; }
+    expect(err.statusCode).toBe(503);
+    expect(err.code).toBe("iap_not_configured");
+  });
+
+  it("accepts production env with valid APPLE_APP_APPLE_ID", () => {
+    const env: any = {
+      ...APPLE_ONLY,
+      APPLE_ENV: "production",
+      APPLE_APP_APPLE_ID: "1234567890",
+      GOOGLE_PACKAGE_NAME: "app.fina",
+      GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"x@y","private_key":"-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----\\n"}',
+      GOOGLE_PUBSUB_VERIFY_AUDIENCE: "x",
+      GOOGLE_PUBSUB_VERIFY_EMAIL: "y@z",
+      GOOGLE_PUBSUB_SUBSCRIPTION_NAME: "n",
+    };
+    const cfg = requireIapEnv(env);
+    expect(cfg.apple.appAppleId).toBe(1234567890);
+  });
 });

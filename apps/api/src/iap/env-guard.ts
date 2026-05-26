@@ -6,6 +6,11 @@ export type AppleIapConfig = {
   ascKeyId: string;
   ascPrivateKey: string;
   env: "sandbox" | "production";
+  /** App Store Connect numeric ID. Required in production because
+   *  Apple's SDK validates it against the ASSN V2 notification payload.
+   *  Optional in sandbox (the SDK's notification verifier skips this
+   *  check when env=Sandbox). */
+  appAppleId?: number;
 };
 
 export type GoogleIapConfig = {
@@ -46,12 +51,28 @@ export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
     throw new HttpError(503, "iap_not_configured", "APPLE_ENV must be sandbox|production");
   }
 
+  // Parse the optional numeric app ID. process.env is always strings, so
+  // coerce here. If the env reader is upstream of this (e.g., loadEnv),
+  // it's already coerced — accept both.
+  const appAppleIdRaw = env.APPLE_APP_APPLE_ID;
+  const appAppleId =
+    appAppleIdRaw === undefined || appAppleIdRaw === ""
+      ? undefined
+      : typeof appAppleIdRaw === "number"
+        ? appAppleIdRaw
+        : Number.parseInt(String(appAppleIdRaw), 10);
+
+  if (appleEnvRaw === "production" && (appAppleId === undefined || !Number.isFinite(appAppleId) || appAppleId <= 0)) {
+    throw new HttpError(503, "iap_not_configured", "APPLE_APP_APPLE_ID is required in production");
+  }
+
   const apple: AppleIapConfig = {
     bundleId: need("APPLE_BUNDLE_ID"),
     ascIssuerId: need("APPLE_ASC_ISSUER_ID"),
     ascKeyId: need("APPLE_ASC_KEY_ID"),
     ascPrivateKey: appleKey,
     env: appleEnvRaw,
+    appAppleId,
   };
 
   const saRaw = need("GOOGLE_SERVICE_ACCOUNT_JSON");

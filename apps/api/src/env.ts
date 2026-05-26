@@ -94,6 +94,12 @@ const Schema = z.object({
   APPLE_BUNDLE_ID: z.string().optional(),
   APPLE_ASC_ISSUER_ID: z.string().optional(),
   APPLE_ASC_KEY_ID: z.string().optional(),
+  // App Store Connect numeric "App Apple ID" — required for production
+  // ASSN V2 notification verification (Apple's SDK validates this
+  // against the JWT payload). Find it in App Store Connect →
+  // your app → App Information → General Information → "Apple ID".
+  // Optional in dev/sandbox; required at requireIapEnv() boundary in prod.
+  APPLE_APP_APPLE_ID: z.coerce.number().int().positive().optional(),
   // PEM-encoded .p8 — accept raw OR base64. The IAP env-guard verifies
   // shape ("BEGIN PRIVATE KEY") without ever including the value in
   // an error message.

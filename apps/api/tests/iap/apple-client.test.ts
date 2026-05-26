@@ -48,7 +48,7 @@ describe("AppleClient.verifyAndDecodeTransaction", () => {
   });
 
   it("rejects sandbox JWS in production env", async () => {
-    const prodCfg = { ...cfg, env: "production" as const };
+    const prodCfg = { ...cfg, env: "production" as const, appAppleId: 1234567890 };
     const c = new AppleClient(prodCfg);
     vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx({ environment: "Sandbox" }));
     await expect(c.verifyAndDecodeTransaction("x")).rejects.toMatchObject({ code: "invalid_receipt" });
@@ -73,5 +73,12 @@ describe("AppleClient.verifyAndDecodeTransaction", () => {
     const c = new AppleClient(cfg);
     vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx({ appAccountToken: undefined }));
     await expect(c.verifyAndDecodeTransaction("x")).rejects.toMatchObject({ code: "user_mismatch" });
+  });
+
+  it("rejects future-dated signedDate beyond 30s skew", async () => {
+    const c = new AppleClient(cfg);
+    const future = Date.now() + 60_000; // 60s in the future
+    vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx({ signedDate: future }));
+    await expect(c.verifyAndDecodeTransaction("x")).rejects.toMatchObject({ code: "expired_receipt" });
   });
 });
