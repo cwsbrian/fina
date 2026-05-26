@@ -105,13 +105,20 @@ GOOGLE_PACKAGE_NAME             # app.fina (Play Console package name)
 GOOGLE_SERVICE_ACCOUNT_JSON     # full JSON blob (single-line, escaped) for Play Developer API
 GOOGLE_PUBSUB_VERIFY_AUDIENCE   # the audience claim we expect in Google's OIDC JWT (set when subscribing to Pub/Sub)
 GOOGLE_PUBSUB_VERIFY_EMAIL      # the service account email we expect as `email` claim in the OIDC token
+GOOGLE_PUBSUB_SUBSCRIPTION_NAME # full Pub/Sub subscription name (projects/.../subscriptions/...) — verified in the envelope to defend against a misconfigured second push pointing at our URL
 ```
 
 All new vars optional (z.string().optional()) so dev/test envs without store credentials don't blow up. Use-site throws `HttpError(500, "iap_not_configured")` when consumer code runs without them.
 
 ### 5.2 Modules (`apps/api/src/iap/`)
 
-- `apple-client.ts` — Calls App Store Server API `inApps/v1/transactions/{transactionId}` + `inApps/v1/subscriptions/{originalTransactionId}` with JWT auth (JWT signed each call, 5-min expiry, cached). Verifies `signedTransactionInfo` JWS using Apple's root certs.
+- `apple-client.ts` — Calls App Store Server API `inApps/v1/transactions/{transactionId}` + `inApps/v1/subscriptions/{originalTransactionId}` with JWT auth (JWT signed each call, 5-min expiry, cached). Exposes `verifyAndDecodeTransaction(jws): VerifiedAppleTransaction` which **fails closed** unless ALL of the following hold (the JWS body is decoded only after the cert chain verifies):
+  1. JWS header `alg === "ES256"` (never `none`, never HS256, never RS256).
+  2. The X5C cert chain terminates at Apple's WWDR root, **pinned by SPKI SHA-256 hash in code** (no runtime fetch).
+  3. `bundleId === env.APPLE_BUNDLE_ID` — rejects valid JWS from any other app.
+  4. `environment === env.APPLE_ENV` ("Production" or "Sandbox") — rejects sandbox JWS in prod (the "free Pro" exploit).
+  5. `signedDate` within last 10 minutes for ASC-API responses; within last 1 hour for ASSN webhook payloads — bounds replay of captured/stored payloads.
+  6. `appAccountToken` is present (not `undefined`). Without it we cannot bind to a Fina user, so reject — never bind to "whoever's session POSTed".
 - `google-client.ts` — Calls Google Play Developer API `purchases.subscriptionsv2.get(packageName, token)` with service-account auth (googleapis lib). Returns the v2 SubscriptionPurchaseV2 shape. **Also calls `purchases.subscriptionsv2.acknowledge` after every successful upsert when the validated `acknowledgementState === ACKNOWLEDGEMENT_STATE_PENDING`** — Google auto-refunds and revokes the purchase if not acknowledged within 3 days. The call is idempotent so we run it on every sync (initial + webhook). Acknowledge failure is non-fatal (logged + retried on next webhook), but acknowledge MUST run **after** the local upsert lands so we never acknowledge a purchase we couldn't record.
 - `pricing-map.ts` — Maps `productId → tier` from `IAP_PRODUCT_IDS` (single import from @fina/shared).
 - `sync-sub.ts` — Mirror of `apps/api/src/stripe/sync-sub.ts`. Signature: `syncSubscriptionFromIAP(env, args, userId, log)`. Takes either Apple (`{platform: "ios", originalTransactionId}`) or Google (`{platform: "android", productId, purchaseToken}`). Re-fetches from the store, normalizes status (see §5.4), upserts.
@@ -134,8 +141,10 @@ All new vars optional (z.string().optional()) so dev/test envs without store cre
 3. Cross-source guard: if **any** purchase belongs to a different user (per `appAccountToken` / `obfuscatedAccountId` mismatch), return 403 `user_mismatch` for that one and continue with the rest.
 4. Return `buildMeBody(userId)`.
 
+Both webhook routes use a per-plugin `addContentTypeParser` with `parseAs: "buffer"`, scoped to the plugin's encapsulation context (mirror of `apps/api/src/routes/billing-webhook.ts:11`). Without raw bytes, Fastify re-serializes the body and JWS / Pub/Sub signature verification fails.
+
 **`POST /webhooks/iap/apple`** — Unauthenticated (signature-verified). Per ASSN V2:
-1. Parse `signedPayload` (JWS). Verify with Apple's X5C cert chain → Apple root.
+1. Parse `signedPayload` (JWS). Verify via `apple-client.verifyAndDecodeTransaction` — all six checks in §5.2 apply (alg pinning, SPKI-pinned root, bundleId, environment, signedDate ≤ 1h, appAccountToken presence).
 2. Extract `notificationUUID` → dedup against `WebhookEvent` (id = "apple:" + notificationUUID; source = "iap_apple").
 3. Extract `signedTransactionInfo.originalTransactionId`.
 4. Resolve userId via `Subscription.findFirst({ where: { source: "iap_apple", sourceSubscriptionId: originalTransactionId }})`. If unknown (first-purchase race), log + return 200 — the client-driven `/billing/iap/checkout` will create the row on retry.
@@ -144,8 +153,12 @@ All new vars optional (z.string().optional()) so dev/test envs without store cre
 7. On handler exception → 500 (Apple retries up to 5x over 3 days). On signature failure → 400 (no retry).
 
 **`POST /webhooks/iap/google`** — Unauthenticated (Pub/Sub OIDC + signature). Per RTDN:
-1. Verify OIDC bearer token in `Authorization` header. Audience must match `GOOGLE_PUBSUB_VERIFY_AUDIENCE`; issuer must be `https://accounts.google.com`; email must equal the configured Pub/Sub service account.
-2. Pub/Sub envelope: `{message: {data: base64, messageId, ...}}`. Decode + parse the inner JSON: `{subscriptionNotification: {purchaseToken, subscriptionId, notificationType}}`.
+1. Verify OIDC bearer token in `Authorization` header:
+   - Audience exactly equals `env.GOOGLE_PUBSUB_VERIFY_AUDIENCE`.
+   - Issuer exactly equals `https://accounts.google.com`.
+   - `email` AND `azp` claims both equal `env.GOOGLE_PUBSUB_VERIFY_EMAIL` (belt-and-suspenders against `email`-only confused-deputy).
+   - `exp` enforced with 0s clock skew tolerance — leaked-after-`exp` tokens must fail.
+2. Pub/Sub envelope: `{message: {data: base64, messageId, ...}, subscription: "projects/.../subscriptions/..."}`. Verify `body.subscription === env.GOOGLE_PUBSUB_SUBSCRIPTION_NAME` to defend against a misconfigured second push subscription pointing at our URL. Decode + parse the inner JSON: `{subscriptionNotification: {purchaseToken, subscriptionId, notificationType}}`. **Ignore** non-`subscriptionNotification` envelopes (`oneTimeProductNotification`, `testNotification`) — log + 200.
 3. Dedup via `WebhookEvent` (id = "google:" + messageId).
 4. Resolve userId from `Subscription` row keyed on `(source: iap_google, sourceSubscriptionId: purchaseToken)`. If unknown → 200 + log (first-purchase race).
 5. Call `syncSubscriptionFromIAP({platform: "android", productId: subscriptionId, purchaseToken}, userId)`.
