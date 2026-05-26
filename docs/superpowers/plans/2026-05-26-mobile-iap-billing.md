@@ -34,7 +34,8 @@
 
 **Test infrastructure conventions** (validated against the real codebase, used throughout):
 
-- All tests live in `apps/api/tests/iap/` (NOT `apps/api/tests/iap/`).
+- All tests live in `apps/api/tests/iap/` (plural `tests`, matches `apps/api/vitest.config.ts` `include: ["tests/**/*.test.ts"]`).
+- Shared-package tests are colocated with source — e.g., `libs/shared/src/iap/productIds.test.ts` next to `productIds.ts` (matches existing pattern like `libs/shared/src/notifications.test.ts`).
 - DB reset helper: `truncateAll` exported from `apps/api/tests/helpers/db.ts`.
 - Session helper: `signUpAndGetCookie(app, email)` exported from `apps/api/tests/helpers/auth.ts`.
 - App factory: `buildApp(env, opts?)` from `apps/api/src/server.ts` — Task 0 below extends it to accept an `opts.iap` dependency-injection seam.
@@ -203,14 +204,14 @@ git commit -m "feat(api): buildApp(env, opts.iap) injection seam + Pino redact w
 - Create: `libs/shared/src/schemas/iap.ts`
 - Modify: `libs/shared/src/errors.ts` (append IAP codes to `API_ERROR_CODES`)
 - Modify: `libs/shared/src/index.ts` (re-export new modules)
-- Test: `libs/shared/test/iap/productIds.test.ts`
-- Test: `libs/shared/test/iap/namespace.test.ts`
-- Test: `libs/shared/test/schemas/iap.test.ts`
+- Test: `libs/shared/src/iap/productIds.test.ts`
+- Test: `libs/shared/src/iap/namespace.test.ts`
+- Test: `libs/shared/src/schemas/iap.test.ts`
 
 - [ ] **Step 1.1: Write `productIds` failing tests**
 
 ```ts
-// libs/shared/test/iap/productIds.test.ts
+// libs/shared/src/iap/productIds.test.ts
 import { describe, it, expect } from "vitest";
 import { IAP_PRODUCT_IDS, tierForIapProductId, iapProductIdForTier, type IAPProductId } from "../../src/iap/productIds.js";
 
@@ -238,7 +239,7 @@ describe("IAP_PRODUCT_IDS", () => {
 - [ ] **Step 1.2: Run, confirm fails**
 
 ```
-cd libs/shared && npx vitest run test/iap/productIds.test.ts
+cd libs/shared && npx vitest run tests/iap/productIds.test.ts
 ```
 Expected: FAIL "Cannot find module './iap/productIds.js'".
 
@@ -277,14 +278,14 @@ export function iapProductIdForTier(tier: PaidTier): IAPProductId {
 - [ ] **Step 1.4: Run, confirm passes**
 
 ```
-npx vitest run test/iap/productIds.test.ts
+npx vitest run tests/iap/productIds.test.ts
 ```
 Expected: PASS 5/5.
 
 - [ ] **Step 1.5: Write `namespace` failing test**
 
 ```ts
-// libs/shared/test/iap/namespace.test.ts
+// libs/shared/src/iap/namespace.test.ts
 import { describe, it, expect } from "vitest";
 import { IAP_NAMESPACE } from "../../src/iap/namespace.js";
 
@@ -316,14 +317,14 @@ export const IAP_NAMESPACE = "8f3a7c2e-1b4d-4e5f-9a6b-7c8d9e0f1a2b";
 - [ ] **Step 1.7: Run namespace test, confirm pass**
 
 ```
-npx vitest run test/iap/namespace.test.ts
+npx vitest run tests/iap/namespace.test.ts
 ```
 Expected: PASS 2/2.
 
 - [ ] **Step 1.8: Write schemas failing tests**
 
 ```ts
-// libs/shared/test/schemas/iap.test.ts
+// libs/shared/src/schemas/iap.test.ts
 import { describe, it, expect } from "vitest";
 import { IAPCheckoutBody, IAPRestoreBody } from "../../src/schemas/iap.js";
 
@@ -459,7 +460,7 @@ Expected: all tests pass + build emits dist/.
 - [ ] **Step 1.14: Commit**
 
 ```
-git add libs/shared/src/iap libs/shared/src/schemas/iap.ts libs/shared/src/errors.ts libs/shared/src/index.ts libs/shared/test/iap libs/shared/test/schemas/iap.test.ts
+git add libs/shared/src/iap libs/shared/src/schemas/iap.ts libs/shared/src/errors.ts libs/shared/src/index.ts libs/shared/src/schemas/iap.test.ts
 git commit -m "feat(shared): IAP product IDs, schemas, namespace, error codes"
 ```
 
@@ -573,7 +574,7 @@ import { prisma } from "../../src/db.js";
 import { truncateAll } from "../helpers/db.js";
 
 describe("IAP schema migration", () => {
-  beforeEach(async () => { await resetTestDb(); });
+  beforeEach(async () => { await truncateAll(); });
 
   it("accepts iapAppleAccountToken on User", async () => {
     const u = await prisma.user.create({
@@ -619,7 +620,7 @@ describe("IAP schema migration", () => {
 - [ ] **Step 2.6: Run, confirm passes**
 
 ```
-cd apps/api && npx vitest run test/iap/schema.smoke.test.ts
+cd apps/api && npx vitest run tests/iap/schema.smoke.test.ts
 ```
 Expected: PASS 4/4.
 
@@ -714,7 +715,7 @@ export function redactEnv(env: NodeJS.ProcessEnv): Record<string, string | undef
 - [ ] **Step 3.4: Run `env.test.ts`, confirm pass**
 
 ```
-cd apps/api && npx vitest run test/iap/env.test.ts
+cd apps/api && npx vitest run tests/iap/env.test.ts
 ```
 Expected: PASS 1/1.
 
@@ -880,7 +881,7 @@ export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
 - [ ] **Step 3.7: Run `env-guard.test.ts`, confirm pass**
 
 ```
-npx vitest run test/iap/env-guard.test.ts
+npx vitest run tests/iap/env-guard.test.ts
 ```
 Expected: PASS 4/4.
 
@@ -1115,7 +1116,7 @@ export function mapGoogleStatus(g: GoogleStatusInput): MappedStatus {
 - [ ] **Step 4.4: Run status-mapping tests, confirm pass**
 
 ```
-npx vitest run test/iap/status-mapping.test.ts
+npx vitest run tests/iap/status-mapping.test.ts
 ```
 Expected: PASS 16/16.
 
@@ -1511,7 +1512,7 @@ This test FAILS on a fresh checkout (placeholder still in place) — the enginee
 - [ ] **Step 4.7: Run `apple-client.test.ts`, confirm pass**
 
 ```
-npx vitest run test/iap/apple-client.test.ts
+npx vitest run tests/iap/apple-client.test.ts
 ```
 Expected: PASS 6/6.
 
@@ -1743,7 +1744,7 @@ export class GoogleClient {
 - [ ] **Step 5.4: Run google-client test, confirm pass**
 
 ```
-npx vitest run test/iap/google-client.test.ts
+npx vitest run tests/iap/google-client.test.ts
 ```
 Expected: PASS 5/5.
 
@@ -2009,7 +2010,7 @@ export async function verifyGoogleEnvelope(
 - [ ] **Step 6.3: Run, confirm pass**
 
 ```
-npx vitest run test/iap/webhook-verify.test.ts
+npx vitest run tests/iap/webhook-verify.test.ts
 ```
 Expected: PASS 7/7.
 
@@ -2090,7 +2091,7 @@ npm install -D @types/uuid --workspace=apps/api
 - [ ] **Step 7.4: Run binding test, confirm pass**
 
 ```
-cd apps/api && npx vitest run test/iap/binding.test.ts
+cd apps/api && npx vitest run tests/iap/binding.test.ts
 ```
 Expected: PASS 4/4.
 
@@ -2484,7 +2485,7 @@ async function syncGoogle(_cfg: IapConfig, args: SyncArgsGoogle, deps: SyncDeps)
 - [ ] **Step 7.7: Run sync-sub tests, confirm pass**
 
 ```
-npx vitest run test/iap/sync-sub.test.ts
+npx vitest run tests/iap/sync-sub.test.ts
 ```
 Expected: PASS 6/6.
 
@@ -2503,12 +2504,12 @@ git commit -m "feat(api): syncSubscriptionFromIAP orchestrator + deterministic b
 - Modify: `apps/api/src/routes/billing.ts` (replace `find(pro) ?? activeSubs[0]` with deterministic helper)
 - Modify: `apps/api/src/auth/tier.ts` (filter sandbox rows in prod env)
 - Create: `apps/api/src/billing/precedence.ts` (pure helper, easy to unit test)
-- Test: `apps/api/test/billing/precedence.test.ts`
+- Test: `apps/api/tests/billing/precedence.test.ts`
 
 - [ ] **Step 8.1: Write precedence helper test**
 
 ```ts
-// apps/api/test/billing/precedence.test.ts
+// apps/api/tests/billing/precedence.test.ts
 import { describe, it, expect } from "vitest";
 import { pickPrimarySub, filterEnvironmentRows } from "../../src/billing/precedence.js";
 
@@ -2614,7 +2615,7 @@ export function filterEnvironmentRows<T extends { environment: string }>(
 - [ ] **Step 8.3: Run precedence tests, confirm pass**
 
 ```
-npx vitest run test/billing/precedence.test.ts
+npx vitest run tests/billing/precedence.test.ts
 ```
 Expected: PASS 7/7.
 
@@ -2691,14 +2692,14 @@ export async function effectiveTier(userId: string): Promise<EffectiveTier> {
 - [ ] **Step 8.6: Run full billing tests**
 
 ```
-npx vitest run test/billing test/iap
+npx vitest run tests/billing tests/iap
 ```
 Expected: zero new failures, precedence tests pass.
 
 - [ ] **Step 8.7: Commit**
 
 ```
-git add apps/api/src/billing/precedence.ts apps/api/src/routes/billing.ts apps/api/src/auth/tier.ts apps/api/test/billing/precedence.test.ts
+git add apps/api/src/billing/precedence.ts apps/api/src/routes/billing.ts apps/api/src/auth/tier.ts apps/api/tests/billing/precedence.test.ts
 git commit -m "feat(api): deterministic source precedence + sandbox-environment filter in buildMeBody/effectiveTier"
 ```
 
@@ -2729,7 +2730,7 @@ const fakeAppleClient: any = { verifyAndDecodeTransaction: vi.fn(), getSubscript
 const fakeGoogleClient: any = { fetchAndNormalize: vi.fn(), acknowledgeIfPending: vi.fn().mockResolvedValue(true) };
 
 beforeEach(async () => {
-  await resetTestDb();
+  await truncateAll();
   vi.clearAllMocks();
   app = await buildApp(testEnv(), { iap: { appleClient: fakeAppleClient, googleClient: fakeGoogleClient, oidcClient: { verifyIdToken: vi.fn() } } });
   await prisma.user.create({ data: { id: "u1", email: "u1@test" } });
@@ -2973,7 +2974,7 @@ In `apps/api/src/routes/billing.ts`, change `async function buildMeBody` → `ex
 - [ ] **Step 9.5: Run integration test, confirm pass**
 
 ```
-npx vitest run test/iap/billing-iap.routes.test.ts
+npx vitest run tests/iap/billing-iap.routes.test.ts
 ```
 Expected: PASS 5/5.
 
@@ -3014,7 +3015,7 @@ const fakeGoogleClient: any = { fetchAndNormalize: vi.fn(), acknowledgeIfPending
 const fakeOidcClient: any = { verifyIdToken: vi.fn() };
 
 beforeEach(async () => {
-  await resetTestDb();
+  await truncateAll();
   vi.clearAllMocks();
   app = await buildApp(testEnv(), { iap: { appleClient: fakeAppleClient, googleClient: fakeGoogleClient, oidcClient: fakeOidcClient } });
   await prisma.user.create({ data: { id: "u1", email: "u1@test", iapAppleAccountToken: deriveAppleToken("u1") } });
@@ -3472,7 +3473,7 @@ await app.register(billingIapWebhookRoutes);
 - [ ] **Step 10.4: Run webhook integration tests, confirm pass**
 
 ```
-npx vitest run test/iap/billing-iap-webhook.test.ts
+npx vitest run tests/iap/billing-iap-webhook.test.ts
 ```
 Expected: PASS 8/8 (6 Apple + 2 Google).
 
@@ -3581,7 +3582,7 @@ Expected: PASS 2/2.
 Create a shared fixture so server and mobile both assert the same exact output for the same input. A drift here would silently 403 every purchase as `user_mismatch`.
 
 ```ts
-// libs/shared/test/iap/binding-parity.test.ts
+// libs/shared/src/iap/binding-parity.test.ts
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
 import { v5 as uuidv5 } from "uuid";
@@ -3618,7 +3619,7 @@ import { describe, it, expect } from "vitest";
 import { deriveAppleToken, deriveGoogleToken } from "../binding";
 
 const FIXTURE_USER_ID = "fixture-user-id";
-// Same expected values as libs/shared/test/iap/binding-parity.test.ts.
+// Same expected values as libs/shared/src/iap/binding-parity.test.ts.
 // Update both files if IAP_NAMESPACE ever changes.
 const EXPECTED_APPLE = "<paste from server test on first run>";
 const EXPECTED_GOOGLE = "<paste from server test on first run>";
@@ -3635,7 +3636,7 @@ describe("mobile binding tokens match server output", () => {
 
 Run both:
 ```
-cd libs/shared && npx vitest run test/iap/binding-parity.test.ts
+cd libs/shared && npx vitest run tests/iap/binding-parity.test.ts
 cd apps/mobile && npx vitest run src/iap/__tests__/binding-parity.test.ts
 ```
 First run: paste the server-computed values into the mobile test's `EXPECTED_*` constants. Both pass thereafter.
