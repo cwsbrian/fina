@@ -26,45 +26,39 @@ Mobile calls `react-native-iap` to fetch products + initiate purchase. On succes
 
 Per the **Shared lib first** principle, all new wire types live in `libs/shared/src/` before any consumer code is written.
 
-**New files:**
+**New files (following existing schemas/ vs dto/ vs errors.ts convention):**
 
-- `libs/shared/src/iap/productIds.ts` — single source of truth for product SKUs.
+- `libs/shared/src/iap/productIds.ts` — single source of truth for product SKUs. `billingPeriod` deliberately omitted from the constant until annual lands (v1.5); when added, store it on `Subscription.billingPeriod` directly per the existing column.
   ```ts
   export const IAP_PRODUCT_IDS = {
-    lite_monthly: { tier: "lite",  billingPeriod: "monthly" },
-    pro_monthly:  { tier: "pro",   billingPeriod: "monthly" },
+    lite_monthly: { tier: "lite" },
+    pro_monthly:  { tier: "pro" },
   } as const;
   export type IAPProductId = keyof typeof IAP_PRODUCT_IDS;
   ```
-- `libs/shared/src/dto/iap.ts` — DTOs + zod schemas for the IAP endpoints.
+  This is the **only** IAP pricing-map. `apps/api/src/iap/` imports it directly — no second `pricing-map.ts` file (the Stripe pattern has one because Stripe price IDs come from env vars; IAP product IDs are app-shared constants, so the env indirection isn't needed).
+
+- `libs/shared/src/schemas/iap.ts` — zod request body schemas (mirrors `schemas/billing.ts` placement, NOT `dto/`).
   ```ts
   export const IAPPlatform = z.enum(["ios", "android"]);
   export const IAPCheckoutBody = z.object({
     platform: IAPPlatform,
     productId: z.enum(["lite_monthly", "pro_monthly"]),
-    // iOS: signedTransaction JWS string (StoreKit 2) OR legacy receipt
-    // Android: purchaseToken
-    transactionToken: z.string().min(1),
+    // iOS: signedTransaction JWS string (StoreKit 2, ~2-3 KB).
+    // Android: purchaseToken (short opaque string).
+    receipt: z.string().min(1).describe("iOS: signedTransaction JWS string; Android: purchaseToken"),
   });
   export const IAPRestoreBody = z.object({
     platform: IAPPlatform,
     purchases: z.array(z.object({
       productId: z.enum(["lite_monthly", "pro_monthly"]),
-      transactionToken: z.string().min(1),
+      receipt: z.string().min(1),
     })).min(1).max(20),
   });
   ```
-- `libs/shared/src/dto/iap-errors.ts` — new error codes.
-  ```ts
-  export type IAPErrorCode =
-    | "invalid_receipt"
-    | "expired_receipt"
-    | "product_mismatch"      // productId doesn't match validated receipt
-    | "already_subscribed_stripe"   // user has active Stripe sub
-    | "already_subscribed_iap"      // user already has active IAP sub (same source)
-    | "user_mismatch"         // receipt belongs to another userId
-    | "platform_unavailable"; // App Store / Play returned 5xx
-  ```
+  Field renamed `transactionToken` → `receipt` — industry term, less misleading than "token" for the 2-3 KB JWS.
+
+- **No separate `iap-errors.ts` file.** Append IAP codes to the existing `ApiErrorCode` union in `libs/shared/src/errors.ts` (`API_ERROR_CODES` array). New codes: `invalid_receipt`, `expired_receipt`, `product_mismatch`, `already_subscribed_stripe`, `already_subscribed_iap`, `user_mismatch`, `platform_unavailable`, `iap_not_configured`. Frontend exhaustive switches now narrow over the full union without a separate import path.
 
 **Subscription ID contract:**
 - Apple: `Subscription.sourceSubscriptionId = originalTransactionId` ALWAYS. Never `transactionId` (which rotates per renewal). `originalTransactionId` is stable across renewals and is the subscription identity. The checkout route, the webhook handler, and `syncSubscriptionFromIAP` must all normalize to `originalTransactionId` before upserting — otherwise checkout-route and webhook target different rows and we get duplicate `Subscription` records per user.
@@ -153,7 +147,7 @@ All new vars optional (z.string().optional()) so dev/test envs without store cre
 2. Check `prisma.subscription.count` for active subs (matching `ACTIVE_SUBSCRIPTION_STATUSES`):
    - any active Stripe sub → 409 `already_subscribed_stripe`.
    - any active IAP sub → 409 `already_subscribed_iap`.
-3. Call `syncSubscriptionFromIAP({platform, productId, transactionToken, userId, expectedAppAccountToken: uuidv5(userId, IAP_NAMESPACE), expectedObfuscatedAccountId: sha256(userId)})`. The sync function MUST 403 `user_mismatch` if the verified transaction's `appAccountToken` (iOS) or `obfuscatedAccountId` (Android) does NOT equal the expected value derived from the caller's session — this is the attacker-binds-someone-else's-receipt defense. The check is mandatory, not optional.
+3. Call `syncSubscriptionFromIAP({platform, productId, receipt, userId, expectedAppAccountToken: uuidv5(userId, IAP_NAMESPACE), expectedObfuscatedAccountId: sha256(userId)})`. The sync function MUST 403 `user_mismatch` if the verified transaction's `appAccountToken` (iOS) or `obfuscatedAccountId` (Android) does NOT equal the expected value derived from the caller's session — this is the attacker-binds-someone-else's-receipt defense. The check is mandatory, not optional.
 4. On first successful checkout, write `User.iapAppleAccountToken` / `User.iapGoogleObfuscatedId` so subsequent webhooks can reverse-resolve userId. Subsequent checkouts re-derive the same value (deterministic) and either match the existing binding or 403.
 5. Validation failure → 400 with the IAPErrorCode.
 6. Tier resolution: `syncSubscriptionFromIAP` derives `tier` solely from the verified transaction's `productId` via the shared pricing map. The request body's `productId` is used only for telemetry / `product_mismatch` 400 if it disagrees — the server NEVER trusts client-side productId for write decisions.
