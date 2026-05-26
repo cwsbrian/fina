@@ -70,7 +70,19 @@ Per the **Shared lib first** principle, all new wire types live in `libs/shared/
 - Apple: `Subscription.sourceSubscriptionId = originalTransactionId` ALWAYS. Never `transactionId` (which rotates per renewal). `originalTransactionId` is stable across renewals and is the subscription identity. The checkout route, the webhook handler, and `syncSubscriptionFromIAP` must all normalize to `originalTransactionId` before upserting — otherwise checkout-route and webhook target different rows and we get duplicate `Subscription` records per user.
 - Google: `Subscription.sourceSubscriptionId = purchaseToken`. But the v2 response may carry `linkedPurchaseToken` after an in-Play tier change — see §7 for the chain-rewrite handling.
 
-**No schema changes** to `Subscription` itself — `enum SubscriptionSource { stripe iap_apple iap_google }` already exists. `Subscription.sourceCustomerId` will hold `appAccountToken` (iOS) or `obfuscatedAccountId` (Android) — both are deterministic per-user UUIDs (see §6, §7).
+**Schema additions to `User` (one migration):**
+
+```prisma
+model User {
+  // ...existing fields...
+  iapAppleAccountToken    String?  @unique   // uuidv5(userId, IAP_NAMESPACE) — written on first successful Apple checkout
+  iapGoogleObfuscatedId   String?  @unique   // sha256(userId) hex — written on first successful Google checkout
+}
+```
+
+These columns are the **reverse-lookup binding** used by the webhook handlers to attribute a fresh purchase to a userId when the `Subscription` row doesn't exist yet (first-purchase race or Android resubscribe-after-expiry). They are written by `/billing/iap/checkout` after the verified-transaction check passes. Webhook does `prisma.user.findUnique({ where: { iapAppleAccountToken: ... } })` (or the Google equivalent) and creates the missing `Subscription` row in-place. Without this binding, an event whose corresponding checkout never lands (mobile crash, network mid-flight) drops on the floor permanently and the user is charged with no Fina record.
+
+`Subscription.sourceCustomerId` continues to hold the same `appAccountToken` / `obfuscatedAccountId` per-row for forensic/dedup convenience; the `User.iap*` columns are the canonical user→token binding.
 
 ## 4. Mobile library + config
 
@@ -135,15 +147,18 @@ All new vars optional (z.string().optional()) so dev/test envs without store cre
 2. Check `prisma.subscription.count` for active subs (matching `ACTIVE_SUBSCRIPTION_STATUSES`):
    - any active Stripe sub → 409 `already_subscribed_stripe`.
    - any active IAP sub → 409 `already_subscribed_iap`.
-3. Call `syncSubscriptionFromIAP(env, {platform, productId, transactionToken}, userId)`.
-4. If validation fails → 400 with the IAPErrorCode.
-5. Return `buildMeBody(userId)` — same shape `/billing/sync` returns.
+3. Call `syncSubscriptionFromIAP({platform, productId, transactionToken, userId, expectedAppAccountToken: uuidv5(userId, IAP_NAMESPACE), expectedObfuscatedAccountId: sha256(userId)})`. The sync function MUST 403 `user_mismatch` if the verified transaction's `appAccountToken` (iOS) or `obfuscatedAccountId` (Android) does NOT equal the expected value derived from the caller's session — this is the attacker-binds-someone-else's-receipt defense. The check is mandatory, not optional.
+4. On first successful checkout, write `User.iapAppleAccountToken` / `User.iapGoogleObfuscatedId` so subsequent webhooks can reverse-resolve userId. Subsequent checkouts re-derive the same value (deterministic) and either match the existing binding or 403.
+5. Validation failure → 400 with the IAPErrorCode.
+6. Tier resolution: `syncSubscriptionFromIAP` derives `tier` solely from the verified transaction's `productId` via the shared pricing map. The request body's `productId` is used only for telemetry / `product_mismatch` 400 if it disagrees — the server NEVER trusts client-side productId for write decisions.
+7. Return `buildMeBody(userId)` — same shape `/billing/sync` returns.
 
 **`POST /billing/iap/restore`** — Authenticated. Body: `IAPRestoreBody`. Flow:
 1. `requireSession`, load user.
-2. For each purchase: call `syncSubscriptionFromIAP` with `userId`. Skip (log + continue) on individual failures so partial restores succeed.
-3. Cross-source guard: if **any** purchase belongs to a different user (per `appAccountToken` / `obfuscatedAccountId` mismatch), return 403 `user_mismatch` for that one and continue with the rest.
-4. Return `buildMeBody(userId)`.
+2. For each purchase: call `syncSubscriptionFromIAP` with the same expected-token args as `/billing/iap/checkout` step 3. Skip (log + continue) on individual failures so partial restores succeed.
+3. Cross-source guard: a verified transaction with NO `appAccountToken` (Apple) or NO `obfuscatedAccountId` (Google) is treated as `user_mismatch` — never bind ambiguous purchases. The same applies if the present-but-mismatched token doesn't match `uuidv5(callerUserId, IAP_NAMESPACE)` / `sha256(callerUserId)`. Both cases continue (skip this one, process the rest).
+4. Mobile client MUST pre-filter `getAvailablePurchases` to `productId IN IAP_PRODUCT_IDS` and dedup on `originalTransactionId` before POSTing, so the 20-item cap is exercised only on legitimate Fina purchases.
+5. Return `buildMeBody(userId)`.
 
 Both webhook routes use a per-plugin `addContentTypeParser` with `parseAs: "buffer"`, scoped to the plugin's encapsulation context (mirror of `apps/api/src/routes/billing-webhook.ts:11`). Without raw bytes, Fastify re-serializes the body and JWS / Pub/Sub signature verification fails.
 
@@ -151,10 +166,13 @@ Both webhook routes use a per-plugin `addContentTypeParser` with `parseAs: "buff
 1. Parse `signedPayload` (JWS). Verify via `apple-client.verifyAndDecodeTransaction` — all six checks in §5.2 apply (alg pinning, SPKI-pinned root, bundleId, environment, signedDate ≤ 1h, appAccountToken presence).
 2. Extract `notificationUUID` → dedup against `WebhookEvent` (id = "apple:" + notificationUUID; source = "iap_apple").
 3. Extract `signedTransactionInfo.originalTransactionId`.
-4. Resolve userId via `Subscription.findFirst({ where: { source: "iap_apple", sourceSubscriptionId: originalTransactionId }})`. If unknown (first-purchase race), log + return 200 — the client-driven `/billing/iap/checkout` will create the row on retry.
-5. Call `syncSubscriptionFromIAP({platform: "ios", originalTransactionId}, userId)`.
+4. Resolve userId, in order:
+   1. `Subscription.findFirst({ where: { source: "iap_apple", sourceSubscriptionId: originalTransactionId }})` → existing sub, use its `userId`.
+   2. Fallback: the verified JWS carries `appAccountToken`. `User.findUnique({ where: { iapAppleAccountToken: appAccountToken }})` → matched user, create the missing `Subscription` row here (covers webhook-before-checkout race and pure-resubscribe-from-Settings).
+   3. Still unknown → return **500** (NOT 200). Apple retries up to 5x over 3 days, giving `/billing/iap/checkout` time to land. Returning 200-and-drop silently loses the user's purchase forever if their client never reconnects. Cap log noise via per-`appAccountToken` counter.
+5. Call `syncSubscriptionFromIAP({platform: "ios", originalTransactionId, userId})`.
 6. Record `WebhookEvent` after handler succeeds (same pattern as Stripe webhook).
-7. On handler exception → 500 (Apple retries up to 5x over 3 days). On signature failure → 400 (no retry).
+7. On handler exception → 500. On signature failure → 400 (no retry).
 
 **`POST /webhooks/iap/google`** — Unauthenticated (Pub/Sub OIDC + signature). Per RTDN:
 1. Verify OIDC bearer token in `Authorization` header:
@@ -164,8 +182,11 @@ Both webhook routes use a per-plugin `addContentTypeParser` with `parseAs: "buff
    - `exp` enforced with 0s clock skew tolerance — leaked-after-`exp` tokens must fail.
 2. Pub/Sub envelope: `{message: {data: base64, messageId, ...}, subscription: "projects/.../subscriptions/..."}`. Verify `body.subscription === env.GOOGLE_PUBSUB_SUBSCRIPTION_NAME` to defend against a misconfigured second push subscription pointing at our URL. Decode + parse the inner JSON: `{subscriptionNotification: {purchaseToken, subscriptionId, notificationType}}`. **Ignore** non-`subscriptionNotification` envelopes (`oneTimeProductNotification`, `testNotification`) — log + 200.
 3. Dedup via `WebhookEvent` (id = "google:" + messageId).
-4. Resolve userId from `Subscription` row keyed on `(source: iap_google, sourceSubscriptionId: purchaseToken)`. If unknown → 200 + log (first-purchase race).
-5. Call `syncSubscriptionFromIAP({platform: "android", productId: subscriptionId, purchaseToken}, userId)`.
+4. Resolve userId, in order:
+   1. `Subscription.findFirst({ where: { source: "iap_google", sourceSubscriptionId: purchaseToken }})` → existing sub, use its `userId`. Also try the `linkedPurchaseToken` if present (handles in-Play tier change crossing events).
+   2. Fallback: fetch the v2 purchase via `purchases.subscriptionsv2.get`, read `externalAccountIdentifiers.obfuscatedExternalAccountId`. `User.findUnique({ where: { iapGoogleObfuscatedId: ... }})` → matched user, create the missing `Subscription` row here (covers webhook-before-checkout race AND Android resubscribe-after-expiry, which always issues a brand-new purchaseToken).
+   3. Still unknown → return **500** (NOT 200). Pub/Sub retries per the subscription's retry policy. Cap log noise via per-`obfuscatedExternalAccountId` counter.
+5. Call `syncSubscriptionFromIAP({platform: "android", productId: subscriptionId, purchaseToken, userId})`.
 6. Record `WebhookEvent` after handler succeeds. On handler exception → 500 (Pub/Sub retries per subscription's ack-deadline + retry policy).
 
 ### 5.4 Status mapping
