@@ -4142,6 +4142,203 @@ git commit -m "docs(iap): sandbox launch smoke checklist (gates §11)"
 
 ---
 
+## Task 14: Account-deletion integration — tombstone helper + future-impl doc
+
+The v1 IAP work does NOT include an account-deletion flow (none exists in the codebase yet). But the IAP webhook ladder (Task 10) reads `IapDeletedBinding` tombstones to short-circuit notifications for deleted users. When the deletion flow IS built later, it MUST write these tombstones — otherwise webhooks for deleted users 500 for 5 retries before the cap trips.
+
+This task ships the helper + the integration document so the future implementer can't miss it.
+
+**Files:**
+- Create: `apps/api/src/iap/account-deletion.ts` (the `writeAccountDeletionTombstones(userId)` helper)
+- Create: `docs/runbooks/iap-account-deletion.md` (one-page integration guide)
+- Modify: `apps/api/src/iap/binding.ts` (re-export the helper)
+- Test: `apps/api/tests/iap/account-deletion.test.ts`
+
+- [ ] **Step 14.1: Write failing test**
+
+```ts
+// apps/api/tests/iap/account-deletion.test.ts
+import { describe, it, expect, beforeEach } from "vitest";
+import { prisma } from "../../src/db.js";
+import { truncateAll } from "../helpers/db.js";
+import { writeAccountDeletionTombstones } from "../../src/iap/account-deletion.js";
+import { deriveAppleToken, deriveGoogleToken, hashBindingToken } from "../../src/iap/binding.js";
+
+beforeEach(async () => { await truncateAll(); });
+
+describe("writeAccountDeletionTombstones", () => {
+  it("writes tombstones for both apple and google bindings when present", async () => {
+    await prisma.user.create({
+      data: {
+        id: "u1", email: "u1@test",
+        iapAppleAccountToken: deriveAppleToken("u1"),
+        iapGoogleObfuscatedId: deriveGoogleToken("u1"),
+      },
+    });
+    await writeAccountDeletionTombstones("u1");
+    const apple = await prisma.iapDeletedBinding.findUnique({
+      where: { source_tokenHash: { source: "iap_apple", tokenHash: hashBindingToken(deriveAppleToken("u1")) } },
+    });
+    const google = await prisma.iapDeletedBinding.findUnique({
+      where: { source_tokenHash: { source: "iap_google", tokenHash: hashBindingToken(deriveGoogleToken("u1")) } },
+    });
+    expect(apple).not.toBeNull();
+    expect(google).not.toBeNull();
+  });
+
+  it("no-ops when user has never made an IAP purchase", async () => {
+    await prisma.user.create({ data: { id: "u2", email: "u2@test" } });
+    await writeAccountDeletionTombstones("u2");
+    const rows = await prisma.iapDeletedBinding.findMany();
+    expect(rows.length).toBe(0);
+  });
+
+  it("idempotent — second call doesn't create duplicate rows", async () => {
+    await prisma.user.create({
+      data: { id: "u3", email: "u3@test", iapAppleAccountToken: deriveAppleToken("u3") },
+    });
+    await writeAccountDeletionTombstones("u3");
+    await writeAccountDeletionTombstones("u3");
+    const rows = await prisma.iapDeletedBinding.findMany({ where: { source: "iap_apple" } });
+    expect(rows.length).toBe(1);
+  });
+});
+```
+
+- [ ] **Step 14.2: Implement `account-deletion.ts`**
+
+```ts
+// apps/api/src/iap/account-deletion.ts
+import { prisma } from "../db.js";
+import { hashBindingToken } from "./binding.js";
+
+/** Future-deletion-flow integration point. Whoever builds the account-
+ *  deletion flow MUST call this BEFORE removing the User row. Without
+ *  it, IAP webhooks for the deleted user's purchases 500 for 5 retries
+ *  before the per-token retry-cap trips (spec §5.3 step 4).
+ *
+ *  No-op for users who never made an IAP purchase. Idempotent — safe
+ *  to call repeatedly (uses upsert under (source, tokenHash) unique). */
+export async function writeAccountDeletionTombstones(userId: string): Promise<void> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { iapAppleAccountToken: true, iapGoogleObfuscatedId: true },
+  });
+  if (!user) return;
+  const tombstones: { source: "iap_apple" | "iap_google"; tokenHash: string }[] = [];
+  if (user.iapAppleAccountToken) {
+    tombstones.push({ source: "iap_apple", tokenHash: hashBindingToken(user.iapAppleAccountToken) });
+  }
+  if (user.iapGoogleObfuscatedId) {
+    tombstones.push({ source: "iap_google", tokenHash: hashBindingToken(user.iapGoogleObfuscatedId) });
+  }
+  if (tombstones.length === 0) return;
+  // Hash userId for support-replay; not reversible without the original userId.
+  const userIdHash = hashBindingToken(userId);
+  for (const t of tombstones) {
+    await prisma.iapDeletedBinding.upsert({
+      where: { source_tokenHash: { source: t.source, tokenHash: t.tokenHash } },
+      create: { source: t.source, tokenHash: t.tokenHash, userIdHash },
+      update: {}, // idempotent
+    });
+  }
+}
+```
+
+- [ ] **Step 14.3: Re-export from `binding.ts`**
+
+In `apps/api/src/iap/binding.ts`, add at the bottom:
+
+```ts
+export { writeAccountDeletionTombstones } from "./account-deletion.js";
+```
+
+- [ ] **Step 14.4: Create runbook**
+
+```markdown
+# Runbook — IAP account deletion integration
+
+**Audience:** future implementer of `DELETE /me` / account-deletion flow.
+
+## Background
+
+Fina mobile IAP webhooks consult `IapDeletedBinding` to recognize
+notifications for users we've deleted. Without a tombstone, our
+webhook 500s for 5 retries (per spec §5.3 step 4) before the per-
+token retry-cap trips and stops the noise. The cap exists as a
+safety net; the tombstone is the right answer.
+
+## What the deletion flow MUST do
+
+BEFORE removing the `User` row (or in the same transaction):
+
+```ts
+import { writeAccountDeletionTombstones } from "@fina/api/src/iap/account-deletion.js";
+
+await prisma.$transaction(async (tx) => {
+  await writeAccountDeletionTombstones(userId);
+  // ... cancel any Stripe subs, null out PII fields per spec §12.1
+  //     retention guidance (6-year tax-retention exemption), etc.
+  // ... finally delete or tombstone the User row.
+});
+```
+
+`writeAccountDeletionTombstones` is idempotent and no-ops for users
+who never made an IAP purchase.
+
+## What the deletion flow MUST NOT do
+
+- Hard-delete `Subscription` rows for IAP-source subs. Spec §12.1
+  requires PII-null + retain 6 years (CRA tax retention).
+- Cancel the Apple/Google subscription server-side. We cannot; the
+  user must do it via Apple Settings / Play Store. UI must surface
+  a blocking banner.
+
+## Verification
+
+After deletion, simulate a renewal webhook for the deleted user:
+the webhook handler should consult IapDeletedBinding, log
+`unattributable_after_delete`, and return 200 immediately (no 500-
+retry cascade).
+
+## When this becomes self-service
+
+If/when account deletion is exposed in the mobile UI:
+- Block deletion if any active `iap_apple` / `iap_google` Subscription
+  rows exist. Show "Cancel your subscription first" with a deep-link
+  to the platform's subs UI (see Task 12 step 12.4 for the iOS/Android
+  deep-link patterns).
+- Only proceed after the user confirms platform-native cancel.
+```
+
+- [ ] **Step 14.5: Verify ApiErrorCode → HTTP status mapping**
+
+The IAP error codes added in Task 1 Step 1.11 (`invalid_receipt`, `iap_not_configured`, etc.) are surfaced by code via `throw new HttpError(statusCode, code, ...)`. The Fastify error serializer should already trust `e.statusCode`. Confirm by reading `apps/api/src/auth/context.ts` for the `HttpError` class:
+
+```
+grep -n "class HttpError\|statusCode" apps/api/src/auth/context.ts | head
+```
+
+Expected: HttpError carries `statusCode: number` and `code: string` properties. Route handlers do `reply.code(e.statusCode).send({ error: e.code })`. Verified — no global mapping table needs updating.
+
+If a route ever returns the error code without an explicit statusCode (e.g., legacy code that catches and re-throws as 500), the mapping fails silently. Smoke-test by hitting `/billing/iap/checkout` with no env configured and confirming the response is 503 with body `{"error":"iap_not_configured"}`.
+
+- [ ] **Step 14.6: Run tests, confirm pass**
+
+```
+cd apps/api && npx vitest run tests/iap/account-deletion.test.ts
+```
+Expected: PASS 3/3.
+
+- [ ] **Step 14.7: Commit**
+
+```
+git add apps/api/src/iap/account-deletion.ts apps/api/src/iap/binding.ts apps/api/tests/iap/account-deletion.test.ts docs/runbooks/iap-account-deletion.md
+git commit -m "feat(api): writeAccountDeletionTombstones helper + future-impl runbook"
+```
+
+---
+
 ## Self-review (done — recorded for trace)
 
 **Spec coverage:**
@@ -4171,6 +4368,17 @@ git commit -m "docs(iap): sandbox launch smoke checklist (gates §11)"
 ## Plan complete
 
 Plan saved to `docs/superpowers/plans/2026-05-26-mobile-iap-billing.md`.
+
+**Revision history (post-write):**
+- `244501d` — Initial plan (13 tasks).
+- `a074ff0` — P1 — Test infrastructure: Task 0 (buildApp injection), real helper paths.
+- `e9f315e` — P2 — Single migration: WebhookEvent.body + IapRetryCounter moved to Task 2.
+- `a542d66` — P3 — Apple verifyAndDecodeNotification + SPKI-pinned root + fail-fast.
+- `5ac3e53` — P4 — Google acknowledge fix (productId not empty) + no double-fetch.
+- `02ff6e0` — P5 — Webhook dedup vs retry-counter separation; Family Sharing → canceled.
+- `409c472` — P6 — buildMeBody signature + caller updates; filterEnvironmentRows type narrowed.
+- `418582a` — P7 — react-native-iap@^14 pin; sha256 top-level; parity tests; IapPurchaseError UX.
+- This commit — P8 — Task 14 (account-deletion tombstone helper + runbook) + ApiErrorCode mapping check.
 
 **Two execution options:**
 
