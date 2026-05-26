@@ -14,20 +14,183 @@
 
 **Dependency graph (`‖` = independent, parallelizable):**
 ```
-1 (shared) → 2 (migration) → 3 (env)
-                              ├→ 4 (apple-client)   ‖
-                              ├→ 5 (google-client)  ‖
-                              └→ 6 (webhook-verify)
-                                  └→ 7 (sync-sub)
-                                      ├→ 8 (buildMeBody)  ‖
-                                      ├→ 9 (routes)       ‖
-                                      └→ 10 (webhooks)    ‖
-                                          ↓
-                                          11 (mobile lib)
-                                              ↓
-                                              12 (mobile UI)
-                                                  ↓
-                                                  13 (sandbox smoke)
+0 (test infra) → 1 (shared) → 2 (migration) → 3 (env)
+                                               ├→ 4 (apple-client)   ‖
+                                               ├→ 5 (google-client)  ‖
+                                               └→ 6 (webhook-verify)
+                                                   └→ 7 (sync-sub)
+                                                       └→ 8 (buildMeBody + sandbox filter)
+                                                           ├→ 9 (routes)    ‖
+                                                           └→ 10 (webhooks) ‖
+                                                               ↓
+                                                               11 (mobile lib)
+                                                                   ↓
+                                                                   12 (mobile UI)
+                                                                       ↓
+                                                                       13 (sandbox smoke)
+                                                                           ↓
+                                                                           14 (account-deletion doc)
+```
+
+**Test infrastructure conventions** (validated against the real codebase, used throughout):
+
+- All tests live in `apps/api/tests/iap/` (NOT `apps/api/tests/iap/`).
+- DB reset helper: `truncateAll` exported from `apps/api/tests/helpers/db.ts`.
+- Session helper: `signUpAndGetCookie(app, email)` exported from `apps/api/tests/helpers/auth.ts`.
+- App factory: `buildApp(env, opts?)` from `apps/api/src/server.ts` — Task 0 below extends it to accept an `opts.iap` dependency-injection seam.
+- Test env: import `testEnv` from `apps/api/tests/helpers/test-env.ts`.
+
+---
+
+## Task 0: Test infrastructure — `buildApp` IAP dependency injection seam
+
+This task lands BEFORE Task 1 so every subsequent test can wire mock Apple/Google clients into the route handlers without touching real store SDKs.
+
+**Files:**
+- Modify: `apps/api/src/server.ts` (extend `buildApp` signature)
+- Create: `apps/api/tests/helpers/iap-mocks.ts` (typed factory for the three IAP mock clients)
+- Test: `apps/api/tests/iap/buildApp-iap.test.ts`
+
+- [ ] **Step 0.1: Write failing test**
+
+```ts
+// apps/api/tests/iap/buildApp-iap.test.ts
+import { describe, it, expect } from "vitest";
+import { buildApp } from "../../src/server.js";
+import { testEnv } from "../helpers/test-env.js";
+import { makeIapMocks } from "../helpers/iap-mocks.js";
+
+describe("buildApp IAP injection seam", () => {
+  it("exposes injected iap clients on app.fina.iap when opts.iap is provided", async () => {
+    const mocks = makeIapMocks();
+    const app = await buildApp(testEnv(), { iap: mocks });
+    expect((app as any).fina.iap).toBe(mocks);
+    await app.close();
+  });
+
+  it("leaves app.fina.iap undefined by default (production wires real clients lazily)", async () => {
+    const app = await buildApp(testEnv());
+    expect((app as any).fina.iap).toBeUndefined();
+    await app.close();
+  });
+});
+```
+
+- [ ] **Step 0.2: Implement `iap-mocks.ts` helper**
+
+```ts
+// apps/api/tests/helpers/iap-mocks.ts
+import { vi } from "vitest";
+
+/** Shape mirrors AppleClient / GoogleClient / OAuth2Client surfaces
+ *  used by route + sync code. The factory returns ready-to-mutate
+ *  vi.fn() spies; each test does `mocks.appleClient.verifyAndDecodeTransaction.mockResolvedValue(...)`. */
+export type IapMocks = {
+  appleClient: {
+    verifyAndDecodeTransaction: ReturnType<typeof vi.fn>;
+    verifyAndDecodeNotification: ReturnType<typeof vi.fn>;
+    getSubscriptionStatus: ReturnType<typeof vi.fn>;
+    _decodeAndVerifyJws: ReturnType<typeof vi.fn>;
+  };
+  googleClient: {
+    fetchAndNormalize: ReturnType<typeof vi.fn>;
+    acknowledgeIfPending: ReturnType<typeof vi.fn>;
+    _acknowledge: ReturnType<typeof vi.fn>;
+  };
+  oidcClient: {
+    verifyIdToken: ReturnType<typeof vi.fn>;
+  };
+};
+
+export function makeIapMocks(): IapMocks {
+  return {
+    appleClient: {
+      verifyAndDecodeTransaction: vi.fn(),
+      verifyAndDecodeNotification: vi.fn(),
+      getSubscriptionStatus: vi.fn(),
+      _decodeAndVerifyJws: vi.fn(),
+    },
+    googleClient: {
+      fetchAndNormalize: vi.fn(),
+      acknowledgeIfPending: vi.fn().mockResolvedValue(true),
+      _acknowledge: vi.fn().mockResolvedValue(undefined),
+    },
+    oidcClient: {
+      verifyIdToken: vi.fn(),
+    },
+  };
+}
+```
+
+- [ ] **Step 0.3: Extend `buildApp` signature in `apps/api/src/server.ts`**
+
+Replace the signature `export async function buildApp(env: Env): Promise<FastifyInstance>` with:
+
+```ts
+export type BuildAppOpts = {
+  /** Test seam — when present, the IAP route + webhook handlers
+   *  consume these mocks via `app.fina.iap` instead of constructing
+   *  real Apple/Google clients from env. Untyped here to avoid a
+   *  cross-cycle import; the IAP routes do the precise narrowing. */
+  iap?: { appleClient: unknown; googleClient: unknown; oidcClient: unknown };
+};
+
+export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<FastifyInstance> {
+  // ... existing body ...
+  // After app.fina is constructed (search for `app.decorate("fina"`), append:
+  if (opts.iap) {
+    (app as any).fina.iap = opts.iap;
+  }
+  // ... rest of body ...
+}
+```
+
+The exact insertion point: after `app.decorate("fina", { env, auth, ... });` and BEFORE the `await app.register(...)` calls that load routes (so route handlers can read `app.fina.iap` at registration time).
+
+- [ ] **Step 0.4: Add Pino redact wiring in the same step**
+
+While editing `apps/api/src/server.ts:82` (the `logger:` field of the Fastify config), replace `{ level: "info" }` with:
+
+```ts
+logger:
+  env.NODE_ENV === "test"
+    ? false
+    : {
+        level: "info",
+        redact: {
+          paths: [
+            "env.APPLE_ASC_PRIVATE_KEY",
+            "env.GOOGLE_SERVICE_ACCOUNT_JSON",
+            "*.APPLE_ASC_PRIVATE_KEY",
+            "*.GOOGLE_SERVICE_ACCOUNT_JSON",
+            "*.private_key",
+            "*.purchaseToken",
+            "*.signedTransactionInfo",
+            "*.signedRenewalInfo",
+            "*.signedPayload",
+            "*.appAccountToken",
+            "*.receipt",
+            "*.jwsRepresentation",
+            "*.body.appAccountToken",
+            "*.body.obf",
+          ],
+          censor: "[REDACTED]",
+        },
+      },
+```
+
+- [ ] **Step 0.5: Run, confirm pass**
+
+```
+cd apps/api && npx vitest run tests/iap/buildApp-iap.test.ts
+```
+Expected: PASS 2/2.
+
+- [ ] **Step 0.6: Commit**
+
+```
+git add apps/api/src/server.ts apps/api/tests/helpers/iap-mocks.ts apps/api/tests/iap/buildApp-iap.test.ts
+git commit -m "feat(api): buildApp(env, opts.iap) injection seam + Pino redact wiring for IAP secrets"
 ```
 
 ---
@@ -307,7 +470,7 @@ git commit -m "feat(shared): IAP product IDs, schemas, namespace, error codes"
 **Files:**
 - Modify: `apps/api/prisma/schema.prisma` (User additions, Subscription.environment, new IapDeletedBinding model)
 - Create: `apps/api/prisma/migrations/<timestamp>_iap_billing/migration.sql` (generated by Prisma)
-- Test: `apps/api/test/iap/schema.smoke.test.ts`
+- Test: `apps/api/tests/iap/schema.smoke.test.ts`
 
 - [ ] **Step 2.1: Edit `User` model**
 
@@ -372,10 +535,10 @@ Expected output: `Applied 1 migration` + Prisma Client regenerated. Inspect the 
 - [ ] **Step 2.5: Write schema smoke test**
 
 ```ts
-// apps/api/test/iap/schema.smoke.test.ts
+// apps/api/tests/iap/schema.smoke.test.ts
 import { describe, it, expect, beforeEach } from "vitest";
 import { prisma } from "../../src/db.js";
-import { resetTestDb } from "../testdb.js"; // existing helper
+import { truncateAll } from "../helpers/db.js";
 
 describe("IAP schema migration", () => {
   beforeEach(async () => { await resetTestDb(); });
@@ -431,7 +594,7 @@ Expected: PASS 4/4.
 - [ ] **Step 2.7: Commit**
 
 ```
-git add apps/api/prisma/schema.prisma apps/api/prisma/migrations apps/api/test/iap/schema.smoke.test.ts
+git add apps/api/prisma/schema.prisma apps/api/prisma/migrations apps/api/tests/iap/schema.smoke.test.ts
 git commit -m "feat(api): prisma migration for IAP billing — User.iap* + Subscription.environment + IapDeletedBinding"
 ```
 
@@ -444,8 +607,8 @@ git commit -m "feat(api): prisma migration for IAP billing — User.iap* + Subsc
 - Modify: `apps/api/src/logger.ts` (extend Pino `redact` paths) — if file doesn't exist, find Pino init in `apps/api/src/server.ts` and add there
 - Create: `apps/api/src/iap/env-guard.ts` (`requireIapEnv()` returns the typed config or throws 503)
 - Create: `apps/api/src/iap/redactEnv.ts`
-- Test: `apps/api/test/iap/env.test.ts`
-- Test: `apps/api/test/iap/env-guard.test.ts`
+- Test: `apps/api/tests/iap/env.test.ts`
+- Test: `apps/api/tests/iap/env-guard.test.ts`
 
 - [ ] **Step 3.1: Add env vars**
 
@@ -474,7 +637,7 @@ Open `apps/api/src/env.ts`, append to the `Schema` object (before the closing `}
 - [ ] **Step 3.2: Write `redactEnv` test**
 
 ```ts
-// apps/api/test/iap/env.test.ts
+// apps/api/tests/iap/env.test.ts
 import { describe, it, expect } from "vitest";
 import { redactEnv } from "../../src/iap/redactEnv.js";
 
@@ -526,7 +689,7 @@ Expected: PASS 1/1.
 - [ ] **Step 3.5: Write `requireIapEnv` test**
 
 ```ts
-// apps/api/test/iap/env-guard.test.ts
+// apps/api/tests/iap/env-guard.test.ts
 import { describe, it, expect } from "vitest";
 import { requireIapEnv } from "../../src/iap/env-guard.js";
 
@@ -725,7 +888,7 @@ Expected: zero new failures (pre-existing tests untouched).
 - [ ] **Step 3.10: Commit**
 
 ```
-git add apps/api/src/env.ts apps/api/src/iap/redactEnv.ts apps/api/src/iap/env-guard.ts apps/api/src/server.ts apps/api/test/iap/env.test.ts apps/api/test/iap/env-guard.test.ts
+git add apps/api/src/env.ts apps/api/src/iap/redactEnv.ts apps/api/src/iap/env-guard.ts apps/api/src/server.ts apps/api/tests/iap/env.test.ts apps/api/tests/iap/env-guard.test.ts
 git commit -m "feat(api): IAP env vars, redact rules, 503 iap_not_configured guard"
 ```
 
@@ -737,8 +900,8 @@ git commit -m "feat(api): IAP env vars, redact rules, 503 iap_not_configured gua
 - Install: `npm install @apple/app-store-server-library --workspace=apps/api`
 - Create: `apps/api/src/iap/apple-client.ts`
 - Create: `apps/api/src/iap/status-mapping.ts` (shared by apple-client + google-client)
-- Test: `apps/api/test/iap/apple-client.test.ts`
-- Test: `apps/api/test/iap/status-mapping.test.ts`
+- Test: `apps/api/tests/iap/apple-client.test.ts`
+- Test: `apps/api/tests/iap/status-mapping.test.ts`
 
 - [ ] **Step 4.1: Install Apple's SDK**
 
@@ -749,7 +912,7 @@ npm install @apple/app-store-server-library --workspace=apps/api
 - [ ] **Step 4.2: Write status-mapping test**
 
 ```ts
-// apps/api/test/iap/status-mapping.test.ts
+// apps/api/tests/iap/status-mapping.test.ts
 import { describe, it, expect } from "vitest";
 import { mapAppleStatus, mapGoogleStatus } from "../../src/iap/status-mapping.js";
 
@@ -927,7 +1090,7 @@ Expected: PASS 16/16.
 - [ ] **Step 4.5: Write `apple-client` test (mocked SDK)**
 
 ```ts
-// apps/api/test/iap/apple-client.test.ts
+// apps/api/tests/iap/apple-client.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { AppleClient } from "../../src/iap/apple-client.js";
 import type { AppleIapConfig } from "../../src/iap/env-guard.js";
@@ -1177,7 +1340,7 @@ Expected: PASS 6/6.
 - [ ] **Step 4.8: Commit**
 
 ```
-git add apps/api/package.json apps/api/src/iap/apple-client.ts apps/api/src/iap/status-mapping.ts apps/api/test/iap/apple-client.test.ts apps/api/test/iap/status-mapping.test.ts
+git add apps/api/package.json apps/api/src/iap/apple-client.ts apps/api/src/iap/status-mapping.ts apps/api/tests/iap/apple-client.test.ts apps/api/tests/iap/status-mapping.test.ts
 git commit -m "feat(api): Apple StoreKit 2 client — verifyAndDecodeTransaction with 6 mandatory checks"
 ```
 
@@ -1188,7 +1351,7 @@ git commit -m "feat(api): Apple StoreKit 2 client — verifyAndDecodeTransaction
 **Files:**
 - Install: `npm install googleapis google-auth-library --workspace=apps/api`
 - Create: `apps/api/src/iap/google-client.ts`
-- Test: `apps/api/test/iap/google-client.test.ts`
+- Test: `apps/api/tests/iap/google-client.test.ts`
 
 - [ ] **Step 5.1: Install Google libraries**
 
@@ -1199,7 +1362,7 @@ npm install googleapis google-auth-library --workspace=apps/api
 - [ ] **Step 5.2: Write `google-client` failing test**
 
 ```ts
-// apps/api/test/iap/google-client.test.ts
+// apps/api/tests/iap/google-client.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { GoogleClient } from "../../src/iap/google-client.js";
 import type { GoogleIapConfig } from "../../src/iap/env-guard.js";
@@ -1396,7 +1559,7 @@ Expected: PASS 5/5.
 - [ ] **Step 5.5: Commit**
 
 ```
-git add apps/api/package.json apps/api/src/iap/google-client.ts apps/api/test/iap/google-client.test.ts
+git add apps/api/package.json apps/api/src/iap/google-client.ts apps/api/tests/iap/google-client.test.ts
 git commit -m "feat(api): Google Play Developer client — fetchAndNormalize + acknowledgeIfPending"
 ```
 
@@ -1406,12 +1569,12 @@ git commit -m "feat(api): Google Play Developer client — fetchAndNormalize + a
 
 **Files:**
 - Create: `apps/api/src/iap/webhook-verify.ts`
-- Test: `apps/api/test/iap/webhook-verify.test.ts`
+- Test: `apps/api/tests/iap/webhook-verify.test.ts`
 
 - [ ] **Step 6.1: Write failing tests**
 
 ```ts
-// apps/api/test/iap/webhook-verify.test.ts
+// apps/api/tests/iap/webhook-verify.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   verifyApplePayload,
@@ -1663,7 +1826,7 @@ Expected: PASS 7/7.
 - [ ] **Step 6.4: Commit**
 
 ```
-git add apps/api/src/iap/webhook-verify.ts apps/api/test/iap/webhook-verify.test.ts
+git add apps/api/src/iap/webhook-verify.ts apps/api/tests/iap/webhook-verify.test.ts
 git commit -m "feat(api): IAP webhook signature verifiers — Apple ASSN JWS + Google Pub/Sub OIDC"
 ```
 
@@ -1674,13 +1837,13 @@ git commit -m "feat(api): IAP webhook signature verifiers — Apple ASSN JWS + G
 **Files:**
 - Create: `apps/api/src/iap/sync-sub.ts`
 - Create: `apps/api/src/iap/binding.ts` (helper: deterministic `uuidv5` / `sha256` derivation + `IapDeletedBinding` writer)
-- Test: `apps/api/test/iap/sync-sub.test.ts`
-- Test: `apps/api/test/iap/binding.test.ts`
+- Test: `apps/api/tests/iap/sync-sub.test.ts`
+- Test: `apps/api/tests/iap/binding.test.ts`
 
 - [ ] **Step 7.1: Write `binding` failing tests**
 
 ```ts
-// apps/api/test/iap/binding.test.ts
+// apps/api/tests/iap/binding.test.ts
 import { describe, it, expect } from "vitest";
 import { deriveAppleToken, deriveGoogleToken, hashBindingToken } from "../../src/iap/binding.js";
 
@@ -1744,11 +1907,11 @@ Expected: PASS 4/4.
 - [ ] **Step 7.5: Write `sync-sub` failing test**
 
 ```ts
-// apps/api/test/iap/sync-sub.test.ts
+// apps/api/tests/iap/sync-sub.test.ts
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { syncSubscriptionFromIAP } from "../../src/iap/sync-sub.js";
 import { prisma } from "../../src/db.js";
-import { resetTestDb } from "../testdb.js";
+import { truncateAll } from "../helpers/db.js";
 import { deriveAppleToken, deriveGoogleToken } from "../../src/iap/binding.js";
 
 const fakeAppleClient: any = {
@@ -1767,7 +1930,7 @@ const cfg = {
 
 describe("syncSubscriptionFromIAP — Apple checkout path", () => {
   beforeEach(async () => {
-    await resetTestDb();
+    await truncateAll();
     vi.clearAllMocks();
     await prisma.user.create({ data: { id: "u1", email: "u1@test" } });
   });
@@ -1852,7 +2015,7 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
 
 describe("syncSubscriptionFromIAP — Google checkout path", () => {
   beforeEach(async () => {
-    await resetTestDb();
+    await truncateAll();
     vi.clearAllMocks();
     await prisma.user.create({ data: { id: "u1", email: "u1@test" } });
   });
@@ -2131,7 +2294,7 @@ Expected: PASS 6/6.
 - [ ] **Step 7.8: Commit**
 
 ```
-git add apps/api/package.json apps/api/src/iap/binding.ts apps/api/src/iap/sync-sub.ts apps/api/test/iap/binding.test.ts apps/api/test/iap/sync-sub.test.ts
+git add apps/api/package.json apps/api/src/iap/binding.ts apps/api/src/iap/sync-sub.ts apps/api/tests/iap/binding.test.ts apps/api/tests/iap/sync-sub.test.ts
 git commit -m "feat(api): syncSubscriptionFromIAP orchestrator + deterministic binding helpers"
 ```
 
@@ -2325,16 +2488,19 @@ git commit -m "feat(api): deterministic source precedence + sandbox-environment 
 **Files:**
 - Create: `apps/api/src/routes/billing-iap.ts`
 - Modify: `apps/api/src/server.ts` (register the new plugin)
-- Test: `apps/api/test/iap/billing-iap.routes.test.ts`
+- Test: `apps/api/tests/iap/billing-iap.routes.test.ts`
 
 - [ ] **Step 9.1: Write integration test scaffold**
 
 ```ts
-// apps/api/test/iap/billing-iap.routes.test.ts
+// apps/api/tests/iap/billing-iap.routes.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildApp } from "../helpers/build-app.js"; // existing helper that returns a Fastify instance with prisma stub + IAP client injection seam
+import { buildApp } from "../../src/server.js";
 import { prisma } from "../../src/db.js";
-import { resetTestDb, makeAuthedSession } from "../testdb.js";
+import { truncateAll } from "../helpers/db.js";
+import { signUpAndGetCookie } from "../helpers/auth.js";
+import { testEnv } from "../helpers/test-env.js";
+import { makeIapMocks } from "../helpers/iap-mocks.js";
 import { deriveAppleToken } from "../../src/iap/binding.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -2344,7 +2510,7 @@ const fakeGoogleClient: any = { fetchAndNormalize: vi.fn(), acknowledgeIfPending
 beforeEach(async () => {
   await resetTestDb();
   vi.clearAllMocks();
-  app = await buildApp({ iap: { appleClient: fakeAppleClient, googleClient: fakeGoogleClient } });
+  app = await buildApp(testEnv(), { iap: { appleClient: fakeAppleClient, googleClient: fakeGoogleClient, oidcClient: { verifyIdToken: vi.fn() } } });
   await prisma.user.create({ data: { id: "u1", email: "u1@test" } });
 });
 
@@ -2352,7 +2518,7 @@ describe("POST /billing/iap/checkout", () => {
   it("400 invalid_body when payload malformed", async () => {
     const res = await app.inject({
       method: "POST", url: "/billing/iap/checkout",
-      headers: { cookie: await makeAuthedSession("u1") },
+      headers: { cookie: await signUpAndGetCookie(app, "u1@test") },
       payload: { platform: "ios" },
     });
     expect(res.statusCode).toBe(400);
@@ -2366,7 +2532,7 @@ describe("POST /billing/iap/checkout", () => {
     } });
     const res = await app.inject({
       method: "POST", url: "/billing/iap/checkout",
-      headers: { cookie: await makeAuthedSession("u1") },
+      headers: { cookie: await signUpAndGetCookie(app, "u1@test") },
       payload: { platform: "ios", productId: "pro_monthly", receipt: "jws" },
     });
     expect(res.statusCode).toBe(409);
@@ -2386,7 +2552,7 @@ describe("POST /billing/iap/checkout", () => {
     });
     const res = await app.inject({
       method: "POST", url: "/billing/iap/checkout",
-      headers: { cookie: await makeAuthedSession("u1") },
+      headers: { cookie: await signUpAndGetCookie(app, "u1@test") },
       payload: { platform: "ios", productId: "pro_monthly", receipt: "jws" },
     });
     expect(res.statusCode).toBe(200);
@@ -2403,7 +2569,7 @@ describe("POST /billing/iap/checkout", () => {
     });
     const res = await app.inject({
       method: "POST", url: "/billing/iap/checkout",
-      headers: { cookie: await makeAuthedSession("u1") },
+      headers: { cookie: await signUpAndGetCookie(app, "u1@test") },
       payload: { platform: "ios", productId: "pro_monthly", receipt: "jws" },
     });
     expect(res.statusCode).toBe(403);
@@ -2428,7 +2594,7 @@ describe("POST /billing/iap/restore", () => {
     });
     const res = await app.inject({
       method: "POST", url: "/billing/iap/restore",
-      headers: { cookie: await makeAuthedSession("u1") },
+      headers: { cookie: await signUpAndGetCookie(app, "u1@test") },
       payload: {
         platform: "ios",
         purchases: [
@@ -2593,7 +2759,7 @@ Expected: PASS 5/5.
 - [ ] **Step 9.6: Commit**
 
 ```
-git add apps/api/src/routes/billing-iap.ts apps/api/src/routes/billing.ts apps/api/src/server.ts apps/api/test/iap/billing-iap.routes.test.ts
+git add apps/api/src/routes/billing-iap.ts apps/api/src/routes/billing.ts apps/api/src/server.ts apps/api/tests/iap/billing-iap.routes.test.ts
 git commit -m "feat(api): POST /billing/iap/checkout + /billing/iap/restore"
 ```
 
@@ -2604,16 +2770,16 @@ git commit -m "feat(api): POST /billing/iap/checkout + /billing/iap/restore"
 **Files:**
 - Create: `apps/api/src/routes/billing-iap-webhook.ts`
 - Modify: `apps/api/src/server.ts` (register the new plugin)
-- Test: `apps/api/test/iap/billing-iap-webhook.test.ts`
+- Test: `apps/api/tests/iap/billing-iap-webhook.test.ts`
 
 - [ ] **Step 10.1: Write integration test scaffold**
 
 ```ts
-// apps/api/test/iap/billing-iap-webhook.test.ts
+// apps/api/tests/iap/billing-iap-webhook.test.ts
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { buildApp } from "../helpers/build-app.js";
+import { buildApp } from "../../src/server.js";
 import { prisma } from "../../src/db.js";
-import { resetTestDb } from "../testdb.js";
+import { truncateAll } from "../helpers/db.js";
 import { deriveAppleToken, deriveGoogleToken, hashBindingToken } from "../../src/iap/binding.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -2628,7 +2794,7 @@ const fakeOidcClient: any = { verifyIdToken: vi.fn() };
 beforeEach(async () => {
   await resetTestDb();
   vi.clearAllMocks();
-  app = await buildApp({ iap: { appleClient: fakeAppleClient, googleClient: fakeGoogleClient, oidcClient: fakeOidcClient } });
+  app = await buildApp(testEnv(), { iap: { appleClient: fakeAppleClient, googleClient: fakeGoogleClient, oidcClient: fakeOidcClient } });
   await prisma.user.create({ data: { id: "u1", email: "u1@test", iapAppleAccountToken: deriveAppleToken("u1") } });
 });
 
@@ -3047,7 +3213,7 @@ Expected: PASS 8/8 (6 Apple + 2 Google).
 - [ ] **Step 10.6: Commit**
 
 ```
-git add apps/api/src/routes/billing-iap-webhook.ts apps/api/src/server.ts apps/api/prisma apps/api/test/iap/billing-iap-webhook.test.ts
+git add apps/api/src/routes/billing-iap-webhook.ts apps/api/src/server.ts apps/api/prisma apps/api/tests/iap/billing-iap-webhook.test.ts
 git commit -m "feat(api): IAP webhook routes — Apple ASSN + Google RTDN with 4-step userId resolution"
 ```
 
