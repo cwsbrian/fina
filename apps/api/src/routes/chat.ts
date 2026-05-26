@@ -19,6 +19,7 @@ function serializeThread(t: {
   id: string; userId: string; workspaceId: string | null; title: string | null;
   lastMessageAt: Date | null; archivedAt: Date | null;
   createdAt: Date; updatedAt: Date;
+  lastReadAt: Date | null;
 }) {
   return {
     id: t.id,
@@ -29,6 +30,7 @@ function serializeThread(t: {
     archivedAt: t.archivedAt?.toISOString() ?? null,
     createdAt: t.createdAt.toISOString(),
     updatedAt: t.updatedAt.toISOString(),
+    lastReadAt: t.lastReadAt?.toISOString() ?? null,
   };
 }
 
@@ -90,11 +92,29 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         previewByThread.set(row.threadId, md ? md.slice(0, 100) : null);
       }
 
+      // Unread assistant-message count per thread.
+      // Single grouped raw query — uses thread.lastReadAt to filter; if NULL,
+      // all assistant messages count as unread.
+      const unreadRows = threadIds.length === 0 ? [] : await prisma.$queryRaw<Array<{
+        threadId: string;
+        cnt: bigint;
+      }>>`
+        SELECT m."threadId" AS "threadId", COUNT(*)::bigint AS cnt
+        FROM "chat_messages" m
+        JOIN "chat_threads" t ON t.id = m."threadId"
+        WHERE m."threadId" = ANY(${threadIds}::text[])
+          AND m.role = 'assistant'
+          AND (t."lastReadAt" IS NULL OR m."createdAt" > t."lastReadAt")
+        GROUP BY m."threadId"
+      `;
+      const unreadByThread = new Map(unreadRows.map((r) => [r.threadId, Number(r.cnt)]));
+
       return {
         threads: threads.map((t) => ({
           ...serializeThread(t),
           messageCount: countByThread.get(t.id) ?? 0,
           firstMessagePreview: previewByThread.get(t.id) ?? null,
+          unreadCount: unreadByThread.get(t.id) ?? 0,
         })),
       };
     } catch (e) {
