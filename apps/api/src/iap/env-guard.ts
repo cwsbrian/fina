@@ -31,14 +31,12 @@ export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
   };
 
   const appleKeyRaw = need("APPLE_ASC_PRIVATE_KEY");
-  let appleKey = appleKeyRaw;
-  if (!appleKeyRaw.includes("BEGIN PRIVATE KEY")) {
-    try {
-      appleKey = Buffer.from(appleKeyRaw, "base64").toString("utf8");
-    } catch {
-      throw new HttpError(503, "iap_not_configured", "APPLE_ASC_PRIVATE_KEY base64 decode failed");
-    }
-  }
+  // Try raw PEM first; fall back to base64 if the header marker is missing.
+  // Buffer.from(..., "base64") never throws (invalid chars are silently
+  // skipped), so the subsequent shape check catches garbage decodes.
+  const appleKey = appleKeyRaw.includes("BEGIN PRIVATE KEY")
+    ? appleKeyRaw
+    : Buffer.from(appleKeyRaw, "base64").toString("utf8");
   if (!appleKey.includes("BEGIN PRIVATE KEY")) {
     throw new HttpError(503, "iap_not_configured", "APPLE_ASC_PRIVATE_KEY shape invalid");
   }
@@ -57,14 +55,11 @@ export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
   };
 
   const saRaw = need("GOOGLE_SERVICE_ACCOUNT_JSON");
-  let saText = saRaw;
-  if (!saRaw.trimStart().startsWith("{")) {
-    try {
-      saText = Buffer.from(saRaw, "base64").toString("utf8");
-    } catch {
-      throw new HttpError(503, "iap_not_configured", "GOOGLE_SERVICE_ACCOUNT_JSON base64 decode failed");
-    }
-  }
+  // Same raw-first-then-base64 strategy as the Apple key above. JSON.parse
+  // below catches garbage decodes.
+  const saText = saRaw.trimStart().startsWith("{")
+    ? saRaw
+    : Buffer.from(saRaw, "base64").toString("utf8");
   let serviceAccount: GoogleIapConfig["serviceAccount"];
   try {
     serviceAccount = JSON.parse(saText);

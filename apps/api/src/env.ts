@@ -101,8 +101,9 @@ const Schema = z.object({
   APPLE_ENV: z.enum(["sandbox", "production"]).optional(),
   // Google IAP
   GOOGLE_PACKAGE_NAME: z.string().optional(),
-  // JSON service-account key. Accept raw OR base64 (preferred for
-  // Vercel's 4 KB per-var cap). Loader tries base64 first.
+  // JSON service-account key. Accept raw OR base64 (base64 preferred
+  // for Vercel's 4 KB per-var cap). Loader tries raw first, falls back
+  // to base64 when the value doesn't start with '{'.
   GOOGLE_SERVICE_ACCOUNT_JSON: z.string().optional(),
   GOOGLE_PUBSUB_VERIFY_AUDIENCE: z.string().optional(),
   GOOGLE_PUBSUB_VERIFY_EMAIL: z.string().optional(),
