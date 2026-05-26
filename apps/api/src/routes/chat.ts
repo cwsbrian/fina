@@ -161,6 +161,23 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.post<{ Params: { tid: string } }>("/chat/threads/:tid/read", async (req, reply) => {
+    try {
+      const session = await requireSession(req, app);
+      const updated = await prisma.chatThread.updateMany({
+        where: { id: req.params.tid, userId: session.userId },
+        data: { lastReadAt: new Date() },
+      });
+      if (updated.count === 0) {
+        return reply.code(404).send({ error: "thread_not_found" });
+      }
+      return reply.code(200).send({ ok: true });
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
   app.delete("/chat/threads/:tid", async (req, reply) => {
     const params = req.params as { tid: string };
     try {
