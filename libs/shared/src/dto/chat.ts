@@ -49,4 +49,54 @@ export type PresentationBlock =
       count: number;
       items: { txId: string; merchant: string; categoryName: string }[];
       moreCount: number;
+    }
+  | {
+      /** Read-only recap card. Used by getSpendingSummary,
+       *  getCategoryBreakdown, compareSpendingPeriods, getCashflowSummary,
+       *  compareSpendingVsBudget. Fields are intentionally generic so a
+       *  single renderer covers all five tools.
+       *
+       *  Amounts are strings (Decimal serialization-safe) without currency
+       *  symbols; renderer formats with `currency`. Bars (`bar_pct`) scale
+       *  0–100; renderer decides whether to draw them.
+       */
+      type: "recap";
+      /** Card title — e.g. "Spending · this month", "vs last month". */
+      title: string;
+      /** Optional human-readable period label under the title — e.g.
+       *  "Nov 1 — Nov 27, 2026". */
+      period_label?: string;
+      /** Optional headline number (large) — total / net / used. */
+      headline?: {
+        /** Small label above the amount — e.g. "Total" / "Net" / "Used". */
+        label?: string;
+        amount: string;
+        /** ISO 4217 — "CAD" / "USD". Renderer formats. */
+        currency?: string;
+        /** Optional delta vs reference (used by compare tools). */
+        delta?: {
+          /** Stringified absolute delta (e.g. "12.40" or "8%"). */
+          value: string;
+          direction: "up" | "down";
+        };
+      };
+      /** Detail rows. Empty array means "no data this period" — renderer
+       *  shows a friendly empty state. */
+      rows: Array<{
+        /** Display label — category, merchant, day, or fixed row name. */
+        label: string;
+        /** Stringified amount (no currency symbol). */
+        amount: string;
+        /** Optional secondary text — "3 tx" / "budget $200" / "vs $180". */
+        sub?: string;
+        /** Optional 0–100 bar value for relative visualization. */
+        bar_pct?: number;
+        delta?: {
+          value: string;
+          direction: "up" | "down";
+        };
+      }>;
+      /** Optional footer line — e.g. "Top 5 of 23 categories" or trend
+       *  commentary. Renderer styles as small muted text. */
+      footer?: string;
     };
