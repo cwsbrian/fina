@@ -54,7 +54,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
 
   app.post("/webhooks/iap/apple", async (req, reply) => {
     try {
-      const { cfg, appleClient } = resolveCtx();
+      const { cfg, appleClient, googleClient } = resolveCtx();
       const body = req.body as { signedPayload?: string };
       if (!body?.signedPayload) return reply.code(400).send({ error: "invalid_body" });
 
@@ -125,13 +125,12 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         return reply.code(500).send({ error: "user_unknown" });
       }
 
-      const ctx = resolveCtx();
       await syncSubscriptionFromIAP(cfg, {
         platform: "ios",
         receipt: notification.signedTransactionJws,
         userId,
         context: "assn",
-      }, { appleClient: ctx.appleClient, googleClient: ctx.googleClient });
+      }, { appleClient, googleClient });
 
       await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: notification.notificationType } });
       return reply.code(200).send({ ok: true });
@@ -146,7 +145,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
 
   app.post("/webhooks/iap/google", async (req, reply) => {
     try {
-      const { cfg, googleClient, oidcClient } = resolveCtx();
+      const { cfg, appleClient, googleClient, oidcClient } = resolveCtx();
       const note = await verifyGoogleEnvelope(
         req.headers.authorization,
         req.body as any,
@@ -172,52 +171,53 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       });
       if (sub) userId = sub.userId;
 
-      // Fetch purchase details regardless (needed for binding lookup)
-      const v2 = await googleClient.fetchAndNormalize(note.payload.purchaseToken);
-      const bindingHash = hashBindingToken(v2.obfuscatedExternalAccountId);
-
-      // Step 2: user binding via iapGoogleObfuscatedId
+      // fetchAndNormalize is only needed for steps 2/3/4 — defer until step 1 miss.
+      // On the step-1-hit happy path, syncSubscriptionFromIAP will fetch internally.
       if (!userId) {
+        const v2 = await googleClient.fetchAndNormalize(note.payload.purchaseToken);
+        const bindingHash = hashBindingToken(v2.obfuscatedExternalAccountId);
+
+        // Step 2: user binding via iapGoogleObfuscatedId
         const user = await prisma.user.findUnique({ where: { iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId } });
         if (user) userId = user.id;
-      }
 
-      // Step 3: IapDeletedBinding tombstone
-      if (!userId) {
-        const tombstone = await prisma.iapDeletedBinding.findUnique({
-          where: { source_tokenHash: { source: "iap_google", tokenHash: bindingHash } },
-        });
-        if (tombstone) {
-          await prisma.webhookEvent.create({
-            data: { id: eventId, source: "iap_google", type: "unattributable_after_delete", body: { tokenHash: bindingHash } as any },
+        // Step 3: IapDeletedBinding tombstone
+        if (!userId) {
+          const tombstone = await prisma.iapDeletedBinding.findUnique({
+            where: { source_tokenHash: { source: "iap_google", tokenHash: bindingHash } },
           });
-          return reply.code(200).send({ ok: true });
+          if (tombstone) {
+            await prisma.webhookEvent.create({
+              data: { id: eventId, source: "iap_google", type: "unattributable_after_delete", body: { tokenHash: bindingHash } as any },
+            });
+            return reply.code(200).send({ ok: true });
+          }
+        }
+
+        // Step 4: still unknown — increment retry counter; give up after cap
+        if (!userId) {
+          const counter = await prisma.iapRetryCounter.upsert({
+            where: { source_tokenHash: { source: "iap_google", tokenHash: bindingHash } },
+            create: { source: "iap_google", tokenHash: bindingHash, attempts: 1 },
+            update: { attempts: { increment: 1 }, lastAt: new Date() },
+          });
+          if (counter.attempts > MAX_UNKNOWN_RETRIES) {
+            await prisma.webhookEvent.create({
+              data: { id: eventId, source: "iap_google", type: "unattributable_giveup", body: { tokenHash: bindingHash, attempts: counter.attempts } as any },
+            });
+            return reply.code(200).send({ ok: true });
+          }
+          return reply.code(500).send({ error: "user_unknown" });
         }
       }
 
-      // Step 4: still unknown — increment retry counter; give up after cap
-      if (!userId) {
-        const counter = await prisma.iapRetryCounter.upsert({
-          where: { source_tokenHash: { source: "iap_google", tokenHash: bindingHash } },
-          create: { source: "iap_google", tokenHash: bindingHash, attempts: 1 },
-          update: { attempts: { increment: 1 }, lastAt: new Date() },
-        });
-        if (counter.attempts > MAX_UNKNOWN_RETRIES) {
-          await prisma.webhookEvent.create({
-            data: { id: eventId, source: "iap_google", type: "unattributable_giveup", body: { tokenHash: bindingHash, attempts: counter.attempts } as any },
-          });
-          return reply.code(200).send({ ok: true });
-        }
-        return reply.code(500).send({ error: "user_unknown" });
-      }
-
-      const ctx = resolveCtx();
+      // userId resolved — proceed with sync.
       await syncSubscriptionFromIAP(cfg, {
         platform: "android",
         receipt: note.payload.purchaseToken,
         userId,
         context: "rtdn",
-      }, { appleClient: ctx.appleClient, googleClient: ctx.googleClient });
+      }, { appleClient, googleClient });
 
       await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: `notif_${note.payload.notificationType}` } });
       return reply.code(200).send({ ok: true });
