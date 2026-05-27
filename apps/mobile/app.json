@@ -45,7 +45,11 @@
         }
       ],
       "@react-native-community/datetimepicker",
-      "expo-web-browser"
+      "expo-web-browser",
+      [
+        "react-native-iap",
+        { "paymentProvider": "both" }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

@@ -2,12 +2,16 @@
   "name": "@fina/shared",
   "version": "0.0.1",
   "dependencies": {
-    "vite": "^5.0.0",
     "@nx/vite": "19.8.14",
+    "vite": "^5.0.0",
     "zod": "^3.23.0"
   },
   "type": "commonjs",
   "main": "./src/index.js",
   "typings": "./src/index.d.ts",
-  "private": true
+  "private": true,
+  "devDependencies": {
+    "js-sha256": "^0.11.1",
+    "uuid": "^14.0.0"
+  }
 }

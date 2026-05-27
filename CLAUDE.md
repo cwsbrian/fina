@@ -338,3 +338,15 @@ string used in two places → constant. Bias toward "share it".
 
 Run `grep -rn "@fina/shared" apps/api/ apps/web/ apps/mobile/ | head`
 to see the patterns in use. Then follow them.
+
+---
+
+## IAP development workflow
+
+`react-native-iap` is a native module — it requires a custom dev client and CANNOT run under Expo Go.
+
+- **Layout-only work** on `apps/mobile/app/plan/*` can use Expo Go; the IAP client throws "module not linked" and falls back to the empty-state.
+- **Purchase flow testing** requires `eas build --profile development` once per developer to get a dev client. Load that build instead of Expo Go.
+- Each iOS developer needs their own sandbox tester account (App Store Connect → Users and Access → Sandbox Testers). Login state caches per device.
+- Each Android developer adds their Google account to the Play Console license-test list.
+- Tailscale Funnel ([[project_mobile_dev_network]]) carries webhooks to `localhost:4000` exactly the same way it does for Plaid.
