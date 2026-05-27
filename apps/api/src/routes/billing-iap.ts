@@ -11,16 +11,37 @@ import { GoogleClient } from "../iap/google-client.js";
 import { buildMeBody } from "./billing.js";
 
 export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
-  const iapDeps = () => {
+  // Memoized production cache. Only used when the test-injection seam
+  // is absent. We cache (cfg + clients) together so we don't re-parse
+  // env or rebuild the SignedDataVerifier per request.
+  let cached: {
+    cfg: ReturnType<typeof requireIapEnv>;
+    appleClient: AppleClient;
+    googleClient: GoogleClient;
+  } | null = null;
+
+  const resolveCtx = (): {
+    cfg: ReturnType<typeof requireIapEnv>;
+    appleClient: AppleClient;
+    googleClient: GoogleClient;
+  } => {
     const injected = (app as any).fina?.iap as
       | { appleClient: AppleClient; googleClient: GoogleClient }
       | undefined;
-    if (injected) return injected;
-    const cfg = requireIapEnv(process.env);
-    return {
-      appleClient: new AppleClient(cfg.apple),
-      googleClient: new GoogleClient(cfg.google),
-    };
+    // Tests bypass the cache so each test can swap mocks freely.
+    if (injected) {
+      const cfg = requireIapEnv(process.env);
+      return { cfg, appleClient: injected.appleClient, googleClient: injected.googleClient };
+    }
+    if (!cached) {
+      const cfg = requireIapEnv(process.env);
+      cached = {
+        cfg,
+        appleClient: new AppleClient(cfg.apple),
+        googleClient: new GoogleClient(cfg.google),
+      };
+    }
+    return cached;
   };
 
   app.post("/billing/iap/checkout", async (req, reply) => {
@@ -29,8 +50,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
       const parsed = IAPCheckoutBody.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
-      const cfg = requireIapEnv(process.env);
-      const deps = iapDeps();
+      const { cfg, appleClient, googleClient } = resolveCtx();
       const userId = session.userId;
 
       const active = await prisma.subscription.findMany({
@@ -53,7 +73,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
           productId: parsed.data.productId,
           expectedAppAccountToken: deriveAppleToken(userId),
           context: "checkout",
-        }, deps);
+        }, { appleClient, googleClient });
       } else {
         await syncSubscriptionFromIAP(cfg, {
           platform: "android",
@@ -62,7 +82,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
           productId: parsed.data.productId,
           expectedObfuscatedAccountId: deriveGoogleToken(userId),
           context: "checkout",
-        }, deps);
+        }, { appleClient, googleClient });
       }
 
       return await buildMeBody(userId, cfg.apple.env);
@@ -79,8 +99,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
       const parsed = IAPRestoreBody.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
-      const cfg = requireIapEnv(process.env);
-      const deps = iapDeps();
+      const { cfg, appleClient, googleClient } = resolveCtx();
       const userId = session.userId;
 
       for (const item of parsed.data.purchases) {
@@ -93,7 +112,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
               productId: item.productId,
               expectedAppAccountToken: deriveAppleToken(userId),
               context: "restore",
-            }, deps);
+            }, { appleClient, googleClient });
           } else {
             await syncSubscriptionFromIAP(cfg, {
               platform: "android",
@@ -102,7 +121,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
               productId: item.productId,
               expectedObfuscatedAccountId: deriveGoogleToken(userId),
               context: "restore",
-            }, deps);
+            }, { appleClient, googleClient });
           }
         } catch (e) {
           // Spec §5.3 restore: "Skip (log + continue) on individual failures".
