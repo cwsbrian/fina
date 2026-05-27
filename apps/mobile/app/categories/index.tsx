@@ -65,6 +65,7 @@ export default function CategoriesScreen() {
         <Text style={styles.title}>Categories</Text>
         <HeaderIconButton
           icon="add"
+          variant="plain"
           onPress={() =>
             router.push(`/categories/new?type=${tab}` as never)
           }
