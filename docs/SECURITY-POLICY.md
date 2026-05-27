@@ -2,10 +2,6 @@
 
 **Version 1.0** · Effective 2026-05-26 · Owner: Brian Choi (founder) · Next review: 2026-08-26
 
-This is how we run Fina securely. It is short on purpose. The substance lives in the
-codebase and in the deployment / runbook docs (`DEPLOY.md`, `PRODUCTION-READY.md`); this
-policy ties those threads together and is what we read against during quarterly review.
-
 ---
 
 ## 1. Scope
