@@ -1,6 +1,9 @@
 import { useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
+import * as WebBrowser from "expo-web-browser";
+
+const WEB_URL = "https://withfina.com";
 import {
   passwordStrength,
   MIN_PASSWORD_LENGTH,
@@ -132,8 +135,20 @@ export default function SignUpScreen() {
 
       <Text style={styles.legal}>
         By creating an account you agree to Fina&apos;s{" "}
-        <Text style={styles.legalLink}>Terms</Text> and{" "}
-        <Text style={styles.legalLink}>Privacy Policy</Text>.
+        <Text
+          style={styles.legalLink}
+          onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/terms`)}
+        >
+          Terms
+        </Text>{" "}
+        and{" "}
+        <Text
+          style={styles.legalLink}
+          onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/privacy`)}
+        >
+          Privacy Policy
+        </Text>
+        .
       </Text>
       <Text style={styles.footText}>
           Already have an account?{" "}

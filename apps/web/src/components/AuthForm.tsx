@@ -324,8 +324,15 @@ export function AuthForm({ mode }: { mode: Mode }) {
 
           {mode === "signUp" && (
             <p className={styles.legal}>
-              By creating an account, you agree to our <a>Terms</a> and{" "}
-              <a>Privacy policy</a>.
+              By creating an account, you agree to our{" "}
+              <a href="/terms" target="_blank" rel="noopener noreferrer">
+                Terms
+              </a>{" "}
+              and{" "}
+              <a href="/privacy" target="_blank" rel="noopener noreferrer">
+                Privacy policy
+              </a>
+              .
             </p>
           )}
 

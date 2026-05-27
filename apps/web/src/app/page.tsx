@@ -81,8 +81,9 @@ export default function Landing() {
 
       <div className={styles.foot}>
         <span>© 2026 Fina, Inc.</span>
-        <span>Privacy</span>
-        <span>Terms</span>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+        <a href="/security">Security</a>
       </div>
     </main>
   );

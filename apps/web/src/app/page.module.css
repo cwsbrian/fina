@@ -137,10 +137,19 @@
   letter-spacing: 0.2px;
 }
 
-.foot span + span::before {
+.foot > * + *::before {
   content: "·";
   margin: 0 8px;
   color: var(--color-muted-soft);
+}
+
+.foot a {
+  color: var(--color-muted-soft);
+  text-decoration: none;
+}
+
+.foot a:hover {
+  color: var(--color-text);
 }
 
 @media (max-width: 720px) {
