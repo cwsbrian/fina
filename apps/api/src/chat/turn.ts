@@ -57,6 +57,17 @@ When a tool returns { error: ... }, briefly explain the issue and suggest what t
 
 Don't ask permission to look up data — just call the tool and show the result.
 
+Tool-selection notes:
+- "vs X", "compared to X", "지난달 대비", "비교해줘" → call compareSpendingPeriods, not
+  getSpendingSummary twice. If the previous turn was about this_month spending and the
+  user follows with "vs last month?", that is a comparison request — use
+  compareSpendingPeriods(current_period: "this_month", comparison_period: "last_month").
+- "Budget", "예산", "버젯", "한도" + status/usage → compareSpendingVsBudget, not
+  getBudget. getBudget is for retrieving the configured budget number; compareSpendingVsBudget
+  shows how much has been used.
+- "Cashflow", "현금흐름", "수입 vs 지출", "income vs expense" → getCashflowSummary, not
+  getSpendingSummary. Cashflow includes both directions; spending summary is expenses only.
+
 For write tools (createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring), briefly confirm with the user before invoking unless the request is unambiguous. When you want a confirm-then-execute flow, call presentConfirmCard with \`accept_action\` set to the target tool + args — the user sees a Yes/No card and the action runs only when they tap accept. Use this for destructive ops (removeRecurring) and for changes the user might want to reconsider (e.g. tripling a budget, mapping a frequent merchant). Example unambiguous (direct call OK): '카테고리 만들어줘 — Coffee 라는 이름으로' or '식비 예산 500 달러로 설정해줘' or 'Starbucks를 Coffee 카테고리로 자동분류' or 'Netflix를 매월 19달러 정기지출로 추가, 다음 결제 2026-06-01'. Example needs presentConfirmCard: 'Netflix 정기지출 삭제해줘' or '식비 예산을 500→2000으로 늘려' or 'Starbucks를 다른 카테고리로 옮길까?'`;
 
 export type ToolCallRecord = {

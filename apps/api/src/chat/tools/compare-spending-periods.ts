@@ -143,7 +143,13 @@ async function bucketizeByAllocation(
 export const compareSpendingPeriods: ToolDef<Args, Result> = {
   name: "compareSpendingPeriods",
   description:
-    "Compare CAD spending between two matching periods by category or merchant and return the largest changes.",
+    "Compare CAD spending between two matching periods by category or merchant and return the largest changes. " +
+    "Use this WHENEVER the user asks about change between periods — even with shorthand phrasing. " +
+    "Trigger phrases (EN): 'vs last month', 'vs last week', 'compared to', 'how does X compare to Y', " +
+    "'has it gone up?', 'biggest changes', 'what got more expensive', 'difference vs', 'change from'. " +
+    "Trigger phrases (KR): '지난달 대비', '지난주랑 비교', '지난달과 비교', '비교해줘', '얼마나 늘었어', " +
+    "'얼마나 줄었어', '큰 변화', '변동', '이번달이 더 썼어?'. " +
+    "Do NOT call getSpendingSummary twice when one of these phrases appears — call this tool instead.",
   args: Args,
   async run(ctx, args) {
     if (!isValidPair(args.current_period, args.comparison_period)) {
