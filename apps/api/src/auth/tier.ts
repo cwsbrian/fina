@@ -2,6 +2,15 @@ import { ACTIVE_SUBSCRIPTION_STATUSES, TIER_LIMITS, type EffectiveTier, type Tie
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError } from "./context.js";
+import { filterEnvironmentRows } from "../billing/precedence.js";
+
+// Read APPLE_ENV directly from process.env to avoid validating the entire
+// env schema at call time — tests that call effectiveTier() directly may
+// not have STRIPE_* vars set (they use per-app `testEnv()` objects instead).
+// APPLE_ENV is optional in the schema; default to "sandbox" when absent.
+function getRuntimeEnv(): "sandbox" | "production" {
+  return process.env.APPLE_ENV === "production" ? "production" : "sandbox";
+}
 
 /** Pure computation when caller already has the User + active subs.
  *  Order of precedence: trial > active paid sub (highest tier) > free. */
@@ -46,10 +55,11 @@ export async function effectiveTier(userId: string): Promise<EffectiveTier> {
     prisma.user.findUniqueOrThrow({ where: { id: userId } }),
     prisma.subscription.findMany({
       where: { userId, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] } },
-      select: { tier: true },
+      select: { tier: true, environment: true },
     }),
   ]);
-  return computeEffectiveTier(user, activeSubs);
+  const filtered = filterEnvironmentRows(activeSubs, getRuntimeEnv());
+  return computeEffectiveTier(user, filtered);
 }
 
 export async function requireProTier(userId: string): Promise<void> {

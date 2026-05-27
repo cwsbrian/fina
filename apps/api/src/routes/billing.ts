@@ -9,6 +9,7 @@ import { priceIdForTier } from "../stripe/pricing-map.js";
 import { ensureStripeCustomer } from "../stripe/ensure-customer.js";
 import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
 import { computeEffectiveTier } from "../auth/tier.js";
+import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
 
 // Stripe requires trial_end to be at least 48h in the future (codex R3).
 // Trials expiring sooner than this are treated as already-expired — the
@@ -20,7 +21,10 @@ function useTrialEnd(trialEndsAt: Date | null): boolean {
   return trialEndsAt.getTime() - Date.now() >= STRIPE_TRIAL_END_MIN_MS;
 }
 
-async function buildMeBody(userId: string): Promise<MeDTO> {
+export async function buildMeBody(
+  userId: string,
+  runtimeEnv: "sandbox" | "production",
+): Promise<MeDTO> {
   const [user, activeSubs] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: userId } }),
     prisma.subscription.findMany({
@@ -31,10 +35,11 @@ async function buildMeBody(userId: string): Promise<MeDTO> {
       orderBy: { currentPeriodEnd: "desc" },
     }),
   ]);
-  const t = computeEffectiveTier(user, activeSubs);
-  // Highest-tier active sub wins (pro > lite). Canceled rows are
-  // already filtered out by ACTIVE_SUBSCRIPTION_STATUSES (codex R8).
-  const primary = activeSubs.find((s) => s.tier === "pro") ?? activeSubs[0];
+  // Sandbox env filter MUST run before precedence — stale sandbox rows
+  // should not influence the primary pick or the EffectiveTier.
+  const filtered = filterEnvironmentRows(activeSubs, runtimeEnv);
+  const t = computeEffectiveTier(user, filtered);
+  const primary = pickPrimarySub(filtered);
   const subscription: SubscriptionDTO | null = primary
     ? {
         tier: primary.tier as "lite" | "pro",
@@ -195,7 +200,8 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
         }
       }
 
-      return await buildMeBody(user.id);
+      const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
+      return await buildMeBody(user.id, runtimeEnv);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       // Log tag mirrors the response code so monitoring/alerting can grep
