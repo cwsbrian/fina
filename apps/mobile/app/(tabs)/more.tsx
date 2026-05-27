@@ -356,14 +356,27 @@ export default function More() {
         </Group>
 
         {/* Subscription — three modes:
-            - Stripe-owned (web): show Plan + "Managed on withfina.com" row that opens
-              the web settings page. No Manage billing (Apple/Google deep-link doesn't
-              apply) and no Restore (nothing to restore).
+            - Stripe-owned (web): rows look identical to other modes (Plan + Billing)
+              but tap fires an Alert telling the user to manage on withfina.com.
+              No Restore (nothing to restore).
             - IAP-owned (Apple/Google) OR free/trial: full IAP UX — Plan, Manage billing
               (platform-native deep-link), Restore purchases. */}
         {(() => {
           const sub = me?.subscription;
           const isStripeOwned = sub?.source === "stripe";
+          const onStripeManagedTap = (label: string) =>
+            Alert.alert(
+              label,
+              "Your subscription is managed on withfina.com. Open the website to make changes.",
+              [
+                { text: "Cancel", style: "cancel" },
+                {
+                  text: "Open website",
+                  onPress: () =>
+                    WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`),
+                },
+              ],
+            );
           return (
             <>
               <GroupLabel>Subscription</GroupLabel>
@@ -373,19 +386,18 @@ export default function More() {
                   title="Plan"
                   detail={me ? tierLabel(me.tier, me.trial.active) : "—"}
                   onPress={
-                    me?.subscription
-                      ? comingSoon("Plan details")
-                      : () => router.push("/plan" as never)
+                    isStripeOwned
+                      ? () => onStripeManagedTap("Plan")
+                      : me?.subscription
+                        ? comingSoon("Plan details")
+                        : () => router.push("/plan" as never)
                   }
                 />
                 {isStripeOwned ? (
                   <SettingsRow
-                    icon="globe-outline"
-                    title="Managed on withfina.com"
-                    detail="Open web"
-                    onPress={() =>
-                      WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`)
-                    }
+                    icon="card-outline"
+                    title="Billing"
+                    onPress={() => onStripeManagedTap("Billing")}
                     last
                   />
                 ) : (
@@ -416,6 +428,32 @@ export default function More() {
           );
         })()}
 
+        {/* About */}
+        <GroupLabel>About</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="globe-outline"
+            title="Visit website"
+            onPress={() => WebBrowser.openBrowserAsync(WEB_URL)}
+          />
+          <SettingsRow
+            icon="shield-checkmark-outline"
+            title="Privacy policy"
+            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/privacy`)}
+          />
+          <SettingsRow
+            icon="document-text-outline"
+            title="Terms of service"
+            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/terms`)}
+          />
+          <SettingsRow
+            icon="lock-closed-outline"
+            title="Security"
+            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/security`)}
+            last
+          />
+        </Group>
+
         {/* Account */}
         <GroupLabel>Account</GroupLabel>
         <Group>
@@ -444,32 +482,6 @@ export default function More() {
             title="Delete account"
             danger
             onPress={comingSoon("Delete account")}
-            last
-          />
-        </Group>
-
-        {/* About */}
-        <GroupLabel>About</GroupLabel>
-        <Group>
-          <SettingsRow
-            icon="globe-outline"
-            title="Visit website"
-            onPress={() => WebBrowser.openBrowserAsync(WEB_URL)}
-          />
-          <SettingsRow
-            icon="shield-checkmark-outline"
-            title="Privacy policy"
-            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/privacy`)}
-          />
-          <SettingsRow
-            icon="document-text-outline"
-            title="Terms of service"
-            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/terms`)}
-          />
-          <SettingsRow
-            icon="lock-closed-outline"
-            title="Security"
-            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/security`)}
             last
           />
         </Group>
