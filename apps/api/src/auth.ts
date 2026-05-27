@@ -32,9 +32,13 @@ export function createAuth(env: Env) {
   return betterAuth({
     secret: env.BETTER_AUTH_SECRET,
     baseURL: env.BETTER_AUTH_URL,
+    // Production: the deployed web origin + mobile native scheme.
+    // expo() plugin below also injects "fina://" automatically, but listing
+    // it here is defensive — if the plugin chain ever changes, Better Auth
+    // still rejects unsigned origins instead of silently accepting them.
     trustedOrigins:
       env.NODE_ENV === "production"
-        ? []
+        ? [env.WEB_APP_URL, "fina://"]
         : ["http://localhost:3000", "http://localhost:3100", "fina://", ...devOrigins],
     database: prismaAdapter(prisma, { provider: "postgresql" }),
     emailVerification: {

@@ -162,9 +162,13 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
   }
 
   await app.register(cors, {
+    // Production: only the deployed web app (env.WEB_APP_URL) may call /api.
+    // Same-site sub-domains (fina.app ↔ api.fina.app) share eTLD+1, so
+    // Better Auth's SameSite=Lax session cookie works as long as both
+    // CORS *and* trustedOrigins (auth.ts) explicitly list WEB_APP_URL.
     origin:
       env.NODE_ENV === "production"
-        ? false
+        ? [env.WEB_APP_URL]
         : [
             "http://localhost:3000",
             "http://localhost:3100",
