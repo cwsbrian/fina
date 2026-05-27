@@ -150,6 +150,39 @@ describe("applyAllocations", () => {
     expect(allocs[0]!.source).toBeNull();
   });
 
+  it("happy: signed (negative) income allocation matches negative tx amount", async () => {
+    // Plaid sign convention: negative tx amount = money in (income/refund).
+    // The allocation must mirror the sign so sum equality holds; the bound
+    // check is on |amount|, not amount > 0.
+    const { wsId } = await setup("aa-inc@t.co");
+    const cat = await prisma.category.create({
+      data: { workspaceId: wsId, name: "Salary-aa-inc", type: "income" },
+    });
+    const txId = await seedTx(wsId, "-1500");
+    await withWorkspaceLock(wsId, async (tx) =>
+      applyAllocations(tx, wsId, txId, new Prisma.Decimal("-1500"), "manual", [
+        { categoryId: cat.id, amount: -1500 },
+      ]),
+    );
+    const allocs = await prisma.transactionAllocation.findMany({ where: { transactionId: txId } });
+    expect(allocs).toHaveLength(1);
+    expect(allocs[0]!.amount.toString()).toBe("-1500");
+    expect(allocs[0]!.categoryId).toBe(cat.id);
+  });
+
+  it("rejects amount === 0 → invalid_allocation_amount", async () => {
+    const { wsId } = await setup("aa-zero@t.co");
+    const txId = await seedTx(wsId, "10");
+    await expect(
+      withWorkspaceLock(wsId, async (tx) =>
+        applyAllocations(tx, wsId, txId, new Prisma.Decimal("10"), "manual", [
+          { categoryId: null, amount: 0 },
+          { categoryId: null, amount: 10 },
+        ]),
+      ),
+    ).rejects.toMatchObject({ code: "invalid_allocation_amount" });
+  });
+
   it("happy: 1 categorized allocation", async () => {
     const { wsId } = await setup("aa8@t.co");
     const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Food-aa8" } });

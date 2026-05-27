@@ -18,13 +18,19 @@ export class AllocationError extends Error {
   }
 }
 
-// Same Decimal(14, 2) rule as create-manual.ts: positive, ≤ MAX, ≤2 decimals,
-// rejects scientific notation via string regex.
+// Same Decimal(14, 2) rule as create-manual.ts, but signed: allocations
+// inherit the tx's sign (positive = expense per Plaid convention, negative
+// = income/refund), so the bound is on |amount|. Rejects zero, NaN, > MAX,
+// and >2 decimals via the positive-only regex applied to abs().
 function validateOneAmount(amount: number): void {
-  if (!Number.isFinite(amount) || amount <= 0 || amount > MAX_AMOUNT) {
+  if (!Number.isFinite(amount) || amount === 0) {
     throw new AllocationError("invalid_allocation_amount");
   }
-  if (!AMOUNT_RE.test(String(amount))) {
+  const abs = Math.abs(amount);
+  if (abs > MAX_AMOUNT) {
+    throw new AllocationError("invalid_allocation_amount");
+  }
+  if (!AMOUNT_RE.test(String(abs))) {
     throw new AllocationError("invalid_allocation_amount");
   }
 }
@@ -52,9 +58,17 @@ export async function applyAllocations(
     throw new AllocationError("empty_allocations");
   }
 
-  // Validate each amount first.
+  // Validate each amount first. Allocations must share the tx's sign —
+  // an expense (positive tx) splits into positive parts; an income
+  // (negative tx) splits into negative parts. Mixed signs are rejected
+  // even when the sum happens to match the tx amount.
+  const txIsNegative = txAmount.isNegative();
   for (const a of allocations) {
     validateOneAmount(a.amount);
+    const allocIsNegative = a.amount < 0;
+    if (allocIsNegative !== txIsNegative) {
+      throw new AllocationError("invalid_allocation_amount");
+    }
   }
 
   // Strict Decimal sum equality.
