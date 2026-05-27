@@ -15,3 +15,5 @@ export function deriveGoogleToken(userId: string): string {
 export function hashBindingToken(token: string): string {
   return createHash("sha256").update(token, "utf8").digest("hex");
 }
+
+export { writeAccountDeletionTombstones } from "./account-deletion.js";
