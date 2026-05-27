@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 
 const HEADER_HEIGHT = 84;
+const WEB_URL = "https://withfina.com";
 import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -425,6 +426,32 @@ export default function More() {
             title="Delete account"
             danger
             onPress={comingSoon("Delete account")}
+            last
+          />
+        </Group>
+
+        {/* About */}
+        <GroupLabel>About</GroupLabel>
+        <Group>
+          <SettingsRow
+            icon="globe-outline"
+            title="Visit website"
+            onPress={() => WebBrowser.openBrowserAsync(WEB_URL)}
+          />
+          <SettingsRow
+            icon="shield-checkmark-outline"
+            title="Privacy policy"
+            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/privacy`)}
+          />
+          <SettingsRow
+            icon="document-text-outline"
+            title="Terms of service"
+            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/terms`)}
+          />
+          <SettingsRow
+            icon="lock-closed-outline"
+            title="Security"
+            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/security`)}
             last
           />
         </Group>
