@@ -278,6 +278,12 @@ export default function More() {
         <GroupLabel>Planning</GroupLabel>
         <Group>
           <SettingsRow
+            icon="pricetag-outline"
+            title="Categories"
+            subtitle="Expense + income labels for transactions"
+            onPress={() => router.push("/categories" as never)}
+          />
+          <SettingsRow
             icon="calendar-outline"
             title="Scheduled"
             subtitle="Upcoming planned spends"
