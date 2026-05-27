@@ -10,6 +10,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
 import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
+import { txDirection } from "../../src/categories/direction";
 
 type LoadResult = {
   txs: TransactionDTO[];
@@ -24,9 +25,6 @@ export default function CategorizeInbox() {
   const [busyTxId, setBusyTxId] = useState<string | null>(null);
   const [pickerTxId, setPickerTxId] = useState<string | null>(null);
   const [pickerSelectedId, setPickerSelectedId] = useState<string | null>(null);
-  // Tracks the open picker's transaction direction so the sheet can filter
-  // to expense vs. income categories. Positive Plaid amount = money out
-  // (expense); negative = money in (income/refund).
   const [pickerType, setPickerType] = useState<"expense" | "income">("expense");
 
   const load = useCallback(async () => {
@@ -69,7 +67,7 @@ export default function CategorizeInbox() {
   function editRow(tx: TransactionDTO) {
     setPickerTxId(tx.id);
     setPickerSelectedId(tx.allocations[0]?.categoryId ?? null);
-    setPickerType(Number(tx.amount) >= 0 ? "expense" : "income");
+    setPickerType(txDirection(tx.amount));
   }
 
   async function skipOrDismissRow(tx: TransactionDTO) {

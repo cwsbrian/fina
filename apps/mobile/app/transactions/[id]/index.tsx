@@ -23,6 +23,7 @@ import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
+import { txDirection } from "../../../src/categories/direction";
 import { DatePickerSheet } from "../../../src/datetime/DatePickerSheet";
 import { AccountPickerSheet } from "../../../src/accounts/AccountPickerSheet";
 
@@ -476,7 +477,7 @@ export default function TransactionDetail() {
         visible={pickerOpen}
         txId={tx.id}
         selectedId={firstAlloc?.categoryId ?? null}
-        categoryType={Number(tx.amount) >= 0 ? "expense" : "income"}
+        categoryType={txDirection(tx.amount)}
         onClose={() => setPickerOpen(false)}
         onChange={() => {
           setPickerOpen(false);
