@@ -2,6 +2,8 @@
 
 **Version 1.0** · Effective 2026-05-26 · Owner: Brian Choi (founder) · Next review: 2026-08-26
 
+---
+
 This policy defines how Fina protects Plaid-sourced and other consumer data, the
 systems that store and process it, and the personnel who operate them. The posture
 rests on five pillars: AES-256-GCM encryption of Plaid access tokens at rest, TLS 1.2+
