@@ -370,10 +370,10 @@ export default function More() {
                   icon="star-outline"
                   title="Plan"
                   detail={me ? tierLabel(me.tier, me.trial.active) : "—"}
-                  onPress={() =>
-                    router.push(
-                      (me?.subscription ? "/plan/summary" : "/plan") as never,
-                    )
+                  onPress={
+                    me?.subscription
+                      ? comingSoon("Plan details")
+                      : () => router.push("/plan" as never)
                   }
                 />
                 <SettingsRow
