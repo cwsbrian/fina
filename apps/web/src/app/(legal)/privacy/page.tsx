@@ -105,7 +105,16 @@ export default function Privacy() {
           <tr>
             <td>Plaid Inc.</td>
             <td>Bank account aggregation</td>
-            <td>Per Plaid&apos;s End User Privacy Policy</td>
+            <td>
+              Per{" "}
+              <a
+                href="https://plaid.com/legal/#end-user-privacy-policy"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Plaid&apos;s End User Privacy Policy
+              </a>
+            </td>
           </tr>
           <tr>
             <td>Cloudflare Inc.</td>
