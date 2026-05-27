@@ -2,22 +2,12 @@
 
 **Version 1.0** · Effective 2026-05-26 · Owner: Brian Choi (founder) · Next review: 2026-08-26
 
----
-
-## Summary
-
-Fina is a personal finance product for users in the United States and Canada. It
-aggregates consumer bank data through Plaid and provides categorization, budgeting,
-and goal-tracking features through a web app, mobile apps, and an API server.
-
 This policy defines how Fina protects Plaid-sourced and other consumer data, the
 systems that store and process it, and the personnel who operate them. The posture
 rests on five pillars: AES-256-GCM encryption of Plaid access tokens at rest, TLS 1.2+
 in transit with origin access restricted to Cloudflare's IP ranges, MFA on every
 administrative interface, daily encrypted backups to Cloudflare R2 with quarterly
 restore drills, and a single-operator access model with key-based SSH only.
-
----
 
 ## 1. Scope
 
