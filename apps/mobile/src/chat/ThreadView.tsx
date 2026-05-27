@@ -9,6 +9,7 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
+  Animated,
   Keyboard,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -250,6 +251,7 @@ export function ThreadView({
           </View>
         }
         renderItem={({ item }) => <MessageBubble message={item} />}
+        ListFooterComponent={sending ? <TypingIndicator /> : null}
       />
 
       <View style={styles.composer}>
@@ -284,25 +286,102 @@ export function ThreadView({
 }
 
 
+/** Three-dot bouncing indicator inside an assistant-style bubble. Shown
+ *  while a chat turn is in flight so the user knows Fina is "thinking",
+ *  rather than guessing whether the tap registered. */
+function TypingIndicator() {
+  const dots = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  useEffect(() => {
+    const animations = dots.map((d, i) => {
+      return Animated.loop(
+        Animated.sequence([
+          Animated.delay(i * 150),
+          Animated.timing(d, { toValue: 1, duration: 350, useNativeDriver: true }),
+          Animated.timing(d, { toValue: 0, duration: 350, useNativeDriver: true }),
+          Animated.delay(450 - i * 150),
+        ]),
+      );
+    });
+    for (const a of animations) a.start();
+    return () => {
+      for (const a of animations) a.stop();
+    };
+  }, [dots]);
+  return (
+    <View style={[styles.row, styles.rowAssistant]}>
+      <View style={[styles.bubble, styles.bubbleAssistant, styles.typingBubble]}>
+        {dots.map((d, i) => (
+          <Animated.View
+            key={i}
+            style={[
+              styles.typingDot,
+              {
+                opacity: d.interpolate({ inputRange: [0, 1], outputRange: [0.3, 1] }),
+                transform: [
+                  {
+                    translateY: d.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, -3],
+                    }),
+                  },
+                ],
+              },
+            ]}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+/** Block kinds rendered as self-contained cards instead of inside a chat
+ *  bubble. Adding a new card-style block here lifts it out of the bubble
+ *  and lets it use its own surface treatment (border, padding, etc). */
+function isCardBlock(b: Block): boolean {
+  return (
+    b.type === "recap" ||
+    b.type === "confirm_card" ||
+    b.type === "categorize_confirm_card"
+  );
+}
+
 function MessageBubble({ message }: { message: ChatMessageDTO }) {
   const blocks = Array.isArray(message.blocks)
     ? (message.blocks as Block[])
     : [];
   const isUser = message.role === "user";
+
+  // Render each block as its own visual row. Text blocks get the standard
+  // chat bubble; card blocks render full-width (within the list padding)
+  // so the structured surface treatment from BlockCard / confirm card
+  // can carry without an outer rounded bubble fighting it.
   return (
-    <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
-      <View
-        style={[
-          styles.bubble,
-          isUser ? styles.bubbleUser : styles.bubbleAssistant,
-        ]}
-      >
-        {blocks.map((b, i) => (
-          <View key={i} style={i > 0 ? { marginTop: 8 } : undefined}>
-            <PresentationBlock block={b} role={message.role} />
+    <View style={{ gap: 6 }}>
+      {blocks.map((b, i) => {
+        const key = `${message.id}-${i}`;
+        if (isCardBlock(b)) {
+          return (
+            <View key={key} style={styles.cardRow}>
+              <PresentationBlock block={b} role={message.role} />
+            </View>
+          );
+        }
+        return (
+          <View
+            key={key}
+            style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}
+          >
+            <View
+              style={[
+                styles.bubble,
+                isUser ? styles.bubbleUser : styles.bubbleAssistant,
+              ]}
+            >
+              <PresentationBlock block={b} role={message.role} />
+            </View>
           </View>
-        ))}
-      </View>
+        );
+      })}
     </View>
   );
 }
@@ -323,6 +402,23 @@ const styles = StyleSheet.create({
   },
   bubbleUser: { backgroundColor: colors.primary, borderBottomRightRadius: 4 },
   bubbleAssistant: { backgroundColor: colors.surfaceSoft, borderBottomLeftRadius: 4 },
+  cardRow: {
+    // Card blocks render full-width within the list's padding rather than
+    // inside an alignment-flex row, so they don't get squeezed to 82%.
+    marginVertical: 4,
+  },
+  typingBubble: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 12,
+  },
+  typingDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.muted,
+  },
   startCard: {
     backgroundColor: colors.surfaceSoft,
     padding: space.base,
