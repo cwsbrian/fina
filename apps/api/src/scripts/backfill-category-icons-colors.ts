@@ -6,21 +6,32 @@
  *   pnpm tsx src/scripts/backfill-category-icons-colors.ts
  */
 import { prisma } from "../db.js";
-import { DEFAULT_CATEGORIES } from "../categorize/seed.js";
+import {
+  DEFAULT_EXPENSE_CATEGORIES,
+  DEFAULT_INCOME_CATEGORIES,
+} from "../categorize/seed.js";
 
 async function main(): Promise<void> {
   let touched = 0;
-  for (const c of DEFAULT_CATEGORIES) {
-    const result = await prisma.category.updateMany({
-      where: {
-        name: c.name,
-        OR: [{ icon: null }, { color: null }],
-      },
-      data: { icon: c.icon, color: c.color },
-    });
-    if (result.count > 0) {
-      console.log(`  ${c.name}: ${result.count} row(s)`);
-      touched += result.count;
+  // Match by (name, type) so the "Other" name (which exists in both lists)
+  // gets the right icon/color per type.
+  for (const [list, type] of [
+    [DEFAULT_EXPENSE_CATEGORIES, "expense" as const],
+    [DEFAULT_INCOME_CATEGORIES, "income" as const],
+  ]) {
+    for (const c of list) {
+      const result = await prisma.category.updateMany({
+        where: {
+          name: c.name,
+          type,
+          OR: [{ icon: null }, { color: null }],
+        },
+        data: { icon: c.icon, color: c.color },
+      });
+      if (result.count > 0) {
+        console.log(`  ${type}/${c.name}: ${result.count} row(s)`);
+        touched += result.count;
+      }
     }
   }
   console.log(`Done. Backfilled ${touched} category row(s).`);

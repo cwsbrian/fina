@@ -409,15 +409,25 @@ enum TransactionSource {
   csv
 }
 
+enum CategoryType {
+  expense
+  income
+}
+
 model Category {
-  id          String    @id @default(cuid())
+  id          String       @id @default(cuid())
   workspaceId String
   name        String
+  /// expense | income — drives picker filtering by transaction direction
+  /// and constrains the LLM categorize prompt to the right vocabulary.
+  /// Defaulted to "expense" on backfill — the existing seed's lone
+  /// "Income" row is migrated to type=income via the migration SQL.
+  type        CategoryType @default(expense)
   parentId    String?
   icon        String?
   color       String?
   archivedAt  DateTime?
-  createdAt   DateTime  @default(now())
+  createdAt   DateTime     @default(now())
 
   workspace          Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   parent             Category?         @relation("CategoryTree", fields: [parentId], references: [id])
@@ -429,6 +439,7 @@ model Category {
   recurringExpenses  RecurringExpense[]
   goalAllocations    GoalAllocation[]
 
+  @@index([workspaceId, type])
   @@map("categories")
 }
 

@@ -10,7 +10,13 @@ const Args = z.object({
     .min(1)
     .max(40)
     .describe(
-      "Category name. Trimmed of surrounding whitespace; uniqueness check is case-insensitive against existing active categories.",
+      "Category name. Trimmed of surrounding whitespace; uniqueness check is case-insensitive against existing active categories of the same type.",
+    ),
+  type: z
+    .enum(["expense", "income"])
+    .optional()
+    .describe(
+      "expense (default) or income. Drives whether this category appears in the expense or income picker. Pre-existing same-name categories of the other type don't collide.",
     ),
   parent_name: z
     .string()
@@ -18,7 +24,7 @@ const Args = z.object({
     .min(1)
     .max(40)
     .describe(
-      "Optional parent category name (case-insensitive exact match against active categories). Omit for a top-level category.",
+      "Optional parent category name (case-insensitive exact match against active categories of the same type). Omit for a top-level category.",
     )
     .optional(),
 });
@@ -45,13 +51,18 @@ export const createCategory: ToolDef<Args, Result> = {
       throw new Error("insufficient_role");
     }
 
+    const type = args.type ?? "expense";
+
     let parentId: string | null = null;
     let parentName: string | null = null;
     if (args.parent_name) {
+      // Parent must be of the same type — a Salary child of an expense
+      // category doesn't make sense for picker filtering.
       const parent = await prisma.category.findFirst({
         where: {
           workspaceId: ctx.workspaceId,
           archivedAt: null,
+          type,
           name: { equals: args.parent_name, mode: "insensitive" },
         },
         select: { id: true, name: true },
@@ -64,6 +75,7 @@ export const createCategory: ToolDef<Args, Result> = {
     const created = await createCategoryService({
       workspaceId: ctx.workspaceId,
       name: args.name,
+      type,
       parentId,
     });
 

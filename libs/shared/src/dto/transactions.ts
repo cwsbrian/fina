@@ -41,6 +41,8 @@ export type TransactionDTO = {
 export type CategoryDTO = {
   id: string;
   name: string;
+  /** "expense" | "income" — drives picker filtering by transaction direction. */
+  type: "expense" | "income";
   parentId: string | null;
   icon: string | null;
   color: string | null;

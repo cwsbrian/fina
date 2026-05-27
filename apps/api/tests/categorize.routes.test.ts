@@ -31,7 +31,7 @@ afterAll(async () => {
 });
 
 describe("GET /workspaces/:id/categories", () => {
-  it("seeded user has 11 default categories", async () => {
+  it("seeded user has the full default category set (10 expense + 9 income)", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "cat-list@x.com", name: "CL" });
     const wsId = await getOwnerWorkspaceId(u.userId);
@@ -41,10 +41,16 @@ describe("GET /workspaces/:id/categories", () => {
       headers: { cookie: u.cookie, "x-workspace-id": wsId },
     });
     expect(res.statusCode).toBe(200);
-    const names = (res.json().categories as Array<{ name: string }>).map((c) => c.name).sort();
-    expect(names).toEqual([
+    const rows = res.json().categories as Array<{ name: string; type: string }>;
+    const expense = rows.filter((c) => c.type === "expense").map((c) => c.name).sort();
+    const income = rows.filter((c) => c.type === "income").map((c) => c.name).sort();
+    expect(expense).toEqual([
       "Dining", "Entertainment", "Groceries", "Health", "Housing",
-      "Income", "Other", "Shopping", "Subscriptions", "Transit", "Utilities",
+      "Other", "Shopping", "Subscriptions", "Transit", "Utilities",
+    ]);
+    expect(income).toEqual([
+      "Bonus", "Freelance", "Gift", "Interest", "Investment",
+      "Other", "Refund", "Salary", "Transfer",
     ]);
     await app.close();
   });
@@ -146,8 +152,9 @@ describe("POST /workspaces/:id/categories", () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "cat-cap@x.com", name: "C" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    // Seeded 11 + we add 19 more = 30
-    for (let i = 0; i < 19; i++) {
+    // Seeded 10 expense + 9 income = 19 defaults, then add 11 custom = 30 total.
+    // The 12th custom (overall 31st) must hit the cap.
+    for (let i = 0; i < 11; i++) {
       const r = await app.inject({
         method: "POST",
         url: `/workspaces/${wsId}/categories`,

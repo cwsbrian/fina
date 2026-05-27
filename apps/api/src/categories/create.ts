@@ -7,6 +7,8 @@ export const MAX_ACTIVE_CATEGORIES = 30;
 export type CreateCategoryInput = {
   workspaceId: string;
   name: string;
+  /** Defaults to "expense" when omitted — preserves pre-type-aware callers. */
+  type?: "expense" | "income";
   parentId?: string | null;
   icon?: string | null;
   color?: string | null;
@@ -15,6 +17,7 @@ export type CreateCategoryInput = {
 export type CreateCategoryOutput = {
   id: string;
   name: string;
+  type: "expense" | "income";
   parentId: string | null;
   icon: string | null;
   color: string | null;
@@ -55,10 +58,17 @@ export async function createCategoryService(
     throw new Error("too_many_categories");
   }
 
+  const type = input.type ?? "expense";
+
+  // Dup check is now per-type — the underlying partial unique index
+  // `categories_one_active_name_per_workspace_per_type_ci` keys on
+  // (workspaceId, lower(name), type). So "Other" can coexist as both
+  // expense and income; only same-name-same-type collides.
   const dup = await prisma.category.findFirst({
     where: {
       workspaceId: input.workspaceId,
       archivedAt: null,
+      type,
       name: { equals: input.name, mode: "insensitive" },
     },
     select: { id: true },
@@ -70,15 +80,17 @@ export async function createCategoryService(
       data: {
         workspaceId: input.workspaceId,
         name: input.name,
+        type,
         parentId: input.parentId ?? null,
         icon: input.icon ?? null,
         color: input.color ?? null,
       },
-      select: { id: true, name: true, parentId: true, icon: true, color: true },
+      select: { id: true, name: true, type: true, parentId: true, icon: true, color: true },
     });
     return {
       id: created.id,
       name: created.name,
+      type: created.type,
       parentId: created.parentId,
       icon: created.icon,
       color: created.color,

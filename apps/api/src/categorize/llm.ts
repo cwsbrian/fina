@@ -14,6 +14,13 @@ export type LLMTransaction = {
   };
 };
 
+/** Category vocabulary split by type so Gemini can be constrained to
+ *  pick from the right bucket based on transaction direction. */
+export type LLMCategoryVocab = {
+  expense: string[];
+  income: string[];
+};
+
 export type LLMResult = { tx_id: string; category: string };
 
 /**
@@ -23,13 +30,14 @@ export type LLMResult = { tx_id: string; category: string };
  */
 export async function callGeminiCategorize(
   env: Env,
-  categoryNames: string[],
+  vocab: LLMCategoryVocab,
   txs: LLMTransaction[],
 ): Promise<LLMResult[]> {
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
 
   const userPayload = {
-    categories: categoryNames,
+    expense_categories: vocab.expense,
+    income_categories: vocab.income,
     transactions: txs.map((t) => ({
       tx_id: t.id,
       merchant: t.merchantRaw,
@@ -62,11 +70,12 @@ export async function callGeminiCategorize(
       },
       systemInstruction:
         "You categorize Canadian personal financial transactions. CAD currency. " +
-        "Positive amount = expense, negative = income/refund. " +
-        "Use exact category names from the categories list. " +
+        "Positive amount = money out (expense) — pick ONLY from expense_categories. " +
+        "Negative amount = money in (income/refund) — pick ONLY from income_categories. " +
+        "Never cross types. Use exact category names from the matching list. " +
         "If a transaction includes plaid_hint (Plaid's personal_finance_category with primary/detailed/confidence), " +
         "treat HIGH/VERY_HIGH as a strong hint and MEDIUM/LOW as a weak hint when mapping into our category list. " +
-        "If genuinely unclear, use 'Other'.",
+        "If genuinely unclear, use 'Other' from the matching type's list.",
     },
     contents: [
       { role: "user", parts: [{ text: JSON.stringify(userPayload) }] },

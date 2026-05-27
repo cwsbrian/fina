@@ -9,15 +9,32 @@ const MAX_ACTIVE_CATEGORIES = 30;
 export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
   app.get("/workspaces/:id/categories", async (req, reply) => {
     const params = req.params as { id: string };
+    const query = req.query as { type?: string };
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
+      // Optional ?type=expense|income narrows the list. Anything else is
+      // a 400 — we don't silently fall back to "all" because the mobile
+      // picker depends on a precise filter (positive amount → expense,
+      // negative → income). Omit the param to get both.
+      let typeFilter: "expense" | "income" | undefined;
+      if (query.type !== undefined) {
+        if (query.type === "expense" || query.type === "income") {
+          typeFilter = query.type;
+        } else {
+          return reply.code(400).send({ error: "invalid_type" });
+        }
+      }
       const cats = await prisma.category.findMany({
-        where: { workspaceId: ctx.membership.workspaceId, archivedAt: null },
-        orderBy: { name: "asc" },
-        select: { id: true, name: true, icon: true, color: true },
+        where: {
+          workspaceId: ctx.membership.workspaceId,
+          archivedAt: null,
+          ...(typeFilter ? { type: typeFilter } : {}),
+        },
+        orderBy: [{ type: "asc" }, { name: "asc" }],
+        select: { id: true, name: true, type: true, icon: true, color: true },
       });
       return { categories: cats };
     } catch (e) {
@@ -44,11 +61,18 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
         const created = await createCategoryService({
           workspaceId: wsId,
           name: nameTrim,
+          type: parsed.data.type,
           icon: parsed.data.icon ?? null,
           color: parsed.data.color ?? null,
         });
         return reply.code(201).send({
-          category: { id: created.id, name: created.name, icon: created.icon, color: created.color },
+          category: {
+            id: created.id,
+            name: created.name,
+            type: created.type,
+            icon: created.icon,
+            color: created.color,
+          },
         });
       } catch (svcErr) {
         if (svcErr instanceof Error) {

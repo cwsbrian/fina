@@ -199,13 +199,25 @@ export async function categorizeNewTransactions(
   if (stillUnmapped.length === 0) return;
 
   // Step 3: LLM batch. Build workspace-scoped active category map.
+  // Categories now carry a type (expense | income) — we split the vocab
+  // for the Gemini prompt and key the lookup map on (lower(name), type)
+  // so that "Other" (which exists in both types) resolves correctly
+  // based on transaction direction.
   const categoryRows = await prisma.category.findMany({
     where: { workspaceId, archivedAt: null },
-    select: { id: true, name: true },
+    select: { id: true, name: true, type: true },
   });
-  const categoryByLower = new Map(categoryRows.map((c) => [c.name.toLowerCase(), c.id]));
-  const categoryNames = categoryRows.map((c) => c.name);
-  if (categoryNames.length === 0) return; // no vocabulary, nothing to do
+  if (categoryRows.length === 0) return; // no vocabulary, nothing to do
+
+  const expenseNames: string[] = [];
+  const incomeNames: string[] = [];
+  const categoryByLowerAndType = new Map<string, string>();
+  for (const c of categoryRows) {
+    categoryByLowerAndType.set(`${c.type}:${c.name.toLowerCase()}`, c.id);
+    if (c.type === "income") incomeNames.push(c.name);
+    else expenseNames.push(c.name);
+  }
+  if (expenseNames.length === 0 && incomeNames.length === 0) return;
 
   const batchMax = env.CATEGORIZE_BATCH_MAX ?? 50; // optional field; default in code not zod
   for (let i = 0; i < stillUnmapped.length; i += batchMax) {
@@ -226,7 +238,11 @@ export async function categorizeNewTransactions(
 
     let results: Array<{ tx_id: string; category: string }> = [];
     try {
-      results = await callGeminiCategorize(env, categoryNames, llmTxs);
+      results = await callGeminiCategorize(
+        env,
+        { expense: expenseNames, income: incomeNames },
+        llmTxs,
+      );
     } catch (e) {
       // Log + continue. Tx in this batch stay uncategorized.
       // NOTE: callGeminiCategorize may throw on network errors OR on
@@ -236,13 +252,21 @@ export async function categorizeNewTransactions(
       continue;
     }
 
-    const batchIdSet = new Set(batch.map((t) => t.id));
+    const batchById = new Map(batch.map((t) => [t.id, t] as const));
     for (const r of results) {
-      if (!batchIdSet.has(r.tx_id)) continue;
+      const txMeta = batchById.get(r.tx_id);
+      if (!txMeta) continue;
       // Guard against malformed rows where category is null/undefined — calling
       // .toLowerCase() on those would throw and violate the best-effort contract.
       if (typeof r.category !== "string") continue;
-      const aiCatId = categoryByLower.get(r.category.toLowerCase());
+      // Direction: positive amount = expense, negative = income (mirrors
+      // the system prompt's instruction to Gemini). Same-name "Other"
+      // resolves to the correct type based on amount sign.
+      const expectedType: "expense" | "income" =
+        Number(txMeta.amount) >= 0 ? "expense" : "income";
+      const aiCatId = categoryByLowerAndType.get(
+        `${expectedType}:${r.category.toLowerCase()}`,
+      );
       if (!aiCatId) continue;
 
       // Step 3: Gemini results — write to the single null-cat allocation per tx
