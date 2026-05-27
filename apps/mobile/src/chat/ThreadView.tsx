@@ -188,9 +188,22 @@ export function ThreadView({
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setDraft(body);
+      const code = (e as { code?: string }).code;
+      if (code === "llm_weekly_budget_exceeded") {
+        // Friendly KR/EN message — server doesn't localize; we choose
+        // based on whether the user's draft looks Korean-leaning.
+        const ko = /[ㄱ-힝]/.test(body);
+        Alert.alert(
+          ko ? "이번 주 AI 사용 한도 도달" : "Weekly AI limit reached",
+          ko
+            ? "이번 주 AI 한도($5/월)를 모두 사용했어요. 며칠 후 다시 시도해주세요. Fina의 다른 알림은 계속 받아볼 수 있어요."
+            : "You've used this week's AI allowance ($5/mo). Try again in a few days — Fina will still send you scheduled briefs.",
+        );
+        return;
+      }
       Alert.alert(
         "Couldn't send",
-        (e as { code?: string }).code ?? "Try again in a moment.",
+        code ?? "Try again in a moment.",
       );
     } finally {
       setSending(false);

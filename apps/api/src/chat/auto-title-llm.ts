@@ -1,5 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
 import type { Env } from "../env.js";
+import { logLlmCall } from "../llm/budget.js";
 
 const SYSTEM_INSTRUCTION =
   "You generate concise titles for chat conversations.\n" +
@@ -10,7 +11,12 @@ const MAX_PROMPT_CHARS = 500;
 
 // Calls Gemini once with the SYSTEM_INSTRUCTION + the (truncated) first user
 // message. Returns the raw text. Errors propagate; the orchestrator catches.
-export async function callTitleLLM(env: Env, firstMessageText: string): Promise<string> {
+// Records spend against the user's weekly LLM cap as a side effect.
+export async function callTitleLLM(
+  env: Env,
+  userId: string,
+  firstMessageText: string,
+): Promise<string> {
   const userPrompt = firstMessageText.slice(0, MAX_PROMPT_CHARS);
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
   const model = env.CHAT_MODEL ?? "gemini-2.5-flash-lite";
@@ -19,5 +25,15 @@ export async function callTitleLLM(env: Env, firstMessageText: string): Promise<
     contents: [{ role: "user", parts: [{ text: userPrompt }] }],
     config: { systemInstruction: SYSTEM_INSTRUCTION },
   });
+  // Logging is fire-and-forget — auto-title is non-critical and a missed
+  // accounting row should never fail title generation. logWarn happens
+  // implicitly inside Prisma if the insert fails.
+  void logLlmCall({
+    userId,
+    source: "auto_title",
+    model,
+    inputTokens: resp.usageMetadata?.promptTokenCount ?? 0,
+    outputTokens: resp.usageMetadata?.candidatesTokenCount ?? 0,
+  }).catch(() => {});
   return resp.text ?? "";
 }

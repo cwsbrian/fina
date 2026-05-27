@@ -2,6 +2,7 @@ import { GoogleGenAI } from "@google/genai";
 import type { BriefContext, BriefType } from "./brief-context.js";
 import type { PresentationBlock } from "./blocks.js";
 import type { Env } from "../env.js";
+import { logLlmCall } from "../llm/budget.js";
 
 const SYSTEM_PROMPT_PER_TYPE: Record<BriefType, string> = {
   daily: `너는 Fina라는 가계부 AI 비서야. 매일 아침 사용자에게 한 메시지 brief를 줘.
@@ -53,6 +54,16 @@ export async function generateBrief(
       temperature: 0.7,
     },
   });
+
+  // Brief is system-initiated — runs even if the user has hit their weekly
+  // LLM budget cap. But the cost still counts against next week's window.
+  void logLlmCall({
+    userId: context.user.id,
+    source: "brief",
+    model,
+    inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+    outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+  }).catch(() => {});
 
   const text = response.text;
   if (!text || text.trim().length === 0) {

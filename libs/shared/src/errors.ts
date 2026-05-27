@@ -72,6 +72,7 @@ export const API_ERROR_CODES = [
   // Chat
   "chat_provider_error",
   "not_member",
+  "llm_weekly_budget_exceeded",
 
   // Rate limiting
   "rate_limit_exceeded",

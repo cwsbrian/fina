@@ -13,6 +13,7 @@ import type { PresentationBlock } from "../chat/blocks.js";
 import { threadsService } from "../chat/threads.js";
 import { processChatTurn } from "../chat/turn.js";
 import { prisma } from "../db.js";
+import { isUserChatBudgetExceeded } from "../llm/budget.js";
 import { logError, logWarn } from "../logger.js";
 
 function serializeThread(t: {
@@ -229,6 +230,14 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const tier = await effectiveTier(session.userId);
       if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
 
+      // Weekly LLM spend cap (per user, rolling 7 days). Only gates the
+      // user → Fina path; system-initiated features (brief, categorize)
+      // keep running so Fina can still talk to the user even after the
+      // cap is hit. See apps/api/src/llm/budget.ts.
+      if (await isUserChatBudgetExceeded(session.userId, app.fina.env)) {
+        return reply.code(429).send({ error: "llm_weekly_budget_exceeded" });
+      }
+
       // Find the thread by id + userId first so we can detect workspace_mismatch
       // (400) before the membership check (403). Order matters: a bound thread
       // sending the wrong workspaceId should 400, not 403.
@@ -344,7 +353,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           });
           if (userMsgCount === 1) {
             void generateAndPersistThreadTitle(
-              app.fina.env, thread.id, parsed.data.text,
+              app.fina.env, thread.id, session.userId, parsed.data.text,
             ).catch(() => {
               /* orchestrator logs internally */
             });

@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { logLlmCall } from "../llm/budget.js";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import type { FinaEnv } from "../env.js";
@@ -400,6 +401,22 @@ export async function generateAndStoreGoalStrategy(
         responseMimeType: "application/json",
       },
     });
+    // Attribute spend to the workspace owner — same model as categorize.
+    // Lookup is best-effort; missing ownership row (test fixture only)
+    // simply skips accounting rather than throwing.
+    const owner = await prisma.membership.findFirst({
+      where: { workspaceId: goal.workspaceId, role: "owner" },
+      select: { userId: true },
+    });
+    if (owner) {
+      void logLlmCall({
+        userId: owner.userId,
+        source: "goal_strategy",
+        model,
+        inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+        outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      }).catch(() => {});
+    }
     const text = response.text ?? "";
     items = parseStrategy(text);
     if (items.length === 0 && categories.length === 0) {

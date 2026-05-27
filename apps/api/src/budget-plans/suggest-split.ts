@@ -1,4 +1,6 @@
 import { GoogleGenAI } from "@google/genai";
+import { logLlmCall } from "../llm/budget.js";
+import { prisma } from "../db.js";
 import { prisma } from "../db.js";
 import type { FinaEnv } from "../env.js";
 
@@ -221,6 +223,19 @@ export async function suggestBudgetSplit(
         responseMimeType: "application/json",
       },
     });
+    const owner = await prisma.membership.findFirst({
+      where: { workspaceId, role: "owner" },
+      select: { userId: true },
+    });
+    if (owner) {
+      void logLlmCall({
+        userId: owner.userId,
+        source: "budget_suggest",
+        model,
+        inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+        outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      }).catch(() => {});
+    }
     const text = response.text ?? "";
     const raw = parseAllocations(text, byName);
     if (raw.length === 0) {

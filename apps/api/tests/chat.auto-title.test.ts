@@ -36,7 +36,7 @@ describe("[plan 1e-title] generateAndPersistThreadTitle", () => {
 
   it("persists a cleaned title from the LLM result on first message", async () => {
     vi.mocked(callTitleLLM).mockResolvedValue("Coffee 카테고리 추가");
-    await generateAndPersistThreadTitle(env, threadId, "Coffee 카테고리 만들어줘");
+    await generateAndPersistThreadTitle(env, threadId, stamp, "Coffee 카테고리 만들어줘");
     const t = await prisma.chatThread.findUnique({ where: { id: threadId } });
     expect(t?.title).toBe("Coffee 카테고리 추가");
   });
@@ -44,28 +44,28 @@ describe("[plan 1e-title] generateAndPersistThreadTitle", () => {
   it("does NOT overwrite a manually-set title", async () => {
     await prisma.chatThread.update({ where: { id: threadId }, data: { title: "Manual" } });
     vi.mocked(callTitleLLM).mockResolvedValue("Auto Title");
-    await generateAndPersistThreadTitle(env, threadId, "first msg");
+    await generateAndPersistThreadTitle(env, threadId, stamp, "first msg");
     const t = await prisma.chatThread.findUnique({ where: { id: threadId } });
     expect(t?.title).toBe("Manual");
   });
 
   it("swallows LLM errors and leaves title NULL", async () => {
     vi.mocked(callTitleLLM).mockRejectedValue(new Error("rate-limit"));
-    await generateAndPersistThreadTitle(env, threadId, "first msg");
+    await generateAndPersistThreadTitle(env, threadId, stamp, "first msg");
     const t = await prisma.chatThread.findUnique({ where: { id: threadId } });
     expect(t?.title).toBeNull();
   });
 
   it("leaves title NULL when cleanTitle returns null (whitespace LLM output)", async () => {
     vi.mocked(callTitleLLM).mockResolvedValue("   \n   ");
-    await generateAndPersistThreadTitle(env, threadId, "first msg");
+    await generateAndPersistThreadTitle(env, threadId, stamp, "first msg");
     const t = await prisma.chatThread.findUnique({ where: { id: threadId } });
     expect(t?.title).toBeNull();
   });
 
   it("respects threadId boundary (wrong threadId → no update)", async () => {
     vi.mocked(callTitleLLM).mockResolvedValue("Should Not Land");
-    await generateAndPersistThreadTitle(env, "wrong-thread-id", "first msg");
+    await generateAndPersistThreadTitle(env, "wrong-thread-id", stamp, "first msg");
     const t = await prisma.chatThread.findUnique({ where: { id: threadId } });
     expect(t?.title).toBeNull();
   });

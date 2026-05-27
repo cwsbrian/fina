@@ -72,6 +72,12 @@ const Schema = z.object({
   CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().optional(),
   CHAT_HISTORY_BUDGET_TOKENS: z.coerce.number().int().positive().optional(),
   CHAT_MAX_TOOL_CALLS_PER_TURN: z.coerce.number().int().positive().optional(),
+  // Weekly LLM spend cap per user (USD). Sum of every LlmCallLog row in
+  // the last 7 days. When reached, POST /chat/threads/:tid/messages is
+  // blocked with 429 llm_weekly_budget_exceeded; system-initiated LLM
+  // (brief, categorize, auto-title) keep running so Fina can still talk
+  // to the user. Default applied at use site as $1.25/week (≈$5/month).
+  WEEKLY_LLM_BUDGET_USD_PER_USER: z.coerce.number().positive().optional(),
   // Prisma connection pool size. Default 10 covers cron + webhook + a
   // few request handlers without pool starvation under singleFork tests.
   PRISMA_CONNECTION_LIMIT: z.coerce.number().int().min(1).default(10),

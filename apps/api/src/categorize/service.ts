@@ -35,11 +35,14 @@ export async function categorizeNewTransactions(
 
   // Resolve mode from the workspace owner's user record. (Plan v3: user-level mode,
   // sync runs workspace-scoped, so owner's mode applies. v2 may revisit.)
+  // We also need the owner's userId to attribute LLM spend to the right
+  // user's weekly budget cap (see logLlmCall below).
   const owner = await prisma.membership.findFirst({
     where: { workspaceId, role: "owner" },
-    select: { user: { select: { categorizationMode: true } } },
+    select: { userId: true, user: { select: { categorizationMode: true } } },
   });
   const mode = owner?.user.categorizationMode ?? "flexible";
+  const ownerUserId = owner?.userId ?? null;
 
   // Step 1: Load tx + populate merchantNormalized on each row.
   // Use allocation-based predicate so this filter survives Task 8's column drop.
@@ -242,6 +245,7 @@ export async function categorizeNewTransactions(
         env,
         { expense: expenseNames, income: incomeNames },
         llmTxs,
+        ownerUserId,
       );
     } catch (e) {
       // Log + continue. Tx in this batch stay uncategorized.

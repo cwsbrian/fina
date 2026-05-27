@@ -408,4 +408,77 @@ describe("POST /chat/threads/:tid/messages", () => {
     const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
     expect(reload.workspaceId).toBe(wsId);
   });
+
+  it("429 — weekly LLM budget exceeded for this user", async () => {
+    const { userId, cookie, wsId } = await setup("mt10@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    // Seed last-7-days cost AT the configured cap. Service uses
+    // `WEEKLY_LLM_BUDGET_USD_PER_USER ?? 1.25` (default) and the
+    // gate fires on `>=`.
+    await prisma.llmCallLog.create({
+      data: {
+        userId,
+        source: "chat",
+        model: "gemini-2.5-flash",
+        inputTokens: 1_000_000,
+        outputTokens: 1_000_000,
+        costUsd: "1.25",
+        createdAt: new Date(),
+      },
+    });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(429);
+    expect(res.json().error).toBe("llm_weekly_budget_exceeded");
+  });
+
+  it("200 — usage outside the 7-day window does NOT trigger the cap", async () => {
+    const { userId, cookie, wsId } = await setup("mt11@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+    await prisma.llmCallLog.create({
+      data: {
+        userId,
+        source: "chat",
+        model: "gemini-2.5-flash",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: "5.00",
+        createdAt: eightDaysAgo,
+      },
+    });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it("429 — another user's spend does not leak across users", async () => {
+    const { userId: spenderId } = await setup("mt12a@t.co");
+    await prisma.llmCallLog.create({
+      data: {
+        userId: spenderId,
+        source: "chat",
+        model: "gemini-2.5-flash",
+        inputTokens: 0,
+        outputTokens: 0,
+        costUsd: "1.25",
+        createdAt: new Date(),
+      },
+    });
+    // Different user, with the same chat path, should NOT be gated.
+    const { userId, cookie, wsId } = await setup("mt12b@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({
+      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+    });
+    expect(res.statusCode).toBe(200);
+  });
 });

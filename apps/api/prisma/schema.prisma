@@ -72,6 +72,7 @@ model User {
   subscriptions   Subscription[]
   briefs          Brief[]
   devices UserDevice[]
+  llmCallLogs LlmCallLog[]
 
   @@map("users")
 }
@@ -858,4 +859,31 @@ model IapRetryCounter {
 
   @@unique([source, tokenHash])
   @@map("iap_retry_counters")
+}
+
+/// One row per LLM call attributed to a user. Used to enforce the weekly
+/// per-user spend cap (see apps/api/src/llm/budget.ts) and to audit usage by
+/// source feature. NOT a chat history — chat messages live in ChatMessage.
+///
+/// `source` is one of: "chat" | "auto_title" | "brief" | "categorize"
+/// | "goal_strategy" | "budget_suggest". Server enforces the enum at
+/// the call sites (logLlmCall) so we don't need an enum at the DB layer.
+///
+/// `costUsd` is Decimal(10,6) — 1e-6 precision gives sub-cent accuracy
+/// down to ~$0.000001 per call, more than enough; aggregates to 4 digits
+/// of dollars without overflow.
+model LlmCallLog {
+  id           String   @id @default(uuid())
+  userId       String
+  source       String
+  model        String
+  inputTokens  Int
+  outputTokens Int
+  costUsd      Decimal  @db.Decimal(10, 6)
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@map("llm_call_logs")
 }

@@ -16,6 +16,7 @@ import {
   extractTargetId,
 } from "../audit/service.js";
 import { logWarn } from "../logger.js";
+import { logLlmCall } from "../llm/budget.js";
 
 const SYSTEM_PROMPT = `You are Fina, a personal-finance assistant for Canadian users. You help users
 understand their spending, categorize transactions, and plan their budgets.
@@ -175,6 +176,19 @@ export async function processChatTurn(
 
   while (true) {
     const resp = await ai.models.generateContent({ model: MODEL, contents, config: { systemInstruction: sysInstruction, tools } });
+
+    // Account every Gemini call (including multi-round tool dispatch
+    // iterations) against the user's weekly LLM budget. Fire-and-forget
+    // so a bookkeeping failure never aborts a chat turn — the gate at
+    // the route handler ran with the pre-turn balance, so a missed log
+    // only delays cap enforcement by one turn.
+    void logLlmCall({
+      userId,
+      source: "chat",
+      model: MODEL,
+      inputTokens: resp.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: resp.usageMetadata?.candidatesTokenCount ?? 0,
+    }).catch(() => {});
 
     const fcs: FunctionCall[] = resp.functionCalls ?? [];
     if (fcs.length === 0) return { assistantText: resp.text ?? "", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };

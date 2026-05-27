@@ -38,10 +38,11 @@ export function cleanTitle(raw: string): string | null {
 export async function generateAndPersistThreadTitle(
   env: Env,
   threadId: string,
+  userId: string,
   firstMessageText: string,
 ): Promise<void> {
   try {
-    const raw = await callTitleLLM(env, firstMessageText);
+    const raw = await callTitleLLM(env, userId, firstMessageText);
     const cleaned = cleanTitle(raw);
     if (cleaned === null) return;
     await prisma.chatThread.updateMany({

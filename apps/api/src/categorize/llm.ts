@@ -1,5 +1,6 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import type { Env } from "../env.js";
+import { logLlmCall } from "../llm/budget.js";
 
 export type LLMTransaction = {
   id: string;
@@ -32,8 +33,13 @@ export async function callGeminiCategorize(
   env: Env,
   vocab: LLMCategoryVocab,
   txs: LLMTransaction[],
+  /** Workspace owner — accounts for the LLM spend against their weekly cap.
+   *  Null when no owner can be resolved (test fixtures only); in that case
+   *  we still run the call but skip accounting. */
+  ownerUserId: string | null,
 ): Promise<LLMResult[]> {
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
+  const model = "gemini-2.5-flash-lite";
 
   const userPayload = {
     expense_categories: vocab.expense,
@@ -48,7 +54,7 @@ export async function callGeminiCategorize(
   };
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash-lite",
+    model,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -81,6 +87,16 @@ export async function callGeminiCategorize(
       { role: "user", parts: [{ text: JSON.stringify(userPayload) }] },
     ],
   });
+
+  if (ownerUserId) {
+    void logLlmCall({
+      userId: ownerUserId,
+      source: "categorize",
+      model,
+      inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+    }).catch(() => {});
+  }
 
   const text = response.text;
   if (typeof text !== "string" || text.length === 0) {
