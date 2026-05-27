@@ -1,13 +1,9 @@
-import {
-  initConnection,
-  endConnection,
-  fetchProducts as rnFetchProducts,
-  requestPurchase,
-  getAvailablePurchases,
-  finishTransaction,
-  type Purchase,
-  type ProductSubscription,
-} from "react-native-iap";
+// Type-only imports from react-native-iap are elided at runtime, so they
+// don't pull in the Nitro native module. All runtime imports go through
+// `getIap()` below — lazy-required inside try/catch so Expo Go (which has
+// no NitroModules support) can still load this file. Functions degrade to
+// empty-state / typed errors when the module is unavailable.
+import type { Purchase, ProductSubscription } from "react-native-iap";
 import { Platform } from "react-native";
 import { deriveAppleToken, deriveGoogleToken } from "./binding";
 import type { IAPProductId } from "@fina/shared";
@@ -21,17 +17,66 @@ export type LocalProduct = {
   localizedTitle: string;
 };
 
+/** Error class surfaced to callers so the UI can map react-native-iap's
+ *  string codes to user-friendly messaging. The code is the canonical
+ *  rn-iap error code; `recoverable` is true for user-cancel and
+ *  already-owned (Restore handles the latter). `E_RN_IAP_UNAVAILABLE` is
+ *  our own code, emitted only when running under Expo Go (no dev client). */
+export class IapPurchaseError extends Error {
+  constructor(public code: string, public recoverable: boolean, message: string) {
+    super(message);
+    this.name = "IapPurchaseError";
+  }
+}
+
+type RnIap = typeof import("react-native-iap");
+
+let _iap: RnIap | null | undefined; // undefined = not yet probed
+
+/** Lazy-require react-native-iap. Returns null under Expo Go where the
+ *  Nitro native module isn't linked. Cached after first probe — both
+ *  success and the null sentinel persist for the session. */
+function getIap(): RnIap | null {
+  if (_iap !== undefined) return _iap;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _iap = require("react-native-iap") as RnIap;
+  } catch {
+    _iap = null;
+  }
+  return _iap;
+}
+
+export function isIapAvailable(): boolean {
+  return getIap() !== null;
+}
+
 let connected = false;
 
-async function ensureConnected(): Promise<void> {
-  if (connected) return;
-  await initConnection();
-  connected = true;
+async function ensureConnected(): Promise<RnIap> {
+  const iap = getIap();
+  if (!iap) {
+    throw new IapPurchaseError(
+      "E_RN_IAP_UNAVAILABLE",
+      false,
+      "In-app purchases require a dev client build (Expo Go cannot load native modules).",
+    );
+  }
+  if (!connected) {
+    await iap.initConnection();
+    connected = true;
+  }
+  return iap;
 }
 
 export async function fetchProducts(): Promise<LocalProduct[]> {
+  const iap = getIap();
+  // Under Expo Go: return empty array so the plan picker shows the
+  // empty-state ("Subscriptions aren't available right now") instead of
+  // crashing the whole app on module load.
+  if (!iap) return [];
   await ensureConnected();
-  const raw = await rnFetchProducts({ skus: SKUS, type: "subs" });
+  const raw = await iap.fetchProducts({ skus: SKUS, type: "subs" });
   if (!raw) return [];
   return (raw as ProductSubscription[])
     .filter((s): s is ProductSubscription => Boolean((s as any).id))
@@ -45,26 +90,15 @@ export async function fetchProducts(): Promise<LocalProduct[]> {
     });
 }
 
-/** Error class surfaced to callers so the UI can map react-native-iap's
- *  string codes to user-friendly messaging. The code is the canonical
- *  rn-iap error code; `recoverable` is true for user-cancel and
- *  already-owned (Restore handles the latter). */
-export class IapPurchaseError extends Error {
-  constructor(public code: string, public recoverable: boolean, message: string) {
-    super(message);
-    this.name = "IapPurchaseError";
-  }
-}
-
 export async function purchaseSubscription(args: {
   productId: IAPProductId;
   userId: string;
 }): Promise<{ receipt: string; platform: "ios" | "android"; purchase: Purchase }> {
-  await ensureConnected();
+  const iap = await ensureConnected();
   try {
     if (Platform.OS === "ios") {
       const appAccountToken = deriveAppleToken(args.userId);
-      const result = await requestPurchase({
+      const result = await iap.requestPurchase({
         request: { apple: { sku: args.productId, appAccountToken } },
         type: "subs",
       });
@@ -77,7 +111,7 @@ export async function purchaseSubscription(args: {
     }
     // Android
     const obfuscatedAccountId = deriveGoogleToken(args.userId);
-    const result = await requestPurchase({
+    const result = await iap.requestPurchase({
       request: { google: { skus: [args.productId], obfuscatedAccountId } },
       type: "subs",
     });
@@ -100,16 +134,20 @@ export async function purchaseSubscription(args: {
 }
 
 /** Call ONLY after server returns 2xx — protects against
- *  client-finishing-before-server-records race. */
+ *  client-finishing-before-server-records race. No-op under Expo Go. */
 export async function finishPurchase(p: Purchase): Promise<void> {
-  await finishTransaction({ purchase: p as any, isConsumable: false });
+  const iap = getIap();
+  if (!iap) return;
+  await iap.finishTransaction({ purchase: p as any, isConsumable: false });
 }
 
 export async function listAvailablePurchases(): Promise<
   Array<{ productId: IAPProductId; receipt: string; platform: "ios" | "android"; purchase: Purchase }>
 > {
+  const iap = getIap();
+  if (!iap) return [];
   await ensureConnected();
-  const all: Purchase[] = await getAvailablePurchases();
+  const all: Purchase[] = await iap.getAvailablePurchases();
   const out: Array<{ productId: IAPProductId; receipt: string; platform: "ios" | "android"; purchase: Purchase }> = [];
   const seen = new Set<string>();
   for (const p of all) {
@@ -133,6 +171,11 @@ export async function listAvailablePurchases(): Promise<
 
 export async function disconnect(): Promise<void> {
   if (!connected) return;
-  await endConnection();
+  const iap = getIap();
+  if (!iap) {
+    connected = false;
+    return;
+  }
+  await iap.endConnection();
   connected = false;
 }
