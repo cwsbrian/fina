@@ -145,6 +145,7 @@ export default function Home() {
   } | null>(null);
   const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
   const [unreadFina, setUnreadFina] = useState(0);
+  const [latestUnreadThreadId, setLatestUnreadThreadId] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState(0);
   const [hasGoal, setHasGoal] = useState<boolean | null>(null);
   const [hasChattedState, setHasChattedState] = useState(false);
@@ -178,6 +179,11 @@ export default function Home() {
             setUnreadFina(
               r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0),
             );
+            // Threads are returned newest-first by lastMessageAt; the first
+            // one with unread messages is what the Home action card opens.
+            setLatestUnreadThreadId(
+              r.threads.find((t) => (t.unreadCount ?? 0) > 0)?.id ?? null,
+            );
             // hasChatted = any thread (across all workspaces / unbound) has
             // a user-role first message preview — i.e. the user typed at
             // least once. Daily-brief threads carry only assistant messages
@@ -189,6 +195,7 @@ export default function Home() {
           .catch(() => {
             setLatestUnboundThread(null);
             setUnreadFina(0);
+            setLatestUnreadThreadId(null);
             setHasChattedState(false);
           }),
         apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
@@ -343,7 +350,12 @@ export default function Home() {
       key: "fina",
       icon: "chatbubble-outline",
       title: `Fina sent you ${unreadFina} message${unreadFina === 1 ? "" : "s"}`,
-      href: "/chats",
+      // Open the most recent unread thread directly. Fall back to the
+      // chat history if we somehow don't know which thread (shouldn't
+      // happen — unreadFina > 0 implies at least one unread thread).
+      href: latestUnreadThreadId
+        ? `/(tabs)/chat?thread=${latestUnreadThreadId}`
+        : "/chats",
     });
   }
 
