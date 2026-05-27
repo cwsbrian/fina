@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
 import { basicPeriodRange, type BasicPeriod } from "./periods.js";
@@ -40,6 +41,7 @@ type Result = {
   currency: string;
   total: string;
   categories: Bucket[];
+  block: PresentationBlock;
 };
 
 export const getCategoryBreakdown: ToolDef<Args, Result> = {
@@ -143,6 +145,41 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
       currency: workspace.currency,
       total: total.toFixed(2),
       categories,
+      block: toRecapBlock(args.period, workspace.currency, total.toFixed(2), categories, entries.length),
     };
   },
 };
+
+function toRecapBlock(
+  period: BasicPeriod,
+  currency: string,
+  total: string,
+  categories: Bucket[],
+  totalEntries: number,
+): PresentationBlock {
+  const periodLabel =
+    period === "this_week" ? "This week" :
+    period === "this_month" ? "This month" : "Last month";
+
+  return {
+    type: "recap",
+    title: "By category",
+    period_label: periodLabel,
+    headline: {
+      label: "Total",
+      amount: total,
+      currency,
+    },
+    rows: categories.map((c) => ({
+      label: c.parentCategoryName
+        ? `${c.parentCategoryName} · ${c.categoryName}`
+        : c.categoryName,
+      amount: c.total,
+      sub: `${c.count} ${c.count === 1 ? "tx" : "tx"} · ${Math.round(c.share * 100)}%`,
+      bar_pct: Math.round(c.share * 100),
+    })),
+    ...(totalEntries > categories.length
+      ? { footer: `Top ${categories.length} of ${totalEntries}` }
+      : {}),
+  };
+}

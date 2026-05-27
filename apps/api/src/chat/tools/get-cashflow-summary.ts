@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
 import { basicPeriodRange, dateKeyInTz, resolveUserTz, type BasicPeriod } from "./periods.js";
@@ -31,7 +32,10 @@ type Result = {
   expenseTotal: string;
   netTotal: string;
   groups: Group[];
+  block: PresentationBlock;
 };
+
+const MAX_RECAP_ROWS = 8;
 
 export const getCashflowSummary: ToolDef<Args, Result> = {
   name: "getCashflowSummary",
@@ -114,14 +118,84 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
       });
     }
 
+    const netStr = totalIncome.minus(totalExpense).toFixed(2);
     return {
       period: args.period,
       groupBy,
       currency: workspace.currency,
       incomeTotal: totalIncome.toFixed(2),
       expenseTotal: totalExpense.toFixed(2),
-      netTotal: totalIncome.minus(totalExpense).toFixed(2),
+      netTotal: netStr,
       groups,
+      block: toRecapBlock(
+        args.period,
+        workspace.currency,
+        totalIncome.toFixed(2),
+        totalExpense.toFixed(2),
+        netStr,
+        groups,
+      ),
     };
   },
 };
+
+/** Cashflow recap layout: headline = net, two summary rows (Income /
+ *  Expenses) styled with deltas to make the direction unmistakable, then
+ *  optionally the first 8 day/account rows below for context. */
+function toRecapBlock(
+  period: BasicPeriod,
+  currency: string,
+  incomeTotal: string,
+  expenseTotal: string,
+  netTotal: string,
+  groups: Group[],
+): PresentationBlock {
+  const netNum = parseFloat(netTotal);
+  const periodLabel =
+    period === "this_week" ? "This week" :
+    period === "this_month" ? "This month" : "Last month";
+
+  const summaryRows = [
+    {
+      label: "Income",
+      amount: incomeTotal,
+      delta: { value: incomeTotal, direction: "up" as const },
+    },
+    {
+      label: "Expenses",
+      amount: expenseTotal,
+      delta: { value: expenseTotal, direction: "down" as const },
+    },
+  ];
+
+  const detailRows = groups.slice(0, MAX_RECAP_ROWS).map((g) => ({
+    label: g.label,
+    amount: g.netTotal,
+    sub: `In ${g.incomeTotal} · Out ${g.expenseTotal}`,
+  }));
+
+  const rows = [...summaryRows, ...detailRows];
+
+  return {
+    type: "recap",
+    title: "Cashflow",
+    period_label: periodLabel,
+    headline: {
+      label: "Net",
+      amount: netTotal,
+      currency,
+      ...(netNum !== 0
+        ? {
+            delta: {
+              value: Math.abs(netNum).toFixed(2),
+              direction: (netNum > 0 ? "up" : "down") as "up" | "down",
+            },
+          }
+        : {}),
+    },
+    rows,
+    ...(groups.length > MAX_RECAP_ROWS
+      ? { footer: `Top ${MAX_RECAP_ROWS} of ${groups.length}` }
+      : {}),
+  };
+}

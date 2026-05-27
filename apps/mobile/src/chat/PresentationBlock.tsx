@@ -2,6 +2,7 @@ import { View, Text, StyleSheet, Pressable } from "react-native";
 import { router } from "expo-router";
 import type { PresentationBlock as Block } from "@fina/shared";
 import { colors, space, type as type$ } from "../design/tokens";
+import { RecapBlock } from "./blocks/RecapBlock";
 
 type Props = {
   block: Block;
@@ -49,6 +50,9 @@ export function PresentationBlock({ block, role, onAccept, onReject }: Props) {
         </View>
       </View>
     );
+  }
+  if (block.type === "recap") {
+    return <RecapBlock block={block} />;
   }
   if (block.type === "categorize_confirm_card") {
     return (

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { normalizeMerchant } from "../../categorize/normalize.js";
 import type { ToolDef } from "./types.js";
@@ -43,6 +44,7 @@ type Result = {
   delta: string;
   percentChange: number | null;
   changes: Change[];
+  block: PresentationBlock;
 };
 
 function isValidPair(c: CurrentPeriod, p: ComparisonPeriod): boolean {
@@ -229,6 +231,7 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
     const compTotalNum = parseFloat(comparison.total.toFixed(2));
     const overallPercent = compTotalNum === 0 ? null : parseFloat(overallDelta.toFixed(2)) / compTotalNum;
 
+    const limitedChanges = changes.slice(0, limit);
     return {
       currentPeriod: args.current_period,
       comparisonPeriod: args.comparison_period,
@@ -238,7 +241,76 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
       comparisonTotal: comparison.total.toFixed(2),
       delta: overallDelta.toFixed(2),
       percentChange: overallPercent,
-      changes: changes.slice(0, limit),
+      changes: limitedChanges,
+      block: toRecapBlock(
+        args.current_period,
+        args.comparison_period,
+        workspace.currency,
+        current.total.toFixed(2),
+        overallDelta.toFixed(2),
+        limitedChanges,
+        changes.length,
+      ),
     };
   },
 };
+
+function toRecapBlock(
+  currentPeriod: CurrentPeriod,
+  comparisonPeriod: ComparisonPeriod,
+  currency: string,
+  currentTotal: string,
+  overallDelta: string,
+  changes: Change[],
+  totalChanges: number,
+): PresentationBlock {
+  const periodLabel = `${labelOf(currentPeriod)} vs ${labelOf(comparisonPeriod)}`;
+  const deltaNum = parseFloat(overallDelta);
+
+  return {
+    type: "recap",
+    title: "Spending change",
+    period_label: periodLabel,
+    headline: {
+      label: labelOf(currentPeriod),
+      amount: currentTotal,
+      currency,
+      ...(deltaNum !== 0
+        ? {
+            delta: {
+              value: Math.abs(deltaNum).toFixed(2),
+              direction: (deltaNum > 0 ? "up" : "down") as "up" | "down",
+            },
+          }
+        : {}),
+    },
+    rows: changes.map((c) => {
+      const d = parseFloat(c.delta);
+      return {
+        label: c.label,
+        amount: c.currentTotal,
+        sub: `vs ${c.comparisonTotal}`,
+        ...(d !== 0
+          ? {
+              delta: {
+                value: Math.abs(d).toFixed(2),
+                direction: (d > 0 ? "up" : "down") as "up" | "down",
+              },
+            }
+          : {}),
+      };
+    }),
+    ...(totalChanges > changes.length
+      ? { footer: `Top ${changes.length} of ${totalChanges} changes` }
+      : {}),
+  };
+}
+
+function labelOf(p: CurrentPeriod | ComparisonPeriod): string {
+  switch (p) {
+    case "this_week":     return "This week";
+    case "this_month":    return "This month";
+    case "previous_week": return "Last week";
+    case "last_month":    return "Last month";
+  }
+}
