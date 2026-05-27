@@ -72,6 +72,12 @@ export function ThreadView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
+  // Skips the load useEffect's GET /chat/threads/:id when we just created
+  // the thread locally during a send. Without this guard the GET races
+  // the in-flight POST /messages: it returns empty messages (the POST
+  // hasn't completed) and wipes the optimistic user bubble before the
+  // server reply lands.
+  const justCreatedId = useRef<string | null>(null);
 
   // Sync when the parent switches us to a different thread (e.g. tapping
   // a row in /chats). Reset all local state so the new thread loads cleanly.
@@ -117,6 +123,14 @@ export function ThreadView({
     // Pending thread: nothing to load. Composer is shown over an empty
     // message list — the user's first send creates the DB row.
     if (!localId) return;
+    // First-send race guard: if this localId came from a fresh local
+    // create, the in-flight POST /messages has the canonical data —
+    // GET /threads/:id would return stale empty messages and wipe the
+    // optimistic user bubble.
+    if (justCreatedId.current === localId) {
+      justCreatedId.current = null;
+      return;
+    }
     let cancelled = false;
     (async () => {
       try {
@@ -166,6 +180,9 @@ export function ThreadView({
           { method: "POST", body: JSON.stringify({}) },
         );
         id = created.thread.id;
+        // Mark BEFORE setLocalId so the load-useEffect skips the GET
+        // on the re-render triggered by setLocalId.
+        justCreatedId.current = id;
         setLocalId(id);
         setThread(created.thread);
         onThreadCreated?.(id);
