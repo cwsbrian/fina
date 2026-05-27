@@ -26,6 +26,8 @@
     "croner": "^10.0.1",
     "expo-server-sdk": "^6.1.0",
     "fastify": "^5.0.0",
+    "google-auth-library": "^10.6.2",
+    "googleapis": "^172.0.0",
     "jose": "^6",
     "pino": "^10.3.1",
     "plaid": "^42",
