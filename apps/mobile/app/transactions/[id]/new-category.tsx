@@ -33,7 +33,12 @@ function chunk<T>(arr: ReadonlyArray<T>, size: number): T[][] {
 }
 
 export default function NewCategory() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, type } = useLocalSearchParams<{
+    id: string;
+    type?: "expense" | "income";
+  }>();
+  const categoryType: "expense" | "income" =
+    type === "income" ? "income" : "expense";
   const [name, setName] = useState("");
   const [icon, setIcon] = useState(DEFAULT_NEW_CATEGORY_ICON);
   const [color, setColor] = useState(() => pickRandomCategoryColor());
@@ -54,7 +59,12 @@ export default function NewCategory() {
         `/workspaces/${wsId}/categories`,
         {
           method: "POST",
-          body: JSON.stringify({ name: trimmed, icon, color }),
+          body: JSON.stringify({
+            name: trimmed,
+            type: categoryType,
+            icon,
+            color,
+          }),
         },
       );
       // Auto-assign the new category to the transaction so the user
@@ -71,11 +81,11 @@ export default function NewCategory() {
           ? "A category with this name already exists."
           : code === "too_many_categories"
             ? "You've reached the 30-category limit."
-            : "Couldn't create category. Try again.",
+            : `Couldn't create category (${code}). Try again.`,
       );
       setSubmitting(false);
     }
-  }, [id, name, icon, color, submitting]);
+  }, [id, name, icon, color, categoryType, submitting]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -88,7 +98,9 @@ export default function NewCategory() {
         >
           <Text style={styles.cancel}>Cancel</Text>
         </Pressable>
-        <Text style={styles.title}>Add category</Text>
+        <Text style={styles.title}>
+          {categoryType === "income" ? "Add income category" : "Add category"}
+        </Text>
         <Pressable
           onPress={submit}
           disabled={submitting || name.trim().length === 0}

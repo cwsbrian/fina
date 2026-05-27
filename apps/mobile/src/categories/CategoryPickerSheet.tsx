@@ -159,8 +159,15 @@ export function CategoryPickerSheet({
     if (!txId) return;
     // Keep the sheet open so Cancel on the new-category screen lands
     // back on the same picker; useFocusEffect refreshes on return.
-    router.push(`/transactions/${txId}/new-category` as never);
-  }, [txId]);
+    // Pass the current type so the new category is created in the
+    // matching bucket — otherwise it defaults to expense and an
+    // income-context user's "new income category" wouldn't show up
+    // in the refreshed (income-filtered) picker.
+    const href = categoryType
+      ? `/transactions/${txId}/new-category?type=${categoryType}`
+      : `/transactions/${txId}/new-category`;
+    router.push(href as never);
+  }, [txId, categoryType]);
 
   const pick = async (cat: CategoryDTO | null) => {
     if (!txId) {
