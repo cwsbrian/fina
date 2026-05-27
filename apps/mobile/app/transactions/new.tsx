@@ -111,7 +111,13 @@ export default function NewTransaction() {
           <View style={styles.seg}>
             <Pressable
               style={[styles.segOpt, kind === "expense" && styles.segActive]}
-              onPress={() => setKind("expense")}
+              onPress={() => {
+                setKind("expense");
+                // Clear the picked category if it's not an expense — the
+                // expense picker would no longer show it and submit could
+                // attach a mismatched category to the tx.
+                if (category && category.type !== "expense") setCategory(null);
+              }}
               disabled={submitting}
             >
               <Text
@@ -128,7 +134,10 @@ export default function NewTransaction() {
                 styles.segOpt,
                 kind === "income" && [styles.segActive, styles.segActiveIncome],
               ]}
-              onPress={() => setKind("income")}
+              onPress={() => {
+                setKind("income");
+                if (category && category.type !== "income") setCategory(null);
+              }}
               disabled={submitting}
             >
               <Text
@@ -287,6 +296,7 @@ export default function NewTransaction() {
       <CategoryPickerSheet
         visible={categoryPickerOpen}
         selectedId={category?.id ?? null}
+        categoryType={kind}
         onClose={() => setCategoryPickerOpen(false)}
         onSelect={(cat) => {
           setCategory(cat);

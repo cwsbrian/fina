@@ -259,6 +259,7 @@ export default function NewScheduled() {
       <CategoryPickerSheet
         visible={categoryPickerOpen}
         selectedId={category?.id ?? null}
+        categoryType="expense"
         onClose={() => setCategoryPickerOpen(false)}
         onSelect={(cat) => {
           setCategory(cat);

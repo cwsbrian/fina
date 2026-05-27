@@ -86,8 +86,11 @@ export default function NewBudget() {
           (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
         if (!wsId) return;
         const [catResp, defResp, curResp] = await Promise.all([
+          // Budgets are spend goals — only expense categories make sense
+          // here. Excluding income keeps Salary/Refund/etc. out of the
+          // picker.
           apiFetch<{ categories: CategoryDTO[] }>(
-            `/workspaces/${wsId}/categories`,
+            `/workspaces/${wsId}/categories?type=expense`,
           ),
           apiFetch<{ plan: Plan | null; recentMonthlyAvgSpend?: number }>(
             `/workspaces/${wsId}/budget-plans/default`,
