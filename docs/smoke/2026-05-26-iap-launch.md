@@ -35,6 +35,7 @@ Gate the four launch checks from spec §11 before flipping `APPLE_ENV=production
 ## Production cutover
 
 Only after all four gates pass:
+- [ ] Set `APPLE_APP_APPLE_ID` in Vercel env (numeric App Apple ID from App Store Connect → App Information → General → "Apple ID"). REQUIRED in production — `requireIapEnv` throws 503 otherwise. The Apple SDK validates this value against every ASSN V2 notification payload.
 - [ ] Flip Vercel env: `APPLE_ENV=production`.
 - [ ] Confirm `Subscription.environment` filter rejects any lingering Sandbox rows from grants in production `/me`.
 - [ ] Update App Store Connect product status to Ready for Sale.

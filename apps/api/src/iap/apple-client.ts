@@ -232,6 +232,7 @@ function appleStatusFromCode(code: number): "SUBSCRIBED" | "BILLING_RETRY" | "EX
     case 3: return "BILLING_RETRY";
     case 4: return "BILLING_RETRY"; // grace is part of past_due window
     case 5: return "REVOKED";
+    case 6: return "PAUSED";
     default: return "EXPIRED";
   }
 }

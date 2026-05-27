@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { View, Text, Pressable, ActivityIndicator, ScrollView, Alert } from "react-native";
 import { useRouter, Stack } from "expo-router";
-import { fetchProducts, purchaseSubscription, IapPurchaseError, type LocalProduct } from "../../src/iap/client";
+import { fetchProducts, purchaseSubscription, finishPurchase, IapPurchaseError, type LocalProduct } from "../../src/iap/client";
 import { postIAPCheckout } from "../../src/api/billing";
 import { apiFetch } from "../../src/api/client";
 import { type MeDTO as Me } from "@fina/shared";
@@ -35,11 +35,15 @@ export default function PlanPicker() {
       if (!me?.user?.id || busy) return;
       setBusy(p.productId);
       try {
-        const { receipt, platform } = await purchaseSubscription({
+        const { receipt, platform, purchase } = await purchaseSubscription({
           productId: p.productId,
           userId: me.user.id,
         });
         await postIAPCheckout({ platform, productId: p.productId, receipt });
+        // StoreKit 2 requires explicit finish or it re-delivers on next launch.
+        // Call only after server returns 2xx so we don't finish a purchase
+        // the server failed to record.
+        await finishPurchase(purchase);
         router.replace("/(tabs)/" as never);
       } catch (e) {
         if (e instanceof IapPurchaseError) {
