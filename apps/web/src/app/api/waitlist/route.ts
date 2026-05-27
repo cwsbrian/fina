@@ -13,7 +13,7 @@ import { z } from "zod";
 //   WAITLIST_FROM   — sender. Defaults to onboarding@resend.dev which
 //                     works without domain verification but can only
 //                     deliver to the Resend account owner's email.
-//                     Once fina.app is verified, switch to noreply@fina.app.
+//                     Once withfina.com is verified, switch to noreply@withfina.com.
 
 const Body = z.object({
   email: z.string().trim().toLowerCase().email().max(254),

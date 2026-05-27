@@ -300,7 +300,7 @@ export default function HomePage() {
           <div className={styles.mobileQr}>
             <div className={styles.mobileQrInner}>
               <QRCodeSVG
-                value="https://fina.app/download"
+                value="https://withfina.com/download"
                 size={104}
                 bgColor="#ffffff"
                 fgColor="#0b0f17"

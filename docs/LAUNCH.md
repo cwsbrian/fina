@@ -20,8 +20,8 @@
 ### Required (from `apps/api/src/env.ts`)
 - [ ] `DATABASE_URL` — production Postgres
 - [ ] `BETTER_AUTH_SECRET` — min 32 chars, 무작위 생성 (`openssl rand -base64 32`)
-- [ ] `BETTER_AUTH_URL` — production API URL (e.g., `https://api.fina.app`)
-- [ ] `WEB_APP_URL` — production web URL (e.g., `https://fina.app`)
+- [ ] `BETTER_AUTH_URL` — production API URL (e.g., `https://api.withfina.com`)
+- [ ] `WEB_APP_URL` — production web URL (e.g., `https://withfina.com`)
 - [ ] `STRIPE_SECRET_KEY` — production sk_live_*
 - [ ] `STRIPE_WEBHOOK_SECRET` — production whsec_*
 - [ ] `STRIPE_PRICE_LITE_MONTHLY` — production price ID
@@ -34,7 +34,7 @@
 
 ### Optional but recommended
 - [ ] `EXPO_ACCESS_TOKEN` — Expo Push rate limit 완화 + receipt polling 활성화. `https://expo.dev/accounts/[account]/settings/access-tokens` 발급
-- [ ] `EMAIL_FROM` — sender address (default `Fina <noreply@fina.app>`)
+- [ ] `EMAIL_FROM` — sender address (default `Fina <noreply@withfina.com>`)
 - [ ] `RESEND_API_KEY` — invite email + 기타 transactional. 없으면 silent no-op.
 
 ## 3. 데이터베이스 마이그레이션

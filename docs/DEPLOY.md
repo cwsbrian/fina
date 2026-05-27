@@ -28,9 +28,9 @@
          │                                       │
          │  ┌─ Traefik (80/443) ─────────────┐   │
          │  │   ↓ Origin Cert TLS            │   │
-         │  ├─ api.fina.app  → fina-api      │   │
-         │  ├─ fina.app      → fina-web      │   │
-         │  └─ coolify.fina.app → Coolify UI │   │
+         │  ├─ api.withfina.com  → fina-api      │   │
+         │  ├─ withfina.com      → fina-web      │   │
+         │  └─ coolify.withfina.com → Coolify UI │   │
          │       ↑ Cloudflare Access (OAuth) │   │
          │  fina-postgres (internal-only)    │   │
          └───────────────────────────────────────┘
@@ -60,7 +60,7 @@
 
 ### 1.1 Cloudflare 에 도메인 등록
 
-1. https://dash.cloudflare.com → **Add a Site** → 도메인 입력 (예: `fina.app`)
+1. https://dash.cloudflare.com → **Add a Site** → 도메인 입력 (예: `withfina.com`)
 2. **Free** plan 선택
 3. Cloudflare 가 기존 DNS record scan → 그대로 import. 일단 record 없으면 skip.
 4. Cloudflare 가 nameserver 2개 발급 (예: `ada.ns.cloudflare.com`, `bob.ns.cloudflare.com`)
@@ -78,7 +78,7 @@ Type   Name              Content                  Proxy
 A      fina              <Hetzner_IP>             ON (proxied)
 A      api               <Hetzner_IP>             ON
 A      coolify           <Hetzner_IP>             ON
-CNAME  www               fina.app                 ON
+CNAME  www               withfina.com                 ON
 ```
 
 **`Proxy ON` = orange cloud icon**. 이게 모든 traffic 을 Cloudflare 가 가로채고 origin 숨김.
@@ -106,7 +106,7 @@ Cloudflare 가 발급하는 **15년 valid** 인증서. Origin 에 설치하면 C
 3. 설정:
 ```
 Private key type: RSA (2048)
-Hostnames: *.fina.app, fina.app
+Hostnames: *.withfina.com, withfina.com
 Certificate Validity: 15 years
 ```
 4. **Create** → 화면에 표시되는 2가지 저장 (**한 번만 표시됨**):
@@ -283,7 +283,7 @@ ssh -L 8000:localhost:8000 deploy@<your-ip>
 
 ---
 
-## 6. Coolify UI 를 coolify.fina.app 으로 노출 (Cloudflare Access 보호)
+## 6. Coolify UI 를 coolify.withfina.com 으로 노출 (Cloudflare Access 보호)
 
 Coolify UI 를 Traefik 으로 라우팅 → Cloudflare 통과 → Cloudflare Access OAuth gate.
 
@@ -292,7 +292,7 @@ Coolify UI 를 Traefik 으로 라우팅 → Cloudflare 통과 → Cloudflare Acc
 Coolify UI (SSH tunnel) → **Settings** → **Instance Settings**:
 
 ```
-Instance Domain: https://coolify.fina.app
+Instance Domain: https://coolify.withfina.com
 ```
 
 **Save**. Coolify 가 자체 Traefik 설정 갱신.
@@ -304,14 +304,14 @@ Instance Domain: https://coolify.fina.app
 Coolify v4 의 경우 SSH 로 직접 cert 설치:
 ```bash
 sudo mkdir -p /data/coolify/proxy/certs
-sudo nano /data/coolify/proxy/certs/fina.app.crt
+sudo nano /data/coolify/proxy/certs/withfina.com.crt
 # §2 의 Origin Certificate 전체 paste, save
 
-sudo nano /data/coolify/proxy/certs/fina.app.key
+sudo nano /data/coolify/proxy/certs/withfina.com.key
 # §2 의 Private Key 전체 paste, save
 
-sudo chmod 600 /data/coolify/proxy/certs/fina.app.*
-sudo chown root:root /data/coolify/proxy/certs/fina.app.*
+sudo chmod 600 /data/coolify/proxy/certs/withfina.com.*
+sudo chown root:root /data/coolify/proxy/certs/withfina.com.*
 ```
 
 Traefik dynamic config 추가:
@@ -322,14 +322,14 @@ sudo nano /data/coolify/proxy/dynamic/origin-cert.yaml
 ```yaml
 tls:
   certificates:
-    - certFile: /data/coolify/proxy/certs/fina.app.crt
-      keyFile: /data/coolify/proxy/certs/fina.app.key
+    - certFile: /data/coolify/proxy/certs/withfina.com.crt
+      keyFile: /data/coolify/proxy/certs/withfina.com.key
       stores: [default]
   stores:
     default:
       defaultCertificate:
-        certFile: /data/coolify/proxy/certs/fina.app.crt
-        keyFile: /data/coolify/proxy/certs/fina.app.key
+        certFile: /data/coolify/proxy/certs/withfina.com.crt
+        keyFile: /data/coolify/proxy/certs/withfina.com.key
 ```
 
 Traefik restart (Coolify 가 자동으로 reload):
@@ -345,7 +345,7 @@ Cloudflare dashboard → **Zero Trust** → 첫 사용 시 team domain 생성 (`
 ```
 Application name: Coolify
 Session duration: 24 hours
-Application domain: coolify.fina.app
+Application domain: coolify.withfina.com
 ```
 
 **Policies** → **Add a policy**:
@@ -357,7 +357,7 @@ Include: Emails → your-email@gmail.com
 
 다른 identity providers 추가 가능 (GitHub OAuth 등).
 
-이제 `https://coolify.fina.app` 접속 시:
+이제 `https://coolify.withfina.com` 접속 시:
 1. Cloudflare Access 페이지 → 이메일 입력 → 이메일로 one-time code → 입력
 2. 통과 → Coolify UI
 
@@ -441,8 +441,8 @@ Branch: main
 Build Pack: Dockerfile
 Dockerfile path: apps/api/Dockerfile.prod
 Port: 3000
-Domain: api.fina.app
-Custom Certificate: ✓ (Origin Cert — §6.2 의 동일 cert 가 *.fina.app 커버하므로 자동)
+Domain: api.withfina.com
+Custom Certificate: ✓ (Origin Cert — §6.2 의 동일 cert 가 *.withfina.com 커버하므로 자동)
 ```
 
 **Environment Variables** → `docs/LAUNCH.md` §2 의 모든 required env 입력.
@@ -451,7 +451,7 @@ Custom Certificate: ✓ (Origin Cert — §6.2 의 동일 cert 가 *.fina.app �
 
 검증 (DNS propagation 끝나면):
 ```bash
-curl https://api.fina.app/healthz
+curl https://api.withfina.com/healthz
 # {"status":"ok"}
 ```
 
@@ -461,22 +461,22 @@ curl https://api.fina.app/healthz
 
 ## 11. Fina Web 배포
 
-옵션 A (Coolify 같이): §10 과 동일, 도메인 = `fina.app`.
+옵션 A (Coolify 같이): §10 과 동일, 도메인 = `withfina.com`.
 
 옵션 B (Vercel, 추천): `apps/web` 만 Vercel 에 배포. Vercel 도 Cloudflare 와 호환되지만 도메인은 Vercel 에 직접 가리킴.
-- Vercel 사용 시: Cloudflare DNS 의 `fina.app` A record 를 **proxy OFF** 로 (Vercel 이 자체 cert 발급). OR Cloudflare 만 쓰고 싶으면 옵션 A.
+- Vercel 사용 시: Cloudflare DNS 의 `withfina.com` A record 를 **proxy OFF** 로 (Vercel 이 자체 cert 발급). OR Cloudflare 만 쓰고 싶으면 옵션 A.
 
 ---
 
 ## 12. Plaid + Stripe webhook 등록
 
 ### Plaid
-- URL: `https://api.fina.app/plaid/webhook`
+- URL: `https://api.withfina.com/plaid/webhook`
 - Plaid 대시보드 → API → Webhooks → URL 등록
 - Signing key 발급 → env `PLAID_WEBHOOK_SECRET`
 
 ### Stripe
-- URL: `https://api.fina.app/stripe/webhook`
+- URL: `https://api.withfina.com/stripe/webhook`
 - Stripe → Webhooks → Add endpoint
 - Events: `customer.subscription.*`, `checkout.session.completed`
 - Signing secret → env `STRIPE_WEBHOOK_SECRET`
@@ -537,7 +537,7 @@ docker stop pg-test
 ## 14. Mobile app
 
 ```
-EXPO_PUBLIC_API_URL=https://api.fina.app
+EXPO_PUBLIC_API_URL=https://api.withfina.com
 ```
 `eas build --profile production --platform all` → TestFlight + Play Store.
 (`eas init` 은 이미 완료 — `docs/LAUNCH.md` §1.)
@@ -566,7 +566,7 @@ EXPO_PUBLIC_API_URL=https://api.fina.app
 - **Security Events** → 차단된 요청 inspect
 
 ### Uptime (외부 health check)
-Better Stack (무료 plan): https://api.fina.app/healthz 1분 ping. 다운 시 email/Slack.
+Better Stack (무료 plan): https://api.withfina.com/healthz 1분 ping. 다운 시 email/Slack.
 
 ---
 
@@ -575,7 +575,7 @@ Better Stack (무료 plan): https://api.fina.app/healthz 1분 ping. 다운 시 e
 1. Coolify → **New Project** (`service2`)
 2. **Add Resource** → Application → GitHub repo
 3. Cloudflare DNS: `service2.app` 도메인 zone 추가 (Step 1 반복), proxy ON
-4. Origin Cert: 새 도메인용 발급 (§2 반복) OR `*.fina.app` 으로 발급해두고 `service2.fina.app` 으로 sub 도메인
+4. Origin Cert: 새 도메인용 발급 (§2 반복) OR `*.withfina.com` 으로 발급해두고 `service2.withfina.com` 으로 sub 도메인
 5. Coolify UI 에서 domain 등록 → Traefik 자동 routing
 
 같은 VPS 위에서 fina + service2 + service3 모두 운영. 8GB → 5-6개 서비스 가능.
@@ -600,7 +600,7 @@ Docker 라 lock-in 없음. 마이그레이션 = compose 파일 이동.
 ### "Error 525 (SSL Handshake Failed)" 가 도메인 접속 시
 - Cloudflare SSL/TLS mode 가 Flexible 인지 확인 → **Full (strict)** 으로
 - Origin Cert 가 Traefik 에 제대로 설치됐는지: `docker exec coolify-proxy ls /traefik/certs/`
-- Origin Cert hostname 이 `*.fina.app` 인지 (subdomain match)
+- Origin Cert hostname 이 `*.withfina.com` 인지 (subdomain match)
 
 ### "Error 526 (Invalid SSL Certificate)"
 - Origin 의 cert 가 expired 또는 wrong domain
@@ -611,7 +611,7 @@ Docker 라 lock-in 없음. 마이그레이션 = compose 파일 이동.
 - `sudo ufw status numbered` → CF IPs 가 80,443 allow 인지
 
 ### Coolify UI 접근 시 Cloudflare Access 페이지 안 뜸
-- Cloudflare Zero Trust → Applications → `coolify.fina.app` policy 가 정확한지
+- Cloudflare Zero Trust → Applications → `coolify.withfina.com` policy 가 정확한지
 - Access policy 의 email match 가 정확한지 (`@gmail.com` vs `@anotherdomain.com`)
 
 ### Plaid webhook 안 옴
@@ -634,8 +634,8 @@ Docker 라 lock-in 없음. 마이그레이션 = compose 파일 이동.
 - [ ] Cloudflare → Security → **Under Attack Mode** 사용법 숙지 (긴급 시 5초 challenge)
 - [ ] DB backup 매주 restore test (자동화 가능)
 - [ ] Cloudflare → Rules → **Page Rules** OR **Configuration Rules**:
-  - `coolify.fina.app/*` → Security Level: High
-  - `api.fina.app/*` → Security Level: Medium (webhook false positive 피함)
+  - `coolify.withfina.com/*` → Security Level: High
+  - `api.withfina.com/*` → Security Level: Medium (webhook false positive 피함)
 - [ ] Cloudflare → SSL/TLS → **Authenticated Origin Pulls** 활성화 — Origin 이 Cloudflare 가 보낸 request 인지 검증 (mTLS). 추가 보안 layer.
 - [ ] Sentry/Logflare error tracking
 - [ ] Rate limiting at Cloudflare layer:
