@@ -27,6 +27,7 @@ import { analysisRoutes } from "./routes/analysis.js";
 import { intentsRoutes } from "./routes/intents.js";
 import { chatRoutes } from "./routes/chat.js";
 import { billingRoutes } from "./routes/billing.js";
+import { billingIapRoutes } from "./routes/billing-iap.js";
 import { billingWebhookRoutes } from "./routes/billing-webhook.js";
 import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 
@@ -207,6 +208,7 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
   await app.register(intentsRoutes);
   await app.register(chatRoutes);
   await app.register(billingRoutes);
+  await app.register(billingIapRoutes);
   await app.register(billingWebhookRoutes);
 
   return app;
