@@ -355,14 +355,15 @@ export default function More() {
           />
         </Group>
 
-        {/* Subscription — hidden when billing is owned by web (Stripe).
-            Show on mobile only when the user is on trial / no sub yet,
-            or when they're already subscribed via IAP. */}
+        {/* Subscription — three modes:
+            - Stripe-owned (web): show Plan + "Managed on withfina.com" row that opens
+              the web settings page. No Manage billing (Apple/Google deep-link doesn't
+              apply) and no Restore (nothing to restore).
+            - IAP-owned (Apple/Google) OR free/trial: full IAP UX — Plan, Manage billing
+              (platform-native deep-link), Restore purchases. */}
         {(() => {
           const sub = me?.subscription;
-          const billingOwnedByMobile =
-            !sub || sub.source === "iap_apple" || sub.source === "iap_google";
-          if (!billingOwnedByMobile) return null;
+          const isStripeOwned = sub?.source === "stripe";
           return (
             <>
               <GroupLabel>Subscription</GroupLabel>
@@ -377,22 +378,39 @@ export default function More() {
                       : () => router.push("/plan" as never)
                   }
                 />
-                <SettingsRow
-                  icon="card-outline"
-                  title="Manage billing"
-                  detail={
-                    openingBilling ? (
-                      <ActivityIndicator size="small" color={colors.primary} />
-                    ) : undefined
-                  }
-                  onPress={onManageBilling}
-                />
-                <SettingsRow
-                  icon="refresh-outline"
-                  title="Restore purchases"
-                  onPress={() => router.push("/plan/restore" as never)}
-                  last
-                />
+                {isStripeOwned ? (
+                  <SettingsRow
+                    icon="globe-outline"
+                    title="Managed on withfina.com"
+                    detail="Open web"
+                    onPress={() =>
+                      WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`)
+                    }
+                    last
+                  />
+                ) : (
+                  <>
+                    <SettingsRow
+                      icon="card-outline"
+                      title="Manage billing"
+                      detail={
+                        openingBilling ? (
+                          <ActivityIndicator
+                            size="small"
+                            color={colors.primary}
+                          />
+                        ) : undefined
+                      }
+                      onPress={onManageBilling}
+                    />
+                    <SettingsRow
+                      icon="refresh-outline"
+                      title="Restore purchases"
+                      onPress={() => router.push("/plan/restore" as never)}
+                      last
+                    />
+                  </>
+                )}
               </Group>
             </>
           );
