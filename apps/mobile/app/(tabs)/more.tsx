@@ -8,6 +8,8 @@ import {
   Alert,
   ActivityIndicator,
   Animated,
+  Linking,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
@@ -137,26 +139,26 @@ export default function More() {
     ]);
   };
 
-  const onManageBilling = async () => {
+  const onManageBilling = useCallback(async () => {
     if (openingBilling) return;
     setOpeningBilling(true);
     try {
-      const resp = await apiFetch<{ url: string }>("/billing/portal", {
-        method: "POST",
-      });
-      await WebBrowser.openBrowserAsync(resp.url);
-    } catch (e) {
-      const code = (e as { code?: string }).code ?? "error";
-      Alert.alert(
-        "Couldn't open billing",
-        code === "portal_failed"
-          ? "Set up a subscription first to manage billing."
-          : `Try again (${code}).`,
-      );
+      if (Platform.OS === "ios") {
+        await Linking.openURL("https://apps.apple.com/account/subscriptions");
+        return;
+      }
+      if (Platform.OS === "android" && me?.subscription) {
+        const productId =
+          me.subscription.tier === "pro" ? "pro_monthly" : "lite_monthly";
+        await Linking.openURL(
+          `https://play.google.com/store/account/subscriptions?package=app.fina&sku=${encodeURIComponent(productId)}`,
+        );
+        return;
+      }
     } finally {
       setOpeningBilling(false);
     }
-  };
+  }, [openingBilling, me?.subscription]);
 
   const comingSoon = (label: string) => () =>
     Alert.alert("Coming soon", `${label} screen is on the way.`);
@@ -368,7 +370,11 @@ export default function More() {
                   icon="star-outline"
                   title="Plan"
                   detail={me ? tierLabel(me.tier, me.trial.active) : "—"}
-                  onPress={comingSoon("Plan")}
+                  onPress={() =>
+                    router.push(
+                      (me?.subscription ? "/plan/summary" : "/plan") as never,
+                    )
+                  }
                 />
                 <SettingsRow
                   icon="card-outline"
@@ -379,6 +385,11 @@ export default function More() {
                     ) : undefined
                   }
                   onPress={onManageBilling}
+                />
+                <SettingsRow
+                  icon="refresh-outline"
+                  title="Restore purchases"
+                  onPress={() => router.push("/plan/restore" as never)}
                   last
                 />
               </Group>
