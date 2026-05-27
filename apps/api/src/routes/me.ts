@@ -22,6 +22,7 @@ import {
   sendProductUpdatePush,
 } from "../push/send.js";
 import { localMidnightToUtc } from "../chat/tools/periods.js";
+import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
 
 /** Convert "YYYY-MM-DD" + tz → UTC instant at NOON in that tz. Noon (not
  *  midnight) so the row's date-portion-in-tz unambiguously reads as the
@@ -34,14 +35,17 @@ function tzNoonUtc(dateStr: string, tz: string): Date {
 
 function toMeDTO(
   user: Awaited<ReturnType<typeof prisma.user.findUnique>> & object,
-  activeSubs: Array<{ tier: string; status: string; currentPeriodEnd: Date; cancelAtPeriodEnd: boolean; source: string; pendingTier: string | null; pendingTierAt: Date | null }>,
+  activeSubs: Array<{ tier: string; status: string; currentPeriodEnd: Date; cancelAtPeriodEnd: boolean; source: string; pendingTier: string | null; pendingTierAt: Date | null; environment: string; createdAt: Date; sourceSubscriptionId: string }>,
+  runtimeEnv: "sandbox" | "production",
 ): MeDTO {
-  const t = computeEffectiveTier(user, activeSubs as unknown as Parameters<typeof computeEffectiveTier>[1]);
-  // Highest-tier active sub wins (pro > lite). MeDTO.subscription is
-  // null when no active sub — canceled rows are retained in DB but
-  // excluded here so the UI never accidentally shows Manage for a
-  // dead subscription.
-  const primary = activeSubs.find((s) => s.tier === "pro") ?? activeSubs[0];
+  // Sandbox env filter MUST run before precedence — stale sandbox rows
+  // should not influence the primary pick or the EffectiveTier.
+  const filtered = filterEnvironmentRows(activeSubs, runtimeEnv);
+  const t = computeEffectiveTier(user, filtered as unknown as Parameters<typeof computeEffectiveTier>[1]);
+  // Deterministic primary-sub pick: Stripe wins unconditionally;
+  // inside non-Stripe, pro > lite; then source order; then createdAt ASC.
+  // MeDTO.subscription is null when no active sub.
+  const primary = pickPrimarySub(filtered);
   const subscription: SubscriptionDTO | null = primary
     ? {
         tier: primary.tier as "lite" | "pro",
@@ -87,7 +91,8 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         where: { userId: user.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
         orderBy: { currentPeriodEnd: "desc" },
       });
-      return toMeDTO(user, activeSubs);
+      const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
+      return toMeDTO(user, activeSubs, runtimeEnv);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
@@ -214,7 +219,8 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         where: { userId: updated.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
         orderBy: { currentPeriodEnd: "desc" },
       });
-      return toMeDTO(updated, activeSubs);
+      const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
+      return toMeDTO(updated, activeSubs, runtimeEnv);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
