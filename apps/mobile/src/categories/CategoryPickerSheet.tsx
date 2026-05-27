@@ -46,6 +46,11 @@ type Props = {
   /** Select mode (no txId): fires with the chosen category (or null
    *  for Uncategorized). The sheet dismisses itself. */
   onSelect?: (cat: CategoryDTO | null) => void;
+  /** When set, the picker only loads categories of this type. The
+   *  Categorize Inbox passes "expense" for positive amounts and
+   *  "income" for negative amounts so refunds/payouts land in the
+   *  right list. Omit for the full list. */
+  categoryType?: "expense" | "income";
 };
 
 type CategoriesResp = { categories: CategoryDTO[] };
@@ -65,6 +70,7 @@ export function CategoryPickerSheet({
   onClose,
   onChange,
   onSelect,
+  categoryType,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
   const swipeRefs = useRef<Map<string, Swipeable | null>>(new Map());
@@ -81,9 +87,10 @@ export function CategoryPickerSheet({
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const data = await apiFetch<CategoriesResp>(
-        `/workspaces/${wsId}/categories`,
-      );
+      const url = categoryType
+        ? `/workspaces/${wsId}/categories?type=${categoryType}`
+        : `/workspaces/${wsId}/categories`;
+      const data = await apiFetch<CategoriesResp>(url);
       setCats(
         data.categories
           .filter((c) => !c.archivedAt)
@@ -93,7 +100,7 @@ export function CategoryPickerSheet({
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
     }
-  }, []);
+  }, [categoryType]);
 
   useEffect(() => {
     if (visible) load();

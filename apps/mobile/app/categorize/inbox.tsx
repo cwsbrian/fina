@@ -24,6 +24,10 @@ export default function CategorizeInbox() {
   const [busyTxId, setBusyTxId] = useState<string | null>(null);
   const [pickerTxId, setPickerTxId] = useState<string | null>(null);
   const [pickerSelectedId, setPickerSelectedId] = useState<string | null>(null);
+  // Tracks the open picker's transaction direction so the sheet can filter
+  // to expense vs. income categories. Positive Plaid amount = money out
+  // (expense); negative = money in (income/refund).
+  const [pickerType, setPickerType] = useState<"expense" | "income">("expense");
 
   const load = useCallback(async () => {
     try {
@@ -65,6 +69,7 @@ export default function CategorizeInbox() {
   function editRow(tx: TransactionDTO) {
     setPickerTxId(tx.id);
     setPickerSelectedId(tx.allocations[0]?.categoryId ?? null);
+    setPickerType(Number(tx.amount) >= 0 ? "expense" : "income");
   }
 
   async function skipOrDismissRow(tx: TransactionDTO) {
@@ -173,6 +178,7 @@ export default function CategorizeInbox() {
         visible={pickerTxId !== null}
         txId={pickerTxId ?? ""}
         selectedId={pickerSelectedId}
+        categoryType={pickerType}
         onClose={() => setPickerTxId(null)}
         onChange={() => {
           setPickerTxId(null);
