@@ -9,8 +9,12 @@ export default function LegalLayout({
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <Link href="/" className={styles.brand}>
-          Fina
+        <Link href="/" className={styles.brand} aria-label="Fina home">
+          <img
+            src="/images/logo-dark.png"
+            alt="Fina"
+            className={styles.brandLogo}
+          />
         </Link>
         <nav className={styles.nav}>
           <Link href="/privacy">Privacy</Link>
