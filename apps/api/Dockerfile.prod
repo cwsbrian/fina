@@ -1,0 +1,93 @@
+# syntax=docker/dockerfile:1.7
+#
+# Production image for @fina/api. Multi-stage:
+#   1. base    — node + pnpm via corepack
+#   2. deps    — install full workspace deps (cached on lockfile)
+#   3. build   — generate Prisma client + nx esbuild bundle
+#   4. runtime — minimal slim image with prod deps + dist + prisma engine
+#
+# Build from repo root:
+#   docker build -f apps/api/Dockerfile.prod -t fina-api:latest .
+#
+# Bookworm-slim (not Alpine): Prisma's default engine ships glibc binaries.
+# Alpine would require adding `linux-musl-openssl-3.0.x` to binaryTargets and
+# a separate engine download. Not worth the 30 MB savings.
+
+ARG NODE_VERSION=22
+
+# ----- base -----
+FROM node:${NODE_VERSION}-bookworm-slim AS base
+ENV PNPM_HOME=/usr/local/bin
+RUN corepack enable && corepack prepare pnpm@9 --activate
+WORKDIR /app
+
+# OpenSSL is required by Prisma engine. ca-certificates for HTTPS.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    ca-certificates \
+    tini \
+  && rm -rf /var/lib/apt/lists/*
+
+# ----- deps (cacheable) -----
+FROM base AS deps
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc* ./
+COPY apps/api/package.json ./apps/api/
+COPY libs/shared/package.json ./libs/shared/
+COPY apps/web/package.json ./apps/web/
+COPY apps/mobile/package.json ./apps/mobile/
+# Frozen lockfile install — exit non-zero if lockfile is stale.
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile
+
+# ----- build -----
+FROM deps AS build
+COPY tsconfig.base.json nx.json ./
+COPY libs/shared ./libs/shared
+COPY apps/api ./apps/api
+# Prisma generate writes the client into node_modules/.prisma — must run
+# before nx build so esbuild can resolve `@prisma/client`.
+RUN pnpm --filter @fina/api exec prisma generate
+RUN pnpm exec nx build api --configuration=production --skip-nx-cache
+
+# ----- runtime -----
+FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+ENV NODE_ENV=production \
+    PORT=4000
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    ca-certificates \
+    tini \
+    wget \
+  && rm -rf /var/lib/apt/lists/*
+
+# Nx with `generatePackageJson: true` writes a minimal package.json into
+# dist/apps/api containing only prod deps. Install those alone — much smaller
+# than copying the full workspace node_modules.
+RUN corepack enable && corepack prepare pnpm@9 --activate
+
+COPY --from=build /app/dist/apps/api ./
+COPY --from=build /app/apps/api/prisma ./prisma
+
+RUN pnpm install --prod --no-frozen-lockfile \
+  && pnpm exec prisma generate --schema=./prisma/schema.prisma \
+  && pnpm store prune \
+  && rm -rf /root/.local/share/pnpm
+
+# Non-root. The official node image ships uid 1000 `node`.
+RUN chown -R node:node /app
+USER node
+
+EXPOSE 4000
+
+# /health does a 1-second DB ping. If the DB is down the endpoint returns
+# 503; HEALTHCHECK marks the container unhealthy and Coolify can restart it.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD wget -qO- "http://127.0.0.1:${PORT}/health" || exit 1
+
+# tini reaps zombies and forwards SIGTERM to node so the SIGTERM handler in
+# main.ts can close Fastify + Prisma cleanly. Without it `docker stop` would
+# SIGKILL after 10s and connections get torn mid-flight.
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["node", "main.js"]
