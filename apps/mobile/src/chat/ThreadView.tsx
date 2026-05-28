@@ -582,6 +582,32 @@ function MessageBubble({
               <PresentationBlock
                 block={b}
                 role={message.role}
+                onAccept={async (intentId) => {
+                  // confirm_card accept = consume the bound intent with
+                  // no overrides (the LLM-supplied args are already
+                  // complete). Reuse submitFormIntent — the server
+                  // treats {} the same as undefined overrides.
+                  try {
+                    const confirmation = await submitFormIntent(
+                      workspaceId,
+                      threadId,
+                      intentId,
+                      {},
+                    );
+                    if (confirmation && onConfirmationMessage) {
+                      onConfirmationMessage(confirmation);
+                    }
+                  } catch {
+                    // Surface via the card's own UI in a future pass;
+                    // for now swallow so a transient network error
+                    // doesn't crash the message list.
+                  }
+                }}
+                onReject={() => {
+                  // No server call — the intent expires via its TTL.
+                  // Future polish: dim the card so the user sees the
+                  // choice was registered.
+                }}
                 onSubmitForm={async (id, overrides) => {
                   const confirmation = await submitFormIntent(
                     workspaceId,
