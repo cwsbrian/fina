@@ -16,12 +16,22 @@ type Props = {
    *  finishes consuming the intent so the form can render its "Added"
    *  state. Throw to surface an error to the user. */
   onSubmitForm?: (intentId: string, overrides: Record<string, unknown>) => Promise<void>;
+  /** Form is actively in-edit. Parent uses this to step the chat composer
+   *  out of the way while the user fills in fields. */
+  onFormFocusChange?: (focused: boolean) => void;
 };
 
 /** Renders a single presentation block. Exhaustive over the
  *  PresentationBlock union; new block types fail at the never-cast and
  *  show a debug pill so the user sees something instead of nothing. */
-export function PresentationBlock({ block, role, onAccept, onReject, onSubmitForm }: Props) {
+export function PresentationBlock({
+  block,
+  role,
+  onAccept,
+  onReject,
+  onSubmitForm,
+  onFormFocusChange,
+}: Props) {
   if (block.type === "text") {
     return (
       <Text style={role === "user" ? styles.userText : styles.assistantText}>
@@ -72,9 +82,6 @@ export function PresentationBlock({ block, role, onAccept, onReject, onSubmitFor
       <RecurringFormBlock
         block={block}
         onSubmit={async (id, overrides) => {
-          // Default to a no-op if the parent didn't wire a handler so
-          // the form's "Added" state still fires; ThreadView wires the
-          // real submission.
           if (onSubmitForm) await onSubmitForm(id, overrides);
         }}
         onCancel={() => {
@@ -82,6 +89,7 @@ export function PresentationBlock({ block, role, onAccept, onReject, onSubmitFor
           // after its TTL (1 hour). Mirror confirm-card's reject path.
           onReject?.(undefined);
         }}
+        {...(onFormFocusChange ? { onFocusChange: onFormFocusChange } : {})}
       />
     );
   }

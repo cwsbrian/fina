@@ -100,6 +100,11 @@ export function ThreadView({
   // hasn't completed) and wipes the optimistic user bubble before the
   // server reply lands.
   const justCreatedId = useRef<string | null>(null);
+  // True while any rendered form card is in-edit (not yet submitted /
+  // cancelled). We hide the chat composer in this state so the user
+  // can focus on the form fields without the composer riding the
+  // keyboard up over them.
+  const [formFocused, setFormFocused] = useState(false);
 
   // Sync when the parent switches us to a different thread (e.g. tapping
   // a row in /chats). Reset all local state so the new thread loads cleanly.
@@ -343,7 +348,11 @@ export function ThreadView({
           </View>
         }
         renderItem={({ item }) => (
-          <MessageBubble message={item} workspaceId={thread?.workspaceId ?? null} />
+          <MessageBubble
+            message={item}
+            workspaceId={thread?.workspaceId ?? null}
+            onFormFocusChange={setFormFocused}
+          />
         )}
         ListFooterComponent={sending ? <TypingIndicator /> : null}
       />
@@ -354,28 +363,35 @@ export function ThreadView({
                 active-workspace path), and
             (3) at least one workspace has loaded.
           After binding the chip disappears since the choice is locked. */}
-      {(thread?.workspaceId ?? null) === null && workspaces.length > 1 && (
-        <Pressable
-          style={({ pressed }) => [
-            styles.wsChip,
-            pressed && { backgroundColor: colors.surfaceSoft },
-          ]}
-          onPress={() => setPickerVisible(true)}
-        >
-          <Text style={styles.wsChipPrefix}>Sending to </Text>
-          <Text style={styles.wsChipName}>
-            {workspaces.find((w) => w.id === pickedWorkspaceId)?.name ??
-              "Personal"}
-          </Text>
-          <Ionicons
-            name="chevron-down"
-            size={14}
-            color={colors.muted}
-            style={{ marginLeft: 4 }}
-          />
-        </Pressable>
-      )}
+      {(thread?.workspaceId ?? null) === null &&
+        workspaces.length > 1 &&
+        !formFocused && (
+          <Pressable
+            style={({ pressed }) => [
+              styles.wsChip,
+              pressed && { backgroundColor: colors.surfaceSoft },
+            ]}
+            onPress={() => setPickerVisible(true)}
+          >
+            <Text style={styles.wsChipPrefix}>Sending to </Text>
+            <Text style={styles.wsChipName}>
+              {workspaces.find((w) => w.id === pickedWorkspaceId)?.name ??
+                "Personal"}
+            </Text>
+            <Ionicons
+              name="chevron-down"
+              size={14}
+              color={colors.muted}
+              style={{ marginLeft: 4 }}
+            />
+          </Pressable>
+        )}
 
+      {/* Composer is hidden while a form card is in-edit — the user
+          isn't chatting, they're filling out a form. The KeyboardAvoidingView
+          still lifts the form into view; without the composer the form's
+          own inputs sit naturally above the keyboard. */}
+      {!formFocused && (
       <View style={styles.composer}>
         <TextInput
           style={styles.input}
@@ -403,6 +419,7 @@ export function ThreadView({
           )}
         </Pressable>
       </View>
+      )}
       <WorkspacePickerSheet
         visible={pickerVisible}
         workspaces={workspaces}
@@ -507,9 +524,11 @@ async function submitFormIntent(
 function MessageBubble({
   message,
   workspaceId,
+  onFormFocusChange,
 }: {
   message: ChatMessageDTO;
   workspaceId: string | null;
+  onFormFocusChange?: (focused: boolean) => void;
 }) {
   const blocks = Array.isArray(message.blocks)
     ? (message.blocks as Block[])
@@ -533,6 +552,7 @@ function MessageBubble({
                 onSubmitForm={(id, overrides) =>
                   submitFormIntent(workspaceId, id, overrides)
                 }
+                {...(onFormFocusChange ? { onFormFocusChange } : {})}
               />
             </View>
           );

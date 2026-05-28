@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -8,9 +8,10 @@ import {
   ActivityIndicator,
   Alert,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
-import { DatePickerSheet } from "../../datetime/DatePickerSheet";
+import { useDatePickerSheet } from "../../datetime/DatePickerSheetHost";
 import { BlockCard } from "./_primitives";
 
 type Block = Extract<PresentationBlock, { type: "recurring_form_card" }>;
@@ -20,6 +21,9 @@ type Props = {
   block: Block;
   onSubmit: (intentId: string, overrides: Record<string, unknown>) => Promise<void>;
   onCancel: () => void;
+  /** Called when any of the form inputs gains/loses focus so the parent
+   *  can hide the chat composer while the user is filling in the form. */
+  onFocusChange?: (focused: boolean) => void;
 };
 
 const CADENCE_OPTIONS: Array<{ key: Cadence; label: string }> = [
@@ -35,15 +39,26 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Inline form for adding a recurring expense. LLM seeds defaults; user
  *  edits and submits — no further back-and-forth with the assistant. */
-export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
+export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }: Props) {
+  const datePicker = useDatePickerSheet();
   const [amount, setAmount] = useState<string>(block.defaults.amount ?? "");
   const [cadence, setCadence] = useState<Cadence>(block.defaults.cadence ?? "monthly");
   const [dateStr, setDateStr] = useState<string>(
-    block.defaults.next_occurrence_date ?? defaultNextDate(cadence),
+    block.defaults.next_occurrence_date ?? defaultNextDate(block.defaults.cadence ?? "monthly"),
   );
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
-  const [dateOpen, setDateOpen] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
+
+  // Tell the parent when the form is "in use" so the chat composer can
+  // step out of the way. We consider the form in-use while it's still
+  // editable; done/cancelled re-shows the composer.
+  useEffect(() => {
+    onFocusChange?.(!done && !cancelled);
+    return () => {
+      onFocusChange?.(false);
+    };
+  }, [done, cancelled, onFocusChange]);
 
   const amountValid = amount.length > 0 && AMOUNT_RE.test(amount) && parseFloat(amount) > 0;
   const dateValid = DATE_RE.test(dateStr);
@@ -53,7 +68,7 @@ export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
     const m = DATE_RE.exec(dateStr);
     if (!m) return new Date();
     const [y, mo, d] = dateStr.split("-").map(Number) as [number, number, number];
-    return new Date(Date.UTC(y, mo - 1, d, 12)); // noon-UTC so tz doesn't shift the day
+    return new Date(Date.UTC(y, mo - 1, d, 12));
   }, [dateStr]);
 
   const submit = async () => {
@@ -83,8 +98,38 @@ export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
   const cancel = () => {
     if (submitting || done) return;
     onCancel();
-    setDone(true);
+    setCancelled(true);
   };
+
+  // Post-submit: render the form as a single row of resolved values,
+  // styled like a recurring_list row. No editable fields visible.
+  if (done) {
+    return (
+      <BlockCard>
+        <View style={styles.doneRow}>
+          <View style={styles.doneCheck}>
+            <Ionicons name="checkmark" size={16} color={colors.onPrimary} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={styles.doneName}>{block.defaults.name}</Text>
+            <Text style={styles.doneMeta} numberOfLines={1}>
+              {cadenceLongLabel(cadence)} · Next {prettyDate(dateStr)}
+            </Text>
+          </View>
+          <Text style={styles.doneAmount}>
+            ${formatAmount(amount)} / {cadenceShortLabel(cadence)}
+          </Text>
+        </View>
+      </BlockCard>
+    );
+  }
+  if (cancelled) {
+    return (
+      <BlockCard>
+        <Text style={styles.cancelledText}>{block.defaults.name} — cancelled</Text>
+      </BlockCard>
+    );
+  }
 
   return (
     <BlockCard>
@@ -106,7 +151,7 @@ export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
             keyboardType="decimal-pad"
             placeholder="0.00"
             placeholderTextColor={colors.muted}
-            editable={!submitting && !done}
+            editable={!submitting}
             returnKeyType="done"
           />
         </View>
@@ -121,7 +166,7 @@ export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
               <Pressable
                 key={opt.key}
                 style={[styles.segment, selected && styles.segmentSelected]}
-                onPress={() => !submitting && !done && setCadence(opt.key)}
+                onPress={() => !submitting && setCadence(opt.key)}
               >
                 <Text
                   style={[
@@ -142,7 +187,15 @@ export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
         <Text style={styles.label}>Next occurrence</Text>
         <Pressable
           style={styles.dateBtn}
-          onPress={() => !submitting && !done && setDateOpen(true)}
+          onPress={() => {
+            if (submitting) return;
+            datePicker.open(dateValue, (next) => {
+              const y = next.getUTCFullYear();
+              const mo = String(next.getUTCMonth() + 1).padStart(2, "0");
+              const d = String(next.getUTCDate()).padStart(2, "0");
+              setDateStr(`${y}-${mo}-${d}`);
+            });
+          }}
         >
           <Text style={styles.dateBtnText}>{dateStr || "Pick a date"}</Text>
         </Pressable>
@@ -152,9 +205,9 @@ export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
         <Pressable
           style={[styles.btn, styles.btnCancel]}
           onPress={cancel}
-          disabled={submitting || done}
+          disabled={submitting}
         >
-          <Text style={styles.btnCancelText}>{done ? "Closed" : "Cancel"}</Text>
+          <Text style={styles.btnCancelText}>Cancel</Text>
         </Pressable>
         <Pressable
           style={[styles.btn, styles.btnSubmit, !canSubmit && styles.btnDisabled]}
@@ -164,30 +217,14 @@ export function RecurringFormBlock({ block, onSubmit, onCancel }: Props) {
           {submitting ? (
             <ActivityIndicator size="small" color={colors.onPrimary} />
           ) : (
-            <Text style={styles.btnSubmitText}>{done ? "Added" : "Add"}</Text>
+            <Text style={styles.btnSubmitText}>Add</Text>
           )}
         </Pressable>
       </View>
-
-      <DatePickerSheet
-        visible={dateOpen}
-        value={dateValue}
-        onClose={() => setDateOpen(false)}
-        onConfirm={(next) => {
-          const y = next.getUTCFullYear();
-          const mo = String(next.getUTCMonth() + 1).padStart(2, "0");
-          const d = String(next.getUTCDate()).padStart(2, "0");
-          setDateStr(`${y}-${mo}-${d}`);
-          setDateOpen(false);
-        }}
-      />
     </BlockCard>
   );
 }
 
-/** Sensible default next-occurrence: today + 1 cycle. Server-side
- *  validation will reject past dates anyway, so a forward-leaning seed
- *  is friendly. */
 function defaultNextDate(cadence: Cadence): string {
   const now = new Date();
   const out = new Date(now);
@@ -202,6 +239,45 @@ function defaultNextDate(cadence: Cadence): string {
   const m = String(out.getMonth() + 1).padStart(2, "0");
   const d = String(out.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
+}
+
+function formatAmount(s: string): string {
+  const n = parseFloat(s);
+  if (!Number.isFinite(n)) return s;
+  return n.toFixed(2);
+}
+
+function cadenceLongLabel(c: Cadence): string {
+  switch (c) {
+    case "monthly":     return "Monthly";
+    case "semimonthly": return "Semi-monthly";
+    case "biweekly":    return "Biweekly";
+    case "weekly":      return "Weekly";
+    case "yearly":      return "Yearly";
+  }
+}
+
+function cadenceShortLabel(c: Cadence): string {
+  switch (c) {
+    case "monthly":     return "mo";
+    case "semimonthly": return "½ mo";
+    case "biweekly":    return "2 wk";
+    case "weekly":      return "wk";
+    case "yearly":      return "yr";
+  }
+}
+
+function prettyDate(iso: string): string {
+  const m = DATE_RE.exec(iso);
+  if (!m) return iso;
+  const [y, mo, d] = iso.split("-").map(Number) as [number, number, number];
+  const dt = new Date(Date.UTC(y, mo - 1, d, 12));
+  return dt.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
 }
 
 const styles = StyleSheet.create({
@@ -224,16 +300,8 @@ const styles = StyleSheet.create({
   },
   amountPrefix: { ...type$.bodyMd, color: colors.muted, marginRight: 4 },
   amountInput: { flex: 1 },
-  input: {
-    paddingVertical: 10,
-    color: colors.ink,
-    fontSize: 16,
-  },
-  segments: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-  },
+  input: { paddingVertical: 10, color: colors.ink, fontSize: 16 },
+  segments: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   segment: {
     paddingVertical: 8,
     paddingHorizontal: 12,
@@ -242,10 +310,7 @@ const styles = StyleSheet.create({
     borderColor: colors.hairline,
     backgroundColor: colors.canvas,
   },
-  segmentSelected: {
-    backgroundColor: colors.ink,
-    borderColor: colors.ink,
-  },
+  segmentSelected: { backgroundColor: colors.ink, borderColor: colors.ink },
   segmentText: { ...type$.bodySm, color: colors.body, fontWeight: "500" },
   segmentTextSelected: { color: colors.onDark, fontWeight: "600" },
   dateBtn: {
@@ -255,17 +320,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   dateBtnText: { ...type$.bodyMd, color: colors.ink },
-  actions: {
-    flexDirection: "row",
-    gap: space.xs,
-    marginTop: space.base,
-  },
-  btn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 999,
-    alignItems: "center",
-  },
+  actions: { flexDirection: "row", gap: space.xs, marginTop: space.base },
+  btn: { flex: 1, paddingVertical: 12, borderRadius: 999, alignItems: "center" },
   btnCancel: {
     backgroundColor: colors.canvas,
     borderWidth: 1,
@@ -275,4 +331,18 @@ const styles = StyleSheet.create({
   btnDisabled: { backgroundColor: colors.primaryDisabled },
   btnCancelText: { ...type$.button, color: colors.ink },
   btnSubmitText: { ...type$.button, color: colors.onPrimary },
+  // Post-submit "done" row
+  doneRow: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: 4 },
+  doneCheck: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  doneName: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
+  doneMeta: { ...type$.caption, color: colors.muted, marginTop: 2 },
+  doneAmount: { ...type$.bodyMd, color: colors.ink, fontVariant: ["tabular-nums"], fontWeight: "500" },
+  cancelledText: { ...type$.bodySm, color: colors.muted, fontStyle: "italic" },
 });

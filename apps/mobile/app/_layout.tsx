@@ -5,6 +5,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { DateRangeSheetHost } from "../src/datetime/DateRangeSheetHost";
+import { DatePickerSheetHost } from "../src/datetime/DatePickerSheetHost";
 import * as Notifications from "expo-notifications";
 import { registerForPushNotifications } from "../src/api/push";
 import { useSession } from "../src/auth/client";
@@ -58,7 +59,9 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <BottomSheetModalProvider>
           <DateRangeSheetHost>
-            <Stack screenOptions={{ headerShown: false }} />
+            <DatePickerSheetHost>
+              <Stack screenOptions={{ headerShown: false }} />
+            </DatePickerSheetHost>
           </DateRangeSheetHost>
         </BottomSheetModalProvider>
       </SafeAreaProvider>
