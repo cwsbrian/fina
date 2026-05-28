@@ -317,3 +317,17 @@ export async function removeRecurringByNameService(
   if (!row) return false;
   return removeRecurringByIdService(ctx, { id: row.id });
 }
+
+/** Bulk-delete every recurring expense in the workspace. Returns the
+ *  number of rows removed so the chat confirmation can render an
+ *  accurate "Removed N subscriptions" message. The chat surface MUST
+ *  gate this behind presentConfirmCard — direct invocation skips the
+ *  user-facing safety prompt. */
+export async function removeAllRecurringService(
+  ctx: { workspaceId: string },
+): Promise<{ count: number }> {
+  const { count } = await prisma.recurringExpense.deleteMany({
+    where: { workspaceId: ctx.workspaceId },
+  });
+  return { count };
+}

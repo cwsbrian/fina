@@ -55,6 +55,15 @@ function confirmationFor(
         ? `${r?.name ?? "정기지출"}을 삭제했어요.`
         : `Removed ${r?.name ?? "the recurring expense"}.`;
     }
+    case "removeAllRecurring": {
+      const count = (result as { count?: number }).count ?? 0;
+      if (count === 0) {
+        return ko ? "삭제할 구독이 없어요." : "There were no subscriptions to remove.";
+      }
+      return ko
+        ? `구독 ${count}개를 모두 삭제했어요.`
+        : `Removed all ${count} subscription${count === 1 ? "" : "s"}.`;
+    }
     case "addScheduledSpend": {
       const s = (result as { scheduledSpend?: { name: string; amount: string; occurredAt: string } }).scheduledSpend;
       if (!s) return null;
@@ -114,6 +123,7 @@ export const CONFIRMABLE_TOOLS = [
   "mapMerchantToCategory",
   "addRecurring",
   "removeRecurring",
+  "removeAllRecurring",
   "addScheduledSpend",
   "dismissScheduledSpend",
   "removeScheduledSpend",

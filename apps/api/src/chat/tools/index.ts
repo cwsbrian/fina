@@ -20,6 +20,7 @@ import { mapMerchantToCategory } from "./map-merchant-to-category.js";
 import { addRecurring } from "./add-recurring.js";
 import { listRecurring } from "./list-recurring.js";
 import { removeRecurring } from "./remove-recurring.js";
+import { removeAllRecurring } from "./remove-all-recurring.js";
 import { presentConfirmCard } from "./present-confirm-card.js";
 import { presentRecurringForm } from "./present-recurring-form.js";
 import { addScheduledSpend } from "./add-scheduled-spend.js";
@@ -51,6 +52,7 @@ export const REGISTRY: ToolDef[] = [
   addRecurring as ToolDef,
   listRecurring as ToolDef,
   removeRecurring as ToolDef,
+  removeAllRecurring as ToolDef,
   presentConfirmCard as ToolDef,
   presentRecurringForm as ToolDef,
   addScheduledSpend as ToolDef,
