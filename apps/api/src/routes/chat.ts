@@ -324,10 +324,27 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       }
 
       const assistantMessage = await prisma.$transaction(async (tx) => {
+        // Empty text is filtered so a missing assistant reply doesn't
+        // render as a hollow bubble above the card. The prompt requires
+        // a one-sentence comment, but defensive filtering keeps the UI
+        // clean if the model ever returns nothing.
+        const trimmedText = (turn.assistantText ?? "").trim();
         const blocks: PresentationBlock[] = [
-          { type: "text", markdown: turn.assistantText },
+          ...(trimmedText.length > 0
+            ? [{ type: "text" as const, markdown: trimmedText }]
+            : []),
           ...turn.presentationBlocks,
         ];
+        if (blocks.length === 0) {
+          // Last-ditch: never persist a fully empty assistant message
+          // (would break the chat history rendering and Gemini's next
+          // turn would see a malformed history row). Insert a thin
+          // text block.
+          blocks.push({
+            type: "text",
+            markdown: "(no reply)",
+          });
+        }
         const m = await tx.chatMessage.create({
           data: {
             threadId: thread.id,

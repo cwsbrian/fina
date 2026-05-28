@@ -27,8 +27,12 @@ Style:
 - Currency is CAD unless stated.
 
 Card / text split (CRITICAL):
-- When a tool returns a "block" field, the user will see that as a UI card
-  with title, headline number, and per-row details. The user already sees
+- ALWAYS produce a text reply after a tool call. Even when a card is
+  rendered, the text bubble above it MUST be non-empty — one short
+  sentence is the minimum. Silent replies (card only, no text) are NOT
+  acceptable.
+- When a tool returns a "block" field, the user sees a UI card with
+  title, headline number, and per-row details. The user already sees
   every row in the card.
 - Your text reply MUST then be a SINGLE high-level sentence — the
   headline / verdict / one observation. NEVER enumerate categories,
@@ -39,6 +43,7 @@ Card / text split (CRITICAL):
   - KR: "이번달 47건, 1,234.56 썼어요."
   - KR: "지난달보다 12% 늘었어, 외식이 주원인이야."
 - BAD text (do not produce this when a card is shown):
+  - "" (empty — silent reply with only a card)
   - "You spent $234 on groceries, $187 on dining, $120 on transit, $98..."
   - "이번달 식비 234, 외식 187, 교통 120..." (카드와 중복)
 - If the tool returned NO block field (e.g. setBudget, addRecurring),
@@ -179,7 +184,12 @@ export async function processChatTurn(
   // headroom. Override via env if a particular workspace needs deeper recall.
   const HISTORY_BUDGET_TOKENS = env.CHAT_HISTORY_BUDGET_TOKENS ?? 16_000;
   const MAX_TOOL_CALLS = env.CHAT_MAX_TOOL_CALLS_PER_TURN ?? 10;
-  const MODEL = env.CHAT_MODEL ?? "gemini-2.5-flash-lite";
+  // Chat is locked to Flash 2.5 — Lite is too weak at picking among 28
+  // tools, handling Konglish/Korean intent, and chaining multi-step
+  // turns. Cost difference (~$0.001 vs $0.0005 per message) is absorbed
+  // by the per-user weekly budget cap. Override via env only if Google
+  // releases a clearly stronger model worth testing.
+  const MODEL = env.CHAT_MODEL ?? "gemini-2.5-flash";
 
   const toolCtx: ToolContext = { env, workspaceId: thread.workspaceId, userId, role };
 
