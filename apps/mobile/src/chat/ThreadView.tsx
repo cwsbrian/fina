@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
+  AppState,
   Keyboard,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -112,6 +113,19 @@ export function ThreadView({
       hide.remove();
     };
   }, [bottomInset]);
+
+  // App-resume keyboard reset.
+  // Repro: open chat → focus input (keyboard opens) → background the app →
+  // foreground. iOS doesn't refire keyboardWillShow on the restored
+  // keyboard, so keyboardPad stays at 0 from our state's perspective, and
+  // the composer hides behind the visible keyboard. Dismiss the keyboard
+  // on resume — the user re-taps the input if they want to keep typing.
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state === "active") Keyboard.dismiss();
+    });
+    return () => sub.remove();
+  }, []);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {

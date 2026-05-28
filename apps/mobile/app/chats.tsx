@@ -137,22 +137,25 @@ export default function Chats() {
                   } as never)
                 }
               >
-                <View style={styles.rowGlyph}>
+                <View style={[styles.rowGlyph, !unread && styles.rowGlyphRead]}>
                   <Ionicons
                     name="chatbubble-ellipses"
                     size={20}
-                    color={colors.primary}
+                    color={unread ? colors.primary : colors.mutedSoft}
                   />
                   {unread && <View style={styles.unreadDot} />}
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text
-                    style={[styles.rowTitle, unread && styles.rowTitleUnread]}
+                    style={[
+                      styles.rowTitle,
+                      unread ? styles.rowTitleUnread : styles.rowTitleRead,
+                    ]}
                     numberOfLines={1}
                   >
                     {item.title ?? item.firstMessagePreview ?? "New chat"}
                   </Text>
-                  <Text style={styles.rowMeta}>
+                  <Text style={[styles.rowMeta, !unread && styles.rowMetaRead]}>
                     {item.messageCount} message
                     {item.messageCount === 1 ? "" : "s"}
                     {item.lastMessageAt
@@ -231,9 +234,17 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceSoft,
     alignItems: "center", justifyContent: "center",
   },
-  rowTitle: { ...type$.titleSm, color: colors.ink },
+  // Read rows: dim the glyph background so the icon doesn't pop the
+  // same way unread rows do.
+  rowGlyphRead: { backgroundColor: "transparent" },
+  rowTitle: { ...type$.titleSm },
+  // Unread = full ink + bold. Read = muted body color + regular weight
+  // — a single visual variable (weight + color contrast) drives the
+  // distinction so the list reads at a glance.
   rowTitleUnread: { fontWeight: "700", color: colors.ink },
+  rowTitleRead: { fontWeight: "500", color: colors.body },
   rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
+  rowMetaRead: { color: colors.mutedSoft },
   sep: { height: 1, backgroundColor: colors.hairlineSoft, marginLeft: 52 },
   unreadDot: {
     position: "absolute",
