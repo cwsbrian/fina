@@ -137,24 +137,19 @@ export default function Chats() {
                   } as never)
                 }
               >
-                <View style={[styles.rowGlyph, !unread && styles.rowGlyphRead]}>
-                  <Ionicons
-                    name="chatbubble-ellipses"
-                    size={20}
-                    color={unread ? colors.primary : colors.mutedSoft}
-                  />
-                  {unread && <View style={styles.unreadDot} />}
-                </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text
-                    style={[
-                      styles.rowTitle,
-                      unread ? styles.rowTitleUnread : styles.rowTitleRead,
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {item.title ?? item.firstMessagePreview ?? "New chat"}
-                  </Text>
+                  <View style={styles.titleRow}>
+                    {unread && <View style={styles.unreadDot} />}
+                    <Text
+                      style={[
+                        styles.rowTitle,
+                        unread ? styles.rowTitleUnread : styles.rowTitleRead,
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {item.title ?? item.firstMessagePreview ?? "New chat"}
+                    </Text>
+                  </View>
                   <Text style={[styles.rowMeta, !unread && styles.rowMetaRead]}>
                     {item.messageCount} message
                     {item.messageCount === 1 ? "" : "s"}
@@ -229,33 +224,21 @@ const styles = StyleSheet.create({
   },
   ctaText: { ...type$.button, color: colors.onPrimary },
   row: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.sm + 2 },
-  rowGlyph: {
-    width: 40, height: 40, borderRadius: 12,
-    backgroundColor: colors.surfaceSoft,
-    alignItems: "center", justifyContent: "center",
-  },
-  // Read rows: dim the glyph background so the icon doesn't pop the
-  // same way unread rows do.
-  rowGlyphRead: { backgroundColor: "transparent" },
-  rowTitle: { ...type$.titleSm },
-  // Unread = full ink + bold. Read = muted body color + regular weight
-  // — a single visual variable (weight + color contrast) drives the
+  titleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  rowTitle: { ...type$.titleSm, flex: 1, minWidth: 0 },
+  // Unread = full ink + bold. Read = muted body color + regular weight —
+  // a single visual variable (weight + color contrast) drives the
   // distinction so the list reads at a glance.
   rowTitleUnread: { fontWeight: "700", color: colors.ink },
   rowTitleRead: { fontWeight: "500", color: colors.body },
   rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   rowMetaRead: { color: colors.mutedSoft },
-  sep: { height: 1, backgroundColor: colors.hairlineSoft, marginLeft: 52 },
+  sep: { height: 1, backgroundColor: colors.hairlineSoft },
   unreadDot: {
-    position: "absolute",
-    top: 2,
-    right: 2,
-    width: 10,
-    height: 10,
-    borderRadius: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: colors.primary,
-    borderWidth: 2,
-    borderColor: colors.canvas,
   },
   unreadBadge: {
     minWidth: 22,
