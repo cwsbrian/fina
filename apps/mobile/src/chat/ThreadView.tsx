@@ -113,6 +113,15 @@ export function ThreadView({
   // can focus on the form fields without the composer riding the
   // keyboard up over them.
   const [formFocused, setFormFocused] = useState(false);
+  // Intent ids the user has already resolved via a confirm_card's
+  // Yes/No this session. Re-rendering filters those cards out so the
+  // user sees the action commit, not a still-clickable button row.
+  // Per-session only — a reload re-fetches the server's view of the
+  // thread (which includes the assistant's confirmation message and
+  // the now-consumed intent, so re-hiding isn't critical).
+  const [dismissedIntents, setDismissedIntents] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   // Sync when the parent switches us to a different thread (e.g. tapping
   // a row in /chats). Reset all local state so the new thread loads cleanly.
@@ -372,6 +381,15 @@ export function ThreadView({
             message={item}
             workspaceId={thread?.workspaceId ?? null}
             threadId={localId}
+            dismissedIntents={dismissedIntents}
+            onIntentDismissed={(intentId) =>
+              setDismissedIntents((prev) => {
+                if (prev.has(intentId)) return prev;
+                const next = new Set(prev);
+                next.add(intentId);
+                return next;
+              })
+            }
             onFormFocusChange={setFormFocused}
             onConfirmationMessage={(msg) => {
               setMessages((prev) =>
@@ -554,18 +572,31 @@ function MessageBubble({
   message,
   workspaceId,
   threadId,
+  dismissedIntents,
+  onIntentDismissed,
   onFormFocusChange,
   onConfirmationMessage,
 }: {
   message: ChatMessageDTO;
   workspaceId: string | null;
   threadId: string | null;
+  dismissedIntents: Set<string>;
+  onIntentDismissed: (intentId: string) => void;
   onFormFocusChange?: (focused: boolean) => void;
   onConfirmationMessage?: (msg: ChatMessageDTO) => void;
 }) {
-  const blocks = Array.isArray(message.blocks)
+  const rawBlocks = Array.isArray(message.blocks)
     ? (message.blocks as Block[])
     : [];
+  // Drop confirm_card blocks whose intent the user already resolved
+  // this session — once tapped, the card collapses out of the thread.
+  // Other block types are unaffected.
+  const blocks = rawBlocks.filter((b) => {
+    if (b.type === "confirm_card") {
+      return !dismissedIntents.has(b.accept_intent);
+    }
+    return true;
+  });
   const isUser = message.role === "user";
 
   // Render each block as its own visual row. Text blocks get the standard
@@ -583,10 +614,11 @@ function MessageBubble({
                 block={b}
                 role={message.role}
                 onAccept={async (intentId) => {
-                  // confirm_card accept = consume the bound intent with
-                  // no overrides (the LLM-supplied args are already
-                  // complete). Reuse submitFormIntent — the server
-                  // treats {} the same as undefined overrides.
+                  // Hide the card immediately so the user sees a
+                  // commit — the network round-trip is async and the
+                  // server posts the confirmation message into the
+                  // thread anyway.
+                  onIntentDismissed(intentId);
                   try {
                     const confirmation = await submitFormIntent(
                       workspaceId,
@@ -598,15 +630,20 @@ function MessageBubble({
                       onConfirmationMessage(confirmation);
                     }
                   } catch {
-                    // Surface via the card's own UI in a future pass;
-                    // for now swallow so a transient network error
-                    // doesn't crash the message list.
+                    // Swallow — a transient network error shouldn't
+                    // crash the list. The user can re-issue the
+                    // request from chat if needed.
                   }
                 }}
                 onReject={() => {
-                  // No server call — the intent expires via its TTL.
-                  // Future polish: dim the card so the user sees the
-                  // choice was registered.
+                  // No server call — the intent expires via TTL. Hide
+                  // the card on the client so the choice registers
+                  // visually. Key the dismissal by accept_intent (the
+                  // same id we filter by in the render path) since
+                  // reject_intent can differ.
+                  if (b.type === "confirm_card") {
+                    onIntentDismissed(b.accept_intent);
+                  }
                 }}
                 onSubmitForm={async (id, overrides) => {
                   const confirmation = await submitFormIntent(
