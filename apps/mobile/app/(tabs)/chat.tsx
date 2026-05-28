@@ -27,6 +27,9 @@ export default function ChatTab() {
   // Force ThreadView to fully reset (new keyed instance) when the
   // pencil is hit while already on the pending state.
   const [resetKey, setResetKey] = useState(0);
+  // Workspace tag shown in the header, fed by ThreadView's binding /
+  // picker state. Null when user has a single workspace (no tag needed).
+  const [headerWorkspace, setHeaderWorkspace] = useState<string | null>(null);
 
   useEffect(() => {
     if (params.thread) {
@@ -76,6 +79,9 @@ export default function ChatTab() {
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
         listTopInset={totalHeader}
+        onWorkspaceContextChange={({ workspaceName, multipleWorkspaces }) => {
+          setHeaderWorkspace(multipleWorkspaces ? workspaceName : null);
+        }}
       />
       <Animated.View style={[styles.headerOverlay, { top: insets.top, height: HEADER_HEIGHT }, header.headerStyle]}>
         <View style={styles.header}>
@@ -85,7 +91,14 @@ export default function ChatTab() {
             accessibilityLabel="Chat history"
             onPress={() => router.push("/chats" as never)}
           />
-          <Text style={styles.headerTitle}>Chat</Text>
+          <View style={styles.headerCenter}>
+            <Text style={styles.headerTitle}>Chat</Text>
+            {headerWorkspace ? (
+              <Text style={styles.headerWorkspace} numberOfLines={1}>
+                {headerWorkspace}
+              </Text>
+            ) : null}
+          </View>
           <HeaderIconButton
             icon="create-outline"
             variant="plain"
@@ -126,5 +139,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
+  headerCenter: { flex: 1, alignItems: "center" },
   headerTitle: { ...type$.titleSm, color: colors.ink },
+  headerWorkspace: { ...type$.caption, color: colors.muted, marginTop: 1 },
 });

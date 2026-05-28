@@ -49,6 +49,16 @@ type Props = {
   /** Top padding added to the messages list — usually the header height
    *  when the parent renders an absolute-positioned collapsing header. */
   listTopInset?: number;
+  /** Fires whenever the active workspace context for this thread
+   *  changes — either because a freshly-loaded thread had its
+   *  workspaceId, the user picked a different workspace in the inline
+   *  chip, or the first send just bound the thread. Parent uses this
+   *  to surface the workspace name in the screen header. `null` name
+   *  means single-workspace user or unresolved. */
+  onWorkspaceContextChange?: (info: {
+    workspaceName: string | null;
+    multipleWorkspaces: boolean;
+  }) => void;
 };
 
 type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
@@ -65,6 +75,7 @@ export function ThreadView({
   onScroll,
   scrollEventThrottle,
   listTopInset = 0,
+  onWorkspaceContextChange,
 }: Props) {
   // Local thread id mirrors the prop for switching, but on first send
   // we promote a null prop to a real id WITHOUT waiting for the parent
@@ -124,6 +135,28 @@ export function ThreadView({
     })();
     return () => { cancelled = true; };
   }, []);
+
+  // Notify parent about the workspace name to surface in the header.
+  // Resolves the active id (bound thread.workspaceId, else the user's
+  // current pick) against the workspace list and re-fires whenever any
+  // of those move. multipleWorkspaces lets the parent decide whether
+  // to render a tag at all — single-workspace users don't need it.
+  useEffect(() => {
+    if (!onWorkspaceContextChange) return;
+    const activeId = thread?.workspaceId ?? pickedWorkspaceId;
+    const name = activeId
+      ? workspaces.find((w) => w.id === activeId)?.name ?? null
+      : null;
+    onWorkspaceContextChange({
+      workspaceName: name,
+      multipleWorkspaces: workspaces.length > 1,
+    });
+  }, [
+    onWorkspaceContextChange,
+    workspaces,
+    pickedWorkspaceId,
+    thread?.workspaceId,
+  ]);
 
   // KeyboardAvoidingView (below) handles all the keyboard offset math —
   // including the iOS app-resume edge case where keyboardWillShow doesn't
@@ -229,6 +262,14 @@ export function ThreadView({
         const withoutTemp = prev.filter((m) => m.id !== tempId);
         return [...withoutTemp, resp.userMessage, resp.assistantMessage];
       });
+      // First-send binding: server lazy-binds the thread to wsId on
+      // this POST, but its response only carries the new messages, not
+      // the updated thread. Mirror the binding into local state so the
+      // "Sending to" chip disappears immediately — without this the
+      // chip lingered until a full thread reload.
+      setThread((prev) =>
+        prev && prev.workspaceId === null ? { ...prev, workspaceId: wsId } : prev,
+      );
       scrollToBottom();
       // The user is staring at the reply they just received — mark the
       // thread read so it doesn't show as unread on Home / chats list
