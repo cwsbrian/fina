@@ -36,6 +36,10 @@ const CADENCE_OPTIONS: Array<{ key: Cadence; label: string }> = [
 
 const AMOUNT_RE = /^\d+(\.\d{0,2})?$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+// Date picker cap — same value the standalone subscriptions / scheduled
+// forms use. Without an explicit cap the shared sheet defaults to
+// "today", which silently disables today + every future date.
+const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
 /** Inline form for adding a recurring expense. LLM seeds defaults; user
  *  edits and submits — no further back-and-forth with the assistant. */
@@ -208,12 +212,16 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
           style={styles.dateBtn}
           onPress={() => {
             if (submitting) return;
-            datePicker.open(dateValue, (next) => {
-              const y = next.getUTCFullYear();
-              const mo = String(next.getUTCMonth() + 1).padStart(2, "0");
-              const d = String(next.getUTCDate()).padStart(2, "0");
-              setDateStr(`${y}-${mo}-${d}`);
-            });
+            datePicker.open(
+              dateValue,
+              (next) => {
+                const y = next.getUTCFullYear();
+                const mo = String(next.getUTCMonth() + 1).padStart(2, "0");
+                const d = String(next.getUTCDate()).padStart(2, "0");
+                setDateStr(`${y}-${mo}-${d}`);
+              },
+              { maximumDate: new Date(Date.now() + TEN_YEARS_MS) },
+            );
           }}
         >
           <Text style={styles.dateBtnText}>{dateStr || "Pick a date"}</Text>
