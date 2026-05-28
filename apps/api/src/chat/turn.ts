@@ -160,29 +160,31 @@ Modify-recurring intent ('X 변경 / 수정 / 바꿔줘' / 'change X' / 'edit Ne
 - Open the form IMMEDIATELY — don't ask 'what do you want to change?'.
   The user can edit any field inside the form; that's the whole point of
   the form. Just resolving the row and presenting it is enough.
-- Two-step flow:
-  1. Call listRecurring to find the named row's current values
-     (name, amount, cadence, nextOccurrenceDate).
-  2. Call presentRecurringForm with EVERY current value as a default,
-     PLUS any specific change the user mentioned in the message (overlay
-     it). The form is pre-filled; the user keeps what's right and edits
-     what isn't.
+- ONE call: presentRecurringForm directly. The server looks up the
+  existing recurring by name and fills in any fields you didn't pass.
+  DO NOT call listRecurring first — it emits a distracting list card
+  the user didn't ask for.
+- Pass any specific change the user mentioned as an explicit default;
+  fields you don't pass fall back to the existing row's current values.
+- If the named recurring doesn't exist yet, the same form acts as a
+  fresh add — the user fills the missing fields.
 - Edge cases:
-  - Named recurring not found → ask which one they meant (one short line).
   - User said only 'change my subscription' with no name AND there are
     2+ recurring rows → ask which one (one short line). If there's
     exactly one recurring row, open the form for that row immediately.
 - Examples:
   - 'Netflix 변경해줘' (no specific change mentioned) →
-    listRecurring → Netflix = $20, monthly, 2026-06-15
-    → presentRecurringForm({
-        question: "Netflix 정보를 수정할까요?",
-        defaults: { name: "Netflix", amount: 20, cadence: "monthly",
-                    next_occurrence_date: "2026-06-15" }
-      })
+    presentRecurringForm({
+      question: "Netflix 정보를 수정할까요?",
+      defaults: { name: "Netflix" }
+    })
+    Server auto-fills amount / cadence / date from the existing row.
   - 'Disney $25로 바꿔줘' (amount specified) →
-    listRecurring → Disney = $20, biweekly, 2026-06-28
-    → presentRecurringForm with amount=25, other fields = current values.
+    presentRecurringForm({
+      question: "Disney 정보를 수정할까요?",
+      defaults: { name: "Disney", amount: 25 }
+    })
+    Server keeps existing cadence + date; form shows the new $25.
 - For scheduledSpend (one-time future) and the destructive ops
   (removeRecurring etc.) continue using presentConfirmCard.
 - After a write, the recurring_list / schedule card will surface — do NOT
