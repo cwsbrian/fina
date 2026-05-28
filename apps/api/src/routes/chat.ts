@@ -336,13 +336,29 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
           ...turn.presentationBlocks,
         ];
         if (blocks.length === 0) {
-          // Last-ditch: never persist a fully empty assistant message
-          // (would break the chat history rendering and Gemini's next
-          // turn would see a malformed history row). Insert a thin
-          // text block.
+          // Model returned no text AND no tool produced a block. Most
+          // likely cause is a Gemini safety/recitation filter or a
+          // misfire on the strict-scope prompt. Log for diagnosis so
+          // we can tune prompt or model on repeated cases.
+          logWarn(
+            {
+              threadId: thread.id,
+              userId: session.userId,
+              userText: parsed.data.text.slice(0, 200),
+              toolCalls: turn.toolCalls.length,
+            },
+            "chat: assistant returned empty text + no blocks",
+          );
+          // Bilingual friendly retry — the user typed something, got
+          // nothing back, deserves a real prompt to try again instead
+          // of a debug placeholder.
+          const userText = parsed.data.text;
+          const looksKorean = /[ㄱ-힝]/.test(userText);
           blocks.push({
             type: "text",
-            markdown: "(no reply)",
+            markdown: looksKorean
+              ? "음, 그건 답을 정리 못 했어요. 다르게 다시 말해줄래요?"
+              : "Hmm, I couldn't put that together. Want to rephrase?",
           });
         }
         const m = await tx.chatMessage.create({
