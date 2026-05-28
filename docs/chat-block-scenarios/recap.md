@@ -15,99 +15,115 @@ are acceptable as long as the response carries a recap card.
 
 ---
 
+> Date arguments: spending/breakdown/cashflow/compare tools now take
+> `since` (YYYY-MM-DD, inclusive) and `until` (YYYY-MM-DD, exclusive).
+> The LLM reads the "Today: YYYY-MM-DD" line in the context and
+> translates phrasings ("this month", "올해", "지난 90일", "Q1", "지난주") to
+> specific ISO dates. compareSpendingPeriods takes two date ranges:
+> `current_since`/`current_until` + `comparison_since`/`comparison_until`.
+> compareSpendingVsBudget keeps `period: this_month | last_month |
+> next_month` because budgets are stored monthly.
+
 ## EN — getSpendingSummary
 
-| User message | Expected tool | Notes |
-|---|---|---|
-| `How much did I spend this month?` | `getSpendingSummary(period: "this_month")` | Headline = total; rows by category |
-| `Spending this week` | `getSpendingSummary(period: "this_week")` | |
-| `Total spend last month` | `getSpendingSummary(period: "last_month")` | |
-| `What did I spend on by merchant this month?` | `getSpendingSummary(period: "this_month", group_by: "merchant")` | |
-| `Show me daily spending this week` | `getSpendingSummary(period: "this_week", group_by: "day")` | |
-| `Top categories this month` | `getSpendingSummary` or `getCategoryBreakdown` | Either fine |
+| User message | Expected tool call |
+|---|---|
+| `How much did I spend this month?` | `getSpendingSummary(since: first-of-month, until: first-of-next-month)` |
+| `Spending this week` | `getSpendingSummary(since: Monday-of-week, until: next-Monday)` |
+| `Total spend last month` | `getSpendingSummary(since: first-of-last-month, until: first-of-this-month)` |
+| `Year to date spending` | `getSpendingSummary(since: YYYY-01-01, until: today)` |
+| `Q1 spending` | `getSpendingSummary(since: YYYY-01-01, until: YYYY-04-01)` |
+| `Last 90 days spending` | `getSpendingSummary(since: today-90, until: today)` |
+| `Spending in March` | `getSpendingSummary(since: YYYY-03-01, until: YYYY-04-01)` |
+| `What did I spend on by merchant this month?` | `... group_by: "merchant"` |
+| `Show me daily spending this week` | `... group_by: "day"` |
 
 ## EN — getCategoryBreakdown
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
-| `Break down spending by category this month` | `getCategoryBreakdown(period: "this_month")` |
-| `Category breakdown` | same (defaults to this_month) |
-| `Which categories took the most this month?` | `getCategoryBreakdown` |
+| `Break down spending by category this month` | `getCategoryBreakdown(this-month range)` |
+| `Category breakdown` | default to this month |
+| `Category breakdown this year` | `getCategoryBreakdown(YYYY-01-01 → YYYY+1-01-01)` |
 
 ## EN — compareSpendingPeriods
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
-| `How does this month compare to last month?` | `compareSpendingPeriods(current: "this_month", comparison: "last_month", group_by: "category")` |
-| `Am I spending more this week vs last week?` | `compareSpendingPeriods(current: "this_week", comparison: "previous_week", ...)` |
-| `Biggest changes vs last month` | `compareSpendingPeriods(..., group_by: "category")` — rows should have non-zero `delta` |
-| `Which merchants got more expensive this month?` | `compareSpendingPeriods(..., group_by: "merchant")` |
+| `How does this month compare to last month?` | `compareSpendingPeriods(current=this-month, comparison=last-month, group_by: "category")` |
+| `Am I spending more this week vs last week?` | `(current=this-week, comparison=previous-week)` |
+| `This year vs last year` | `(current=YYYY, comparison=YYYY-1)` |
+| `Q1 this year vs Q1 last year` | `(current=YYYY Q1, comparison=YYYY-1 Q1)` |
+| `Biggest changes vs last month` | category compare with non-zero deltas |
 
 ## EN — getCashflowSummary
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
-| `Show cashflow this month` | `getCashflowSummary(period: "this_month")` |
-| `How's my net cashflow this week?` | `getCashflowSummary(period: "this_week")` |
-| `Cashflow by account` | `getCashflowSummary(group_by: "account")` |
+| `Show cashflow this month` | `getCashflowSummary(this-month range)` |
+| `Cashflow this year` | `getCashflowSummary(YYYY-01-01 → YYYY+1-01-01)` |
+| `Cashflow by account` | `... group_by: "account"` |
 | `Income vs expenses this month` | `getCashflowSummary` |
 
 ## EN — compareSpendingVsBudget
 
-| User message | Expected tool |
+(Budgets are stored monthly — kept on the `period` enum.)
+
+| User message | Expected tool call |
 |---|---|
 | `Am I over budget?` | `compareSpendingVsBudget(period: "this_month")` |
-| `How is my budget going?` | same |
 | `Budget status` | same |
-| `Did I stay under my food budget?` | `compareSpendingVsBudget` (LLM may also follow with text commenting on the specific row) |
+| `Did I stay under my food budget?` | same — LLM may comment on the food row |
 
 ---
 
 ## KR — getSpendingSummary
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
-| `이번달 얼마 썼어?` | `getSpendingSummary(period: "this_month")` |
-| `이번주 지출` | `getSpendingSummary(period: "this_week")` |
-| `지난달 총 지출` | `getSpendingSummary(period: "last_month")` |
-| `이번달 가게별 지출` | `getSpendingSummary(group_by: "merchant")` |
-| `이번주 일별 지출 보여줘` | `getSpendingSummary(group_by: "day")` |
-| `상위 카테고리 이번달` | `getSpendingSummary` or `getCategoryBreakdown` |
+| `이번달 얼마 썼어?` | `getSpendingSummary(this-month range)` |
+| `이번주 지출` | `getSpendingSummary(this-week range)` |
+| `지난달 총 지출` | `getSpendingSummary(last-month range)` |
+| `올해 얼마 썼어` | `getSpendingSummary(YYYY-01-01 → YYYY+1-01-01)` |
+| `작년에 얼마 썼어` | `getSpendingSummary(YYYY-1-01-01 → YYYY-01-01)` |
+| `지난 90일` | `getSpendingSummary(today-90 → today)` |
+| `이번달 가게별 지출` | `... group_by: "merchant"` |
+| `이번주 일별 지출 보여줘` | `... group_by: "day"` |
 
 ## KR — getCategoryBreakdown
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
-| `이번달 카테고리별 지출` | `getCategoryBreakdown(period: "this_month")` |
-| `카테고리 분석` | `getCategoryBreakdown` |
-| `이번달 어느 카테고리에 제일 많이 썼어?` | `getCategoryBreakdown` |
+| `이번달 카테고리별 지출` | `getCategoryBreakdown(this-month range)` |
+| `카테고리 분석` | default to this month |
+| `올해 카테고리별` | `getCategoryBreakdown(YYYY range)` |
 
 ## KR — compareSpendingPeriods
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
-| `지난달 대비 이번달은 어때?` | `compareSpendingPeriods(current: "this_month", comparison: "last_month", group_by: "category")` |
-| `지난주랑 비교해서 이번주 더 썼어?` | `compareSpendingPeriods(current: "this_week", comparison: "previous_week", ...)` |
-| `지난달 대비 변동 큰 항목` | `compareSpendingPeriods(group_by: "category")` |
-| `이번달 비싸진 가게` | `compareSpendingPeriods(group_by: "merchant")` |
+| `지난달 대비 이번달은 어때?` | `(current=this-month, comparison=last-month, group_by: "category")` |
+| `지난주랑 비교해서 이번주 더 썼어?` | `(current=this-week, comparison=previous-week)` |
+| `작년 vs 올해` | `(current=YYYY, comparison=YYYY-1)` |
+| `이번달 비싸진 가게` | `... group_by: "merchant"` |
 
 ## KR — getCashflowSummary
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
-| `이번달 현금흐름 보여줘` | `getCashflowSummary(period: "this_month")` |
-| `이번주 순현금 어때?` | `getCashflowSummary(period: "this_week")` |
-| `계좌별 현금흐름` | `getCashflowSummary(group_by: "account")` |
-| `이번달 수입 vs 지출` | `getCashflowSummary` |
+| `이번달 현금흐름 보여줘` | `getCashflowSummary(this-month range)` |
+| `이번주 순현금 어때?` | `getCashflowSummary(this-week range)` |
+| `올해 현금흐름` | `getCashflowSummary(YYYY range)` |
+| `계좌별 현금흐름` | `... group_by: "account"` |
 
 ## KR — compareSpendingVsBudget
 
-| User message | Expected tool |
+| User message | Expected tool call |
 |---|---|
 | `예산 다 썼어?` | `compareSpendingVsBudget(period: "this_month")` |
 | `이번달 예산 어때?` | same |
-| `식비 예산 얼마나 남았어?` | `compareSpendingVsBudget` (text comment may name the specific row) |
-| `버젯 상태` | `compareSpendingVsBudget` |
+| `식비 예산 얼마나 남았어?` | same — LLM comments on food row |
+| `버젯 상태` | same |
 
 ---
 

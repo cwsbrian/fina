@@ -3,10 +3,18 @@ import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
-import { basicPeriodRange, dateKeyInTz, resolveUserTz, type BasicPeriod } from "./periods.js";
+import { customRange, dateKeyInTz, resolveUserTz } from "./periods.js";
+import { formatPeriodLabel } from "./recap-label.js";
 
 const Args = z.object({
-  period: z.enum(["this_week", "this_month", "last_month"]).describe("Period to summarize cashflow."),
+  since: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Inclusive start date (YYYY-MM-DD) in the user's timezone."),
+  until: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Exclusive end date (YYYY-MM-DD) in the user's timezone — must be > since."),
   group_by: z
     .enum(["day", "account"])
     .describe("Optional grouping dimension. Defaults to day.")
@@ -25,7 +33,8 @@ type Group = {
 };
 
 type Result = {
-  period: BasicPeriod;
+  since: string;
+  until: string;
   groupBy: "day" | "account";
   currency: string;
   incomeTotal: string;
@@ -39,12 +48,15 @@ const MAX_RECAP_ROWS = 8;
 
 export const getCashflowSummary: ToolDef<Args, Result> = {
   name: "getCashflowSummary",
-  description: "Summarize CAD income, expenses, and net cashflow for a period, grouped by day or account.",
+  description:
+    "Summarize CAD income, expenses, and net cashflow for a date range, grouped by day or account. " +
+    "Pass YYYY-MM-DD since/until from the 'Today' anchor in your context. " +
+    "Use this whenever the user asks about both directions (income vs expense) or net flow.",
   args: Args,
   async run(ctx, args) {
     const groupBy = args.group_by ?? "day";
     const [{ gte, lt }, tz, workspace] = await Promise.all([
-      basicPeriodRange(ctx.userId, args.period),
+      customRange(ctx.userId, args.since, args.until),
       resolveUserTz(ctx.userId),
       prisma.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
@@ -120,7 +132,8 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
 
     const netStr = totalIncome.minus(totalExpense).toFixed(2);
     return {
-      period: args.period,
+      since: args.since,
+      until: args.until,
       groupBy,
       currency: workspace.currency,
       incomeTotal: totalIncome.toFixed(2),
@@ -128,7 +141,8 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
       netTotal: netStr,
       groups,
       block: toRecapBlock(
-        args.period,
+        args.since,
+        args.until,
         workspace.currency,
         totalIncome.toFixed(2),
         totalExpense.toFixed(2),
@@ -139,11 +153,9 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
   },
 };
 
-/** Cashflow recap layout: headline = net, two summary rows (Income /
- *  Expenses) styled with deltas to make the direction unmistakable, then
- *  optionally the first 8 day/account rows below for context. */
 function toRecapBlock(
-  period: BasicPeriod,
+  since: string,
+  until: string,
   currency: string,
   incomeTotal: string,
   expenseTotal: string,
@@ -151,9 +163,6 @@ function toRecapBlock(
   groups: Group[],
 ): PresentationBlock {
   const netNum = parseFloat(netTotal);
-  const periodLabel =
-    period === "this_week" ? "This week" :
-    period === "this_month" ? "This month" : "Last month";
 
   const summaryRows = [
     {
@@ -179,7 +188,7 @@ function toRecapBlock(
   return {
     type: "recap",
     title: "Cashflow",
-    period_label: periodLabel,
+    period_label: formatPeriodLabel(since, until),
     headline: {
       label: "Net",
       amount: netTotal,

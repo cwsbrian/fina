@@ -4,13 +4,26 @@ import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { normalizeMerchant } from "../../categorize/normalize.js";
 import type { ToolDef } from "./types.js";
-import { comparisonRanges, type ComparisonPeriod, type CurrentPeriod } from "./periods.js";
+import { customRange } from "./periods.js";
+import { formatPeriodLabel } from "./recap-label.js";
 
 const Args = z.object({
-  current_period: z.enum(["this_week", "this_month"]).describe("Current period to compare."),
-  comparison_period: z
-    .enum(["previous_week", "last_month"])
-    .describe("Comparison period. Use previous_week with this_week, last_month with this_month."),
+  current_since: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Inclusive start of the CURRENT range (YYYY-MM-DD)."),
+  current_until: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Exclusive end of the CURRENT range (YYYY-MM-DD)."),
+  comparison_since: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Inclusive start of the COMPARISON range (YYYY-MM-DD) — the older period."),
+  comparison_until: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Exclusive end of the COMPARISON range (YYYY-MM-DD)."),
   group_by: z.enum(["category", "merchant"]).describe("Dimension to compare spending by."),
   limit: z
     .number()
@@ -35,8 +48,10 @@ type Change = {
 };
 
 type Result = {
-  currentPeriod: CurrentPeriod;
-  comparisonPeriod: ComparisonPeriod;
+  currentSince: string;
+  currentUntil: string;
+  comparisonSince: string;
+  comparisonUntil: string;
   groupBy: "category" | "merchant";
   currency: string;
   currentTotal: string;
@@ -46,10 +61,6 @@ type Result = {
   changes: Change[];
   block: PresentationBlock;
 };
-
-function isValidPair(c: CurrentPeriod, p: ComparisonPeriod): boolean {
-  return (c === "this_week" && p === "previous_week") || (c === "this_month" && p === "last_month");
-}
 
 type Row = {
   amount: Prisma.Decimal;
@@ -143,21 +154,22 @@ async function bucketizeByAllocation(
 export const compareSpendingPeriods: ToolDef<Args, Result> = {
   name: "compareSpendingPeriods",
   description:
-    "Compare CAD spending between two matching periods by category or merchant and return the largest changes. " +
+    "Compare CAD spending between two arbitrary date ranges by category or merchant and return the largest changes. " +
     "Use this WHENEVER the user asks about change between periods — even with shorthand phrasing. " +
     "Trigger phrases (EN): 'vs last month', 'vs last week', 'compared to', 'how does X compare to Y', " +
     "'has it gone up?', 'biggest changes', 'what got more expensive', 'difference vs', 'change from'. " +
     "Trigger phrases (KR): '지난달 대비', '지난주랑 비교', '지난달과 비교', '비교해줘', '얼마나 늘었어', " +
     "'얼마나 줄었어', '큰 변화', '변동', '이번달이 더 썼어?'. " +
-    "Do NOT call getSpendingSummary twice when one of these phrases appears — call this tool instead.",
+    "Do NOT call getSpendingSummary twice when one of these phrases appears — call this tool instead. " +
+    "Provide YYYY-MM-DD dates for both ranges; comparison range must be older than current range; " +
+    "ranges may be different lengths but matched lengths produce more interpretable deltas " +
+    "(e.g. compare a full month to a full month, not a month vs a quarter).",
   args: Args,
   async run(ctx, args) {
-    if (!isValidPair(args.current_period, args.comparison_period)) {
-      throw new Error("invalid_period_pair");
-    }
     const limit = args.limit ?? 10;
-    const [ranges, workspace] = await Promise.all([
-      comparisonRanges(ctx.userId, args.current_period, args.comparison_period),
+    const [currentRange, comparisonRange, workspace] = await Promise.all([
+      customRange(ctx.userId, args.current_since, args.current_until),
+      customRange(ctx.userId, args.comparison_since, args.comparison_until),
       prisma.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
         select: { currency: true },
@@ -169,8 +181,8 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
 
     if (args.group_by === "category") {
       [current, comparison] = await Promise.all([
-        bucketizeByAllocation(ctx.workspaceId, ranges.current.gte, ranges.current.lt),
-        bucketizeByAllocation(ctx.workspaceId, ranges.comparison.gte, ranges.comparison.lt),
+        bucketizeByAllocation(ctx.workspaceId, currentRange.gte, currentRange.lt),
+        bucketizeByAllocation(ctx.workspaceId, comparisonRange.gte, comparisonRange.lt),
       ]);
     } else {
       // group_by=merchant path: category fields not needed (dropped from Transaction in Task 8)
@@ -186,7 +198,7 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
             workspaceId: ctx.workspaceId,
             removedAt: null,
             amount: { gt: 0 },
-            occurredAt: { gte: ranges.current.gte, lt: ranges.current.lt },
+            occurredAt: { gte: currentRange.gte, lt: currentRange.lt },
           },
           select: selectSpec,
         }),
@@ -195,7 +207,7 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
             workspaceId: ctx.workspaceId,
             removedAt: null,
             amount: { gt: 0 },
-            occurredAt: { gte: ranges.comparison.gte, lt: ranges.comparison.lt },
+            occurredAt: { gte: comparisonRange.gte, lt: comparisonRange.lt },
           },
           select: selectSpec,
         }),
@@ -239,8 +251,10 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
 
     const limitedChanges = changes.slice(0, limit);
     return {
-      currentPeriod: args.current_period,
-      comparisonPeriod: args.comparison_period,
+      currentSince: args.current_since,
+      currentUntil: args.current_until,
+      comparisonSince: args.comparison_since,
+      comparisonUntil: args.comparison_until,
       groupBy: args.group_by,
       currency: workspace.currency,
       currentTotal: current.total.toFixed(2),
@@ -249,8 +263,10 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
       percentChange: overallPercent,
       changes: limitedChanges,
       block: toRecapBlock(
-        args.current_period,
-        args.comparison_period,
+        args.current_since,
+        args.current_until,
+        args.comparison_since,
+        args.comparison_until,
         workspace.currency,
         current.total.toFixed(2),
         overallDelta.toFixed(2),
@@ -262,15 +278,17 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
 };
 
 function toRecapBlock(
-  currentPeriod: CurrentPeriod,
-  comparisonPeriod: ComparisonPeriod,
+  currentSince: string,
+  currentUntil: string,
+  comparisonSince: string,
+  comparisonUntil: string,
   currency: string,
   currentTotal: string,
   overallDelta: string,
   changes: Change[],
   totalChanges: number,
 ): PresentationBlock {
-  const periodLabel = `${labelOf(currentPeriod)} vs ${labelOf(comparisonPeriod)}`;
+  const periodLabel = `${formatPeriodLabel(currentSince, currentUntil)} vs ${formatPeriodLabel(comparisonSince, comparisonUntil)}`;
   const deltaNum = parseFloat(overallDelta);
 
   return {
@@ -278,7 +296,7 @@ function toRecapBlock(
     title: "Spending change",
     period_label: periodLabel,
     headline: {
-      label: labelOf(currentPeriod),
+      label: formatPeriodLabel(currentSince, currentUntil),
       amount: currentTotal,
       currency,
       ...(deltaNum !== 0
@@ -310,13 +328,4 @@ function toRecapBlock(
       ? { footer: `Top ${changes.length} of ${totalChanges} changes` }
       : {}),
   };
-}
-
-function labelOf(p: CurrentPeriod | ComparisonPeriod): string {
-  switch (p) {
-    case "this_week":     return "This week";
-    case "this_month":    return "This month";
-    case "previous_week": return "Last week";
-    case "last_month":    return "Last month";
-  }
 }

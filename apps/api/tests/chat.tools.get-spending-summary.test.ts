@@ -43,7 +43,7 @@ describe("getSpendingSummary tool", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
     try {
-      const res = await getSpendingSummary.run(ctx, { period: "this_month", group_by: "category" });
+      const res = await getSpendingSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01", group_by: "category" });
       const coffee = res.groups.find((g) => g.key === catCoffeeId);
       const food = res.groups.find((g) => g.key === catFoodId);
       expect(coffee?.total).toBe("9.00");
@@ -57,7 +57,7 @@ describe("getSpendingSummary tool", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
     try {
-      const res = await getSpendingSummary.run(ctx, { period: "this_month", group_by: "merchant" });
+      const res = await getSpendingSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01", group_by: "merchant" });
       const sb = res.groups.find((g) => g.key === "starbucks");
       expect(sb?.total).toBe("9.00");
     } finally {
@@ -69,7 +69,7 @@ describe("getSpendingSummary tool", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
     try {
-      const res = await getSpendingSummary.run(ctx, { period: "this_month" });
+      const res = await getSpendingSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
       expect(res.groupBy).toBe("category");
     } finally {
       vi.useRealTimers();
@@ -83,7 +83,7 @@ describe("getSpendingSummary tool", () => {
       const other = await prisma.workspace.create({ data: { name: "other" } });
       const oa = await prisma.bankAccount.create({ data: { workspaceId: other.id, name: "x", type: "depository" } });
       await prisma.transaction.create({ data: { workspaceId: other.id, accountId: oa.id, plaidTransactionId: "x", amount: "999.00", merchantRaw: "x", occurredAt: new Date(), rawData: {} } });
-      const res = await getSpendingSummary.run(ctx, { period: "this_month" });
+      const res = await getSpendingSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
       const totals = res.groups.reduce((s, g) => s + parseFloat(g.total), 0);
       expect(totals).toBeLessThan(999);
       await prisma.workspace.delete({ where: { id: other.id } });
@@ -112,7 +112,7 @@ describe("getSpendingSummary tool", () => {
         data: { transactionId: refundTx.id, categoryId: catCoffeeId, amount: "-3.00", source: null },
       });
 
-      const res = await getSpendingSummary.run(ctx, { period: "this_month", group_by: "category" });
+      const res = await getSpendingSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01", group_by: "category" });
       // Coffee total should still be 9.00 (5+4), not 6.00 (9-3)
       const coffee = res.groups.find((g) => g.key === catCoffeeId);
       expect(coffee?.total).toBe("9.00");

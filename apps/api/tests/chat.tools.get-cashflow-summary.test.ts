@@ -38,21 +38,21 @@ describe("getCashflowSummary tool", () => {
   });
 
   it("computes income, expense, and net totals", async () => {
-    const res = await getCashflowSummary.run(ctx, { period: "this_month" });
+    const res = await getCashflowSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     expect(res.incomeTotal).toBe("1000.00");
     expect(res.expenseTotal).toBe("220.00");
     expect(res.netTotal).toBe("780.00");
   });
 
   it("groups by day with YYYY-MM-DD keys when group_by=day (default)", async () => {
-    const res = await getCashflowSummary.run(ctx, { period: "this_month" });
+    const res = await getCashflowSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     expect(res.groupBy).toBe("day");
     expect(res.groups.length).toBeGreaterThan(0);
     expect(res.groups[0].key).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
   it("groups by account", async () => {
-    const res = await getCashflowSummary.run(ctx, { period: "this_month", group_by: "account" });
+    const res = await getCashflowSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01", group_by: "account" });
     const chequing = res.groups.find((g) => g.key === acct1Id);
     const savings = res.groups.find((g) => g.key === acct2Id);
     expect(chequing?.label).toBe("Chequing");
@@ -80,7 +80,7 @@ describe("getCashflowSummary tool", () => {
     const expectedKey = dateKeyInTz(utc, "America/Toronto");
     const utcKey = utc.toISOString().slice(0, 10);
     expect(expectedKey).not.toBe(utcKey); // sanity: the bug would have produced utcKey
-    const res = await getCashflowSummary.run(ctx, { period: "this_month" });
+    const res = await getCashflowSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     expect(res.groups.some((g) => g.key === expectedKey)).toBe(true);
   });
 
@@ -89,7 +89,7 @@ describe("getCashflowSummary tool", () => {
     const u2 = await prisma.user.create({ data: { id: `cf2-${Date.now()}`, email: `cf2-${Date.now()}@t.co`, name: "CF2" } });
     await prisma.membership.create({ data: { userId: u2.id, workspaceId: other.id, role: "owner" } });
     const ctx2: ToolContext = { env: {} as never, workspaceId: other.id, userId: u2.id };
-    const res = await getCashflowSummary.run(ctx2, { period: "this_month" });
+    const res = await getCashflowSummary.run(ctx2, { since: "2026-05-01", until: "2026-06-01" });
     expect(res.incomeTotal).toBe("0.00");
     expect(res.expenseTotal).toBe("0.00");
     expect(res.netTotal).toBe("0.00");

@@ -47,7 +47,7 @@ describe("getCategoryBreakdown tool", () => {
   });
 
   it("returns totals with parent metadata", async () => {
-    const res = await getCategoryBreakdown.run(ctx, { period: "this_month" });
+    const res = await getCategoryBreakdown.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     expect(res.currency).toBe("CAD");
     expect(res.total).toBe("35.00");
     const coffee = res.categories.find((c) => c.categoryId === coffeeId);
@@ -57,25 +57,25 @@ describe("getCategoryBreakdown tool", () => {
   });
 
   it("excludes negative amounts from spending", async () => {
-    const res = await getCategoryBreakdown.run(ctx, { period: "this_month" });
+    const res = await getCategoryBreakdown.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     const food = res.categories.find((c) => c.categoryId === foodId);
     expect(food?.total).toBe("20.00");
   });
 
   it("includes uncategorized bucket by default", async () => {
-    const res = await getCategoryBreakdown.run(ctx, { period: "this_month" });
+    const res = await getCategoryBreakdown.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     const uncat = res.categories.find((c) => c.categoryId === null);
     expect(uncat?.categoryName).toBe("Uncategorized");
     expect(uncat?.total).toBe("5.00");
   });
 
   it("excludes uncategorized when include_uncategorized=false", async () => {
-    const res = await getCategoryBreakdown.run(ctx, { period: "this_month", include_uncategorized: false });
+    const res = await getCategoryBreakdown.run(ctx, { since: "2026-05-01", until: "2026-06-01", include_uncategorized: false });
     expect(res.categories.find((c) => c.categoryId === null)).toBeUndefined();
   });
 
   it("total and share reflect only visible buckets when include_uncategorized=false", async () => {
-    const res = await getCategoryBreakdown.run(ctx, { period: "this_month", include_uncategorized: false });
+    const res = await getCategoryBreakdown.run(ctx, { since: "2026-05-01", until: "2026-06-01", include_uncategorized: false });
     // Categorized spend is 30 (coffee 10 + food 20); uncat (5) is excluded from total and shares.
     expect(res.total).toBe("30.00");
     const food = res.categories.find((c) => c.categoryId === foodId);
@@ -83,7 +83,7 @@ describe("getCategoryBreakdown tool", () => {
   });
 
   it("share sums computed before limit", async () => {
-    const res = await getCategoryBreakdown.run(ctx, { period: "this_month" });
+    const res = await getCategoryBreakdown.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     // shares relative to 35 (total before limit)
     const food = res.categories.find((c) => c.categoryId === foodId);
     expect(food?.share).toBeCloseTo(20 / 35, 5);

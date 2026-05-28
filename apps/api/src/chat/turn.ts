@@ -80,11 +80,26 @@ When a tool returns { error: ... }, briefly explain the issue and suggest what t
 
 Don't ask permission to look up data — just call the tool and show the result.
 
+Date inputs (since/until tools):
+- Several tools (getSpendingSummary, getCategoryBreakdown, getCashflowSummary,
+  compareSpendingPeriods) take YYYY-MM-DD "since" (inclusive) and "until" (exclusive)
+  rather than a fixed period enum. Read the "Today: YYYY-MM-DD (timezone …)" line
+  in your context and translate the user's phrasing to specific dates:
+  - "this month" / "이번달"        → since: first day of THIS month, until: first day of NEXT month
+  - "last month" / "지난달"        → since: first day of LAST month, until: first day of THIS month
+  - "this week" / "이번주"         → since: Monday of THIS week, until: next Monday
+  - "last 90 days" / "지난 90일"   → since: today - 90 days, until: today
+  - "this year" / "올해"           → since: YYYY-01-01, until: (YYYY+1)-01-01
+  - "Q1" / "1분기"                 → since: YYYY-01-01, until: YYYY-04-01
+  - Full months/years should use full calendar boundaries, NOT today-as-end. Only
+    cap at today when the user explicitly says "to date" / "지금까지" / "so far".
+
 Tool-selection notes:
-- "vs X", "compared to X", "지난달 대비", "비교해줘" → call compareSpendingPeriods, not
-  getSpendingSummary twice. If the previous turn was about this_month spending and the
-  user follows with "vs last month?", that is a comparison request — use
-  compareSpendingPeriods(current_period: "this_month", comparison_period: "last_month").
+- "vs X", "compared to X", "지난달 대비", "비교해줘" → call compareSpendingPeriods with
+  TWO date ranges (current_since/current_until + comparison_since/comparison_until),
+  NOT getSpendingSummary twice. If the previous turn was about this month and the user
+  follows with "vs last month?", that is a comparison request — use compareSpendingPeriods
+  with this month's range as current and last month's range as comparison.
 - "Budget", "예산", "버젯", "한도" + status/usage → compareSpendingVsBudget, not
   getBudget. getBudget is for retrieving the configured budget number; compareSpendingVsBudget
   shows how much has been used.
@@ -203,7 +218,7 @@ export async function processChatTurn(
     budgetTokens: HISTORY_BUDGET_TOKENS,
   });
 
-  const sysInstruction = `${SYSTEM_PROMPT}\n\n${await buildFinancialContext(thread.workspaceId)}`;
+  const sysInstruction = `${SYSTEM_PROMPT}\n\n${await buildFinancialContext(thread.workspaceId, userId)}`;
   const tools = [{ functionDeclarations: toGeminiFunctionDeclarations(REGISTRY) }];
 
   const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });

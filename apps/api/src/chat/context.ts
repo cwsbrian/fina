@@ -1,11 +1,33 @@
 import { prisma } from "../db.js";
+import { todayKeyInTz } from "./tools/periods.js";
 
-export async function buildFinancialContext(workspaceId: string): Promise<string> {
-  const [txCount, latestTx, categoryCount] = await Promise.all([
+/** Financial + temporal context injected into the system prompt every
+ *  chat turn. The temporal line is non-negotiable now that recap tools
+ *  accept since/until ISO date keys — the LLM needs an unambiguous
+ *  "today" anchor in the user's timezone to translate "this month",
+ *  "올해", "지난 90일" etc. into specific dates. */
+export async function buildFinancialContext(
+  workspaceId: string,
+  userId: string,
+): Promise<string> {
+  const [txCount, latestTx, categoryCount, { today, tz }] = await Promise.all([
     prisma.transaction.count({ where: { workspaceId, removedAt: null } }),
-    prisma.transaction.findFirst({ where: { workspaceId, removedAt: null }, orderBy: { occurredAt: "desc" }, select: { occurredAt: true } }),
+    prisma.transaction.findFirst({
+      where: { workspaceId, removedAt: null },
+      orderBy: { occurredAt: "desc" },
+      select: { occurredAt: true },
+    }),
     prisma.category.count({ where: { workspaceId, archivedAt: null } }),
+    todayKeyInTz(userId),
   ]);
-  const latestLine = latestTx ? `- Latest transaction date: ${latestTx.occurredAt.toISOString().slice(0, 10)}` : `- No transactions yet`;
-  return [`## Current state`, `- Total transactions: ${txCount}`, latestLine, `- Categories defined: ${categoryCount}`].join("\n");
+  const latestLine = latestTx
+    ? `- Latest transaction date: ${latestTx.occurredAt.toISOString().slice(0, 10)}`
+    : `- No transactions yet`;
+  return [
+    `## Current state`,
+    `- Today: ${today} (timezone ${tz})`,
+    `- Total transactions: ${txCount}`,
+    latestLine,
+    `- Categories defined: ${categoryCount}`,
+  ].join("\n");
 }

@@ -42,16 +42,24 @@ describe("compareSpendingPeriods tool", () => {
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
-  it("throws invalid_period_pair for week vs month mismatch", async () => {
+  it("rejects until <= since (invalid_date_range)", async () => {
     await expect(
-      compareSpendingPeriods.run(ctx, { current_period: "this_week", comparison_period: "last_month", group_by: "category" }),
-    ).rejects.toThrow("invalid_period_pair");
+      compareSpendingPeriods.run(ctx, {
+        current_since: "2026-05-15",
+        current_until: "2026-05-15",
+        comparison_since: "2026-04-01",
+        comparison_until: "2026-05-01",
+        group_by: "category",
+      }),
+    ).rejects.toThrow("invalid_date_range");
   });
 
   it("computes category-level deltas for this_month vs last_month", async () => {
     const res = await compareSpendingPeriods.run(ctx, {
-      current_period: "this_month",
-      comparison_period: "last_month",
+      current_since: "2026-05-01",
+      current_until: "2026-06-01",
+      comparison_since: "2026-04-01",
+      comparison_until: "2026-05-01",
       group_by: "category",
     });
     expect(res.currentTotal).toBe("30.00");
@@ -66,8 +74,10 @@ describe("compareSpendingPeriods tool", () => {
   it("returns null percentChange when comparison total is zero", async () => {
     await prisma.transaction.deleteMany({ where: { workspaceId: wsId, plaidTransactionId: "lm-1" } });
     const res = await compareSpendingPeriods.run(ctx, {
-      current_period: "this_month",
-      comparison_period: "last_month",
+      current_since: "2026-05-01",
+      current_until: "2026-06-01",
+      comparison_since: "2026-04-01",
+      comparison_until: "2026-05-01",
       group_by: "category",
     });
     expect(res.percentChange).toBeNull();
@@ -75,8 +85,10 @@ describe("compareSpendingPeriods tool", () => {
 
   it("group_by=merchant uses normalized merchant key", async () => {
     const res = await compareSpendingPeriods.run(ctx, {
-      current_period: "this_month",
-      comparison_period: "last_month",
+      current_since: "2026-05-01",
+      current_until: "2026-06-01",
+      comparison_since: "2026-04-01",
+      comparison_until: "2026-05-01",
       group_by: "merchant",
     });
     const sub = res.changes.find((c) => c.key === "sub");

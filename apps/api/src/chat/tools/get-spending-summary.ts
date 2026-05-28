@@ -2,12 +2,31 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
-import { basicPeriodRange, dateKeyInTz, resolveUserTz } from "./periods.js";
+import { customRange, dateKeyInTz, resolveUserTz } from "./periods.js";
+import { formatPeriodLabel } from "./recap-label.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
-  period: z.enum(["this_week", "this_month", "last_month"]).describe("Period to summarize."),
-  group_by: z.enum(["category", "merchant", "day"]).describe("Bucket dimension. Defaults to 'category'.").optional(),
+  since: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe(
+      "Inclusive start date (YYYY-MM-DD) in the user's timezone. " +
+        "Translate user phrases to a specific ISO date using the 'Today' anchor in your context: " +
+        "'this month' → first day of the current month; '올해' → YYYY-01-01; 'last 90 days' → today minus 90 days.",
+    ),
+  until: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe(
+      "Exclusive end date (YYYY-MM-DD) in the user's timezone. " +
+        "For 'this month' use the first day of NEXT month; for '올해' use NEXT year's January 1; for '지난주' use this week's Monday. " +
+        "until must be strictly greater than since.",
+    ),
+  group_by: z
+    .enum(["category", "merchant", "day"])
+    .describe("Bucket dimension. Defaults to 'category'.")
+    .optional(),
 });
 
 type Args = z.infer<typeof Args>;
@@ -15,7 +34,8 @@ type Args = z.infer<typeof Args>;
 type Group = { key: string; total: string; count: number };
 
 type Result = {
-  period: Args["period"];
+  since: string;
+  until: string;
   groupBy: NonNullable<Args["group_by"]>;
   groups: Group[];
   block: PresentationBlock;
@@ -28,11 +48,14 @@ const MAX_RECAP_ROWS = 8;
 
 export const getSpendingSummary: ToolDef<Args, Result> = {
   name: "getSpendingSummary",
-  description: "Total spending in a period bucketed by category, merchant, or day.",
+  description:
+    "Total CAD spending in a date range, bucketed by category, merchant, or day. " +
+    "Use whenever the user asks how much they spent over a period — single range only; for cross-period comparisons use compareSpendingPeriods. " +
+    "Pass YYYY-MM-DD dates from the 'Today' anchor in your context.",
   args: Args,
   async run(ctx, args) {
     const groupBy = args.group_by ?? "category";
-    const { gte, lt } = await basicPeriodRange(ctx.userId, args.period);
+    const { gte, lt } = await customRange(ctx.userId, args.since, args.until);
     const tz = await resolveUserTz(ctx.userId);
 
     let groups: Group[];
@@ -93,18 +116,16 @@ export const getSpendingSummary: ToolDef<Args, Result> = {
       rowLabels = new Map(groups.map((g) => [g.key, g.key]));
     }
 
-    const block = toRecapBlock(groups, rowLabels, args.period, groupBy);
-    return { period: args.period, groupBy, groups, block };
+    const block = toRecapBlock(groups, rowLabels, args.since, args.until, groupBy);
+    return { since: args.since, until: args.until, groupBy, groups, block };
   },
 };
 
-/** Build the presentation block from sorted groups. Title + period label
- *  speak in user terms; bar widths scale to the top row so the eye reads
- *  relative magnitude at a glance. */
 function toRecapBlock(
   groups: Group[],
   labels: Map<string, string>,
-  period: Args["period"],
+  since: string,
+  until: string,
   groupBy: NonNullable<Args["group_by"]>,
 ): PresentationBlock {
   const totalCents = groups.reduce(
@@ -112,15 +133,13 @@ function toRecapBlock(
     0,
   );
   const total = (totalCents / 100).toFixed(2);
-  const periodLabel = periodToLabel(period);
-  const groupByLabel = groupByToTitle(groupBy);
   const top = groups.slice(0, MAX_RECAP_ROWS);
   const maxAmount = top[0] ? parseFloat(top[0].total) : 0;
 
   return {
     type: "recap",
-    title: `Spending · ${groupByLabel}`,
-    period_label: periodLabel,
+    title: `Spending · ${groupByToTitle(groupBy)}`,
+    period_label: formatPeriodLabel(since, until),
     headline: {
       label: "Total",
       amount: total,
@@ -136,14 +155,6 @@ function toRecapBlock(
       ? { footer: `Top ${top.length} of ${groups.length}` }
       : {}),
   };
-}
-
-function periodToLabel(p: Args["period"]): string {
-  switch (p) {
-    case "this_week":  return "This week";
-    case "this_month": return "This month";
-    case "last_month": return "Last month";
-  }
 }
 
 function groupByToTitle(g: NonNullable<Args["group_by"]>): string {

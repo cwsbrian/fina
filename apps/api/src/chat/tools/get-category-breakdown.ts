@@ -3,12 +3,18 @@ import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
-import { basicPeriodRange, type BasicPeriod } from "./periods.js";
+import { customRange } from "./periods.js";
+import { formatPeriodLabel } from "./recap-label.js";
 
 const Args = z.object({
-  period: z
-    .enum(["this_week", "this_month", "last_month"])
-    .describe("Period to summarize spending by category."),
+  since: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Inclusive start date (YYYY-MM-DD) in the user's timezone."),
+  until: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .describe("Exclusive end date (YYYY-MM-DD) in the user's timezone — must be > since."),
   include_uncategorized: z
     .boolean()
     .describe("Whether to include uncategorized spending as its own bucket. Defaults to true.")
@@ -37,7 +43,8 @@ type Bucket = {
 };
 
 type Result = {
-  period: BasicPeriod;
+  since: string;
+  until: string;
   currency: string;
   total: string;
   categories: Bucket[];
@@ -47,13 +54,14 @@ type Result = {
 export const getCategoryBreakdown: ToolDef<Args, Result> = {
   name: "getCategoryBreakdown",
   description:
-    "Summarize CAD spending by readable category name, including parent category and visual metadata.",
+    "Summarize CAD spending by readable category name for a date range, including parent category and visual metadata. " +
+    "Pass YYYY-MM-DD since/until from the 'Today' anchor in your context.",
   args: Args,
   async run(ctx, args) {
     const includeUncat = args.include_uncategorized ?? true;
     const limit = args.limit ?? 10;
     const [{ gte, lt }, workspace] = await Promise.all([
-      basicPeriodRange(ctx.userId, args.period),
+      customRange(ctx.userId, args.since, args.until),
       prisma.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
         select: { currency: true },
@@ -141,30 +149,28 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
     }));
 
     return {
-      period: args.period,
+      since: args.since,
+      until: args.until,
       currency: workspace.currency,
       total: total.toFixed(2),
       categories,
-      block: toRecapBlock(args.period, workspace.currency, total.toFixed(2), categories, entries.length),
+      block: toRecapBlock(args.since, args.until, workspace.currency, total.toFixed(2), categories, entries.length),
     };
   },
 };
 
 function toRecapBlock(
-  period: BasicPeriod,
+  since: string,
+  until: string,
   currency: string,
   total: string,
   categories: Bucket[],
   totalEntries: number,
 ): PresentationBlock {
-  const periodLabel =
-    period === "this_week" ? "This week" :
-    period === "this_month" ? "This month" : "Last month";
-
   return {
     type: "recap",
     title: "By category",
-    period_label: periodLabel,
+    period_label: formatPeriodLabel(since, until),
     headline: {
       label: "Total",
       amount: total,

@@ -198,6 +198,61 @@ export async function comparisonRanges(
   throw new Error("invalid_period_pair");
 }
 
+/** Range from YYYY-MM-DD `since` (inclusive) to YYYY-MM-DD `until` (exclusive),
+ *  both interpreted as local midnight in the user's timezone. Powers the
+ *  flexible date inputs on getSpendingSummary, getCategoryBreakdown,
+ *  getCashflowSummary, and compareSpendingPeriods — the LLM converts
+ *  natural language ("올해", "지난 90일", "Q1") to ISO date keys and the
+ *  tool just queries.
+ *
+ *  Validation throws Error('invalid_date_format') on malformed inputs and
+ *  Error('invalid_date_range') when until <= since. Callers should let
+ *  these propagate; the chat dispatcher surfaces them as tool errors
+ *  the model can react to. */
+export async function customRange(
+  userId: string,
+  since: string,
+  until: string,
+): Promise<{ gte: Date; lt: Date }> {
+  if (!isIsoDate(since) || !isIsoDate(until)) {
+    throw new Error("invalid_date_format");
+  }
+  const tz = await resolveUserTz(userId);
+  const [sy, sm, sd] = since.split("-").map(Number) as [number, number, number];
+  const [uy, um, ud] = until.split("-").map(Number) as [number, number, number];
+  const gte = localMidnightToUtc(sy, sm, sd, tz);
+  const lt = localMidnightToUtc(uy, um, ud, tz);
+  if (lt.getTime() <= gte.getTime()) {
+    throw new Error("invalid_date_range");
+  }
+  return { gte, lt };
+}
+
+function isIsoDate(s: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return false;
+  const [y, m, d] = s.split("-").map(Number) as [number, number, number];
+  if (m < 1 || m > 12) return false;
+  if (d < 1 || d > 31) return false;
+  // Round-trip via Date.UTC to reject e.g. 2026-02-30.
+  const trial = new Date(Date.UTC(y, m - 1, d));
+  return (
+    trial.getUTCFullYear() === y &&
+    trial.getUTCMonth() === m - 1 &&
+    trial.getUTCDate() === d
+  );
+}
+
+/** Today's date key (YYYY-MM-DD) in the user's timezone. Cheap helper for
+ *  buildFinancialContext to inject into the system prompt so the LLM can
+ *  resolve "이번달" / "this week" to specific ISO dates without guessing. */
+export async function todayKeyInTz(
+  userId: string,
+  now: Date = new Date(),
+): Promise<{ today: string; tz: string }> {
+  const tz = await resolveUserTz(userId);
+  return { today: dateKeyInTz(now, tz), tz };
+}
+
 // Public: first day of the calendar month at `monthsOffset` from the user's
 // "now" (interpreted in their tz). Returns Date at 12:00:00.000Z on the
 // first-of-month so the @db.Date column receives the right calendar date
