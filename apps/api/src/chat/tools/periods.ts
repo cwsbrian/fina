@@ -214,8 +214,13 @@ export async function customRange(
   since: string,
   until: string,
 ): Promise<{ gte: Date; lt: Date }> {
-  if (!isIsoDate(since) || !isIsoDate(until)) {
-    throw new Error("invalid_date_format");
+  // Per-arg validation so the error tells the LLM exactly which date to
+  // fix — important for compareSpendingPeriods which takes 4 date keys.
+  if (!isIsoDate(since)) {
+    throw new Error(`invalid_date_format: since=${JSON.stringify(since)}`);
+  }
+  if (!isIsoDate(until)) {
+    throw new Error(`invalid_date_format: until=${JSON.stringify(until)}`);
   }
   const tz = await resolveUserTz(userId);
   const [sy, sm, sd] = since.split("-").map(Number) as [number, number, number];
@@ -223,7 +228,9 @@ export async function customRange(
   const gte = localMidnightToUtc(sy, sm, sd, tz);
   const lt = localMidnightToUtc(uy, um, ud, tz);
   if (lt.getTime() <= gte.getTime()) {
-    throw new Error("invalid_date_range");
+    throw new Error(
+      `invalid_date_range: until (${until}) must be strictly greater than since (${since})`,
+    );
   }
   return { gte, lt };
 }
@@ -241,6 +248,21 @@ function isIsoDate(s: string): boolean {
     trial.getUTCDate() === d
   );
 }
+
+/** Shared description fragments for `since` / `until` zod args across all
+ *  flexible-date tools. Keep these in one place so descriptions stay
+ *  consistent — the LLM uses them when deciding tool args, and per-tool
+ *  divergence causes ambiguous behaviour. */
+export const SINCE_ARG_DESC =
+  "Inclusive start date (YYYY-MM-DD) in the user's timezone. " +
+  "Translate user phrases to a specific ISO date using the 'Today' anchor in " +
+  "your context — see the 'Date inputs' section of the system prompt for the " +
+  "phrase → date mapping table.";
+
+export const UNTIL_ARG_DESC =
+  "Exclusive end date (YYYY-MM-DD) in the user's timezone. " +
+  "For 'this month' use the first day of NEXT month; for '올해' use NEXT year's " +
+  "January 1. until must be strictly greater than since.";
 
 /** Today's date key (YYYY-MM-DD) in the user's timezone. Cheap helper for
  *  buildFinancialContext to inject into the system prompt so the LLM can

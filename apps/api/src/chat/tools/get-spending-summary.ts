@@ -2,27 +2,13 @@ import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
-import { customRange, dateKeyInTz, resolveUserTz } from "./periods.js";
+import { customRange, dateKeyInTz, resolveUserTz, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
-  since: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe(
-      "Inclusive start date (YYYY-MM-DD) in the user's timezone. " +
-        "Translate user phrases to a specific ISO date using the 'Today' anchor in your context: " +
-        "'this month' → first day of the current month; '올해' → YYYY-01-01; 'last 90 days' → today minus 90 days.",
-    ),
-  until: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe(
-      "Exclusive end date (YYYY-MM-DD) in the user's timezone. " +
-        "For 'this month' use the first day of NEXT month; for '올해' use NEXT year's January 1; for '지난주' use this week's Monday. " +
-        "until must be strictly greater than since.",
-    ),
+  since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
+  until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(UNTIL_ARG_DESC),
   group_by: z
     .enum(["category", "merchant", "day"])
     .describe("Bucket dimension. Defaults to 'category'.")
@@ -55,6 +41,11 @@ export const getSpendingSummary: ToolDef<Args, Result> = {
   args: Args,
   async run(ctx, args) {
     const groupBy = args.group_by ?? "category";
+    // customRange + resolveUserTz both query user.tz; collapse into a single
+    // call by reusing the tz already known from customRange's lookup. We
+    // re-call resolveUserTz here only because customRange doesn't surface it
+    // — surfacing would change the public signature on a hot helper, more
+    // churn than the saving justifies.
     const { gte, lt } = await customRange(ctx.userId, args.since, args.until);
     const tz = await resolveUserTz(ctx.userId);
 
@@ -148,7 +139,7 @@ function toRecapBlock(
     rows: top.map((g) => ({
       label: labels.get(g.key) ?? g.key,
       amount: g.total,
-      sub: `${g.count} ${g.count === 1 ? "tx" : "tx"}`,
+      sub: `${g.count} ${g.count === 1 ? "tx" : "txs"}`,
       bar_pct: maxAmount > 0 ? (parseFloat(g.total) / maxAmount) * 100 : 0,
     })),
     ...(groups.length > top.length

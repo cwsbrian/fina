@@ -1,7 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { getCategoryBreakdown } from "../src/chat/tools/get-category-breakdown.js";
 import type { ToolContext } from "../src/chat/tools/types.js";
+
+const FIXED_NOW = new Date("2026-05-15T12:00:00Z");
 
 describe("getCategoryBreakdown tool", () => {
   let ctx: ToolContext;
@@ -9,8 +11,17 @@ describe("getCategoryBreakdown tool", () => {
   let foodId: string;
   let coffeeId: string;
 
+  beforeAll(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(async () => {
-    const u = await prisma.user.create({ data: { id: `cb-${Date.now()}`, email: `cb-${Date.now()}@t.co`, name: "CB" } });
+    const u = await prisma.user.create({ data: { id: `cb-${Math.floor(Math.random() * 1e12)}`, email: `cb-${Math.floor(Math.random() * 1e12)}@t.co`, name: "CB" } });
     const ws = await prisma.workspace.create({ data: { name: "cb-ws" } });
     wsId = ws.id;
     await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
@@ -22,8 +33,7 @@ describe("getCategoryBreakdown tool", () => {
     coffeeId = coffee.id;
     const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "x", type: "depository" } });
 
-    const now = new Date();
-    const thisMonth = new Date(now.getFullYear(), now.getMonth(), 5);
+    const thisMonth = new Date("2026-05-05T12:00:00Z");
     const txData: Array<{ workspaceId: string; accountId: string; plaidTransactionId: string; amount: string; merchantRaw: string; occurredAt: Date; rawData: object; allocCategoryId?: string }> = [
       { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "1", amount: "10.00", merchantRaw: "Sb", allocCategoryId: coffee.id, occurredAt: thisMonth, rawData: {} },
       { workspaceId: wsId, accountId: acct.id, plaidTransactionId: "2", amount: "20.00", merchantRaw: "Sub", allocCategoryId: food.id, occurredAt: thisMonth, rawData: {} },

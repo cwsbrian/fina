@@ -3,18 +3,12 @@ import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
-import { customRange, dateKeyInTz, resolveUserTz } from "./periods.js";
+import { customRange, dateKeyInTz, resolveUserTz, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
 
 const Args = z.object({
-  since: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Inclusive start date (YYYY-MM-DD) in the user's timezone."),
-  until: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Exclusive end date (YYYY-MM-DD) in the user's timezone — must be > since."),
+  since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
+  until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(UNTIL_ARG_DESC),
   group_by: z
     .enum(["day", "account"])
     .describe("Optional grouping dimension. Defaults to day.")
@@ -164,16 +158,27 @@ function toRecapBlock(
 ): PresentationBlock {
   const netNum = parseFloat(netTotal);
 
-  const summaryRows = [
+  // The `delta` field is repurposed here to tint the row (up=green income,
+  // down=red expense). Omit when the side is zero so the renderer doesn't
+  // show a $0 ↑ / $0 ↓ next to a zero row.
+  const summaryRows: Array<{
+    label: string;
+    amount: string;
+    delta?: { value: string; direction: "up" | "down" };
+  }> = [
     {
       label: "Income",
       amount: incomeTotal,
-      delta: { value: incomeTotal, direction: "up" as const },
+      ...(parseFloat(incomeTotal) > 0
+        ? { delta: { value: incomeTotal, direction: "up" as const } }
+        : {}),
     },
     {
       label: "Expenses",
       amount: expenseTotal,
-      delta: { value: expenseTotal, direction: "down" as const },
+      ...(parseFloat(expenseTotal) > 0
+        ? { delta: { value: expenseTotal, direction: "down" as const } }
+        : {}),
     },
   ];
 

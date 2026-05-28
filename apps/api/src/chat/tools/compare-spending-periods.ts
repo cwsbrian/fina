@@ -4,26 +4,22 @@ import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { normalizeMerchant } from "../../categorize/normalize.js";
 import type { ToolDef } from "./types.js";
-import { customRange } from "./periods.js";
+import { customRange, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
 
 const Args = z.object({
-  current_since: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Inclusive start of the CURRENT range (YYYY-MM-DD)."),
-  current_until: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Exclusive end of the CURRENT range (YYYY-MM-DD)."),
-  comparison_since: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Inclusive start of the COMPARISON range (YYYY-MM-DD) — the older period."),
-  comparison_until: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Exclusive end of the COMPARISON range (YYYY-MM-DD)."),
+  current_since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(
+    "CURRENT range: " + SINCE_ARG_DESC,
+  ),
+  current_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(
+    "CURRENT range: " + UNTIL_ARG_DESC,
+  ),
+  comparison_since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(
+    "COMPARISON range (the older period): " + SINCE_ARG_DESC,
+  ),
+  comparison_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(
+    "COMPARISON range (the older period): " + UNTIL_ARG_DESC,
+  ),
   group_by: z.enum(["category", "merchant"]).describe("Dimension to compare spending by."),
   limit: z
     .number()
@@ -71,7 +67,16 @@ type Row = {
   occurredAt: Date;
 };
 
-type Bucket = { key: string; label: string; total: Prisma.Decimal; count: number };
+type Bucket = {
+  key: string;
+  label: string;
+  total: Prisma.Decimal;
+  count: number;
+  /** Merchant mode only: tracks the most recent transaction's timestamp so
+   *  the displayed label can adopt the merchantRaw seen on that newest tx.
+   *  Always populated for merchant mode; left undefined in category mode. */
+  lastSeenTs?: number;
+};
 
 function bucketize(rows: Row[], groupBy: "category" | "merchant"): {
   map: Map<string, Bucket>;
@@ -94,14 +99,20 @@ function bucketize(rows: Row[], groupBy: "category" | "merchant"): {
     if (cur) {
       cur.total = cur.total.plus(r.amount);
       cur.count += 1;
-      // prefer the most recent raw merchant as label for merchant mode
-      if (groupBy === "merchant" && r.occurredAt.getTime() >= (cur as Bucket & { _ts?: number })._ts!) {
+      // Prefer the most recent raw merchant as label for merchant mode.
+      // cur.lastSeenTs is guaranteed set on first-insertion below for
+      // merchant mode, so no non-null assertion needed.
+      if (
+        groupBy === "merchant" &&
+        cur.lastSeenTs !== undefined &&
+        r.occurredAt.getTime() >= cur.lastSeenTs
+      ) {
         cur.label = r.merchantRaw;
-        (cur as Bucket & { _ts?: number })._ts = r.occurredAt.getTime();
+        cur.lastSeenTs = r.occurredAt.getTime();
       }
     } else {
-      const b: Bucket & { _ts?: number } = { key, label, total: new Prisma.Decimal(r.amount), count: 1 };
-      if (groupBy === "merchant") b._ts = r.occurredAt.getTime();
+      const b: Bucket = { key, label, total: new Prisma.Decimal(r.amount), count: 1 };
+      if (groupBy === "merchant") b.lastSeenTs = r.occurredAt.getTime();
       map.set(key, b);
     }
     total = total.plus(r.amount);
@@ -145,7 +156,7 @@ async function bucketizeByAllocation(
     const key = r.categoryId ?? "uncategorized";
     const label = r.categoryId ? (catMap.get(r.categoryId) ?? "Unknown") : "Uncategorized";
     const rowTotal = r._sum.amount ?? new Prisma.Decimal(0);
-    map.set(key, { key, label, total: new Prisma.Decimal(rowTotal), count: r._count._all });
+    map.set(key, { key, label, total: rowTotal, count: r._count._all });
     total = total.plus(rowTotal);
   }
   return { map, total };

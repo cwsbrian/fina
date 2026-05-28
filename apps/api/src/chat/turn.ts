@@ -85,14 +85,28 @@ Date inputs (since/until tools):
   compareSpendingPeriods) take YYYY-MM-DD "since" (inclusive) and "until" (exclusive)
   rather than a fixed period enum. Read the "Today: YYYY-MM-DD (timezone …)" line
   in your context and translate the user's phrasing to specific dates:
-  - "this month" / "이번달"        → since: first day of THIS month, until: first day of NEXT month
-  - "last month" / "지난달"        → since: first day of LAST month, until: first day of THIS month
-  - "this week" / "이번주"         → since: Monday of THIS week, until: next Monday
-  - "last 90 days" / "지난 90일"   → since: today - 90 days, until: today
-  - "this year" / "올해"           → since: YYYY-01-01, until: (YYYY+1)-01-01
-  - "Q1" / "1분기"                 → since: YYYY-01-01, until: YYYY-04-01
-  - Full months/years should use full calendar boundaries, NOT today-as-end. Only
-    cap at today when the user explicitly says "to date" / "지금까지" / "so far".
+  - "this month" / "이번달"          → since: first day of THIS month, until: first day of NEXT month
+  - "last month" / "지난달"          → since: first day of LAST month, until: first day of THIS month
+  - "this week" / "이번주"           → since: Monday of THIS week, until: next Monday
+  - "last week" / "지난주"           → since: Monday of LAST week, until: this Monday
+  - "this year" / "올해"             → since: YYYY-01-01, until: (YYYY+1)-01-01
+  - "last year" / "작년"             → since: (YYYY-1)-01-01, until: YYYY-01-01
+  - "in <Month>" / "<Month>에"       → since: YYYY-MM-01, until: first day of next month
+                                       (year inferred — use current year unless the user
+                                       names a different one)
+  - "Q1 / Q2 / Q3 / Q4" / "N분기"    → since: YYYY-{01,04,07,10}-01, until: 3 months later
+  - "last N days" / "지난 N일"       → since: today - N days, until: today
+  - "today" / "오늘"                 → since: today, until: today + 1
+  - "yesterday" / "어제"             → since: today - 1, until: today
+  - Full months/years use full calendar boundaries, NOT today-as-end. Only cap at
+    today when the user explicitly says "to date" / "지금까지" / "so far".
+
+Examples (where "Today" in your context is 2026-05-27):
+  - "이번달"        → since=2026-05-01, until=2026-06-01
+  - "작년"         → since=2025-01-01, until=2026-01-01
+  - "지난 30일"    → since=2026-04-27, until=2026-05-27
+  - "Q1"          → since=2026-01-01, until=2026-04-01
+  - "March"       → since=2026-03-01, until=2026-04-01
 
 Tool-selection notes:
 - "vs X", "compared to X", "지난달 대비", "비교해줘" → call compareSpendingPeriods with

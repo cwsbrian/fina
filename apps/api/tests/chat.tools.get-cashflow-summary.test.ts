@@ -1,7 +1,11 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { getCashflowSummary } from "../src/chat/tools/get-cashflow-summary.js";
 import type { ToolContext } from "../src/chat/tools/types.js";
+
+// All fixtures and query ranges below assume May 2026 — pin the system
+// clock so the test is independent of the real calendar date.
+const FIXED_NOW = new Date("2026-05-15T12:00:00Z");
 
 describe("getCashflowSummary tool", () => {
   let ctx: ToolContext;
@@ -9,8 +13,17 @@ describe("getCashflowSummary tool", () => {
   let acct1Id: string;
   let acct2Id: string;
 
+  beforeAll(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(FIXED_NOW);
+  });
+
+  afterAll(() => {
+    vi.useRealTimers();
+  });
+
   beforeEach(async () => {
-    const u = await prisma.user.create({ data: { id: `cf-${Date.now()}`, email: `cf-${Date.now()}@t.co`, name: "CF" } });
+    const u = await prisma.user.create({ data: { id: `cf-${Math.floor(Math.random() * 1e12)}`, email: `cf-${Math.floor(Math.random() * 1e12)}@t.co`, name: "CF" } });
     const ws = await prisma.workspace.create({ data: { name: "cf-ws" } });
     wsId = ws.id;
     await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
@@ -20,9 +33,8 @@ describe("getCashflowSummary tool", () => {
     acct1Id = a1.id;
     acct2Id = a2.id;
 
-    const now = new Date();
-    const d1 = new Date(now.getFullYear(), now.getMonth(), 3);
-    const d2 = new Date(now.getFullYear(), now.getMonth(), 7);
+    const d1 = new Date("2026-05-03T12:00:00Z");
+    const d2 = new Date("2026-05-07T12:00:00Z");
     await prisma.transaction.createMany({
       data: [
         { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "in-1", amount: "-1000.00", merchantRaw: "Payroll", occurredAt: d1, rawData: {} },

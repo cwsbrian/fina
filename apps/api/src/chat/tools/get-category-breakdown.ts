@@ -3,18 +3,12 @@ import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
-import { customRange } from "./periods.js";
+import { customRange, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
 
 const Args = z.object({
-  since: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Inclusive start date (YYYY-MM-DD) in the user's timezone."),
-  until: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .describe("Exclusive end date (YYYY-MM-DD) in the user's timezone — must be > since."),
+  since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
+  until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(UNTIL_ARG_DESC),
   include_uncategorized: z
     .boolean()
     .describe("Whether to include uncategorized spending as its own bucket. Defaults to true.")
@@ -126,9 +120,11 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
             color: null,
             icon: null,
           };
+      // r._sum.amount is already Prisma.Decimal (or null) — fall back to a
+      // fresh zero rather than re-wrap when it's already a Decimal.
       const rowTotal = r._sum.amount ?? new Prisma.Decimal(0);
       const rowCount = r._count._all;
-      buckets.set(key, { meta, total: new Prisma.Decimal(rowTotal), count: rowCount });
+      buckets.set(key, { meta, total: rowTotal, count: rowCount });
       total = total.plus(rowTotal);
     }
 
@@ -181,7 +177,7 @@ function toRecapBlock(
         ? `${c.parentCategoryName} · ${c.categoryName}`
         : c.categoryName,
       amount: c.total,
-      sub: `${c.count} ${c.count === 1 ? "tx" : "tx"} · ${Math.round(c.share * 100)}%`,
+      sub: `${c.count} ${c.count === 1 ? "tx" : "txs"} · ${Math.round(c.share * 100)}%`,
       bar_pct: Math.round(c.share * 100),
     })),
     ...(totalEntries > categories.length
