@@ -188,17 +188,11 @@ export default function Chats() {
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <View style={styles.titleRow}>
                     {unread && <View style={styles.unreadDot} />}
-                    <Text
-                      style={[
-                        styles.rowTitle,
-                        unread ? styles.rowTitleUnread : styles.rowTitleRead,
-                      ]}
-                      numberOfLines={1}
-                    >
+                    <Text style={styles.rowTitle} numberOfLines={1}>
                       {item.title ?? item.firstMessagePreview ?? "New chat"}
                     </Text>
                   </View>
-                  <Text style={[styles.rowMeta, !unread && styles.rowMetaRead]}>
+                  <Text style={styles.rowMeta}>
                     {[
                       relativeTime(item.lastMessageAt),
                       // Hide the workspace tag when the user is in a
@@ -283,14 +277,11 @@ const styles = StyleSheet.create({
   ctaText: { ...type$.button, color: colors.onPrimary },
   row: { flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.sm + 2 },
   titleRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  rowTitle: { ...type$.titleSm, flex: 1, minWidth: 0 },
-  // Unread = full ink + bold. Read = muted body color + regular weight —
-  // a single visual variable (weight + color contrast) drives the
-  // distinction so the list reads at a glance.
-  rowTitleUnread: { fontWeight: "700", color: colors.ink },
-  rowTitleRead: { fontWeight: "500", color: colors.body },
+  // Read/unread share the same title weight + color. Unread is signaled
+  // by the inline mint dot before the title + the badge on the right —
+  // no need to dim read rows further.
+  rowTitle: { ...type$.titleSm, flex: 1, minWidth: 0, color: colors.ink },
   rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
-  rowMetaRead: { color: colors.mutedSoft },
   sep: { height: 1, backgroundColor: colors.hairlineSoft },
   unreadDot: {
     width: 8,
