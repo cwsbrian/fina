@@ -36,7 +36,13 @@ export type RecurringRow = {
   createdAt: string;
 };
 
-export type AddRecurringOutput = { recurring: RecurringRow };
+export type AddRecurringOutput = {
+  recurring: RecurringRow;
+  /** True when the upsert inserted a new row; false when it updated an
+   *  existing row matched by case-insensitive name. Lets the chat
+   *  confirmation copy say "Added" vs "Updated". */
+  wasCreated: boolean;
+};
 export type ListRecurringOutput = { recurring: RecurringRow[] };
 
 function normalizeName(raw: string): string {
@@ -158,8 +164,14 @@ export async function addRecurringService(
     cadence: input.cadence,
     nextOccurrenceDate: periodDate,
   };
-  const row = await withWorkspaceLock(ctx.workspaceId, async (tx) => {
-    return await tx.recurringExpense.upsert({
+  const { row, wasCreated } = await withWorkspaceLock(ctx.workspaceId, async (tx) => {
+    const existing = await tx.recurringExpense.findUnique({
+      where: {
+        workspaceId_nameNormalized: { workspaceId: ctx.workspaceId, nameNormalized },
+      },
+      select: { id: true },
+    });
+    const upserted = await tx.recurringExpense.upsert({
       where: {
         workspaceId_nameNormalized: {
           workspaceId: ctx.workspaceId,
@@ -177,12 +189,13 @@ export async function addRecurringService(
       },
       include: { category: { select: { name: true } } },
     });
+    return { row: upserted, wasCreated: !existing };
   });
   const workspace = await prisma.workspace.findUniqueOrThrow({
     where: { id: ctx.workspaceId },
     select: { currency: true },
   });
-  return { recurring: formatRow(row, workspace.currency) };
+  return { recurring: formatRow(row, workspace.currency), wasCreated };
 }
 
 export async function listRecurringService(
@@ -273,7 +286,7 @@ export async function updateRecurringService(
     where: { id: ctx.workspaceId },
     select: { currency: true },
   });
-  return { recurring: formatRow(row, workspace.currency) };
+  return { recurring: formatRow(row, workspace.currency), wasCreated: false };
 }
 
 export async function removeRecurringByIdService(

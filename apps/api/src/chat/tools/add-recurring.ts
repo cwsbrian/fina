@@ -33,6 +33,7 @@ export const addRecurring: ToolDef<
       categoryName: string | null;
       merchantNormalized: string | null;
     };
+    wasCreated: boolean;
   }
 > = {
   name: "addRecurring",
@@ -76,6 +77,7 @@ export const addRecurring: ToolDef<
     const out = await addRecurringService({ workspaceId: ctx.workspaceId }, serviceInput);
     return {
       recurring: { ...out.recurring, categoryName },
+      wasCreated: out.wasCreated,
     };
   },
 };

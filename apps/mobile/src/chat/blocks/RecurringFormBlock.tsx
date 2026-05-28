@@ -134,10 +134,12 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
     );
   }
 
+  // Don't render block.question inside the card — the LLM emits it
+  // again as a sibling text bubble above this card, so showing it here
+  // is a visible duplicate. The bubble is the question; the card is
+  // the answer surface.
   return (
     <BlockCard>
-      <Text style={styles.question}>{block.question}</Text>
-
       <View style={styles.field}>
         <Text style={styles.label}>Name</Text>
         <TextInput
@@ -228,7 +230,9 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
           {submitting ? (
             <ActivityIndicator size="small" color={colors.onPrimary} />
           ) : (
-            <Text style={styles.btnSubmitText}>Add</Text>
+            <Text style={styles.btnSubmitText}>
+              {block.mode === "update" ? "Update" : "Add"}
+            </Text>
           )}
         </Pressable>
       </View>

@@ -212,4 +212,10 @@ export type PresentationBlock =
       /** Currency for the amount input — defaults to "CAD" on render
        *  if omitted. */
       currency?: string;
+      /** "add" when no existing recurring matches the name (fresh
+       *  insert), "update" when the form pre-filled from an existing
+       *  row. Drives the submit button copy ("Add" vs "Update") and
+       *  the post-submit confirmation message. Optional for backward
+       *  compatibility — older clients fall back to "add". */
+      mode?: "add" | "update";
     };

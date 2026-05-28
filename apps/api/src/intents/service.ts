@@ -28,12 +28,25 @@ function confirmationFor(
   const ko = locale.startsWith("ko");
   switch (tool) {
     case "addRecurring": {
-      const r = (result as { recurring?: { name: string; amount: string; cadence: string; nextOccurrenceDate: string } }).recurring;
+      const typed = result as {
+        recurring?: { name: string; amount: string; cadence: string; nextOccurrenceDate: string };
+        wasCreated?: boolean;
+      };
+      const r = typed.recurring;
       if (!r) return null;
       const c = cadenceLabel(r.cadence, ko);
       const sym = "$"; // CAD default; downstream can localize later
-      return ko
-        ? `${r.name}을 ${c} ${sym}${r.amount} 정기지출로 추가했어요. 다음 결제: ${r.nextOccurrenceDate}.`
+      // wasCreated false = pre-existing row was updated. Switch verb so
+      // the user sees "Updated Netflix..." not "Added Netflix..." when
+      // they're modifying an existing subscription.
+      const updated = typed.wasCreated === false;
+      if (ko) {
+        return updated
+          ? `${r.name}을 ${c} ${sym}${r.amount}로 업데이트했어요. 다음 결제: ${r.nextOccurrenceDate}.`
+          : `${r.name}을 ${c} ${sym}${r.amount} 정기지출로 추가했어요. 다음 결제: ${r.nextOccurrenceDate}.`;
+      }
+      return updated
+        ? `Updated ${r.name} to ${c} ${sym}${r.amount}. Next charge: ${r.nextOccurrenceDate}.`
         : `Added ${r.name} as a ${c} recurring expense for ${sym}${r.amount}. Next charge: ${r.nextOccurrenceDate}.`;
     }
     case "removeRecurring": {

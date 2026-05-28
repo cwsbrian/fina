@@ -108,6 +108,7 @@ export const presentRecurringForm: ToolDef<
         intent_id: out.intent.id,
         defaults,
         currency: "CAD",
+        mode: existing ? "update" : "add",
       },
     };
   },
