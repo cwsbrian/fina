@@ -23,22 +23,19 @@ export type GoogleIapConfig = {
 
 export type IapConfig = { apple: AppleIapConfig; google: GoogleIapConfig };
 
-/** Returns a fully-validated IAP config or throws HttpError(503,
- *  "iap_not_configured"). The thrown error NEVER carries any portion
- *  of an env value — only the var key name. Callers should use this
- *  inside route handlers / sync helpers so that IAP-less dev / test
- *  envs surface a clean 503 rather than a generic 500. */
-export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
-  const need = (k: string): string => {
-    const v = env[k];
-    if (!v) throw new HttpError(503, "iap_not_configured", `${k} is not set`);
-    return v;
-  };
+const need = (env: NodeJS.ProcessEnv) => (k: string): string => {
+  const v = env[k];
+  if (!v) throw new HttpError(503, "iap_not_configured", `${k} is not set`);
+  return v;
+};
 
-  const appleKeyRaw = need("APPLE_ASC_PRIVATE_KEY");
-  // Try raw PEM first; fall back to base64 if the header marker is missing.
-  // Buffer.from(..., "base64") never throws (invalid chars are silently
-  // skipped), so the subsequent shape check catches garbage decodes.
+/** Validate ONLY the Apple half. Use when the request is known to be
+ *  iOS — avoids forcing Google env (and vice versa with the Google
+ *  variant). When you need both halves at once (e.g., the IAP webhook
+ *  route that fans in both ASSN + RTDN), use requireIapEnv(). */
+export function requireAppleIapEnv(env: NodeJS.ProcessEnv): AppleIapConfig {
+  const n = need(env);
+  const appleKeyRaw = n("APPLE_ASC_PRIVATE_KEY");
   const appleKey = appleKeyRaw.includes("BEGIN PRIVATE KEY")
     ? appleKeyRaw
     : Buffer.from(appleKeyRaw, "base64").toString("utf8");
@@ -46,14 +43,11 @@ export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
     throw new HttpError(503, "iap_not_configured", "APPLE_ASC_PRIVATE_KEY shape invalid");
   }
 
-  const appleEnvRaw = need("APPLE_ENV");
+  const appleEnvRaw = n("APPLE_ENV");
   if (appleEnvRaw !== "sandbox" && appleEnvRaw !== "production") {
     throw new HttpError(503, "iap_not_configured", "APPLE_ENV must be sandbox|production");
   }
 
-  // Parse the optional numeric app ID. process.env is always strings, so
-  // coerce here. If the env reader is upstream of this (e.g., loadEnv),
-  // it's already coerced — accept both.
   const appAppleIdRaw = env.APPLE_APP_APPLE_ID;
   const appAppleId =
     appAppleIdRaw === undefined || appAppleIdRaw === ""
@@ -66,18 +60,26 @@ export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
     throw new HttpError(503, "iap_not_configured", "APPLE_APP_APPLE_ID is required in production");
   }
 
-  const apple: AppleIapConfig = {
-    bundleId: need("APPLE_BUNDLE_ID"),
-    ascIssuerId: need("APPLE_ASC_ISSUER_ID"),
-    ascKeyId: need("APPLE_ASC_KEY_ID"),
+  return {
+    bundleId: n("APPLE_BUNDLE_ID"),
+    ascIssuerId: n("APPLE_ASC_ISSUER_ID"),
+    ascKeyId: n("APPLE_ASC_KEY_ID"),
     ascPrivateKey: appleKey,
     env: appleEnvRaw,
     appAppleId,
   };
+}
 
-  const saRaw = need("GOOGLE_SERVICE_ACCOUNT_JSON");
-  // Same raw-first-then-base64 strategy as the Apple key above. JSON.parse
-  // below catches garbage decodes.
+/** Validate ONLY the Google half. Pub/Sub fields are required because
+ *  the webhook route depends on them; we keep them in the same config
+ *  so callers that need receipt validation alone (checkout/restore)
+ *  still pay the full Google cost up front rather than splitting into
+ *  a third type. If you ever want receipt-only Google (no Pub/Sub),
+ *  add a `requireGoogleReceiptEnv()` variant — for now Pub/Sub is
+ *  cheap enough to require together. */
+export function requireGoogleIapEnv(env: NodeJS.ProcessEnv): GoogleIapConfig {
+  const n = need(env);
+  const saRaw = n("GOOGLE_SERVICE_ACCOUNT_JSON");
   const saText = saRaw.trimStart().startsWith("{")
     ? saRaw
     : Buffer.from(saRaw, "base64").toString("utf8");
@@ -91,13 +93,21 @@ export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
     throw new HttpError(503, "iap_not_configured", "GOOGLE_SERVICE_ACCOUNT_JSON missing client_email/private_key");
   }
 
-  const google: GoogleIapConfig = {
-    packageName: need("GOOGLE_PACKAGE_NAME"),
+  return {
+    packageName: n("GOOGLE_PACKAGE_NAME"),
     serviceAccount,
-    pubsubVerifyAudience: need("GOOGLE_PUBSUB_VERIFY_AUDIENCE"),
-    pubsubVerifyEmail: need("GOOGLE_PUBSUB_VERIFY_EMAIL"),
-    pubsubSubscriptionName: need("GOOGLE_PUBSUB_SUBSCRIPTION_NAME"),
+    pubsubVerifyAudience: n("GOOGLE_PUBSUB_VERIFY_AUDIENCE"),
+    pubsubVerifyEmail: n("GOOGLE_PUBSUB_VERIFY_EMAIL"),
+    pubsubSubscriptionName: n("GOOGLE_PUBSUB_SUBSCRIPTION_NAME"),
   };
-
-  return { apple, google };
 }
+
+/** Returns a fully-validated IAP config or throws HttpError(503,
+ *  "iap_not_configured"). The thrown error NEVER carries any portion
+ *  of an env value — only the var key name. Callers should use this
+ *  inside route handlers / sync helpers so that IAP-less dev / test
+ *  envs surface a clean 503 rather than a generic 500. */
+export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
+  return { apple: requireAppleIapEnv(env), google: requireGoogleIapEnv(env) };
+}
+

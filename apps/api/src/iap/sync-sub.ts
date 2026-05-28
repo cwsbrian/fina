@@ -25,13 +25,23 @@ export type SyncArgsGoogle = {
 
 export type SyncArgs = SyncArgsApple | SyncArgsGoogle;
 
+/** Per-platform deps. syncApple needs only appleClient; syncGoogle
+ *  needs only googleClient. We accept either alone or both — callers
+ *  that already know the platform (most routes) construct a stub for
+ *  the opposite side, but typing both as optional lets a Google-only
+ *  setup (no Apple env at all) call this without bogus Apple stubs. */
 export type SyncDeps = {
-  appleClient: Pick<AppleClient, "verifyAndDecodeTransaction" | "getSubscriptionStatus">;
-  googleClient: Pick<GoogleClient, "fetchAndNormalize" | "acknowledgeIfPending">;
+  appleClient?: Pick<AppleClient, "verifyAndDecodeTransaction" | "getSubscriptionStatus">;
+  googleClient?: Pick<GoogleClient, "fetchAndNormalize" | "acknowledgeIfPending">;
 };
 
+/** Partial IapConfig — neither half is dereferenced inside sync*,
+ *  so a route that has only one platform's env validated can call
+ *  this with just that half. Kept as `Partial<IapConfig>` instead of
+ *  removing the param so the existing tests/webhook call sites that
+ *  pass the full config keep working. */
 export async function syncSubscriptionFromIAP(
-  cfg: IapConfig,
+  cfg: Partial<IapConfig>,
   args: SyncArgs,
   deps: SyncDeps,
 ): Promise<void> {
@@ -39,9 +49,9 @@ export async function syncSubscriptionFromIAP(
   return syncGoogle(cfg, args, deps);
 }
 
-async function syncApple(_cfg: IapConfig, args: SyncArgsApple, deps: SyncDeps): Promise<void> {
+async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: SyncDeps): Promise<void> {
   const context = args.context === "assn" ? "assn" : "asc-api";
-  const verified = await deps.appleClient.verifyAndDecodeTransaction(args.receipt, { context });
+  const verified = await deps.appleClient!.verifyAndDecodeTransaction(args.receipt, { context });
 
   if (args.expectedAppAccountToken && args.expectedAppAccountToken !== verified.appAccountToken) {
     throw new HttpError(403, "user_mismatch", "appAccountToken mismatch");
@@ -50,7 +60,7 @@ async function syncApple(_cfg: IapConfig, args: SyncArgsApple, deps: SyncDeps): 
   const tier = tierForIapProductId(verified.productId);
   if (!tier) throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
 
-  const status = await deps.appleClient.getSubscriptionStatus(verified.originalTransactionId);
+  const status = await deps.appleClient!.getSubscriptionStatus(verified.originalTransactionId);
 
   await prisma.$transaction(async (tx) => {
     await tx.subscription.upsert({
@@ -87,8 +97,8 @@ async function syncApple(_cfg: IapConfig, args: SyncArgsApple, deps: SyncDeps): 
   });
 }
 
-async function syncGoogle(_cfg: IapConfig, args: SyncArgsGoogle, deps: SyncDeps): Promise<void> {
-  const v2 = await deps.googleClient.fetchAndNormalize(args.receipt);
+async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: SyncDeps): Promise<void> {
+  const v2 = await deps.googleClient!.fetchAndNormalize(args.receipt);
 
   if (args.expectedObfuscatedAccountId && args.expectedObfuscatedAccountId !== v2.obfuscatedExternalAccountId) {
     throw new HttpError(403, "user_mismatch", "obfuscatedExternalAccountId mismatch");
@@ -149,7 +159,7 @@ async function syncGoogle(_cfg: IapConfig, args: SyncArgsGoogle, deps: SyncDeps)
   });
 
   // AFTER upsert lands. Pass already-fetched state.
-  await deps.googleClient.acknowledgeIfPending({
+  await deps.googleClient!.acknowledgeIfPending({
     purchaseToken: args.receipt,
     productId: v2.productId,
     acknowledgementState: v2.acknowledgementState,
