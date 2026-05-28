@@ -16,6 +16,10 @@
       },
       "android": {
         "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "http://100.65.93.102:4000",
+        "EXPO_PUBLIC_WEB_URL": "http://100.65.93.102:3100"
       }
     }
   },
