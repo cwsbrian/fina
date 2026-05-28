@@ -114,18 +114,26 @@ export function ThreadView({
     };
   }, [bottomInset]);
 
-  // App-resume keyboard reset.
+  // App-resume keyboard re-sync.
   // Repro: open chat → focus input (keyboard opens) → background the app →
   // foreground. iOS doesn't refire keyboardWillShow on the restored
   // keyboard, so keyboardPad stays at 0 from our state's perspective, and
-  // the composer hides behind the visible keyboard. Dismiss the keyboard
-  // on resume — the user re-taps the input if they want to keep typing.
+  // the composer hides behind the visible keyboard. On every transition
+  // to 'active', query Keyboard.metrics() — if the keyboard is currently
+  // visible, recompute the pad from its frame; otherwise leave pad at 0.
   useEffect(() => {
     const sub = AppState.addEventListener("change", (state) => {
-      if (state === "active") Keyboard.dismiss();
+      if (state !== "active") return;
+      const metrics = Keyboard.metrics();
+      if (metrics && metrics.height > 0) {
+        const target = Math.max(0, metrics.height - bottomInset);
+        setKeyboardPad(target);
+      } else {
+        setKeyboardPad(0);
+      }
     });
     return () => sub.remove();
-  }, []);
+  }, [bottomInset]);
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
