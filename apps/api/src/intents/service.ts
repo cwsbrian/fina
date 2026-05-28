@@ -31,6 +31,10 @@ export const CONFIRMABLE_TOOLS = [
   "dismissScheduledSpend",
   "removeScheduledSpend",
 ] as const;
+
+// presentRecurringForm is a UI presenter — never a confirmable target,
+// only the SOURCE of intents that BIND to addRecurring above.
+
 export type ConfirmableTool = (typeof CONFIRMABLE_TOOLS)[number];
 
 function isConfirmable(t: string): t is ConfirmableTool {
@@ -44,6 +48,10 @@ export type CreateIntentInput = {
   tool: string;
   args: Record<string, unknown>;
   messageId?: string;
+  /** Form-flow intents leave required fields unset (the user fills them
+   *  in at submit time). When true, skip the create-time zod validation;
+   *  consume re-validates after overrides land. */
+  skipStrictValidate?: boolean;
 };
 export type CreateIntentOutput = { intent: { id: string; expiresAt: string } };
 
@@ -55,8 +63,14 @@ export async function createIntentService(
   const registry = await getRegistry();
   const tool = registry.find((t) => t.name === input.tool);
   if (!tool) throw new Error("invalid_tool");
-  const parsed = tool.args.safeParse(input.args);
-  if (!parsed.success) throw new Error("invalid_payload_args");
+  // Form intents (presentRecurringForm etc) deliberately store partial
+  // args because the user is going to fill in the missing fields at
+  // submit time. Skip strict zod validation at creation; the consume
+  // path re-validates after merging overrides.
+  if (input.skipStrictValidate !== true) {
+    const parsed = tool.args.safeParse(input.args);
+    if (!parsed.success) throw new Error("invalid_payload_args");
+  }
   const expiresAt = new Date(Date.now() + INTENT_TTL_MS);
   const data: Prisma.ActionIntentUncheckedCreateInput = {
     workspaceId: ctx.workspaceId,
@@ -73,6 +87,11 @@ export async function createIntentService(
 export async function consumeIntentService(
   ctx: { workspaceId: string; userId: string; role: Role; env: Env },
   intentId: string,
+  /** Optional field overrides — used by form blocks (e.g.
+   *  recurring_form_card) so the user's edits land in the executed args.
+   *  Merged on top of the intent's stored args, then re-validated
+   *  against the target tool's zod schema. */
+  overrides?: Record<string, unknown>,
 ): Promise<{ result: unknown }> {
   const row = await prisma.actionIntent.findUnique({ where: { id: intentId } });
   if (!row) throw new Error("intent_not_found");
@@ -92,7 +111,12 @@ export async function consumeIntentService(
   const registry = await getRegistry();
   const tool = registry.find((t) => t.name === payload.tool);
   if (!tool) throw new Error("invalid_tool");
-  const parsed = tool.args.safeParse(payload.args);
+  // Apply form-side overrides BEFORE zod parsing so invalid edits fail
+  // with the same error path as a malformed LLM call would have.
+  const mergedArgs: Record<string, unknown> = overrides
+    ? { ...payload.args, ...overrides }
+    : payload.args;
+  const parsed = tool.args.safeParse(mergedArgs);
   if (!parsed.success) throw new Error("invalid_payload_args");
   const result = await tool.run(
     { env: ctx.env, workspaceId: ctx.workspaceId, userId: ctx.userId, role: ctx.role },
@@ -107,7 +131,7 @@ export async function consumeIntentService(
       targetType: resolveTargetType(payload.tool),
       targetId:   extractTargetId(payload.tool, result),
       intentId:   intentId,
-      payload:    payload.args,
+      payload:    mergedArgs,
       result:     result,
     });
   }

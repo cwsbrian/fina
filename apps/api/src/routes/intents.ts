@@ -6,6 +6,11 @@ import { consumeIntentService } from "../intents/service.js";
 export async function intentsRoutes(app: FastifyInstance): Promise<void> {
   app.post("/workspaces/:id/intents/:intentId/consume", async (req, reply) => {
     const params = req.params as { id: string; intentId: string };
+    // Form blocks send their edited values in the body. Untyped record
+    // — the consume service re-validates against the target tool's
+    // zod schema, so a bad/extra field fails with invalid_payload_args
+    // the same way a malformed LLM call would.
+    const body = (req.body ?? {}) as { overrides?: Record<string, unknown> };
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
       if (ctx.membership.workspaceId !== params.id) {
@@ -22,6 +27,7 @@ export async function intentsRoutes(app: FastifyInstance): Promise<void> {
           env: app.fina.env,
         },
         params.intentId,
+        body.overrides,
       );
       return reply.code(200).send(result);
     } catch (e) {

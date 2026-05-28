@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import type { PresentationBlock as Block } from "@fina/shared";
 import { colors, space, type as type$ } from "../design/tokens";
 import { RecapBlock } from "./blocks/RecapBlock";
+import { RecurringFormBlock } from "./blocks/RecurringFormBlock";
 import { RecurringListBlock } from "./blocks/RecurringListBlock";
 import { TransactionsListBlock } from "./blocks/TransactionsListBlock";
 
@@ -11,12 +12,16 @@ type Props = {
   role: "user" | "assistant" | "tool";
   onAccept?: (intent: string) => void;
   onReject?: (intent: string | undefined) => void;
+  /** Form submission for recurring_form_card. Resolves once the server
+   *  finishes consuming the intent so the form can render its "Added"
+   *  state. Throw to surface an error to the user. */
+  onSubmitForm?: (intentId: string, overrides: Record<string, unknown>) => Promise<void>;
 };
 
 /** Renders a single presentation block. Exhaustive over the
  *  PresentationBlock union; new block types fail at the never-cast and
  *  show a debug pill so the user sees something instead of nothing. */
-export function PresentationBlock({ block, role, onAccept, onReject }: Props) {
+export function PresentationBlock({ block, role, onAccept, onReject, onSubmitForm }: Props) {
   if (block.type === "text") {
     return (
       <Text style={role === "user" ? styles.userText : styles.assistantText}>
@@ -61,6 +66,24 @@ export function PresentationBlock({ block, role, onAccept, onReject }: Props) {
   }
   if (block.type === "recurring_list") {
     return <RecurringListBlock block={block} />;
+  }
+  if (block.type === "recurring_form_card") {
+    return (
+      <RecurringFormBlock
+        block={block}
+        onSubmit={async (id, overrides) => {
+          // Default to a no-op if the parent didn't wire a handler so
+          // the form's "Added" state still fires; ThreadView wires the
+          // real submission.
+          if (onSubmitForm) await onSubmitForm(id, overrides);
+        }}
+        onCancel={() => {
+          // Cancel doesn't hit the server — the intent simply expires
+          // after its TTL (1 hour). Mirror confirm-card's reject path.
+          onReject?.(undefined);
+        }}
+      />
+    );
   }
   if (block.type === "categorize_confirm_card") {
     return (

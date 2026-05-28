@@ -342,7 +342,9 @@ export function ThreadView({
             </Text>
           </View>
         }
-        renderItem={({ item }) => <MessageBubble message={item} />}
+        renderItem={({ item }) => (
+          <MessageBubble message={item} workspaceId={thread?.workspaceId ?? null} />
+        )}
         ListFooterComponent={sending ? <TypingIndicator /> : null}
       />
 
@@ -469,6 +471,7 @@ function isCardBlock(b: Block): boolean {
     b.type === "recap" ||
     b.type === "transactions_list" ||
     b.type === "recurring_list" ||
+    b.type === "recurring_form_card" ||
     b.type === "confirm_card" ||
     b.type === "categorize_confirm_card"
   );
@@ -482,7 +485,32 @@ function markRead(threadId: string): void {
   apiFetch(`/chat/threads/${threadId}/read`, { method: "POST" }).catch(() => {});
 }
 
-function MessageBubble({ message }: { message: ChatMessageDTO }) {
+/** Workspace-scoped helper that POSTs to /workspaces/:wsId/intents/:id/consume
+ *  with the form's edited values. Resolves on success so the form can
+ *  render its "Added" state; rejects with the ApiError so the form can
+ *  surface the message to the user. */
+async function submitFormIntent(
+  workspaceId: string | null,
+  intentId: string,
+  overrides: Record<string, unknown>,
+): Promise<void> {
+  // We always have a workspaceId by the time a form block was emitted —
+  // the LLM only emits one inside a bound thread. Fall back to throwing
+  // so the form's catch surfaces a clean error if the invariant breaks.
+  if (!workspaceId) throw new Error("no_workspace");
+  await apiFetch(`/workspaces/${workspaceId}/intents/${intentId}/consume`, {
+    method: "POST",
+    body: JSON.stringify({ overrides }),
+  });
+}
+
+function MessageBubble({
+  message,
+  workspaceId,
+}: {
+  message: ChatMessageDTO;
+  workspaceId: string | null;
+}) {
   const blocks = Array.isArray(message.blocks)
     ? (message.blocks as Block[])
     : [];
@@ -499,7 +527,13 @@ function MessageBubble({ message }: { message: ChatMessageDTO }) {
         if (isCardBlock(b)) {
           return (
             <View key={key} style={styles.cardRow}>
-              <PresentationBlock block={b} role={message.role} />
+              <PresentationBlock
+                block={b}
+                role={message.role}
+                onSubmitForm={(id, overrides) =>
+                  submitFormIntent(workspaceId, id, overrides)
+                }
+              />
             </View>
           );
         }

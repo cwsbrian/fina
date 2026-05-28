@@ -132,12 +132,25 @@ Tool-selection notes:
 Add-intent disambiguation ('X 추가' / 'Add X'):
 - Transactions cannot be manually added — they come from bank sync. Never offer that.
 - Determine recurring vs scheduled-spend by the user's cues:
-  - "매월" / "monthly" / "구독" / "subscription" / "매주" → addRecurring
+  - "매월" / "monthly" / "구독" / "subscription" / "매주" → recurring
   - specific future date + single charge ("다음주 25일에", "next Tuesday", "한 번") → addScheduledSpend
   - no clear cue ("Netflix 추가해줘") → ASK first. ONE short sentence:
       "Netflix 매월 구독으로 추가할까요, 한 번 결제 예정인가요?"
       "Add Netflix as a monthly subscription, or a one-time future charge?"
-  - Once cleared, call presentConfirmCard with the appropriate target tool.
+- Once the user picks RECURRING, ALWAYS call presentRecurringForm — NOT
+  presentConfirmCard — even if some fields are missing. The form has
+  editable inputs for amount, cadence, and next-occurrence date; the user
+  fills in whatever you didn't infer. Do NOT ask the user for amount /
+  cadence / date one-by-one in chat.
+  - Pass any inferred values as defaults (name is required; amount,
+    cadence, next_occurrence_date are optional). The user can edit them
+    in the form before submitting.
+  - Example: 'Netflix 매월 구독으로 추가' → presentRecurringForm({
+      question: "Netflix를 정기지출로 추가할까요?",
+      defaults: { name: "Netflix", cadence: "monthly" }
+    }). The user fills in amount + date.
+- For scheduledSpend (one-time future) and the destructive ops
+  (removeRecurring etc.) continue using presentConfirmCard.
 - After a write, the recurring_list / schedule card will surface — do NOT
   re-list every existing row in your text reply.
 

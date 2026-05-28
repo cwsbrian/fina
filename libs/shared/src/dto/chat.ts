@@ -180,4 +180,36 @@ export type PresentationBlock =
         };
       }>;
       footer?: string;
+    }
+  | {
+      /** Inline form for adding a recurring expense. Server emits this
+       *  (via presentRecurringForm) when the user's request is ambiguous
+       *  on amount / cadence / date but clearly recurring in intent —
+       *  rather than the LLM asking each field in turn, the mobile
+       *  renders editable inputs and the user fills + submits.
+       *
+       *  Submission flow: mobile POSTs the field values to
+       *  /workspaces/:wsId/intents/:intent_id/consume with the form
+       *  values as overrides. Server merges over the intent's stored
+       *  defaults and runs addRecurring. */
+      type: "recurring_form_card";
+      /** Question shown above the inputs (LLM-authored, language
+       *  mirrors the user). */
+      question: string;
+      /** Action intent id created server-side; submission sends to
+       *  /intents/:id/consume. */
+      intent_id: string;
+      /** Pre-filled defaults the LLM inferred from the user's message
+       *  (name almost always present; amount/cadence/date optional). */
+      defaults: {
+        name: string;
+        amount?: string;
+        cadence?: "monthly" | "semimonthly" | "biweekly" | "weekly" | "yearly";
+        /** YYYY-MM-DD in the user's tz. */
+        next_occurrence_date?: string;
+        category_name?: string;
+      };
+      /** Currency for the amount input — defaults to "CAD" on render
+       *  if omitted. */
+      currency?: string;
     };
