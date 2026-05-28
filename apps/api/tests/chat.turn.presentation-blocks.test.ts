@@ -10,9 +10,9 @@ describe("collectPresentationBlocks", () => {
             block: {
               type: "confirm_card",
               question: "Q",
-              acceptLabel: "확인",
-              rejectLabel: "취소",
-              acceptIntent: "int-1",
+              accept_label: "확인",
+              reject_label: "취소",
+              accept_intent: "int-1",
               expiresAt: "2026-05-17T22:00:00.000Z",
             },
           },

@@ -29,10 +29,9 @@ export const presentConfirmCard: ToolDef<Args, { block: ConfirmCardBlock }> = {
       block: {
         type: "confirm_card",
         question: args.question,
-        acceptLabel: args.accept_label ?? "확인",
-        rejectLabel: args.reject_label ?? "취소",
-        acceptIntent: out.intent.id,
-        expiresAt: out.intent.expiresAt,
+        accept_label: args.accept_label ?? "Yes",
+        reject_label: args.reject_label ?? "No",
+        accept_intent: out.intent.id,
       },
     };
   },
