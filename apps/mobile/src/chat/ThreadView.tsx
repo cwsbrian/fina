@@ -139,6 +139,10 @@ export function ThreadView({
         setThread(data.thread);
         setMessages(data.messages);
         scrollToBottom();
+        // Mark as read on view — the user is looking at the messages
+        // right now, so any unreadCount must drop to 0 immediately and
+        // the next Home / chats poll must not show a stale badge.
+        markRead(localId);
       } catch (e) {
         if (!cancelled) setErr((e as { code?: string }).code ?? "load_error");
       }
@@ -203,6 +207,10 @@ export function ThreadView({
         return [...withoutTemp, resp.userMessage, resp.assistantMessage];
       });
       scrollToBottom();
+      // The user is staring at the reply they just received — mark the
+      // thread read so it doesn't show as unread on Home / chats list
+      // when they navigate away.
+      markRead(id);
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setDraft(body);
@@ -360,6 +368,14 @@ function isCardBlock(b: Block): boolean {
     b.type === "confirm_card" ||
     b.type === "categorize_confirm_card"
   );
+}
+
+/** Best-effort POST /chat/threads/:id/read. We never block the UI on
+ *  this; a failed call just means the unread count drops on the next
+ *  poll. Silently swallow so chat keeps flowing even when /read is
+ *  slow or unreachable. */
+function markRead(threadId: string): void {
+  apiFetch(`/chat/threads/${threadId}/read`, { method: "POST" }).catch(() => {});
 }
 
 function MessageBubble({ message }: { message: ChatMessageDTO }) {

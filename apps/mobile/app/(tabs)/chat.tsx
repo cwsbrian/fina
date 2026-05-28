@@ -31,8 +31,13 @@ export default function ChatTab() {
   useEffect(() => {
     if (params.thread) {
       setCurrentThreadId(params.thread);
+      // Switching threads needs the collapsible header snapped back —
+      // the new ThreadView mounts at scrollY 0, but the hook still
+      // holds translateY from the previous thread's scroll position.
+      header.reset();
       router.setParams({ thread: undefined } as never);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.thread]);
 
   useEffect(() => {
@@ -45,6 +50,8 @@ export default function ChatTab() {
   const onNewChat = useCallback(() => {
     setCurrentThreadId(null);
     setResetKey((k) => k + 1);
+    header.reset();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Tapping the Chat tab while already on it should reset to a new

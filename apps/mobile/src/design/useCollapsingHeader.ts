@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useCallback, useRef } from "react";
 import { Animated, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 
 type Result = {
@@ -9,6 +9,11 @@ type Result = {
   /** scrollEventThrottle to pair with onScroll. 1 keeps the header
    *  glued to the finger; React Native delivers every available frame. */
   scrollEventThrottle: number;
+  /** Imperatively snap the header back to fully visible. Call when the
+   *  scrollable underneath is swapped (e.g. a new chat thread mounts
+   *  with empty content but the header state from the previous view
+   *  is still translated up). */
+  reset: () => void;
 };
 
 /** Sticky-style collapsing header. The header's translateY tracks scroll
@@ -48,9 +53,16 @@ export function useCollapsingHeader(headerHeight: number): Result {
     translateY.setValue(next);
   };
 
+  const reset = useCallback(() => {
+    current.current = 0;
+    lastY.current = 0;
+    translateY.setValue(0);
+  }, [translateY]);
+
   return {
     headerStyle: { transform: [{ translateY }] },
     onScroll,
     scrollEventThrottle: 1,
+    reset,
   };
 }
