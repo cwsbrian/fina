@@ -200,6 +200,7 @@ export default function Chats() {
                   </View>
                   <Text style={[styles.rowMeta, !unread && styles.rowMetaRead]}>
                     {[
+                      relativeTime(item.lastMessageAt),
                       // Hide the workspace tag when the user is in a
                       // single workspace — every row would say the same
                       // name. Lazy/unassigned threads still surface that
@@ -210,7 +211,6 @@ export default function Chats() {
                         : item.workspaceName === null
                           ? "Unassigned"
                           : "",
-                      relativeTime(item.lastMessageAt),
                     ]
                       .filter(Boolean)
                       .join(" · ")}
