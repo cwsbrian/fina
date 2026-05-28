@@ -7,6 +7,7 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
+  Keyboard,
 } from "react-native";
 import BottomSheet, {
   BottomSheetBackdrop,
@@ -21,6 +22,10 @@ type Props = {
   visible: boolean;
   threadId: string;
   currentTitle: string | null;
+  /** Workspace this thread is bound to. Read-only display — the user
+   *  can't change the binding from here (changing a thread's workspace
+   *  isn't supported; it's set at first send). `null` hides the row. */
+  workspaceName: string | null;
   /** Called after a successful rename so the parent can update its
    *  header title without waiting for a thread reload. */
   onRenamed: (newTitle: string) => void;
@@ -39,19 +44,25 @@ export function ThreadActionsSheet({
   visible,
   threadId,
   currentTitle,
+  workspaceName,
   onRenamed,
   onDeleted,
   onClose,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
-  const snapPoints = useMemo(() => ["38%"], []);
+  const snapPoints = useMemo(() => ["44%"], []);
   const [draft, setDraft] = useState<string>(currentTitle ?? "");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
 
   // Re-prime the input whenever the sheet opens for a different title.
+  // Also drop the chat composer's keyboard so the sheet animates in
+  // over a settled screen instead of fighting a half-raised keyboard.
   useEffect(() => {
-    if (visible) setDraft(currentTitle ?? "");
+    if (visible) {
+      setDraft(currentTitle ?? "");
+      Keyboard.dismiss();
+    }
   }, [visible, currentTitle]);
 
   const renderBackdrop = useCallback(
@@ -143,10 +154,18 @@ export function ThreadActionsSheet({
           placeholderTextColor={colors.muted}
           maxLength={TITLE_MAX}
           editable={!saving && !deleting}
-          autoFocus
           returnKeyType="done"
           onSubmitEditing={save}
         />
+
+        {workspaceName ? (
+          <View style={styles.workspaceBlock}>
+            <Text style={styles.label}>Workspace</Text>
+            <Text style={styles.workspaceValue} numberOfLines={1}>
+              {workspaceName}
+            </Text>
+          </View>
+        ) : null}
 
         <View style={styles.actions}>
           <Pressable
@@ -200,9 +219,15 @@ const styles = StyleSheet.create({
   btnSave: { backgroundColor: colors.primary },
   btnDisabled: { backgroundColor: colors.primaryDisabled },
   btnSaveText: { ...type$.button, color: colors.onPrimary },
+  workspaceBlock: { gap: 4 },
+  workspaceValue: { ...type$.bodyMd, color: colors.ink },
+  // Centered row — the destructive action sits in the middle of the
+  // sheet, mirroring how iOS / iOS-style action sheets center
+  // destructive choices.
   deleteRow: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     gap: 8,
     paddingVertical: 14,
     marginTop: space.xs,

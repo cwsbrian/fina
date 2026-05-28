@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { View, Text, StyleSheet, Animated, Pressable } from "react-native";
+import { View, Text, StyleSheet, Animated, Pressable, Keyboard } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, router, useNavigation } from "expo-router";
@@ -29,8 +29,9 @@ export default function ChatTab() {
   // Force ThreadView to fully reset (new keyed instance) when the
   // pencil is hit while already on the pending state.
   const [resetKey, setResetKey] = useState(0);
-  // Workspace tag shown in the header, fed by ThreadView's binding /
-  // picker state. Null when user has a single workspace (no tag needed).
+  // Workspace name surfaced from ThreadView's binding / picker state.
+  // Shown under the title in the header AND inside the actions sheet
+  // for context — not editable, just informational.
   const [headerWorkspace, setHeaderWorkspace] = useState<string | null>(null);
   // Loaded thread for the header — null on the pending state. Drives the
   // title text and whether the header is tappable for rename/delete.
@@ -90,8 +91,8 @@ export default function ChatTab() {
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
         listTopInset={totalHeader}
-        onWorkspaceContextChange={({ workspaceName, multipleWorkspaces }) => {
-          setHeaderWorkspace(multipleWorkspaces ? workspaceName : null);
+        onWorkspaceContextChange={({ workspaceName }) => {
+          setHeaderWorkspace(workspaceName);
         }}
         onThreadChange={setHeaderThread}
       />
@@ -106,26 +107,30 @@ export default function ChatTab() {
           <Pressable
             style={styles.headerCenter}
             disabled={!headerThread}
-            onPress={() => headerThread && setActionsVisible(true)}
+            onPress={() => {
+              if (!headerThread) return;
+              Keyboard.dismiss();
+              setActionsVisible(true);
+            }}
             hitSlop={8}
           >
-            <View style={styles.headerTitleRow}>
+            <View style={styles.headerStack}>
               <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
                 {headerThread?.title?.trim() || "Chat"}
               </Text>
-              {headerThread ? (
-                <Ionicons
-                  name="chevron-down"
-                  size={14}
-                  color={colors.muted}
-                  style={styles.headerCaret}
-                />
+              {headerWorkspace ? (
+                <Text style={styles.headerWorkspace} numberOfLines={1}>
+                  {headerWorkspace}
+                </Text>
               ) : null}
             </View>
-            {headerWorkspace ? (
-              <Text style={styles.headerWorkspace} numberOfLines={1}>
-                {headerWorkspace}
-              </Text>
+            {headerThread ? (
+              <Ionicons
+                name="chevron-down"
+                size={14}
+                color={colors.muted}
+                style={styles.headerCaret}
+              />
             ) : null}
           </Pressable>
           <HeaderIconButton
@@ -142,6 +147,7 @@ export default function ChatTab() {
           visible={actionsVisible}
           threadId={headerThread.id}
           currentTitle={headerThread.title}
+          workspaceName={headerWorkspace}
           onRenamed={(newTitle) =>
             setHeaderThread((prev) =>
               prev ? { ...prev, title: newTitle } : prev,
@@ -182,13 +188,18 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
+  // Title + workspace form a vertical stack; the chevron sits to the
+  // right of the whole block (not just the title) so it visually
+  // affordances the whole unit as tappable.
   headerCenter: {
     flex: 1,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     paddingHorizontal: space.sm,
   },
-  headerTitleRow: { flexDirection: "row", alignItems: "center", maxWidth: "100%" },
-  headerTitle: { ...type$.titleSm, color: colors.ink, flexShrink: 1 },
-  headerCaret: { marginLeft: 4 },
+  headerStack: { alignItems: "center", flexShrink: 1, minWidth: 0 },
+  headerTitle: { ...type$.titleSm, color: colors.ink },
+  headerCaret: { marginLeft: 6 },
   headerWorkspace: { ...type$.caption, color: colors.muted, marginTop: 1 },
 });
