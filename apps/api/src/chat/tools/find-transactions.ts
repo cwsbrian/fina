@@ -89,7 +89,8 @@ type Result = {
     accountName: string | null;
     limit: number;
   };
-  block: PresentationBlock;
+  /** Omitted when totalCount === 0 — empty card adds noise. */
+  block?: PresentationBlock;
 };
 
 function isValidIsoDate(s: string): boolean {
@@ -110,20 +111,13 @@ function resolveFilters(args: Args, limit: number): Result["filtersApplied"] {
   };
 }
 
-function emptyResult(args: Args, limit: number, currency: string): Result {
+function emptyResult(args: Args, limit: number, _currency: string): Result {
+  // No block on empty — LLM's text reply ("no matches" etc) is enough.
   return {
     transactions: [],
     totalCount: 0,
     hasMore: false,
     filtersApplied: resolveFilters(args, limit),
-    block: {
-      type: "transactions_list",
-      title: searchTitle(args),
-      total_count: 0,
-      currency,
-      rows: [],
-      footer: "No transactions match.",
-    },
   };
 }
 
@@ -302,24 +296,27 @@ export const findTransactions: ToolDef<Args, Result> = {
     });
 
     const periodLabel = searchPeriodLabel(args);
-    const block: PresentationBlock = {
-      type: "transactions_list",
-      title: searchTitle(args),
-      ...(periodLabel ? { period_label: periodLabel } : {}),
-      total_count: totalCount,
-      currency: workspace.currency,
-      rows: blockRows,
-      ...(totalCount > blockRows.length
-        ? { footer: `Showing ${blockRows.length} of ${totalCount}` }
-        : {}),
-    };
+    const block: PresentationBlock | undefined =
+      totalCount === 0
+        ? undefined
+        : {
+            type: "transactions_list",
+            title: searchTitle(args),
+            ...(periodLabel ? { period_label: periodLabel } : {}),
+            total_count: totalCount,
+            currency: workspace.currency,
+            rows: blockRows,
+            ...(totalCount > blockRows.length
+              ? { footer: `Showing ${blockRows.length} of ${totalCount}` }
+              : {}),
+          };
 
     return {
       transactions,
       totalCount,
       hasMore: totalCount > rows.length,
       filtersApplied: resolveFilters(args, limit),
-      block,
+      ...(block ? { block } : {}),
     };
   },
 };

@@ -26,7 +26,8 @@ type Result = {
     needsReclassification: boolean;
     allocations: Array<{ id: string; categoryId: string | null; amount: string; source: string | null }>;
   }>;
-  block: PresentationBlock;
+  /** Omitted when there are zero results — empty card adds noise. */
+  block?: PresentationBlock;
 };
 
 export const listTransactions: ToolDef<Args, Result> = {
@@ -88,17 +89,20 @@ export const listTransactions: ToolDef<Args, Result> = {
     });
 
     const periodLabel = periodToLabel(args.period);
-    const block: PresentationBlock = {
-      type: "transactions_list",
-      title: "Recent transactions",
-      ...(periodLabel ? { period_label: periodLabel } : {}),
-      total_count: rows.length,
-      currency: "CAD",
-      rows: blockRows,
-      ...(rows.length > blockRows.length
-        ? { footer: `Showing ${blockRows.length} of ${rows.length}` }
-        : {}),
-    };
+    const block: PresentationBlock | undefined =
+      rows.length === 0
+        ? undefined
+        : {
+            type: "transactions_list",
+            title: "Recent transactions",
+            ...(periodLabel ? { period_label: periodLabel } : {}),
+            total_count: rows.length,
+            currency: "CAD",
+            rows: blockRows,
+            ...(rows.length > blockRows.length
+              ? { footer: `Showing ${blockRows.length} of ${rows.length}` }
+              : {}),
+          };
 
     return {
       transactions: rows.map((r) => ({
@@ -115,7 +119,7 @@ export const listTransactions: ToolDef<Args, Result> = {
           source: a.source,
         })),
       })),
-      block,
+      ...(block ? { block } : {}),
     };
   },
 };

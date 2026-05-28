@@ -44,7 +44,10 @@ type Result = {
     occurredAt: string;
     accountName: string;
   }>;
-  block: PresentationBlock;
+  /** Omitted when there are zero results — the LLM's text reply ("all
+   *  caught up", "no matches") is sufficient on its own and a tall empty
+   *  card just adds visual noise. */
+  block?: PresentationBlock;
 };
 
 export const findUncategorizedTransactions: ToolDef<Args, Result> = {
@@ -112,19 +115,20 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
       ),
     );
 
-    const block: PresentationBlock = {
-      type: "transactions_list",
-      title: "Needs review",
-      ...(periodToLabel(period) ? { period_label: periodToLabel(period)! } : {}),
-      total_count: rows.length,
-      currency: workspace.currency,
-      rows: blockRows,
-      ...(rows.length === 0
-        ? { footer: "All caught up — nothing to review." }
-        : rows.length > blockRows.length
-          ? { footer: `Showing ${blockRows.length} of ${rows.length}` }
-          : {}),
-    };
+    const block: PresentationBlock | undefined =
+      rows.length === 0
+        ? undefined
+        : {
+            type: "transactions_list",
+            title: "Needs review",
+            ...(periodToLabel(period) ? { period_label: periodToLabel(period)! } : {}),
+            total_count: rows.length,
+            currency: workspace.currency,
+            rows: blockRows,
+            ...(rows.length > blockRows.length
+              ? { footer: `Showing ${blockRows.length} of ${rows.length}` }
+              : {}),
+          };
 
     return {
       period,
@@ -138,7 +142,7 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
         occurredAt: r.occurredAt.toISOString(),
         accountName: r.account.name,
       })),
-      block,
+      ...(block ? { block } : {}),
     };
   },
 };
