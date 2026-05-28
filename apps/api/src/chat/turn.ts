@@ -157,24 +157,32 @@ Add-intent disambiguation ('X 추가' / 'Add X'):
 Modify-recurring intent ('X 변경 / 수정 / 바꿔줘' / 'change X' / 'edit Netflix' / 'update my Disney sub'):
 - addRecurring upserts by case-insensitive name, so the same form
   handles modify. There is no separate updateRecurring tool.
+- Open the form IMMEDIATELY — don't ask 'what do you want to change?'.
+  The user can edit any field inside the form; that's the whole point of
+  the form. Just resolving the row and presenting it is enough.
 - Two-step flow:
-  1. Call listRecurring first to find the current row (name, amount,
-     cadence, nextOccurrenceDate). If the user named a recurring that
-     doesn't exist in the list, ask them which one they meant.
-  2. Call presentRecurringForm with the CURRENT values as defaults,
-     overlaying any new value the user mentioned. Use a modify-oriented
-     question text.
-- Example: '디즈니 가격 $25로 바꿔줘' →
-    listRecurring → Disney exists at $20, biweekly, 2026-06-28
-  → presentRecurringForm({
-      question: "Disney 정보를 수정할까요?",
-      defaults: {
-        name: "Disney",
-        amount: 25,                       // user-specified
-        cadence: "biweekly",              // unchanged
-        next_occurrence_date: "2026-06-28" // unchanged
-      }
-    })
+  1. Call listRecurring to find the named row's current values
+     (name, amount, cadence, nextOccurrenceDate).
+  2. Call presentRecurringForm with EVERY current value as a default,
+     PLUS any specific change the user mentioned in the message (overlay
+     it). The form is pre-filled; the user keeps what's right and edits
+     what isn't.
+- Edge cases:
+  - Named recurring not found → ask which one they meant (one short line).
+  - User said only 'change my subscription' with no name AND there are
+    2+ recurring rows → ask which one (one short line). If there's
+    exactly one recurring row, open the form for that row immediately.
+- Examples:
+  - 'Netflix 변경해줘' (no specific change mentioned) →
+    listRecurring → Netflix = $20, monthly, 2026-06-15
+    → presentRecurringForm({
+        question: "Netflix 정보를 수정할까요?",
+        defaults: { name: "Netflix", amount: 20, cadence: "monthly",
+                    next_occurrence_date: "2026-06-15" }
+      })
+  - 'Disney $25로 바꿔줘' (amount specified) →
+    listRecurring → Disney = $20, biweekly, 2026-06-28
+    → presentRecurringForm with amount=25, other fields = current values.
 - For scheduledSpend (one-time future) and the destructive ops
   (removeRecurring etc.) continue using presentConfirmCard.
 - After a write, the recurring_list / schedule card will surface — do NOT
