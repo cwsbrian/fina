@@ -147,4 +147,37 @@ export type PresentationBlock =
       }>;
       /** Optional footer ("Showing 8 of 47", "All categorized", etc). */
       footer?: string;
+    }
+  | {
+      /** Read-only recurring expenses list. Used by listRecurring (and
+       *  later detectRecurringMerchants for proposed ones).
+       *
+       *  Amounts are plain decimal strings (positive, no sign — recurring
+       *  is always an expense by definition). Cadence is the same enum
+       *  surfaced elsewhere; the renderer maps it to "monthly" / "weekly"
+       *  / etc. for the row line. nextOccurrence is YYYY-MM-DD in the
+       *  workspace's timezone. */
+      type: "recurring_list";
+      title: string;
+      period_label?: string;
+      /** Total rows in the result set; may exceed `rows.length` if capped. */
+      total_count: number;
+      /** Optional summed monthly-equivalent across the result set so the
+       *  card can show "$134.50 / mo" — computed server-side. */
+      total_monthly_amount?: string;
+      currency?: string;
+      rows: Array<{
+        id: string;
+        name: string;
+        amount: string;
+        cadence: "monthly" | "semimonthly" | "biweekly" | "weekly" | "yearly";
+        /** YYYY-MM-DD in the workspace's timezone. */
+        next_occurrence_date: string;
+        category?: {
+          name: string;
+          color?: string | null;
+          icon?: string | null;
+        };
+      }>;
+      footer?: string;
     };
