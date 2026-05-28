@@ -12,7 +12,9 @@ import BottomSheet, {
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import { colors, space, type as type$ } from "../design/tokens";
 
 type Props = {
@@ -31,7 +33,42 @@ type Props = {
   onConfirm: (next: Date) => void;
 };
 
-export function DatePickerSheet({
+export function DatePickerSheet(props: Props) {
+  // On Android the native picker is a modal dialog that opens the moment it
+  // mounts and emits a single terminal set/dismissed event. The iOS path
+  // keeps it permanently mounted inside a bottom sheet, which on Android
+  // would auto-open the dialog at the root layout and re-open it after every
+  // Cancel. So Android gets a dedicated dialog-only path; iOS keeps the sheet.
+  if (Platform.OS === "android") {
+    return <AndroidDatePicker {...props} />;
+  }
+  return <IosDatePickerSheet {...props} />;
+}
+
+function AndroidDatePicker({
+  visible,
+  value,
+  mode = "date",
+  maximumDate,
+  onClose,
+  onConfirm,
+}: Props) {
+  if (!visible) return null;
+  return (
+    <DateTimePicker
+      value={value}
+      mode={mode}
+      display="default"
+      maximumDate={maximumDate ?? new Date()}
+      onChange={(event: DateTimePickerEvent, selected?: Date) => {
+        if (event.type === "set" && selected) onConfirm(selected);
+        else onClose();
+      }}
+    />
+  );
+}
+
+function IosDatePickerSheet({
   visible,
   value,
   mode = "date",
@@ -103,7 +140,7 @@ export function DatePickerSheet({
           <DateTimePicker
             value={draft}
             mode={mode}
-            display={Platform.OS === "ios" ? "spinner" : "default"}
+            display="spinner"
             maximumDate={maximumDate ?? new Date()}
             onChange={(_, selected) => {
               if (selected) setDraft(selected);

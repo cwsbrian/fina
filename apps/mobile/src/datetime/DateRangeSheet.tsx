@@ -5,7 +5,9 @@ import BottomSheet, {
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
-import DateTimePicker from "@react-native-community/datetimepicker";
+import DateTimePicker, {
+  type DateTimePickerEvent,
+} from "@react-native-community/datetimepicker";
 import { colors, space, type as type$ } from "../design/tokens";
 
 export type DateRange = {
@@ -225,7 +227,17 @@ export function DateRangeSheet({
             mode="date"
             display={Platform.OS === "ios" ? "spinner" : "default"}
             maximumDate={new Date()}
-            onChange={(_, sel) => {
+            onChange={(event: DateTimePickerEvent, sel?: Date) => {
+              if (Platform.OS === "android") {
+                // Native dialog is terminal — clear `picking` after the one
+                // event, else it re-opens immediately while still mounted.
+                setPicking(null);
+                if (event.type === "set" && sel) {
+                  if (picking === "from") setFrom(sel);
+                  else setTo(sel);
+                }
+                return;
+              }
               if (!sel) return;
               if (picking === "from") setFrom(sel);
               else setTo(sel);

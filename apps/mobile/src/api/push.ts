@@ -1,7 +1,18 @@
-import * as Notifications from "expo-notifications";
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { apiFetch } from "./client";
+import { isExpoGo } from "../env";
+
+type ExpoNotifications = typeof import("expo-notifications");
+
+/** Lazy-require expo-notifications. Returns null in Expo Go — SDK 53 removed
+ *  remote push there, and the static import alone logs a red console.error.
+ *  Push is unavailable in Expo Go regardless, so callers no-op. */
+function getNotifications(): ExpoNotifications | null {
+  if (isExpoGo) return null;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  return require("expo-notifications") as ExpoNotifications;
+}
 
 /** Sentinel value in apps/mobile/app.json `extra.eas.projectId`. Run
  *  `eas init` once the Expo project is initialized to overwrite it. */

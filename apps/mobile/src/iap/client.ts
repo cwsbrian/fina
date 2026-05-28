@@ -5,6 +5,7 @@
 // empty-state / typed errors when the module is unavailable.
 import type { Purchase, ProductSubscription } from "react-native-iap";
 import { Platform } from "react-native";
+import { isExpoGo } from "../env";
 import { deriveAppleToken, deriveGoogleToken } from "./binding";
 import type { IAPProductId } from "@fina/shared";
 
@@ -38,6 +39,13 @@ let _iap: RnIap | null | undefined; // undefined = not yet probed
  *  success and the null sentinel persist for the session. */
 function getIap(): RnIap | null {
   if (_iap !== undefined) return _iap;
+  // Expo Go ships no NitroModules. react-native-iap v14's module-level Nitro
+  // init throws an *uncaught* error that escapes the try/catch below (it isn't
+  // a clean synchronous require failure), so skip the require in Expo Go.
+  if (isExpoGo) {
+    _iap = null;
+    return _iap;
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     _iap = require("react-native-iap") as RnIap;

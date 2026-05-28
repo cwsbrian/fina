@@ -1,4 +1,13 @@
 import { z } from "zod";
+import Constants, { ExecutionEnvironment } from "expo-constants";
+
+/** True when running inside Expo Go, where native modules are unavailable:
+ *  NitroModules (react-native-iap) and remote push (expo-notifications, removed
+ *  from Expo Go in SDK 53) both throw or log on load. Gate native-only code
+ *  behind this so the app stays usable in Expo Go for UI development. False in
+ *  dev client / standalone / production builds. */
+export const isExpoGo =
+  Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 const Schema = z.object({
   EXPO_PUBLIC_API_URL: z.string().url(),
