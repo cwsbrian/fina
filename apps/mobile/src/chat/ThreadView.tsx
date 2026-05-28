@@ -365,6 +365,7 @@ function TypingIndicator() {
 function isCardBlock(b: Block): boolean {
   return (
     b.type === "recap" ||
+    b.type === "transactions_list" ||
     b.type === "confirm_card" ||
     b.type === "categorize_confirm_card"
   );
