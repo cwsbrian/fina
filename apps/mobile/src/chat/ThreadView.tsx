@@ -10,8 +10,7 @@ import {
   ActivityIndicator,
   Alert,
   Animated,
-  AppState,
-  Keyboard,
+  KeyboardAvoidingView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type {
@@ -92,48 +91,11 @@ export function ThreadView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
 
-  // Direct keyboard-driven padding — no animation. The view extends
-  // to `bottomInset` above the screen edge (tab bar height in the
-  // embedded case, 0 in the drill-in case), so the composer needs
-  // raising by exactly `keyboardHeight - bottomInset`.
-  const [keyboardPad, setKeyboardPad] = useState(0);
-
-  useEffect(() => {
-    const showEvt = Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow";
-    const hideEvt = Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide";
-    const show = Keyboard.addListener(showEvt, (e) => {
-      const target = Math.max(0, e.endCoordinates.height - bottomInset);
-      setKeyboardPad(target);
-    });
-    const hide = Keyboard.addListener(hideEvt, () => {
-      setKeyboardPad(0);
-    });
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, [bottomInset]);
-
-  // App-resume keyboard re-sync.
-  // Repro: open chat → focus input (keyboard opens) → background the app →
-  // foreground. iOS doesn't refire keyboardWillShow on the restored
-  // keyboard, so keyboardPad stays at 0 from our state's perspective, and
-  // the composer hides behind the visible keyboard. On every transition
-  // to 'active', query Keyboard.metrics() — if the keyboard is currently
-  // visible, recompute the pad from its frame; otherwise leave pad at 0.
-  useEffect(() => {
-    const sub = AppState.addEventListener("change", (state) => {
-      if (state !== "active") return;
-      const metrics = Keyboard.metrics();
-      if (metrics && metrics.height > 0) {
-        const target = Math.max(0, metrics.height - bottomInset);
-        setKeyboardPad(target);
-      } else {
-        setKeyboardPad(0);
-      }
-    });
-    return () => sub.remove();
-  }, [bottomInset]);
+  // KeyboardAvoidingView (below) handles all the keyboard offset math —
+  // including the iOS app-resume edge case where keyboardWillShow doesn't
+  // re-fire on restored keyboard. The `bottomInset` (tab bar height in
+  // embedded mode) is passed as keyboardVerticalOffset so the composer
+  // lands flush against the keyboard, not under the tab bar.
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -279,7 +241,11 @@ export function ThreadView({
   }
 
   return (
-    <View style={{ flex: 1, paddingBottom: keyboardPad }}>
+    <KeyboardAvoidingView
+      style={{ flex: 1 }}
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      keyboardVerticalOffset={bottomInset}
+    >
       <FlatList
         ref={listRef}
         data={messages}
@@ -328,7 +294,7 @@ export function ThreadView({
           )}
         </Pressable>
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
