@@ -114,6 +114,14 @@ Tool-selection notes:
   NOT getSpendingSummary twice. If the previous turn was about this month and the user
   follows with "vs last month?", that is a comparison request — use compareSpendingPeriods
   with this month's range as current and last month's range as comparison.
+- "What about X?", "X은?", "그럼 X은?", "How about X?" (re-asking the previous question for
+  a different period) → RE-USE THE SAME TOOL the previous turn used, just with X's date
+  range. This is NOT a comparison.
+  - Previous: "How much did I spend this month?" → getSpendingSummary(this month)
+    User then says: "What about last month?" → getSpendingSummary(LAST month) — NOT compare.
+  - Previous: "Show me cashflow this month" → getCashflowSummary(this month)
+    User then says: "What about last week?" → getCashflowSummary(last week) — NOT compare.
+  Compare is reserved for explicit comparison vocabulary ("vs", "compared", "변화", "차이").
 - "Budget", "예산", "버젯", "한도" + status/usage → compareSpendingVsBudget, not
   getBudget. getBudget is for retrieving the configured budget number; compareSpendingVsBudget
   shows how much has been used.
@@ -243,7 +251,20 @@ export async function processChatTurn(
   let dispatched = 0;
 
   while (true) {
-    const resp = await ai.models.generateContent({ model: MODEL, contents, config: { systemInstruction: sysInstruction, tools } });
+    const resp = await ai.models.generateContent({
+      model: MODEL,
+      contents,
+      config: {
+        systemInstruction: sysInstruction,
+        tools,
+        // Gemini 2.5 Flash defaults to "thinking" mode which spends output
+        // tokens on internal reasoning and can return zero visible content
+        // for tool-call chat turns. Explicit thinkingBudget: 0 disables it
+        // so the model produces tool calls / text directly. See
+        // ai.google.dev/gemini-api/docs/thinking.
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    });
 
     // Account every Gemini call (including multi-round tool dispatch
     // iterations) against the user's weekly LLM budget. Fire-and-forget
@@ -259,7 +280,27 @@ export async function processChatTurn(
     }).catch(() => {});
 
     const fcs: FunctionCall[] = resp.functionCalls ?? [];
-    if (fcs.length === 0) return { assistantText: resp.text ?? "", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
+    if (fcs.length === 0) {
+      // Diagnostic: log finishReason + safety + candidates shape when we
+      // got nothing actionable from the model. Helps distinguish safety
+      // blocks from genuine empty responses.
+      if ((resp.text ?? "").trim().length === 0) {
+        const cand = resp.candidates?.[0];
+        logWarn(
+          {
+            threadId: thread.id,
+            model: MODEL,
+            finishReason: cand?.finishReason,
+            safetyRatings: cand?.safetyRatings,
+            promptFeedback: resp.promptFeedback,
+            partsLen: cand?.content?.parts?.length ?? 0,
+            usage: resp.usageMetadata,
+          },
+          "chat: Gemini returned empty text + no function calls",
+        );
+      }
+      return { assistantText: resp.text ?? "", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
+    }
 
     if (dispatched + fcs.length > MAX_TOOL_CALLS) {
       logWarn({ threadId: thread.id }, `chat: max tool calls exceeded (dispatched=${dispatched}, requested=${fcs.length})`);
