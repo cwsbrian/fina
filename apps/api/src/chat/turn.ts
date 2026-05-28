@@ -153,6 +153,28 @@ Add-intent disambiguation ('X 추가' / 'Add X'):
       question: "Netflix를 정기지출로 추가할까요?",
       defaults: { name: "Netflix", cadence: "monthly" }
     }). The user fills in amount + date.
+
+Modify-recurring intent ('X 변경 / 수정 / 바꿔줘' / 'change X' / 'edit Netflix' / 'update my Disney sub'):
+- addRecurring upserts by case-insensitive name, so the same form
+  handles modify. There is no separate updateRecurring tool.
+- Two-step flow:
+  1. Call listRecurring first to find the current row (name, amount,
+     cadence, nextOccurrenceDate). If the user named a recurring that
+     doesn't exist in the list, ask them which one they meant.
+  2. Call presentRecurringForm with the CURRENT values as defaults,
+     overlaying any new value the user mentioned. Use a modify-oriented
+     question text.
+- Example: '디즈니 가격 $25로 바꿔줘' →
+    listRecurring → Disney exists at $20, biweekly, 2026-06-28
+  → presentRecurringForm({
+      question: "Disney 정보를 수정할까요?",
+      defaults: {
+        name: "Disney",
+        amount: 25,                       // user-specified
+        cadence: "biweekly",              // unchanged
+        next_occurrence_date: "2026-06-28" // unchanged
+      }
+    })
 - For scheduledSpend (one-time future) and the destructive ops
   (removeRecurring etc.) continue using presentConfirmCard.
 - After a write, the recurring_list / schedule card will surface — do NOT
