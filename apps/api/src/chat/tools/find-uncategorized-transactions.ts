@@ -1,8 +1,14 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
-import { reviewPeriodRange, type ReviewPeriod } from "./periods.js";
+import { reviewPeriodRange, resolveUserTz, type ReviewPeriod } from "./periods.js";
+import {
+  MAX_TX_ROWS_IN_BLOCK,
+  recentLabelContext,
+  txRowToBlockRow,
+} from "./tx-row-helpers.js";
 
 const Args = z.object({
   period: z
@@ -38,6 +44,7 @@ type Result = {
     occurredAt: string;
     accountName: string;
   }>;
+  block: PresentationBlock;
 };
 
 export const findUncategorizedTransactions: ToolDef<Args, Result> = {
@@ -87,6 +94,38 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
       include: { account: { select: { name: true } } },
     });
 
+    const tz = await resolveUserTz(ctx.userId);
+    const labelCtx = recentLabelContext(new Date(), tz);
+    const blockRows = rows.slice(0, MAX_TX_ROWS_IN_BLOCK).map((r) =>
+      txRowToBlockRow(
+        {
+          id: r.id,
+          occurredAt: r.occurredAt,
+          amount: r.amount.toString(),
+          merchant: r.merchantRaw,
+          category: null, // by definition: uncategorized / needs-review
+          account: r.account.name,
+          needsReview: true,
+        },
+        labelCtx,
+        tz,
+      ),
+    );
+
+    const block: PresentationBlock = {
+      type: "transactions_list",
+      title: "Needs review",
+      ...(periodToLabel(period) ? { period_label: periodToLabel(period)! } : {}),
+      total_count: rows.length,
+      currency: workspace.currency,
+      rows: blockRows,
+      ...(rows.length === 0
+        ? { footer: "All caught up — nothing to review." }
+        : rows.length > blockRows.length
+          ? { footer: `Showing ${blockRows.length} of ${rows.length}` }
+          : {}),
+    };
+
     return {
       period,
       reviewMode,
@@ -99,6 +138,18 @@ export const findUncategorizedTransactions: ToolDef<Args, Result> = {
         occurredAt: r.occurredAt.toISOString(),
         accountName: r.account.name,
       })),
+      block,
     };
   },
 };
+
+function periodToLabel(p: ReviewPeriod): string | undefined {
+  switch (p) {
+    case "today":      return "Today";
+    case "this_week":  return "This week";
+    case "this_month": return "This month";
+    case "last_month": return "Last month";
+    case "all_time":   return undefined;
+    default:           return undefined;
+  }
+}

@@ -1,7 +1,13 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { resolveUserTz, localMidnightToUtc } from "./periods.js";
+import {
+  MAX_TX_ROWS_IN_BLOCK,
+  recentLabelContext,
+  txRowToBlockRow,
+} from "./tx-row-helpers.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
@@ -83,6 +89,7 @@ type Result = {
     accountName: string | null;
     limit: number;
   };
+  block: PresentationBlock;
 };
 
 function isValidIsoDate(s: string): boolean {
@@ -103,13 +110,37 @@ function resolveFilters(args: Args, limit: number): Result["filtersApplied"] {
   };
 }
 
-function emptyResult(args: Args, limit: number): Result {
+function emptyResult(args: Args, limit: number, currency: string): Result {
   return {
     transactions: [],
     totalCount: 0,
     hasMore: false,
     filtersApplied: resolveFilters(args, limit),
+    block: {
+      type: "transactions_list",
+      title: searchTitle(args),
+      total_count: 0,
+      currency,
+      rows: [],
+      footer: "No transactions match.",
+    },
   };
+}
+
+/** Title that names the active filters so the card subtitle reads
+ *  naturally — "Search: starbucks", "All transactions", etc. */
+function searchTitle(args: Args): string {
+  if (args.merchant_query) return `Search: ${args.merchant_query}`;
+  if (args.category_name) return `Category: ${args.category_name}`;
+  if (args.account_name) return `Account: ${args.account_name}`;
+  return "Transactions";
+}
+
+function searchPeriodLabel(args: Args): string | undefined {
+  if (args.start_date && args.end_date) return `${args.start_date} — ${args.end_date}`;
+  if (args.start_date) return `Since ${args.start_date}`;
+  if (args.end_date) return `Through ${args.end_date}`;
+  return undefined;
 }
 
 export const findTransactions: ToolDef<Args, Result> = {
@@ -147,7 +178,7 @@ export const findTransactions: ToolDef<Args, Result> = {
         },
         select: { id: true },
       });
-      if (cats.length === 0) return emptyResult(args, limit);
+      if (cats.length === 0) return emptyResult(args, limit, workspace.currency);
       categoryIds = cats.map((c) => c.id);
     }
     let accountIds: string[] | undefined;
@@ -160,7 +191,7 @@ export const findTransactions: ToolDef<Args, Result> = {
         },
         select: { id: true },
       });
-      if (accts.length === 0) return emptyResult(args, limit);
+      if (accts.length === 0) return emptyResult(args, limit, workspace.currency);
       accountIds = accts.map((a) => a.id);
     }
 
@@ -222,7 +253,10 @@ export const findTransactions: ToolDef<Args, Result> = {
         include: {
           account: { select: { id: true, name: true } },
           allocations: {
-            select: { categoryId: true, category: { select: { id: true, name: true } } },
+            select: {
+              categoryId: true,
+              category: { select: { id: true, name: true, color: true, icon: true } },
+            },
             orderBy: { createdAt: "asc" },
           },
         },
@@ -230,26 +264,62 @@ export const findTransactions: ToolDef<Args, Result> = {
       prisma.transaction.count({ where }),
     ]);
 
-    return {
-      transactions: rows.map((r) => {
-        // Derive category from the first allocation that has one.
-        const primaryAlloc = r.allocations.find((a) => a.categoryId !== null);
-        return {
+    const transactions: Result["transactions"] = rows.map((r) => {
+      const primaryAlloc = r.allocations.find((a) => a.categoryId !== null);
+      return {
+        id: r.id,
+        amount: r.amount.toString(),
+        currency: workspace.currency,
+        merchantRaw: r.merchantRaw,
+        merchantNormalized: r.merchantNormalized,
+        occurredAt: r.occurredAt.toISOString(),
+        accountName: r.account.name,
+        accountId: r.account.id,
+        categoryId: primaryAlloc?.category?.id ?? null,
+        categoryName: primaryAlloc?.category?.name ?? null,
+      };
+    });
+
+    const labelCtx = recentLabelContext(new Date(), tz);
+    const blockRows = rows.slice(0, MAX_TX_ROWS_IN_BLOCK).map((r) => {
+      const primaryAlloc = r.allocations.find((a) => a.categoryId !== null);
+      const cat = primaryAlloc?.category;
+      return txRowToBlockRow(
+        {
           id: r.id,
+          occurredAt: r.occurredAt,
           amount: r.amount.toString(),
-          currency: workspace.currency,
-          merchantRaw: r.merchantRaw,
-          merchantNormalized: r.merchantNormalized,
-          occurredAt: r.occurredAt.toISOString(),
-          accountName: r.account.name,
-          accountId: r.account.id,
-          categoryId: primaryAlloc?.category?.id ?? null,
-          categoryName: primaryAlloc?.category?.name ?? null,
-        };
-      }),
+          merchant: r.merchantRaw,
+          category: cat
+            ? { name: cat.name, color: cat.color ?? null, icon: cat.icon ?? null }
+            : null,
+          account: r.account.name,
+          needsReview: false,
+        },
+        labelCtx,
+        tz,
+      );
+    });
+
+    const periodLabel = searchPeriodLabel(args);
+    const block: PresentationBlock = {
+      type: "transactions_list",
+      title: searchTitle(args),
+      ...(periodLabel ? { period_label: periodLabel } : {}),
+      total_count: totalCount,
+      currency: workspace.currency,
+      rows: blockRows,
+      ...(totalCount > blockRows.length
+        ? { footer: `Showing ${blockRows.length} of ${totalCount}` }
+        : {}),
+    };
+
+    return {
+      transactions,
       totalCount,
       hasMore: totalCount > rows.length,
       filtersApplied: resolveFilters(args, limit),
+      block,
     };
   },
 };

@@ -3,6 +3,7 @@ import { router } from "expo-router";
 import type { PresentationBlock as Block } from "@fina/shared";
 import { colors, space, type as type$ } from "../design/tokens";
 import { RecapBlock } from "./blocks/RecapBlock";
+import { TransactionsListBlock } from "./blocks/TransactionsListBlock";
 
 type Props = {
   block: Block;
@@ -53,6 +54,12 @@ export function PresentationBlock({ block, role, onAccept, onReject }: Props) {
   }
   if (block.type === "recap") {
     return <RecapBlock block={block} />;
+  }
+  if (block.type === "transactions_list") {
+    return <TransactionsListBlock block={block} />;
+  }
+  if (block.type === "transactions_list") {
+    return <TransactionsListBlock block={block} />;
   }
   if (block.type === "categorize_confirm_card") {
     return (

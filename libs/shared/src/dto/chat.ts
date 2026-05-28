@@ -99,4 +99,52 @@ export type PresentationBlock =
       /** Optional footer line — e.g. "Top 5 of 23 categories" or trend
        *  commentary. Renderer styles as small muted text. */
       footer?: string;
+    }
+  | {
+      /** Read-only transactions list card. Used by listTransactions,
+       *  findTransactions, findUncategorizedTransactions. Generic enough
+       *  for "recent N", search results, and the review queue alike;
+       *  presence/absence of the optional fields (category chip, account
+       *  badge, needs_review flag) lets one renderer cover all three.
+       *
+       *  Amounts are signed strings — positive = expense (money out),
+       *  negative = income (money in) — matching Plaid + our DB
+       *  convention. The renderer colorizes income green and expense ink,
+       *  and shows a leading sign only on income. */
+      type: "transactions_list";
+      title: string;
+      /** Optional period subtitle ("This month", "Search: starbucks", etc). */
+      period_label?: string;
+      /** Total rows in the result set; may exceed `rows.length` if the
+       *  card is capped. Used by the footer for "Showing N of M". */
+      total_count: number;
+      /** Optional summed amount across the result set. Server-computed so
+       *  the LLM doesn't redo the math. */
+      total_amount?: string;
+      /** ISO 4217 — defaults to CAD. */
+      currency?: string;
+      rows: Array<{
+        /** Transaction id (for future tap-to-detail navigation). */
+        id: string;
+        /** Pre-formatted date label — server picks "Today" / "Yesterday"
+         *  / "Mon May 5" / "May 5, 2026" based on recency. */
+        date_label: string;
+        /** Display merchant name (raw text from Plaid, NOT the
+         *  normalized key). */
+        merchant: string;
+        /** Signed amount string ("12.34" or "-87.43"). */
+        amount: string;
+        /** Optional category chip — color/icon mirror the Category DTO. */
+        category?: {
+          name: string;
+          color?: string | null;
+          icon?: string | null;
+        };
+        /** Optional account name (small text on the right column). */
+        account?: string;
+        /** When true, the row should render a "needs review" indicator. */
+        needs_review?: boolean;
+      }>;
+      /** Optional footer ("Showing 8 of 47", "All categorized", etc). */
+      footer?: string;
     };
