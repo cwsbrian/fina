@@ -33,3 +33,8 @@ playwright-report/
 # Git worktrees
 .worktrees/
 .claude/worktrees/
+
+# Service account / private credentials — never commit raw JSON keys
+*service-account*.json
+gen-lang-client-*.json
+*-iap-validator*.json
