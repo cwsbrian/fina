@@ -63,10 +63,13 @@ type ThreadRow = ChatThreadDTO & {
   workspaceName: string | null;
 };
 
+type WorkspacesResp = { workspaces: Array<{ id: string }> };
+
 // Chat history — opened from the Chat tab header's clock icon. Lists
 // every past + current thread. Tapping a row drills into /chat/[tid].
 export default function Chats() {
   const [threads, setThreads] = useState<ThreadRow[] | null>(null);
+  const [workspaceCount, setWorkspaceCount] = useState<number>(1);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const insets = useSafeAreaInsets();
@@ -75,8 +78,16 @@ export default function Chats() {
 
   const load = useCallback(async () => {
     try {
-      const data = await apiFetch<{ threads: ThreadRow[] }>("/chat/threads");
+      // Single workspace user → workspace tag on every chats row is
+      // redundant. Hydrate the count alongside threads so the meta line
+      // can omit it. The /workspaces call is cheap and the user already
+      // hits it on every other tab.
+      const [data, ws] = await Promise.all([
+        apiFetch<{ threads: ThreadRow[] }>("/chat/threads"),
+        apiFetch<WorkspacesResp>("/workspaces"),
+      ]);
       setThreads(data.threads);
+      setWorkspaceCount(ws.workspaces.length);
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -189,7 +200,16 @@ export default function Chats() {
                   </View>
                   <Text style={[styles.rowMeta, !unread && styles.rowMetaRead]}>
                     {[
-                      item.workspaceName ?? "Unassigned",
+                      // Hide the workspace tag when the user is in a
+                      // single workspace — every row would say the same
+                      // name. Lazy/unassigned threads still surface that
+                      // status so the user knows the thread hasn't been
+                      // bound yet.
+                      workspaceCount > 1
+                        ? item.workspaceName ?? "Unassigned"
+                        : item.workspaceName === null
+                          ? "Unassigned"
+                          : "",
                       relativeTime(item.lastMessageAt),
                     ]
                       .filter(Boolean)
