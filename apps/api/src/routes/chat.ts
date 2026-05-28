@@ -160,8 +160,12 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(exists ? 403 : 404).send({ error: exists ? "forbidden" : "thread_not_found" });
       }
 
+      // Skip role: "tool" rows — those carry { type: "tool", ... }
+      // blocks that exist for LLM history replay (see turn.ts), not for
+      // user display. Sending them surfaces an "Unsupported message
+      // type" fallback in the mobile/web renderer.
       const recent = await prisma.chatMessage.findMany({
-        where: { threadId: thread.id },
+        where: { threadId: thread.id, role: { not: "tool" } },
         orderBy: { createdAt: "desc" },
         take: 100,
       });
