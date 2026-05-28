@@ -21,9 +21,46 @@ import { useCollapsingHeader } from "../src/design/useCollapsingHeader";
 
 const HEADER_HEIGHT = 58;
 
+/** Pretty-print an ISO timestamp as a relative-then-absolute label for
+ *  the chats list meta line. Returns "" when the input is null/missing.
+ *
+ *  - <1m ago    → "just now"
+ *  - <60m ago   → "5m ago"
+ *  - <24h ago   → "3h ago"
+ *  - yesterday  → "Yesterday"
+ *  - <7d ago    → "Mon" (weekday)
+ *  - same year  → "May 5"
+ *  - else       → "May 5, 2025"
+ */
+function relativeTime(iso: string | null): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "";
+  const nowMs = Date.now();
+  const deltaMs = nowMs - t;
+  if (deltaMs < 60_000) return "just now";
+  if (deltaMs < 60 * 60_000) return `${Math.floor(deltaMs / 60_000)}m ago`;
+  if (deltaMs < 24 * 60 * 60_000) return `${Math.floor(deltaMs / (60 * 60_000))}h ago`;
+
+  const d = new Date(t);
+  const now = new Date(nowMs);
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const daysAgo = Math.round((startOfToday.getTime() - startOfDay.getTime()) / (24 * 60 * 60_000));
+  if (daysAgo === 1) return "Yesterday";
+  if (daysAgo > 1 && daysAgo < 7) {
+    return d.toLocaleDateString(undefined, { weekday: "short" });
+  }
+  if (d.getFullYear() === now.getFullYear()) {
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+}
+
 type ThreadRow = ChatThreadDTO & {
   messageCount: number;
   firstMessagePreview: string | null;
+  workspaceName: string | null;
 };
 
 // Chat history — opened from the Chat tab header's clock icon. Lists
@@ -151,11 +188,12 @@ export default function Chats() {
                     </Text>
                   </View>
                   <Text style={[styles.rowMeta, !unread && styles.rowMetaRead]}>
-                    {item.messageCount} message
-                    {item.messageCount === 1 ? "" : "s"}
-                    {item.lastMessageAt
-                      ? ` · ${new Date(item.lastMessageAt).toLocaleDateString()}`
-                      : ""}
+                    {[
+                      item.workspaceName ?? "Unassigned",
+                      relativeTime(item.lastMessageAt),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
                   </Text>
                 </View>
                 {unread ? (

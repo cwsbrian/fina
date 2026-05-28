@@ -110,12 +110,34 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       `;
       const unreadByThread = new Map(unreadRows.map((r) => [r.threadId, Number(r.cnt)]));
 
+      // Hydrate workspaceName per row so the listing UI can show which
+      // workspace each thread lives in without a follow-up roundtrip.
+      // Lazy threads (workspaceId === null) come back with workspaceName
+      // === null and the renderer falls back to a neutral label.
+      const wsIds = Array.from(
+        new Set(
+          threads
+            .map((t) => t.workspaceId)
+            .filter((id): id is string => id !== null),
+        ),
+      );
+      const wsRows = wsIds.length === 0
+        ? []
+        : await prisma.workspace.findMany({
+            where: { id: { in: wsIds } },
+            select: { id: true, name: true },
+          });
+      const wsNameById = new Map(wsRows.map((w) => [w.id, w.name]));
+
       return {
         threads: threads.map((t) => ({
           ...serializeThread(t),
           messageCount: countByThread.get(t.id) ?? 0,
           firstMessagePreview: previewByThread.get(t.id) ?? null,
           unreadCount: unreadByThread.get(t.id) ?? 0,
+          workspaceName: t.workspaceId
+            ? wsNameById.get(t.workspaceId) ?? null
+            : null,
         })),
       };
     } catch (e) {
