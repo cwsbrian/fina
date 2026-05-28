@@ -351,7 +351,14 @@ export function ThreadView({
           <MessageBubble
             message={item}
             workspaceId={thread?.workspaceId ?? null}
+            threadId={localId}
             onFormFocusChange={setFormFocused}
+            onConfirmationMessage={(msg) => {
+              setMessages((prev) =>
+                prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
+              );
+              scrollToBottom();
+            }}
           />
         )}
         ListFooterComponent={sending ? <TypingIndicator /> : null}
@@ -503,32 +510,38 @@ function markRead(threadId: string): void {
 }
 
 /** Workspace-scoped helper that POSTs to /workspaces/:wsId/intents/:id/consume
- *  with the form's edited values. Resolves on success so the form can
- *  render its "Added" state; rejects with the ApiError so the form can
- *  surface the message to the user. */
+ *  with the form's edited values + the active threadId so the server
+ *  can post an assistant confirmation message into the same conversation.
+ *  Returns the confirmation message when the server emitted one; caller
+ *  appends it to the local message list. */
 async function submitFormIntent(
   workspaceId: string | null,
+  threadId: string | null,
   intentId: string,
   overrides: Record<string, unknown>,
-): Promise<void> {
-  // We always have a workspaceId by the time a form block was emitted —
-  // the LLM only emits one inside a bound thread. Fall back to throwing
-  // so the form's catch surfaces a clean error if the invariant breaks.
+): Promise<ChatMessageDTO | null> {
   if (!workspaceId) throw new Error("no_workspace");
-  await apiFetch(`/workspaces/${workspaceId}/intents/${intentId}/consume`, {
-    method: "POST",
-    body: JSON.stringify({ overrides }),
-  });
+  const body: Record<string, unknown> = { overrides };
+  if (threadId) body.threadId = threadId;
+  const resp = await apiFetch<{ result: unknown; confirmationMessage?: ChatMessageDTO }>(
+    `/workspaces/${workspaceId}/intents/${intentId}/consume`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+  return resp.confirmationMessage ?? null;
 }
 
 function MessageBubble({
   message,
   workspaceId,
+  threadId,
   onFormFocusChange,
+  onConfirmationMessage,
 }: {
   message: ChatMessageDTO;
   workspaceId: string | null;
+  threadId: string | null;
   onFormFocusChange?: (focused: boolean) => void;
+  onConfirmationMessage?: (msg: ChatMessageDTO) => void;
 }) {
   const blocks = Array.isArray(message.blocks)
     ? (message.blocks as Block[])
@@ -549,9 +562,17 @@ function MessageBubble({
               <PresentationBlock
                 block={b}
                 role={message.role}
-                onSubmitForm={(id, overrides) =>
-                  submitFormIntent(workspaceId, id, overrides)
-                }
+                onSubmitForm={async (id, overrides) => {
+                  const confirmation = await submitFormIntent(
+                    workspaceId,
+                    threadId,
+                    id,
+                    overrides,
+                  );
+                  if (confirmation && onConfirmationMessage) {
+                    onConfirmationMessage(confirmation);
+                  }
+                }}
                 {...(onFormFocusChange ? { onFormFocusChange } : {})}
               />
             </View>

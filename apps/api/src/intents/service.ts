@@ -10,6 +10,80 @@ import { prisma } from "../db.js";
 import type { ToolDef } from "../chat/tools/types.js";
 import type { Env } from "../env.js";
 
+type ChatMessageRow = {
+  id: string;
+  role: string;
+  blocks: unknown;
+  createdAt: string;
+};
+
+/** Human-readable confirmation text for a successful intent execution.
+ *  Server-templated (not LLM) — cheap, deterministic, and language
+ *  matches the user's locale rather than guessing per-message. */
+function confirmationFor(
+  tool: string,
+  result: unknown,
+  locale: string,
+): string | null {
+  const ko = locale.startsWith("ko");
+  switch (tool) {
+    case "addRecurring": {
+      const r = (result as { recurring?: { name: string; amount: string; cadence: string; nextOccurrenceDate: string } }).recurring;
+      if (!r) return null;
+      const c = cadenceLabel(r.cadence, ko);
+      const sym = "$"; // CAD default; downstream can localize later
+      return ko
+        ? `${r.name}을 ${c} ${sym}${r.amount} 정기지출로 추가했어요. 다음 결제: ${r.nextOccurrenceDate}.`
+        : `Added ${r.name} as a ${c} recurring expense for ${sym}${r.amount}. Next charge: ${r.nextOccurrenceDate}.`;
+    }
+    case "removeRecurring": {
+      const r = (result as { recurring?: { name: string } }).recurring;
+      return ko
+        ? `${r?.name ?? "정기지출"}을 삭제했어요.`
+        : `Removed ${r?.name ?? "the recurring expense"}.`;
+    }
+    case "addScheduledSpend": {
+      const s = (result as { scheduledSpend?: { name: string; amount: string; occurredAt: string } }).scheduledSpend;
+      if (!s) return null;
+      return ko
+        ? `${s.name}을 $${s.amount} (${s.occurredAt}) 예정 지출로 추가했어요.`
+        : `Added ${s.name} ($${s.amount}) for ${s.occurredAt}.`;
+    }
+    case "setBudget": {
+      return ko ? "예산을 저장했어요." : "Budget saved.";
+    }
+    case "createCategory": {
+      const c = (result as { category?: { name: string } }).category;
+      return ko
+        ? `${c?.name ?? "카테고리"}를 만들었어요.`
+        : `Created ${c?.name ?? "the category"}.`;
+    }
+    default:
+      return null;
+  }
+}
+
+function cadenceLabel(c: string, ko: boolean): string {
+  if (ko) {
+    switch (c) {
+      case "monthly":     return "매월";
+      case "semimonthly": return "반월 (월 2회)";
+      case "biweekly":    return "격주";
+      case "weekly":      return "매주";
+      case "yearly":      return "매년";
+      default:            return c;
+    }
+  }
+  switch (c) {
+    case "monthly":     return "monthly";
+    case "semimonthly": return "semi-monthly";
+    case "biweekly":    return "biweekly";
+    case "weekly":      return "weekly";
+    case "yearly":      return "yearly";
+    default:            return c;
+  }
+}
+
 // Lazy dynamic import breaks the cycle:
 //   present-confirm-card → intents/service → chat/tools/index → present-confirm-card
 // A static `import { REGISTRY }` at module top causes the cycle to produce
@@ -92,7 +166,11 @@ export async function consumeIntentService(
    *  Merged on top of the intent's stored args, then re-validated
    *  against the target tool's zod schema. */
   overrides?: Record<string, unknown>,
-): Promise<{ result: unknown }> {
+  /** Optional thread to post a confirmation assistant message into
+   *  after a successful run. The mobile form passes this so the user
+   *  sees a clean "added X" message right after the form locks. */
+  threadId?: string,
+): Promise<{ result: unknown; confirmationMessage?: ChatMessageRow }> {
   const row = await prisma.actionIntent.findUnique({ where: { id: intentId } });
   if (!row) throw new Error("intent_not_found");
   if (row.workspaceId !== ctx.workspaceId || row.userId !== ctx.userId) {
@@ -135,5 +213,44 @@ export async function consumeIntentService(
       result:     result,
     });
   }
-  return { result };
+
+  // Server-templated confirmation message — posted as an assistant text
+  // block into the chat thread the form was rendered in. The user sees
+  // "Added Disney as a biweekly recurring expense for $20.00..."
+  // without needing the LLM to round-trip.
+  let confirmationMessage: ChatMessageRow | undefined;
+  if (threadId) {
+    const user = await prisma.user.findUnique({
+      where: { id: ctx.userId },
+      select: { locale: true },
+    });
+    const text = confirmationFor(payload.tool, result, user?.locale ?? "en-CA");
+    if (text) {
+      const created = await prisma.$transaction(async (tx) => {
+        const msg = await tx.chatMessage.create({
+          data: {
+            threadId,
+            role: "assistant",
+            blocks: [{ type: "text", markdown: text }] as never,
+          },
+          select: { id: true, role: true, blocks: true, createdAt: true },
+        });
+        await tx.chatThread.update({
+          where: { id: threadId },
+          data: { lastMessageAt: msg.createdAt },
+        });
+        return msg;
+      });
+      confirmationMessage = {
+        id: created.id,
+        role: created.role,
+        blocks: created.blocks,
+        createdAt: created.createdAt.toISOString(),
+      };
+    }
+  }
+
+  return confirmationMessage
+    ? { result, confirmationMessage }
+    : { result };
 }

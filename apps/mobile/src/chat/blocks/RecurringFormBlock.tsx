@@ -41,6 +41,7 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
  *  edits and submits — no further back-and-forth with the assistant. */
 export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }: Props) {
   const datePicker = useDatePickerSheet();
+  const [name, setName] = useState<string>(block.defaults.name);
   const [amount, setAmount] = useState<string>(block.defaults.amount ?? "");
   const [cadence, setCadence] = useState<Cadence>(block.defaults.cadence ?? "monthly");
   const [dateStr, setDateStr] = useState<string>(
@@ -60,9 +61,10 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
     };
   }, [done, cancelled, onFocusChange]);
 
+  const nameValid = name.trim().length > 0 && name.trim().length <= 100;
   const amountValid = amount.length > 0 && AMOUNT_RE.test(amount) && parseFloat(amount) > 0;
   const dateValid = DATE_RE.test(dateStr);
-  const canSubmit = !submitting && !done && amountValid && dateValid;
+  const canSubmit = !submitting && !done && nameValid && amountValid && dateValid;
 
   const dateValue = useMemo(() => {
     const m = DATE_RE.exec(dateStr);
@@ -76,6 +78,7 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
     setSubmitting(true);
     try {
       const overrides: Record<string, unknown> = {
+        name: name.trim(),
         amount: parseFloat(amount),
         cadence,
         next_occurrence_date: dateStr,
@@ -111,7 +114,7 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
             <Ionicons name="checkmark" size={16} color={colors.onPrimary} />
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={styles.doneName}>{block.defaults.name}</Text>
+            <Text style={styles.doneName}>{name.trim()}</Text>
             <Text style={styles.doneMeta} numberOfLines={1}>
               {cadenceLongLabel(cadence)} · Next {prettyDate(dateStr)}
             </Text>
@@ -126,7 +129,7 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
   if (cancelled) {
     return (
       <BlockCard>
-        <Text style={styles.cancelledText}>{block.defaults.name} — cancelled</Text>
+        <Text style={styles.cancelledText}>{name.trim() || block.defaults.name} — cancelled</Text>
       </BlockCard>
     );
   }
@@ -137,7 +140,15 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
 
       <View style={styles.field}>
         <Text style={styles.label}>Name</Text>
-        <Text style={styles.staticValue}>{block.defaults.name}</Text>
+        <TextInput
+          style={[styles.input, styles.nameInput]}
+          value={name}
+          onChangeText={setName}
+          editable={!submitting}
+          maxLength={100}
+          autoCapitalize="words"
+          returnKeyType="done"
+        />
       </View>
 
       <View style={styles.field}>
@@ -301,6 +312,11 @@ const styles = StyleSheet.create({
   amountPrefix: { ...type$.bodyMd, color: colors.muted, marginRight: 4 },
   amountInput: { flex: 1 },
   input: { paddingVertical: 10, color: colors.ink, fontSize: 16 },
+  nameInput: {
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+  },
   segments: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
   segment: {
     paddingVertical: 8,

@@ -10,7 +10,10 @@ export async function intentsRoutes(app: FastifyInstance): Promise<void> {
     // — the consume service re-validates against the target tool's
     // zod schema, so a bad/extra field fails with invalid_payload_args
     // the same way a malformed LLM call would.
-    const body = (req.body ?? {}) as { overrides?: Record<string, unknown> };
+    const body = (req.body ?? {}) as {
+      overrides?: Record<string, unknown>;
+      threadId?: string;
+    };
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
       if (ctx.membership.workspaceId !== params.id) {
@@ -28,6 +31,7 @@ export async function intentsRoutes(app: FastifyInstance): Promise<void> {
         },
         params.intentId,
         body.overrides,
+        body.threadId,
       );
       return reply.code(200).send(result);
     } catch (e) {
