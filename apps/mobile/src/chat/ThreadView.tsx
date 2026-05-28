@@ -21,6 +21,10 @@ import type {
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { PresentationBlock } from "./PresentationBlock";
+import {
+  WorkspacePickerSheet,
+  type WorkspaceOption,
+} from "./WorkspacePickerSheet";
 import { colors, space, type as type$ } from "../design/tokens";
 
 type Props = {
@@ -72,6 +76,13 @@ export function ThreadView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
+  // Workspace-binding chip state. Only relevant before the thread is
+  // bound (thread === null OR thread.workspaceId === null). Once bound
+  // the chip disappears; subsequent messages must hit the bound ws and
+  // there's nothing to pick.
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
+  const [pickedWorkspaceId, setPickedWorkspaceId] = useState<string | null>(null);
+  const [pickerVisible, setPickerVisible] = useState(false);
   // Skips the load useEffect's GET /chat/threads/:id when we just created
   // the thread locally during a send. Without this guard the GET races
   // the in-flight POST /messages: it returns empty messages (the POST
@@ -90,6 +101,29 @@ export function ThreadView({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [threadId]);
+
+  // Workspace list + initial pick. The chip is visible only when 2+
+  // workspaces exist AND the thread isn't bound yet. Default pick
+  // mirrors the global active workspace so silent send works in the
+  // single-workspace case (chip hidden).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [list, activeId] = await Promise.all([
+          apiFetch<{ workspaces: WorkspaceOption[] }>("/workspaces"),
+          getActiveWorkspaceId(),
+        ]);
+        if (cancelled) return;
+        setWorkspaces(list.workspaces);
+        setPickedWorkspaceId(activeId ?? list.workspaces[0]?.id ?? null);
+      } catch {
+        // Non-fatal — onSend's bootstrapActiveWorkspace fallback covers
+        // the missing-active case.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // KeyboardAvoidingView (below) handles all the keyboard offset math —
   // including the iOS app-resume edge case where keyboardWillShow doesn't
@@ -154,8 +188,13 @@ export function ThreadView({
     scrollToBottom();
 
     try {
+      // Use the user's pre-send pick when set (multi-workspace path);
+      // otherwise fall back to active-then-bootstrap so existing
+      // single-workspace behavior is preserved.
       const wsId =
-        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+        pickedWorkspaceId ??
+        (await getActiveWorkspaceId()) ??
+        (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
 
       // Lazy-create the DB thread on the very first send so empty
@@ -266,6 +305,34 @@ export function ThreadView({
         ListFooterComponent={sending ? <TypingIndicator /> : null}
       />
 
+      {/* Workspace picker chip — only visible when:
+            (1) thread not yet bound (thread?.workspaceId === null OR no thread),
+            (2) user has 2+ workspaces (single-workspace users get the silent
+                active-workspace path), and
+            (3) at least one workspace has loaded.
+          After binding the chip disappears since the choice is locked. */}
+      {(thread?.workspaceId ?? null) === null && workspaces.length > 1 && (
+        <Pressable
+          style={({ pressed }) => [
+            styles.wsChip,
+            pressed && { backgroundColor: colors.surfaceSoft },
+          ]}
+          onPress={() => setPickerVisible(true)}
+        >
+          <Text style={styles.wsChipPrefix}>Sending to </Text>
+          <Text style={styles.wsChipName}>
+            {workspaces.find((w) => w.id === pickedWorkspaceId)?.name ??
+              "Personal"}
+          </Text>
+          <Ionicons
+            name="chevron-down"
+            size={14}
+            color={colors.muted}
+            style={{ marginLeft: 4 }}
+          />
+        </Pressable>
+      )}
+
       <View style={styles.composer}>
         <TextInput
           style={styles.input}
@@ -293,6 +360,13 @@ export function ThreadView({
           )}
         </Pressable>
       </View>
+      <WorkspacePickerSheet
+        visible={pickerVisible}
+        workspaces={workspaces}
+        selectedId={pickedWorkspaceId}
+        onSelect={(id) => setPickedWorkspaceId(id)}
+        onClose={() => setPickerVisible(false)}
+      />
     </KeyboardAvoidingView>
   );
 }
@@ -476,4 +550,18 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendBtnDisabled: { backgroundColor: colors.primaryDisabled },
+  wsChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "center",
+    paddingHorizontal: space.sm,
+    paddingVertical: 6,
+    marginBottom: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.canvas,
+  },
+  wsChipPrefix: { ...type$.caption, color: colors.muted },
+  wsChipName: { ...type$.caption, color: colors.ink, fontWeight: "600" },
 });
