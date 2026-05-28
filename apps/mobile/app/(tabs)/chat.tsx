@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { View, Text, StyleSheet, Animated } from "react-native";
+import { View, Text, StyleSheet, Animated, Pressable } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, router, useNavigation } from "expo-router";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { ThreadView } from "../../src/chat/ThreadView";
+import { ThreadActionsSheet } from "../../src/chat/ThreadActionsSheet";
 import { apiFetch } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
@@ -30,6 +32,13 @@ export default function ChatTab() {
   // Workspace tag shown in the header, fed by ThreadView's binding /
   // picker state. Null when user has a single workspace (no tag needed).
   const [headerWorkspace, setHeaderWorkspace] = useState<string | null>(null);
+  // Loaded thread for the header — null on the pending state. Drives the
+  // title text and whether the header is tappable for rename/delete.
+  const [headerThread, setHeaderThread] = useState<{
+    id: string;
+    title: string | null;
+  } | null>(null);
+  const [actionsVisible, setActionsVisible] = useState(false);
 
   useEffect(() => {
     if (params.thread) {
@@ -53,6 +62,8 @@ export default function ChatTab() {
   const onNewChat = useCallback(() => {
     setCurrentThreadId(null);
     setResetKey((k) => k + 1);
+    setHeaderThread(null);
+    setActionsVisible(false);
     header.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -82,6 +93,7 @@ export default function ChatTab() {
         onWorkspaceContextChange={({ workspaceName, multipleWorkspaces }) => {
           setHeaderWorkspace(multipleWorkspaces ? workspaceName : null);
         }}
+        onThreadChange={setHeaderThread}
       />
       <Animated.View style={[styles.headerOverlay, { top: insets.top, height: HEADER_HEIGHT }, header.headerStyle]}>
         <View style={styles.header}>
@@ -91,14 +103,31 @@ export default function ChatTab() {
             accessibilityLabel="Chat history"
             onPress={() => router.push("/chats" as never)}
           />
-          <View style={styles.headerCenter}>
-            <Text style={styles.headerTitle}>Chat</Text>
+          <Pressable
+            style={styles.headerCenter}
+            disabled={!headerThread}
+            onPress={() => headerThread && setActionsVisible(true)}
+            hitSlop={8}
+          >
+            <View style={styles.headerTitleRow}>
+              <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
+                {headerThread?.title?.trim() || "Chat"}
+              </Text>
+              {headerThread ? (
+                <Ionicons
+                  name="chevron-down"
+                  size={14}
+                  color={colors.muted}
+                  style={styles.headerCaret}
+                />
+              ) : null}
+            </View>
             {headerWorkspace ? (
               <Text style={styles.headerWorkspace} numberOfLines={1}>
                 {headerWorkspace}
               </Text>
             ) : null}
-          </View>
+          </Pressable>
           <HeaderIconButton
             icon="create-outline"
             variant="plain"
@@ -108,6 +137,20 @@ export default function ChatTab() {
         </View>
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
+      {headerThread ? (
+        <ThreadActionsSheet
+          visible={actionsVisible}
+          threadId={headerThread.id}
+          currentTitle={headerThread.title}
+          onRenamed={(newTitle) =>
+            setHeaderThread((prev) =>
+              prev ? { ...prev, title: newTitle } : prev,
+            )
+          }
+          onDeleted={onNewChat}
+          onClose={() => setActionsVisible(false)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -139,7 +182,13 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
-  headerCenter: { flex: 1, alignItems: "center" },
-  headerTitle: { ...type$.titleSm, color: colors.ink },
+  headerCenter: {
+    flex: 1,
+    alignItems: "center",
+    paddingHorizontal: space.sm,
+  },
+  headerTitleRow: { flexDirection: "row", alignItems: "center", maxWidth: "100%" },
+  headerTitle: { ...type$.titleSm, color: colors.ink, flexShrink: 1 },
+  headerCaret: { marginLeft: 4 },
   headerWorkspace: { ...type$.caption, color: colors.muted, marginTop: 1 },
 });

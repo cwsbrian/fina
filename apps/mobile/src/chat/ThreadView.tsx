@@ -59,6 +59,13 @@ type Props = {
     workspaceName: string | null;
     multipleWorkspaces: boolean;
   }) => void;
+  /** Fires whenever the loaded thread changes — so the parent can put
+   *  the title in the screen header and surface rename/delete actions
+   *  on it. `null` means the view is on the fresh / pending state with
+   *  nothing to act on. */
+  onThreadChange?: (
+    thread: { id: string; title: string | null } | null,
+  ) => void;
 };
 
 type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
@@ -76,6 +83,7 @@ export function ThreadView({
   scrollEventThrottle,
   listTopInset = 0,
   onWorkspaceContextChange,
+  onThreadChange,
 }: Props) {
   // Local thread id mirrors the prop for switching, but on first send
   // we promote a null prop to a real id WITHOUT waiting for the parent
@@ -162,6 +170,18 @@ export function ThreadView({
     pickedWorkspaceId,
     thread?.workspaceId,
   ]);
+
+  // Surface thread identity (id + title) to the parent so it can render
+  // the title in its header and offer rename/delete actions on the
+  // header tap. Fires `null` on the fresh / pending state.
+  useEffect(() => {
+    if (!onThreadChange) return;
+    if (thread) {
+      onThreadChange({ id: thread.id, title: thread.title });
+    } else {
+      onThreadChange(null);
+    }
+  }, [onThreadChange, thread]);
 
   // KeyboardAvoidingView (below) handles all the keyboard offset math —
   // including the iOS app-resume edge case where keyboardWillShow doesn't
