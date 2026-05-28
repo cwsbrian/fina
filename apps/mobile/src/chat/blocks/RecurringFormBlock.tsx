@@ -50,16 +50,18 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
   const [cancelled, setCancelled] = useState(false);
-
-  // Tell the parent when the form is "in use" so the chat composer can
-  // step out of the way. We consider the form in-use while it's still
-  // editable; done/cancelled re-shows the composer.
+  // True while ANY input inside the form holds keyboard focus. The
+  // parent uses this to step the chat composer out of the way ONLY
+  // while the user is actually typing — NOT for the entire lifetime
+  // of the form, otherwise a re-mounted (already-resolved) form on
+  // thread reload would permanently hide the composer.
+  const [inputFocused, setInputFocused] = useState(false);
   useEffect(() => {
-    onFocusChange?.(!done && !cancelled);
+    onFocusChange?.(inputFocused);
     return () => {
       onFocusChange?.(false);
     };
-  }, [done, cancelled, onFocusChange]);
+  }, [inputFocused, onFocusChange]);
 
   const nameValid = name.trim().length > 0 && name.trim().length <= 100;
   const amountValid = amount.length > 0 && AMOUNT_RE.test(amount) && parseFloat(amount) > 0;
@@ -150,6 +152,8 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
           maxLength={100}
           autoCapitalize="words"
           returnKeyType="done"
+          onFocus={() => setInputFocused(true)}
+          onBlur={() => setInputFocused(false)}
         />
       </View>
 
@@ -166,6 +170,8 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
             placeholderTextColor={colors.muted}
             editable={!submitting}
             returnKeyType="done"
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
           />
         </View>
       </View>
