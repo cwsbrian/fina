@@ -383,7 +383,7 @@ export default function More() {
                     isStripeOwned
                       ? () => onStripeManagedTap("Plan")
                       : me?.subscription
-                        ? comingSoon("Plan details")
+                        ? () => router.push("/plan/details" as never)
                         : () => router.push("/plan" as never)
                   }
                 />
