@@ -95,6 +95,7 @@ export function ThreadView({
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
+  const inputRef = useRef<TextInput>(null);
   // Workspace-binding chip state. Only relevant before the thread is
   // bound (thread === null OR thread.workspaceId === null). Once bound
   // the chip disappears; subsequent messages must hit the bound ws and
@@ -242,6 +243,10 @@ export function ThreadView({
     if (!body || sending) return;
     setSending(true);
     setDraft("");
+    // Imperative clear too: clearing the controlled value alone leaves a
+    // residual composing syllable in the field under the Korean (CJK) IME,
+    // so the text reappears after send. .clear() resets native composition.
+    inputRef.current?.clear();
     const tempId = `tmp-${Date.now()}`;
     setMessages((prev) => [
       ...prev,
@@ -439,6 +444,7 @@ export function ThreadView({
       {!formFocused && (
       <View style={styles.composer}>
         <TextInput
+          ref={inputRef}
           style={styles.input}
           placeholder="Message Fina…"
           placeholderTextColor={colors.muted}

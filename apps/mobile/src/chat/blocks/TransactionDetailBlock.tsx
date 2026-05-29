@@ -90,7 +90,7 @@ const styles = StyleSheet.create({
   headRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    alignItems: "flex-start",
+    alignItems: "center",
     gap: space.sm,
   },
   merchant: {
