@@ -29,6 +29,7 @@ export * from "./validation/password.js";
 
 // UI-display helpers
 export * from "./format/identity.js";
+export * from "./format/date.js";
 
 // Zod request schemas
 export * from "./schemas/billing.js";
