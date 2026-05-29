@@ -556,7 +556,7 @@ const styles = StyleSheet.create({
   catInput: {
     ...type$.bodyMd,
     color: colors.ink,
-    minWidth: 60,
+    width: 88,
     textAlign: "right",
     paddingVertical: 0,
   },
