@@ -51,11 +51,12 @@ trial outranks Lite in `computeEffectiveTier` (correct precedence), so
 
 | Target file | Export | Shape | Motivation |
 |---|---|---|---|
-| `libs/shared/src/tier.ts` | `trialRevertsTo(me)` | `(me: { trial: { active: boolean }; subscription: { tier: Tier; pendingTier: Tier \| null } \| null }) => Tier \| null` | Single source for the "what tier do I land on after the trial" derivation. 4+ consumers across web + mobile; the codebase already routes all tier-precedence logic through `@fina/shared` and the UI never recomputes it. |
+| `libs/shared/src/tier.ts` | `trialRevertsTo(me)` | `(me: { trial: { active: boolean }; subscription: { tier: PaidTier; pendingTier: PaidTier \| null } \| null }) => PaidTier \| null` | Single source for the "what tier do I land on after the trial" derivation. 4+ consumers across web + mobile; the codebase already routes all tier-precedence logic through `@fina/shared` and the UI never recomputes it. Param/return are `PaidTier` (not `Tier`) — `SubscriptionDTO.tier`/`pendingTier` are `PaidTier`, and a standing sub is never `free`, so the input is exactly `MeDTO.subscription` with no widening. |
 | `libs/shared/src/dto/subscription.ts` | `subscriptionSourceLabel(source)` | `(source: SubscriptionSource) => "Web" \| "App Store" \| "Google Play"` | User-facing label for `SubscriptionSource`. UI display helper (repo convention shares these even at 1 consumer, like identity/tier helpers); the Your Plan screen shows it, and the web plan page is a likely second consumer. |
+| `libs/shared/src/format/identity.ts` (or new `format/date.ts`) | `formatShortDate(input)` | `(input: string \| Date) => string` | Renders the approved short month+day form (`{ month: "short", day: "numeric" }`, e.g. "Jun 24") used by every new "Reverts to … on <date>" / "Next charge <date>" string this feature adds (4+ new sites across web + mobile). The same format literal is already hand-inlined in `apps/mobile/src/goals/meta.ts`, `format/money.ts`, etc. — share it now for the new sites; migrating the pre-existing inlines is out of scope. |
 
-Export both from `libs/shared/src/index.ts` alongside the existing
-`tier.ts` / `dto/subscription.ts` exports.
+Export all three from `libs/shared/src/index.ts` alongside the existing
+`tier.ts` / `dto/subscription.ts` / `format/identity.ts` exports.
 
 **No new DTO, schema, error code, or constant.** The required data
 (`trial.active`, `trial.endsAt`, `subscription.tier`,
@@ -63,8 +64,9 @@ Export both from `libs/shared/src/index.ts` alongside the existing
 
 ## Architecture
 
-Pure presentation change driven by two shared pure helpers plus one new
-mobile screen. No server/route/DB work.
+Pure presentation change driven by three shared pure helpers
+(`trialRevertsTo`, `subscriptionSourceLabel`, `formatShortDate`) plus one
+new mobile screen. No server/route/DB work.
 
 ### `trialRevertsTo`
 
@@ -76,8 +78,8 @@ mobile screen. No server/route/DB work.
  *  Pro (nothing to warn about). Drives "Reverts to <Lite> on <date>" copy. */
 export function trialRevertsTo(me: {
   trial: { active: boolean };
-  subscription: { tier: Tier; pendingTier: Tier | null } | null;
-}): Tier | null {
+  subscription: { tier: PaidTier; pendingTier: PaidTier | null } | null;
+}): PaidTier | null {
   if (!me.trial.active || !me.subscription) return null;
   const s = me.subscription;
   const next = s.pendingTier && s.pendingTier !== s.tier ? s.pendingTier : s.tier;
@@ -87,24 +89,25 @@ export function trialRevertsTo(me: {
 
 The `pendingTier` branch mirrors the existing `upcomingTier` derivation
 already inlined in `settings/plan/page.tsx` (so a scheduled
-downgrade-at-period-end is reflected). `SubscriptionDTO.tier` /
-`pendingTier` are `PaidTier`, assignable to `Tier`, so passing a
-`MeDTO` shape compiles without coercion.
+downgrade-at-period-end is reflected). Param and return are `PaidTier`,
+matching `SubscriptionDTO.tier`/`pendingTier` exactly — a standing sub is
+never `free`, so `MeDTO.subscription` passes with no widening or coercion,
+and the return narrows cleanly to `"lite"` (the only non-`pro` `PaidTier`).
+`tierLabel`/`PRICING` accept `PaidTier` (it's a subset of `Tier`), so the
+result feeds the display helpers directly.
 
 ### Display sites
 
 Each site computes `const revertsTo = trialRevertsTo(me)` and renders the
-extra copy only when it is non-null. Date formatted to match the approved
-preview: short month + day.
-
-- Web: `new Date(me.trial.endsAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })`
-- Mobile: same `toLocaleDateString` options (RN Hermes supports Intl).
+extra copy only when it is non-null. Date is rendered with the shared
+`formatShortDate(me.trial.endsAt)` (short month + day, e.g. "Jun 24") on
+both web and mobile — RN Hermes supports `Intl`, so one helper serves both.
 
 Label: `tierLabel(revertsTo, false)` → `"Lite"`.
 
 | # | Site | File / anchor | Change |
 |---|---|---|---|
-| 1 | Web home trial banner | `apps/web/src/app/(app)/home/page.tsx` (~L188–210) | When `revertsTo` set: add a line "Reverts to {label} on {date}" and **replace** the "Add a card to keep Pro at $15/mo…" CTA with a "Manage plan" link to `/settings/plan`. When `revertsTo` is null (no sub): banner unchanged. |
+| 1 | Web home trial banner | `apps/web/src/app/(app)/home/page.tsx` (sub-text ~L199, button ~L205–207) | When `revertsTo` set, two distinct edits: **(a)** replace the misleading sub-text line at ~L199 ("Add a card to keep Pro at $15/mo when the trial ends.") with "Reverts to {label} on {date}."; **(b)** relabel the ~L207 button from "Stay on Pro" to "Manage plan" (its `/settings/plan` route at ~L205 is already correct — only the label changes). When `revertsTo` is null (free-trial, no sub): both the sub-text and the "Stay on Pro" button are **unchanged** (that conversion funnel is out of scope). |
 | 2 | Web plan card (`trialActive && sub`) | `apps/web/src/app/(app)/settings/plan/page.tsx` (~L118–151) | Branch on `trialRevertsTo(me)`: when non-null (downgrade) → "Reverts to {label} on {date}. {price} will be charged." (today it says only "{price} will be charged on {date}"). When null (Pro sub under trial — no downgrade) → keep the existing "{price} will be charged on {date}" copy unchanged. The branch's existing `upcomingLabel`/`upcomingPrice` locals supply label and price. |
 | 3 | Mobile home trial banner | `apps/mobile/app/(tabs)/index.tsx` (~L444–451) | Add a second line "Reverts to {label} on {date}" below "Pro trial · Nd left" when `revertsTo` set. |
 | 4 | Mobile "Your Plan" screen | `apps/mobile/app/plan/details.tsx` (new — see below) | Shows "Reverts to {label} on {date}" prominently when `revertsTo` set. This is the primary mobile surface for the full revert detail. |
@@ -155,14 +158,20 @@ A read-mostly status screen for the user's current plan. Loads `me` via
    - tier + price (`PRICING[sub.tier].displayPrice`),
    - source label via `subscriptionSourceLabel(sub.source)`,
    - next charge: "Next charge {date}" from `currentPeriodEnd`, or
-     "Ends on {date}" when `cancelAtPeriodEnd`.
+     "Ends on {date}" when `cancelAtPeriodEnd` — both via
+     `formatShortDate`.
 3. **Actions**:
    - **Change plan** → `router.push("/plan")` (the picker; upgrade/switch
      uses the existing purchase flow unchanged).
    - **Manage billing** → the existing platform deep-link logic currently
-     inlined as `onManageBilling` in more.tsx. Extract it to a small mobile
-     helper (e.g. `src/iap/manage.ts`) so both More and this screen share
-     it rather than duplicating.
+     inlined as `onManageBilling` in more.tsx. Extract **only the async
+     deep-link work** (open the App Store / Play subscription URL; the
+     `Linking` call + error alert) into a stateless helper (e.g.
+     `openManageBilling()` in `src/iap/manage.ts`). The `openingBilling`
+     busy flag + its `ActivityIndicator` stay **per-screen React state** —
+     each caller owns its own `useState`/spinner and `await`s the helper.
+     The helper must not own or close over any React state, so More and the
+     Your Plan screen don't fight over a shared spinner.
    - **Restore purchases** → `router.push("/plan/restore")`.
    - Defensive no-sub state: if the screen is opened with no
      `me.subscription` (More routes those users straight to the picker, so
@@ -174,13 +183,18 @@ is the source of truth for Stripe — established pattern).
 
 ### More → Plan routing change
 
-`app/(tabs)/more.tsx:394–400` Plan-row `onPress`:
+`app/(tabs)/more.tsx:394–400` Plan-row `onPress`. The row's `onPress` is a
+ternary that selects a **handler function**, so the replacement must be the
+deferred form `() => router.push("/plan/details")` — not a bare
+`router.push(...)` (which would navigate on every render). This mirrors how
+the existing `comingSoon("Plan details")` already returns a `() => Alert(...)`
+thunk.
 
 | Sub state | Today | After |
 |---|---|---|
-| Stripe-owned | alert "manage on web" | unchanged |
-| IAP sub on file | `comingSoon("Plan details")` | `router.push("/plan/details")` |
-| free / trial, no sub | `router.push("/plan")` | unchanged (picker) |
+| Stripe-owned | `onStripeManagedTap` | unchanged |
+| IAP sub on file | `comingSoon("Plan details")` | `() => router.push("/plan/details")` |
+| free / trial, no sub | `() => router.push("/plan")` | unchanged (picker) |
 
 ## Error handling / edge cases
 
@@ -200,12 +214,13 @@ is the source of truth for Stripe — established pattern).
 
 ## Testing
 
-- **Unit (`libs/shared`)**: add a `trialRevertsTo` spec covering: trial+lite
-  sub → `"lite"`; trial+pro sub → `null`; trial+lite sub with
-  `pendingTier:"lite"`-after-pro edge → follows pendingTier; trial+no sub
-  → `null`; no trial → `null`. Add a `subscriptionSourceLabel` spec (one
-  assertion per source). (Use the existing shared test runner if present;
-  otherwise colocate a minimal vitest spec.)
+- **Unit (`libs/shared`)**: colocated vitest `*.test.ts` files (the
+  established pattern — see `src/iap/productIds.test.ts`). Add a
+  `trialRevertsTo` spec covering: trial+lite sub → `"lite"`; trial+pro sub →
+  `null`; trial+lite sub with `pendingTier:"lite"`-after-pro edge → follows
+  pendingTier; trial+no sub → `null`; no trial → `null`. Add a
+  `subscriptionSourceLabel` spec (one assertion per source) and a
+  `formatShortDate` spec (string + Date input → "Jun 24").
 - **Manual UI verification** (per the repo UI rule): with the test
   account (Pro trial + Lite IAP sub), confirm the "Reverts to Lite on
   <date>" copy appears on web home banner, web plan card, mobile home
