@@ -11,9 +11,9 @@ export function BudgetListBlock({ block }: Props) {
   const sym = currencySymbol(block.currency);
   return (
     <Pressable
-      onPress={() => router.push("/budget" as never)}
+      onPress={() => router.push("/budget/new" as never)}
       accessibilityRole="button"
-      accessibilityLabel="View budget"
+      accessibilityLabel="Edit budget"
       style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
     >
     <BlockCard>
