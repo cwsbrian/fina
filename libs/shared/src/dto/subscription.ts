@@ -40,3 +40,17 @@ export type SubscriptionDTO = {
    *  currentPeriodEnd. Null when no scheduled change. */
   pendingTierAt: string | null;
 };
+
+/** User-facing label for a subscription's billing source. */
+export function subscriptionSourceLabel(
+  source: SubscriptionSource,
+): "Web" | "App Store" | "Google Play" {
+  switch (source) {
+    case "stripe":
+      return "Web";
+    case "iap_apple":
+      return "App Store";
+    case "iap_google":
+      return "Google Play";
+  }
+}
