@@ -1,7 +1,20 @@
-# Trial → standing-tier downgrade indicator — design
+# Mobile plan UX + trial → standing-tier downgrade indicator — design
 
 **Date:** 2026-05-29
 **Status:** Approved (brainstorming)
+
+This spec covers three cohesive pieces of plan UX, agreed in one
+brainstorming pass:
+
+1. **Trial → standing-tier downgrade indicator** (web + mobile) — surface
+   "Reverts to Lite on <date>" wherever the current plan shows.
+2. **Mobile plan-screen headers** — the plan picker / restore screens have
+   no visible header (root Stack disables native headers); add the app's
+   custom header row, with the picker titled "Choose Plan".
+3. **New mobile "Your Plan" detail screen** — More → Plan currently shows a
+   "Coming soon" alert for users with an IAP sub; replace it with a screen
+   that shows the active plan (incl. the downgrade indicator) and a
+   change-plan action.
 
 ## Goal
 
@@ -39,9 +52,10 @@ trial outranks Lite in `computeEffectiveTier` (correct precedence), so
 | Target file | Export | Shape | Motivation |
 |---|---|---|---|
 | `libs/shared/src/tier.ts` | `trialRevertsTo(me)` | `(me: { trial: { active: boolean }; subscription: { tier: Tier; pendingTier: Tier \| null } \| null }) => Tier \| null` | Single source for the "what tier do I land on after the trial" derivation. 4+ consumers across web + mobile; the codebase already routes all tier-precedence logic through `@fina/shared` and the UI never recomputes it. |
+| `libs/shared/src/dto/subscription.ts` | `subscriptionSourceLabel(source)` | `(source: SubscriptionSource) => "Web" \| "App Store" \| "Google Play"` | User-facing label for `SubscriptionSource`. UI display helper (repo convention shares these even at 1 consumer, like identity/tier helpers); the Your Plan screen shows it, and the web plan page is a likely second consumer. |
 
-Export from `libs/shared/src/index.ts` alongside the other `tier.ts`
-exports.
+Export both from `libs/shared/src/index.ts` alongside the existing
+`tier.ts` / `dto/subscription.ts` exports.
 
 **No new DTO, schema, error code, or constant.** The required data
 (`trial.active`, `trial.endsAt`, `subscription.tier`,
@@ -49,8 +63,8 @@ exports.
 
 ## Architecture
 
-Pure presentation change driven by one shared pure function. No
-server/route/DB work.
+Pure presentation change driven by two shared pure helpers plus one new
+mobile screen. No server/route/DB work.
 
 ### `trialRevertsTo`
 
@@ -93,7 +107,8 @@ Label: `tierLabel(revertsTo, false)` → `"Lite"`.
 | 1 | Web home trial banner | `apps/web/src/app/(app)/home/page.tsx` (~L188–210) | When `revertsTo` set: add a line "Reverts to {label} on {date}" and **replace** the "Add a card to keep Pro at $15/mo…" CTA with a "Manage plan" link to `/settings/plan`. When `revertsTo` is null (no sub): banner unchanged. |
 | 2 | Web plan card (`trialActive && sub`) | `apps/web/src/app/(app)/settings/plan/page.tsx` (~L118–151) | Branch on `trialRevertsTo(me)`: when non-null (downgrade) → "Reverts to {label} on {date}. {price} will be charged." (today it says only "{price} will be charged on {date}"). When null (Pro sub under trial — no downgrade) → keep the existing "{price} will be charged on {date}" copy unchanged. The branch's existing `upcomingLabel`/`upcomingPrice` locals supply label and price. |
 | 3 | Mobile home trial banner | `apps/mobile/app/(tabs)/index.tsx` (~L444–451) | Add a second line "Reverts to {label} on {date}" below "Pro trial · Nd left" when `revertsTo` set. |
-| 4 | Mobile More → Plan row | `apps/mobile/app/(tabs)/more.tsx` (~L390–401, row detail ~L393) | Row detail becomes "Pro trial · reverts to {label} on {date}" when `revertsTo` set; otherwise the existing `tierLabel(...)`. |
+| 4 | Mobile "Your Plan" screen | `apps/mobile/app/plan/details.tsx` (new — see below) | Shows "Reverts to {label} on {date}" prominently when `revertsTo` set. This is the primary mobile surface for the full revert detail. |
+| — | Mobile More → Plan row | `apps/mobile/app/(tabs)/more.tsx` (~L390–401, row detail ~L393) | **Stays compact** — row detail keeps `tierLabel(...)` only. The row now navigates to the Your Plan screen, which carries the revert detail. (Reconciliation decision: don't crowd the row.) |
 | — | Web top-nav pill | `apps/web/src/components/AppShell.tsx` (~L134–146) | **No change** (decision: pills stay legible). |
 | — | Mobile profile pill | `apps/mobile/app/(tabs)/more.tsx` (~L205–210) | **No change.** |
 
@@ -102,6 +117,70 @@ Label: `tierLabel(revertsTo, false)` → `"Lite"`.
 `GET /me` → `MeDTO` (unchanged) → each display component calls
 `trialRevertsTo(me)` → renders the conditional copy. No new network or
 state.
+
+## Mobile plan screens
+
+### Header bug + fix
+
+`app/_layout.tsx:55` renders `<Stack screenOptions={{ headerShown: false }} />`,
+so the native header is off app-wide. Every sub-screen that shows a header
+renders its **own** header row instead — `<Stack.Screen options={{ headerShown:
+false }} />` plus a `SafeAreaView` containing a back chevron
+(`HeaderIconButton icon="chevron-back" variant="plain"`) and a title `<Text>`
+(canonical example: `app/categories/index.tsx:62–65`).
+
+`plan/index.tsx` and `plan/restore.tsx` instead pass `options={{ title }}`
+to the dead native header, so they show **no header**. Fix both to the
+custom-header pattern; the new detail screen uses it too:
+
+| Screen | Title |
+|---|---|
+| `app/plan/index.tsx` | **Choose Plan** |
+| `app/plan/restore.tsx` | Restore purchases |
+| `app/plan/details.tsx` (new) | **Your Plan** |
+
+Wrap each screen's content in `SafeAreaView` (`react-native-safe-area-context`)
++ the header row, matching the surrounding screens' styles.
+
+### New screen: `app/plan/details.tsx` ("Your Plan")
+
+A read-mostly status screen for the user's current plan. Loads `me` via
+`apiFetch<MeDTO>("/me")` (same as the picker). Sections:
+
+1. **Current plan header**: `tierLabel(me.tier, me.trial.active)` as the
+   headline. When `me.trial.active`: a line "N days left"
+   (`trialDaysLeft`), and when `trialRevertsTo(me)` is non-null,
+   "Reverts to {tierLabel(revertsTo,false)} on {date}".
+2. **Standing subscription block** (when `me.subscription`):
+   - tier + price (`PRICING[sub.tier].displayPrice`),
+   - source label via `subscriptionSourceLabel(sub.source)`,
+   - next charge: "Next charge {date}" from `currentPeriodEnd`, or
+     "Ends on {date}" when `cancelAtPeriodEnd`.
+3. **Actions**:
+   - **Change plan** → `router.push("/plan")` (the picker; upgrade/switch
+     uses the existing purchase flow unchanged).
+   - **Manage billing** → the existing platform deep-link logic currently
+     inlined as `onManageBilling` in more.tsx. Extract it to a small mobile
+     helper (e.g. `src/iap/manage.ts`) so both More and this screen share
+     it rather than duplicating.
+   - **Restore purchases** → `router.push("/plan/restore")`.
+   - Defensive no-sub state: if the screen is opened with no
+     `me.subscription` (More routes those users straight to the picker, so
+     this is just a safety fallback), show a "Choose a plan" CTA → `/plan`.
+
+The screen handles only **non-Stripe** subs. Stripe-owned subs keep their
+existing "managed on withfina.com" alert in More and never route here (web
+is the source of truth for Stripe — established pattern).
+
+### More → Plan routing change
+
+`app/(tabs)/more.tsx:394–400` Plan-row `onPress`:
+
+| Sub state | Today | After |
+|---|---|---|
+| Stripe-owned | alert "manage on web" | unchanged |
+| IAP sub on file | `comingSoon("Plan details")` | `router.push("/plan/details")` |
+| free / trial, no sub | `router.push("/plan")` | unchanged (picker) |
 
 ## Error handling / edge cases
 
@@ -124,13 +203,21 @@ state.
 - **Unit (`libs/shared`)**: add a `trialRevertsTo` spec covering: trial+lite
   sub → `"lite"`; trial+pro sub → `null`; trial+lite sub with
   `pendingTier:"lite"`-after-pro edge → follows pendingTier; trial+no sub
-  → `null`; no trial → `null`. (Use the existing shared test runner if
-  present; otherwise colocate a minimal vitest spec.)
+  → `null`; no trial → `null`. Add a `subscriptionSourceLabel` spec (one
+  assertion per source). (Use the existing shared test runner if present;
+  otherwise colocate a minimal vitest spec.)
 - **Manual UI verification** (per the repo UI rule): with the test
-  account (Pro trial + Lite IAP sub), confirm copy appears on web home
-  banner, web plan card, mobile home banner, and mobile More plan row,
-  and that the small pills are unchanged. Confirm a free-trial (no-sub)
-  account still shows the original upsell banners.
+  account (Pro trial + Lite IAP sub), confirm the "Reverts to Lite on
+  <date>" copy appears on web home banner, web plan card, mobile home
+  banner, and the new mobile Your Plan screen, and that the small pills /
+  More row stay compact. Confirm a free-trial (no-sub) account still shows
+  the original upsell banners.
+- **Mobile screens**: confirm the picker shows a "Choose Plan" header and
+  restore shows its header (regression of the headerless bug); confirm
+  More → Plan opens the Your Plan screen for an IAP sub (no more "Coming
+  soon"), routes to the picker for a free/trial-no-sub account, and still
+  alerts for a Stripe sub; confirm Change plan / Manage billing / Restore
+  actions navigate correctly.
 - `nx typecheck mobile` + web/shared typecheck must pass (bare
   `tsc --noEmit` is a no-op for mobile — see project note).
 
