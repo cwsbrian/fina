@@ -230,6 +230,19 @@ export type PresentationBlock =
       title: string;
       period_label?: string;
       currency?: string;
+      /** Optional total-cap headline (BudgetPlan). Present only when the
+       *  plan has a positive total cap, so `bar_pct` (= spent/cap*100) is
+       *  always well-defined. Amounts are decimal strings formatted in the
+       *  block's `currency`. `left` = cap − spent, server-computed for
+       *  direct display. */
+      headline?: {
+        cap: string;
+        spent: string;
+        /** = cap − spent. */
+        left: string;
+        bar_pct: number;
+        scheduled?: string;
+      };
       rows: Array<{
         id: string;
         category: { name: string; color?: string | null; icon?: string | null };
