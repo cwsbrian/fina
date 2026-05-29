@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { PresentationBlock } from "@fina/shared";
-import { compareSpendingVsBudgetService } from "../../budgets/service.js";
+import { budgetPlanSnapshot, periodToYearMonth } from "../../budget-plans/service.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
@@ -33,17 +33,54 @@ type Result = {
 export const compareSpendingVsBudget: ToolDef<Args, Result> = {
   name: "compareSpendingVsBudget",
   description:
-    "Compare actual spending against budgets for the given period. Returns per-category amount/spent/remaining/pace status. period defaults to this_month.",
+    "Compare actual spending against the budget for the period — per capped category, with remaining and pace. Sources the real BudgetPlan. period defaults to this_month.",
   args: Args,
   async run(ctx, args) {
     const period = args.period ?? "this_month";
-    const raw = await compareSpendingVsBudgetService(
-      { workspaceId: ctx.workspaceId, userId: ctx.userId },
-      { period },
-    );
-    return { ...raw, block: toRecapBlock(period, raw.items) };
+    const { year, month } = periodToYearMonth(period);
+    const snap = await budgetPlanSnapshot(ctx.workspaceId, year, month);
+
+    const todayPct = todayPctFor(period, year, month);
+    const items: Item[] = (snap?.categories ?? [])
+      .filter((c) => c.allocated !== null)
+      .map((c) => {
+        const amount = parseFloat(c.allocated!);
+        const spent = parseFloat(c.spent);
+        const planned = parseFloat(c.scheduled);
+        // Remaining headroom AFTER subtracting both actual spend and
+        // upcoming scheduled/subscription spend (planned) — not just cash left.
+        const remaining = amount - spent - planned;
+        const spentPct = amount > 0 ? Number(((spent / amount) * 100).toFixed(2)) : 0;
+        const plannedPct = amount > 0 ? Number(((planned / amount) * 100).toFixed(2)) : 0;
+        const status: "on-pace" | "over-pace" = spentPct <= todayPct * 1.05 ? "on-pace" : "over-pace";
+        return {
+          categoryId: c.categoryId,
+          categoryName: c.categoryName,
+          amount: c.allocated!,
+          spent: c.spent,
+          planned: c.scheduled,
+          remaining: remaining.toFixed(2),
+          spentPct,
+          plannedPct,
+          todayPct,
+          status,
+        };
+      });
+
+    const start = new Date(Date.UTC(year, month - 1, 1)).toISOString().slice(0, 10);
+    const end = new Date(Date.UTC(year, month, 1)).toISOString().slice(0, 10);
+    return { period: { start, end }, items, block: toRecapBlock(period, items) };
   },
 };
+
+/** Local-day-of-month / days-in-month, as a percent. last_month=100, next_month=0. */
+function todayPctFor(period: Period, year: number, month: number): number {
+  if (period === "last_month") return 100;
+  if (period === "next_month") return 0;
+  const dim = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const day = new Date().getUTCDate();
+  return Math.round((day / dim) * 10000) / 100;
+}
 
 /** Per-category budget consumption. headline = portfolio-wide spent /
  *  budget %, rows = each category with budget in `sub` and remaining in
@@ -82,7 +119,7 @@ function toRecapBlock(period: Period, items: Item[]): PresentationBlock {
         label: i.categoryName,
         amount: i.spent,
         sub: `Budget ${i.amount}`,
-        bar_pct: Math.min(100, Math.round(i.spentPct * 100)),
+        bar_pct: Math.min(100, Math.round(i.spentPct)),
         delta: {
           value: Math.abs(rem).toFixed(2),
           direction: (rem >= 0 ? "down" : "up") as "up" | "down",

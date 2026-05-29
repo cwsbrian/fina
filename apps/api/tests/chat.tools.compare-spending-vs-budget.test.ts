@@ -1,23 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
-import { setBudget } from "../src/chat/tools/set-budget.js";
 import { compareSpendingVsBudget } from "../src/chat/tools/compare-spending-vs-budget.js";
 import type { ToolContext } from "../src/chat/tools/types.js";
 
-describe("compareSpendingVsBudget chat tool", () => {
+describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
   let ctx: ToolContext;
   let wsId: string;
-  let coffeeCatId: string;
+  let dining: string;
+  let acct: string;
 
   beforeEach(async () => {
-    const stamp = `cmp-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-    const u = await prisma.user.create({
-      data: { id: stamp, email: `${stamp}@t.co`, name: "CMP", tz: "America/Toronto" },
-    });
-    const ws = await prisma.workspace.create({ data: { name: "cmp-ws" } });
+    const stamp = `cvb-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "CVB", tz: "America/Toronto" } });
+    const ws = await prisma.workspace.create({ data: { name: "cvb-ws", currency: "CAD" } });
     wsId = ws.id;
     await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
-    coffeeCatId = (await prisma.category.create({ data: { workspaceId: wsId, name: "Coffee" } })).id;
+    dining = (await prisma.category.create({ data: { workspaceId: wsId, name: "Dining" } })).id;
+    acct = (await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" } })).id;
     ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" };
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
@@ -28,22 +27,26 @@ describe("compareSpendingVsBudget chat tool", () => {
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
-  it("returns service output unchanged for this_month", async () => {
-    await setBudget.run(ctx, { category_id: coffeeCatId, amount: 100 });
-    const acct = await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "x", type: "depository" } });
+  it("builds items + recap from the BudgetPlan, per capped category", async () => {
+    await prisma.budgetPlan.create({
+      data: { workspaceId: wsId, periodStart: new Date("2026-05-01T12:00:00.000Z"), totalAmount: "9000.00", categoryAllocations: [{ categoryId: dining, amount: 500 }] },
+    });
     const tx = await prisma.transaction.create({
-      data: {
-        workspaceId: wsId, accountId: acct.id, plaidTransactionId: "t1",
-        amount: "30.00", merchantRaw: "M",
-        occurredAt: new Date("2026-05-10T12:00:00Z"), rawData: {},
-      },
+      data: { workspaceId: wsId, accountId: acct, amount: "200.00", merchantRaw: "Resto", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
     });
-    await prisma.transactionAllocation.deleteMany({ where: { transactionId: tx.id } });
-    await prisma.transactionAllocation.create({
-      data: { transactionId: tx.id, categoryId: coffeeCatId, amount: "30.00", source: "manual" },
-    });
-    const r = await compareSpendingVsBudget.run(ctx, { period: "this_month" });
-    expect(r.items).toHaveLength(1);
-    expect(r.items[0]!.spent).toBe("30.00");
+    await prisma.transactionAllocation.create({ data: { transactionId: tx.id, categoryId: dining, amount: "200.00" } });
+
+    const r = await compareSpendingVsBudget.run(ctx, {});
+    expect(r.block.type).toBe("recap");
+    const item = r.items.find((i) => i.categoryName === "Dining")!;
+    expect(item.amount).toBe("500.00");
+    expect(item.spent).toBe("200.00");
+    expect(item.remaining).toBe("300.00");
+  });
+
+  it("no plan → empty items + recap", async () => {
+    const r = await compareSpendingVsBudget.run(ctx, {});
+    expect(r.items).toHaveLength(0);
+    expect(r.block.type).toBe("recap");
   });
 });
