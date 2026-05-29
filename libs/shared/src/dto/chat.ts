@@ -1,4 +1,5 @@
-import type { ChatMessageRole } from "../enums.js";
+import type { ChatMessageRole, Cadence, ScheduledSpendStatus } from "../enums.js";
+import type { PlaidItemStatus } from "./plaid.js";
 
 /** Plan 2-chat-user-scope: threads are user-owned with nullable workspace.
  *  workspaceId is `null` until the user's first message binds the thread. */
@@ -170,7 +171,7 @@ export type PresentationBlock =
         id: string;
         name: string;
         amount: string;
-        cadence: "monthly" | "semimonthly" | "biweekly" | "weekly" | "yearly";
+        cadence: Cadence;
         /** YYYY-MM-DD in the workspace's timezone. */
         next_occurrence_date: string;
         category?: {
@@ -204,7 +205,7 @@ export type PresentationBlock =
       defaults: {
         name: string;
         amount?: string;
-        cadence?: "monthly" | "semimonthly" | "biweekly" | "weekly" | "yearly";
+        cadence?: Cadence;
         /** YYYY-MM-DD in the user's tz. */
         next_occurrence_date?: string;
         category_name?: string;
@@ -218,4 +219,117 @@ export type PresentationBlock =
        *  the post-submit confirmation message. Optional for backward
        *  compatibility — older clients fall back to "add". */
       mode?: "add" | "update";
+    }
+  | {
+      /** Read-only budgets card. Used by getBudget. Each row pairs a
+       *  category's configured budget `amount` with the period `spent`
+       *  and a `bar_pct` (spent/amount*100, may exceed 100). `over` is
+       *  true when spent > amount. Amounts are decimal strings without a
+       *  currency symbol; the renderer formats with `currency`. */
+      type: "budget_list";
+      title: string;
+      period_label?: string;
+      currency?: string;
+      rows: Array<{
+        id: string;
+        category: { name: string; color?: string | null; icon?: string | null };
+        amount: string;
+        spent: string;
+        /** spent/amount*100, clamped 0..100+ by the producer; renderer clamps the bar. */
+        bar_pct: number;
+        over?: boolean;
+      }>;
+      footer?: string;
+    }
+  | {
+      /** Read-only bank accounts card. Used by listAccounts. `status`
+       *  is the Plaid connection status (null for manual/CSV accounts).
+       *  `total_balance` is present ONLY when every row shares one
+       *  currency. */
+      type: "accounts_list";
+      title: string;
+      total_balance?: string;
+      currency?: string;
+      rows: Array<{
+        id: string;
+        name: string;
+        balance?: string | null;
+        institution?: string | null;
+        status?: PlaidItemStatus | null;
+      }>;
+      footer?: string;
+    }
+  | {
+      /** Read-only scheduled-spend card. Shared by listScheduledSpends
+       *  and listUnresolvedSchedules. `name` is the schedule's note if
+       *  present, else its category name. `dismiss_intent` is present
+       *  ONLY on unresolved rows — tapping Dismiss consumes that intent
+       *  (runs dismissScheduledSpend). */
+      type: "scheduled_list";
+      title: string;
+      period_label?: string;
+      total_count: number;
+      currency?: string;
+      rows: Array<{
+        id: string;
+        name: string;
+        amount: string;
+        /** YYYY-MM-DD. */
+        scheduled_date: string;
+        status: ScheduledSpendStatus;
+        category?: { name: string; color?: string | null; icon?: string | null };
+        dismiss_intent?: string;
+      }>;
+      footer?: string;
+    }
+  | {
+      /** Detected recurring-merchant candidates. Used by
+       *  detectRecurringMerchants. Each row's "Add" opens a prefilled
+       *  recurring form bound to `add_form_intent` (a server-created
+       *  addRecurring intent). Irregular-cadence candidates are excluded
+       *  by the producer, so `cadence` is always a valid Cadence. */
+      type: "recurring_candidates";
+      title: string;
+      currency?: string;
+      rows: Array<{
+        merchant: string;
+        amount: string;
+        cadence: Cadence;
+        occurrences: number;
+        add_form_intent: string;
+        defaults: {
+          name: string;
+          amount?: string;
+          cadence?: Cadence;
+          /** YYYY-MM-DD, derived server-side as lastSeen + one cadence interval. */
+          next_occurrence_date?: string;
+        };
+      }>;
+      footer?: string;
+    }
+  | {
+      /** Single-transaction detail card. Used by getTransactionDetails.
+       *  `amount` is a signed decimal string. `allocations` each carry a
+       *  full category chip. */
+      type: "transaction_detail";
+      id: string;
+      merchant: string;
+      amount: string;
+      currency?: string;
+      date_label: string;
+      account?: string;
+      category?: { name: string; color?: string | null; icon?: string | null };
+      note?: string | null;
+      pending?: boolean;
+      allocations?: Array<{
+        category: { name: string; color?: string | null; icon?: string | null };
+        amount: string;
+      }>;
+    }
+  | {
+      /** Read-only category chips. Used by listCategories. */
+      type: "category_list";
+      title: string;
+      rows: Array<{ id: string; name: string; color?: string | null; icon?: string | null }>;
+      footer?: string;
     };
