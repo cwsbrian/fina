@@ -1,8 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { addGoal } from "../src/chat/tools/add-goal.js";
 import { minDueDateOneMonthUTC } from "@fina/shared";
 import type { ToolContext } from "../src/chat/tools/types.js";
+import * as strategyMod from "../src/goals/generate-strategy.js";
+
+// Strategy generation is an LLM call — stub it so the test asserts it
+// was TRIGGERED (the fix for chat-created goals spinning forever on a
+// null strategy) without hitting Gemini.
+vi.mock("../src/goals/generate-strategy.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/goals/generate-strategy.js")>();
+  return { ...actual, generateAndStoreGoalStrategy: vi.fn().mockResolvedValue(undefined) };
+});
 
 describe("addGoal chat tool", () => {
   let wsId: string;
@@ -32,6 +41,7 @@ describe("addGoal chat tool", () => {
   });
 
   afterEach(async () => {
+    vi.clearAllMocks();
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
@@ -45,6 +55,18 @@ describe("addGoal chat tool", () => {
     expect(r.goal.targetAmount).toBe("2000.00");
     const inDb = await prisma.goal.findFirst({ where: { workspaceId: wsId, title: "Japan trip" } });
     expect(inDb).not.toBeNull();
+  });
+
+  it("triggers savings-plan generation so the detail screen doesn't spin forever", async () => {
+    const r = await addGoal.run(proCtx, {
+      title: "Laptop",
+      target_amount: 1500,
+      due_date: isoPlusDays(90),
+    });
+    expect(strategyMod.generateAndStoreGoalStrategy).toHaveBeenCalledWith(
+      proCtx.env,
+      r.goal.id,
+    );
   });
 
   it("rejects a non-Pro user with upgrade_required", async () => {

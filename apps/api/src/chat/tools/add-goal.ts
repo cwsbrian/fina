@@ -7,6 +7,7 @@ import {
   type GoalDTO,
 } from "@fina/shared";
 import { createGoalService } from "../../goals/service.js";
+import { generateAndStoreGoalStrategy } from "../../goals/generate-strategy.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
@@ -34,6 +35,12 @@ export const addGoal: ToolDef<Args, { goal: GoalDTO }> = {
       dueDate: args.due_date,
       ...(args.description !== undefined ? { description: args.description } : {}),
     });
+    // Fire-and-forget LLM strategy generation, mirroring the REST POST
+    // /goals route. Without this, a chat-created goal keeps strategy=null
+    // forever and the detail screen spins on "Fina is putting a plan
+    // together". The detail screen refetches on focus and picks up the
+    // plan once Gemini returns (or a failure notice if it can't).
+    void generateAndStoreGoalStrategy(ctx.env, goal.id).catch(() => {});
     return { goal };
   },
 };
