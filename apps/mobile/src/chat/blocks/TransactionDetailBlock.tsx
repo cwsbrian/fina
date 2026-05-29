@@ -1,4 +1,6 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
 import { BlockCard, withAlpha, currencySymbol, CategoryIcon } from "./_primitives";
@@ -38,6 +40,12 @@ export function TransactionDetailBlock({ block }: { block: Block }) {
   const sym = currencySymbol(block.currency);
   const showAllocations = (block.allocations?.length ?? 0) > 1;
   return (
+    <Pressable
+      onPress={() => router.push(`/transactions/${block.id}` as never)}
+      accessibilityRole="button"
+      accessibilityLabel="Open transaction"
+      style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
+    >
     <BlockCard>
       <View style={styles.headRow}>
         <Text style={styles.merchant} numberOfLines={2}>
@@ -47,6 +55,7 @@ export function TransactionDetailBlock({ block }: { block: Block }) {
           {sym}
           {block.amount}
         </Text>
+        <Ionicons name="chevron-forward" size={16} color={colors.muted} />
       </View>
       <Text style={styles.meta}>
         {block.date_label}
@@ -73,6 +82,7 @@ export function TransactionDetailBlock({ block }: { block: Block }) {
         </View>
       ) : null}
     </BlockCard>
+    </Pressable>
   );
 }
 

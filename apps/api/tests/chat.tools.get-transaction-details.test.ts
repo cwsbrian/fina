@@ -204,3 +204,55 @@ describe("getTransactionDetails transaction_detail block", () => {
     expect(r.transaction.allocations).toHaveLength(2);
   });
 });
+
+describe("getTransactionDetails by merchant_query", () => {
+  let ctx: ToolContext;
+  let wsId: string;
+  let acctId: string;
+
+  beforeEach(async () => {
+    const stamp = `gtq-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "GTQ" } });
+    const ws = await prisma.workspace.create({ data: { name: "gtq-ws", currency: "CAD" } });
+    wsId = ws.id;
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
+    acctId = (await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" } })).id;
+    ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" } as ToolContext;
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  async function tx(merchant: string, date: string) {
+    return prisma.transaction.create({
+      data: { workspaceId: wsId, accountId: acctId, amount: "78.50", merchantRaw: merchant, occurredAt: new Date(`${date}T12:00:00Z`), source: "manual", pending: false, rawData: {} },
+    });
+  }
+
+  it("returns the detail card for a single merchant match", async () => {
+    await tx("Touchstone Climbing", "2026-05-11");
+    const r = await getTransactionDetails.run(ctx, { merchant_query: "Touchstone" });
+    expect(r.ambiguous).toBeUndefined();
+    expect(r.block?.type).toBe("transaction_detail");
+    expect(r.transaction?.merchantRaw).toBe("Touchstone Climbing");
+  });
+
+  it("returns ambiguous (no block) when more than one matches", async () => {
+    await tx("Touchstone Climbing", "2026-05-11");
+    await tx("Touchstone Climbing", "2026-04-11");
+    const r = await getTransactionDetails.run(ctx, { merchant_query: "Touchstone" });
+    expect(r.ambiguous).toBe(true);
+    expect(r.matchCount).toBeGreaterThanOrEqual(2);
+    expect(r.block).toBeUndefined();
+    expect(r.transaction).toBeUndefined();
+  });
+
+  it("narrows to one with a date range", async () => {
+    await tx("Touchstone Climbing", "2026-05-11");
+    await tx("Touchstone Climbing", "2026-04-11");
+    const r = await getTransactionDetails.run(ctx, { merchant_query: "Touchstone", start_date: "2026-05-01", end_date: "2026-05-31" });
+    expect(r.block?.type).toBe("transaction_detail");
+    expect(r.transaction?.occurredAt.slice(0, 7)).toBe("2026-05");
+  });
+});

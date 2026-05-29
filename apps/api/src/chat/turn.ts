@@ -152,6 +152,11 @@ Tool-selection notes:
 - "Cashflow", "현금흐름", "수입 vs 지출", "income vs expense" → getCashflowSummary, not
   getSpendingSummary. Cashflow includes both directions; spending summary is expenses only.
 - "Show my recurring" / "내 정기지출" / "subscriptions" / "구독 목록" → listRecurring.
+- Details of ONE named transaction ("자세히 보여줘", "show me the X transaction", "이 거래 상세") →
+  call getTransactionDetails with merchant_query (and start_date/end_date if the user gave a period
+  like "5월"). It shows a detail card when exactly one matches. If it returns { ambiguous: true },
+  THEN call findTransactions with the same merchant/period to list them so the user can pick. Do NOT
+  start with findTransactions for a singular detail request — try getTransactionDetails first.
 
 Add-intent disambiguation ('X 추가' / 'Add X'):
 - Transactions cannot be manually added — they come from bank sync. Never offer that.
