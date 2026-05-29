@@ -548,7 +548,9 @@ function isCardBlock(b: Block): boolean {
     b.type === "scheduled_list" ||
     b.type === "recurring_candidates" ||
     b.type === "transaction_detail" ||
-    b.type === "category_list"
+    b.type === "category_list" ||
+    b.type === "goals_list" ||
+    b.type === "goal_detail"
   );
 }
 

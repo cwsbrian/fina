@@ -12,6 +12,8 @@ import { ScheduledListBlock } from "./blocks/ScheduledListBlock";
 import { RecurringCandidatesBlock } from "./blocks/RecurringCandidatesBlock";
 import { TransactionDetailBlock } from "./blocks/TransactionDetailBlock";
 import { CategoryListBlock } from "./blocks/CategoryListBlock";
+import { GoalsListBlock } from "./blocks/GoalsListBlock";
+import { GoalDetailBlock } from "./blocks/GoalDetailBlock";
 
 type Props = {
   block: Block;
@@ -143,6 +145,12 @@ export function PresentationBlock({
   }
   if (block.type === "category_list") {
     return <CategoryListBlock block={block} />;
+  }
+  if (block.type === "goals_list") {
+    return <GoalsListBlock block={block} />;
+  }
+  if (block.type === "goal_detail") {
+    return <GoalDetailBlock block={block} />;
   }
   // Exhaustiveness — newer block types render a debug pill so users
   // see SOMETHING rather than a blank message.
