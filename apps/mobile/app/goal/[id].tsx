@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -251,49 +251,91 @@ function PathSection({
   onRegenerated: (g: GoalDTO) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [autoTried, setAutoTried] = useState(false);
   const strategy = goal.strategy;
 
-  const regenerate = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const wsId = await getActiveWorkspaceId();
-      if (!wsId) throw new Error("no_workspace");
-      const r = await apiFetch<{ goal: GoalDTO }>(
-        `/workspaces/${wsId}/goals/${goal.id}/strategy`,
-        { method: "POST" },
-      );
-      onRegenerated(r.goal);
-    } catch (e) {
-      Alert.alert(
-        "Couldn't regenerate plan",
-        (e as { code?: string }).code ?? "Try again.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
+  const regenerate = useCallback(
+    async (silent = false) => {
+      if (busy) return;
+      setBusy(true);
+      setFailed(false);
+      try {
+        const wsId = await getActiveWorkspaceId();
+        if (!wsId) throw new Error("no_workspace");
+        const r = await apiFetch<{ goal: GoalDTO }>(
+          `/workspaces/${wsId}/goals/${goal.id}/strategy`,
+          { method: "POST" },
+        );
+        onRegenerated(r.goal);
+      } catch (e) {
+        setFailed(true);
+        if (!silent) {
+          Alert.alert(
+            "Couldn't build a plan",
+            (e as { code?: string }).code ?? "Try again.",
+          );
+        }
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, goal.id, onRegenerated],
+  );
 
   const allocations = goal.allocations;
+  const noPlanYet = !strategy && allocations.length === 0;
 
-  // Brand-new goal — strategy is still null AND no allocations yet.
-  // Show a hint that Fina is preparing it. Don't block.
-  if (!strategy && allocations.length === 0) {
+  // Goal has no plan yet (never generated, or a prior attempt failed
+  // leaving strategy null). Kick generation once automatically so an
+  // existing goal self-heals on open; the server route generates
+  // synchronously and returns the updated goal.
+  useEffect(() => {
+    if (noPlanYet && !autoTried && !busy) {
+      setAutoTried(true);
+      void regenerate(true);
+    }
+  }, [noPlanYet, autoTried, busy, regenerate]);
+
+  // No plan yet. While a request is in flight show the "putting it
+  // together" spinner; otherwise (idle/failed) offer a button so the
+  // user is never stuck on an endless spinner.
+  if (noPlanYet) {
     return (
       <>
         <Text style={styles.groupLabel}>Path</Text>
         <View style={[styles.group, styles.pathHint]}>
           <View style={[styles.pathHintGlyph, { backgroundColor: withAlpha(accent, 0.12) }]}>
-            <ActivityIndicator color={accent} />
+            {busy ? (
+              <ActivityIndicator color={accent} />
+            ) : (
+              <Ionicons name="sparkles-outline" size={20} color={accent} />
+            )}
           </View>
           <View style={{ flex: 1 }}>
             <Text style={styles.pathHintTitle}>
-              Fina is putting a plan together
+              {busy
+                ? "Fina is putting a plan together"
+                : failed
+                  ? "Couldn't build a plan"
+                  : "No plan yet"}
             </Text>
             <Text style={styles.pathHintBody}>
-              I'll suggest where to trim and reroute spending based on your
-              recent activity. Refresh in a moment.
+              {busy
+                ? "I'll suggest where to trim and reroute spending based on your recent activity."
+                : "Fina builds a savings plan from your recent activity. Tap to generate it."}
             </Text>
+            {!busy ? (
+              <Pressable
+                onPress={() => regenerate(false)}
+                hitSlop={8}
+                style={({ pressed }) => [styles.pathHintBtn, pressed && { opacity: 0.6 }]}
+              >
+                <Text style={styles.regenText}>
+                  {failed ? "Try again" : "Generate plan"}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         </View>
       </>
@@ -312,7 +354,7 @@ function PathSection({
           {allocations.length > 0 ? `Path · $${totalMo.toFixed(0)}/mo` : "Path"}
         </Text>
         <Pressable
-          onPress={regenerate}
+          onPress={() => regenerate(false)}
           disabled={busy}
           hitSlop={8}
           style={({ pressed }) => [pressed && { opacity: 0.6 }]}
@@ -555,6 +597,7 @@ const styles = StyleSheet.create({
   },
   pathHintTitle: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   pathHintBody: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
+  pathHintBtn: { marginTop: space.sm, alignSelf: "flex-start" },
   pathRow: {
     flexDirection: "row",
     alignItems: "center",
