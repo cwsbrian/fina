@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
-import { View, Text, Pressable, ActivityIndicator, ScrollView, Alert } from "react-native";
+import { View, Text, Pressable, ActivityIndicator, ScrollView, Alert, StyleSheet } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, Stack } from "expo-router";
 import { fetchProducts, purchaseSubscription, finishPurchase, IapPurchaseError, type LocalProduct } from "../../src/iap/client";
 import { postIAPCheckout } from "../../src/api/billing";
 import { apiFetch } from "../../src/api/client";
 import { type MeDTO as Me } from "@fina/shared";
-import { colors } from "../../src/design/tokens";
+import { colors, space, type as type$ } from "../../src/design/tokens";
+import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
 export default function PlanPicker() {
   const router = useRouter();
@@ -63,74 +65,89 @@ export default function PlanPicker() {
     [me, busy, router],
   );
 
-  if (products === null) {
-    return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+  const body =
+    products === null ? (
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80 }}>
         <ActivityIndicator />
       </View>
-    );
-  }
-
-  return (
-    <ScrollView contentContainerStyle={{ padding: 24, gap: 16 }}>
-      <Stack.Screen options={{ title: "Choose a plan" }} />
-      {products.length === 0 ? (
-        <View
-          style={{
-            padding: 24,
-            borderRadius: 12,
-            backgroundColor: colors.surfaceSoft,
-          }}
-        >
-          <Text style={{ fontSize: 16, color: colors.ink }}>
-            Subscriptions aren't available right now. Try again later.
-          </Text>
-          <Pressable onPress={load} style={{ marginTop: 12 }}>
-            <Text style={{ color: colors.primary, fontWeight: "600" }}>
-              Retry
-            </Text>
-          </Pressable>
-        </View>
-      ) : (
-        products.map((p) => (
-          <Pressable
-            key={p.productId}
-            onPress={() => onSubscribe(p)}
-            disabled={busy !== null}
+    ) : (
+      <ScrollView contentContainerStyle={{ padding: 24, gap: 16 }}>
+        {products.length === 0 ? (
+          <View
             style={{
-              padding: 20,
+              padding: 24,
               borderRadius: 12,
-              backgroundColor: colors.canvas,
-              borderWidth: 1,
-              borderColor: colors.hairline,
+              backgroundColor: colors.surfaceSoft,
             }}
           >
-            <Text
-              style={{ fontSize: 18, fontWeight: "700", color: colors.ink }}
+            <Text style={{ fontSize: 16, color: colors.ink }}>
+              Subscriptions aren't available right now. Try again later.
+            </Text>
+            <Pressable onPress={load} style={{ marginTop: 12 }}>
+              <Text style={{ color: colors.primary, fontWeight: "600" }}>
+                Retry
+              </Text>
+            </Pressable>
+          </View>
+        ) : (
+          products.map((p) => (
+            <Pressable
+              key={p.productId}
+              onPress={() => onSubscribe(p)}
+              disabled={busy !== null}
+              style={{
+                padding: 20,
+                borderRadius: 12,
+                backgroundColor: colors.canvas,
+                borderWidth: 1,
+                borderColor: colors.hairline,
+              }}
             >
-              {p.localizedTitle}
-            </Text>
-            <Text style={{ marginTop: 4, color: colors.muted }}>
-              {p.tier === "pro" ? "Unlimited" : "Lite"}
-            </Text>
-            <Text
-              style={{ marginTop: 12, fontSize: 22, fontWeight: "700", color: colors.ink }}
-            >
-              {p.localizedPrice}
-            </Text>
-            {busy === p.productId && (
-              <ActivityIndicator style={{ marginTop: 8 }} />
-            )}
-          </Pressable>
-        ))
-      )}
-      {/* Apple Guideline 3.1.1 — Restore must be reachable from plan picker. */}
-      <Pressable
-        onPress={() => router.push("/plan/restore" as never)}
-        style={{ marginTop: 8, alignItems: "center" }}
-      >
-        <Text style={{ color: colors.primary }}>Restore purchases</Text>
-      </Pressable>
-    </ScrollView>
+              <Text
+                style={{ fontSize: 18, fontWeight: "700", color: colors.ink }}
+              >
+                {p.localizedTitle}
+              </Text>
+              <Text style={{ marginTop: 4, color: colors.muted }}>
+                {p.tier === "pro" ? "Unlimited" : "Lite"}
+              </Text>
+              <Text
+                style={{ marginTop: 12, fontSize: 22, fontWeight: "700", color: colors.ink }}
+              >
+                {p.localizedPrice}
+              </Text>
+              {busy === p.productId && (
+                <ActivityIndicator style={{ marginTop: 8 }} />
+              )}
+            </Pressable>
+          ))
+        )}
+      </ScrollView>
+    );
+
+  return (
+    <SafeAreaView style={styles.safe} edges={["top"]}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <View style={styles.head}>
+        <HeaderIconButton icon="chevron-back" onPress={() => router.back()} variant="plain" />
+        <Text style={styles.title}>Choose Plan</Text>
+        <View style={{ width: 40 }} />
+      </View>
+      {body}
+    </SafeAreaView>
   );
 }
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.canvas },
+  head: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
+  },
+  title: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+});

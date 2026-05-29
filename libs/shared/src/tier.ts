@@ -1,3 +1,5 @@
+import type { PaidTier } from "./pricing.js";
+
 export const TIERS = ["free", "lite", "pro"] as const;
 export type Tier = (typeof TIERS)[number];
 
@@ -55,4 +57,21 @@ export function trialDaysLeft(endsAt: string | Date | null | undefined): number 
   const ms = t - Date.now();
   if (ms <= 0) return 0;
   return Math.ceil(ms / (24 * 60 * 60 * 1000));
+}
+
+/** The tier a user reverts to when their active Pro trial ends, IF they hold
+ *  a standing paid subscription below Pro. Returns the sub's tier — or its
+ *  scheduled pendingTier when a change is queued. Returns null when: not in a
+ *  trial, no standing sub on file, or the post-trial tier is still Pro
+ *  (nothing to warn about). Drives "Reverts to <Lite> on <date>" copy.
+ *  Param/return are PaidTier (exactly MeDTO.subscription's shape) — a standing
+ *  sub is never `free`. */
+export function trialRevertsTo(me: {
+  trial: { active: boolean };
+  subscription: { tier: PaidTier; pendingTier: PaidTier | null } | null;
+}): PaidTier | null {
+  if (!me.trial.active || !me.subscription) return null;
+  const s = me.subscription;
+  const next = s.pendingTier && s.pendingTier !== s.tier ? s.pendingTier : s.tier;
+  return next === "pro" ? null : next;
 }
