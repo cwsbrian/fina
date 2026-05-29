@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "react-native";
+import { router } from "expo-router";
 import type { PresentationBlock, PlaidItemStatus } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
 import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, currencySymbol } from "./_primitives";
@@ -18,8 +19,14 @@ function statusBadge(status: PlaidItemStatus | null | undefined): { label: strin
 export function AccountsListBlock({ block }: { block: Block }) {
   const sym = currencySymbol(block.currency);
   return (
+    <Pressable
+      onPress={() => router.push("/banks" as never)}
+      accessibilityRole="button"
+      accessibilityLabel="Manage accounts"
+      style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
+    >
     <BlockCard>
-      <BlockHeader title={block.title} />
+      <BlockHeader title={block.title} chevron />
       {block.total_balance != null ? (
         <Text style={styles.total}>
           <Text style={styles.totalAmount}>{sym}{block.total_balance}</Text>
@@ -49,6 +56,7 @@ export function AccountsListBlock({ block }: { block: Block }) {
       )}
       {block.footer ? <BlockFooter text={block.footer} /> : null}
     </BlockCard>
+    </Pressable>
   );
 }
 

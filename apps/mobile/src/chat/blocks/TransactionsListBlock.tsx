@@ -1,4 +1,5 @@
 import { View, Text, StyleSheet, Pressable } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
@@ -119,12 +120,15 @@ function TxRow({ row, isLast }: { row: Row; isLast: boolean }) {
           ) : null}
         </View>
       </View>
-      <Text
-        style={[styles.amount, { color: amountColor }]}
-        numberOfLines={1}
-      >
-        {amountText}
-      </Text>
+      <View style={styles.rowRight}>
+        <Text
+          style={[styles.amount, { color: amountColor }]}
+          numberOfLines={1}
+        >
+          {amountText}
+        </Text>
+        <Ionicons name="chevron-forward" size={16} color={colors.muted} />
+      </View>
     </Pressable>
   );
 }
@@ -241,6 +245,11 @@ const styles = StyleSheet.create({
   accountText: {
     ...type$.caption,
     color: colors.muted,
+  },
+  rowRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
   },
   amount: {
     ...type$.bodyMd,
