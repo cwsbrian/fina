@@ -14,6 +14,9 @@ import { Ionicons } from "@expo/vector-icons";
 import {
   displayName,
   trialDaysLeft,
+  tierLabel,
+  trialRevertsTo,
+  formatShortDate,
   tierAtLeast,
   type MeDTO as Me,
   type CategoryDTO,
@@ -262,6 +265,7 @@ export default function Home() {
       : "";
 
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
+  const revertsTo = me ? trialRevertsTo(me) : null;
 
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
@@ -442,11 +446,18 @@ export default function Home() {
         scrollEventThrottle={header.scrollEventThrottle}
       >
         {me?.trial?.active && days !== null && (
-          <View style={styles.trialBanner}>
-            <Ionicons name="sparkles" size={16} color={colors.navy} />
-            <Text style={styles.trialBannerText}>
-              Pro trial · {days} day{days === 1 ? "" : "s"} left
-            </Text>
+          <View style={styles.trialBannerWrap}>
+            <View style={styles.trialBanner}>
+              <Ionicons name="sparkles" size={16} color={colors.navy} />
+              <Text style={styles.trialBannerText}>
+                Pro trial · {days} day{days === 1 ? "" : "s"} left
+              </Text>
+            </View>
+            {revertsTo && (
+              <Text style={styles.trialRevertText}>
+                Reverts to {tierLabel(revertsTo, false)} on {formatShortDate(me.trial.endsAt)}
+              </Text>
+            )}
           </View>
         )}
 
@@ -903,6 +914,7 @@ const styles = StyleSheet.create({
   title: { ...type$.titleLg, color: colors.ink },
   subtitle: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   scroll: { padding: space.lg, paddingBottom: space.xxl },
+  trialBannerWrap: { marginBottom: space.lg },
   trialBanner: {
     flexDirection: "row",
     alignItems: "center",
@@ -912,9 +924,9 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     borderRadius: 999,
     alignSelf: "flex-start",
-    marginBottom: space.lg,
   },
   trialBannerText: { ...type$.captionStrong, color: colors.navy },
+  trialRevertText: { ...type$.bodySm, color: colors.muted, marginTop: 6, marginLeft: 2 },
   errCard: {
     backgroundColor: colors.surfaceSoft,
     padding: space.base,
