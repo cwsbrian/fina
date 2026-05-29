@@ -52,4 +52,29 @@ describe("getBudget chat tool", () => {
     const r = await getBudget.run(ctx, {});
     expect(r.budgets).toEqual([]);
   });
+
+  it("returns a budget_list block with spent + bar_pct + over", async () => {
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" },
+    });
+    await prisma.budget.create({
+      data: { workspaceId: wsId, categoryId: coffeeCatId, amount: "100.00", periodStart: new Date("2026-05-01T12:00:00.000Z") },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, amount: "120.00",
+        merchantRaw: "Bean", occurredAt: new Date("2026-05-10T12:00:00Z"),
+        source: "manual", pending: false, rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: coffeeCatId, amount: "120.00" },
+    });
+    const r = await getBudget.run(ctx, {});
+    expect(r.block?.type).toBe("budget_list");
+    const row = r.block!.type === "budget_list" ? r.block!.rows[0]! : null;
+    expect(row?.spent).toBe("120.00");
+    expect(row?.over).toBe(true);
+    expect(row?.bar_pct).toBeGreaterThan(100);
+  });
 });
