@@ -6,6 +6,12 @@ import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { generateAndStoreGoalStrategy } from "../goals/generate-strategy.js";
 import { computeGoalSavings } from "../goals/savings.js";
 import { effectiveTier } from "../auth/tier.js";
+import {
+  listGoalsWithSavings,
+  getGoalWithSavings,
+  createGoalService,
+  patchGoalService,
+} from "../goals/service.js";
 
 type GoalRow = {
   id: string;
@@ -65,11 +71,6 @@ const goalInclude = {
   },
 };
 
-function dateOnly(s: string): Date {
-  // YYYY-MM-DD → UTC noon, same convention as transactions.
-  return new Date(`${s}T12:00:00.000Z`);
-}
-
 export async function goalsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/workspaces/:id/goals", async (req, reply) => {
     const params = req.params as { id: string };
@@ -80,24 +81,20 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const rows = await prisma.goal.findMany({
-        where: {
-          workspaceId: ctx.membership.workspaceId,
-          ...(includeArchived ? {} : { archivedAt: null }),
-        },
-        // Soonest due first — matches the design's "list sorted by due date".
-        orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
-        include: goalInclude,
-      });
-      const goals = await Promise.all(
-        rows.map(async (g) => {
-          const saved = await computeGoalSavings(
-            ctx.membership.workspaceId,
-            g.id,
-          );
-          return dto(g, saved);
-        }),
-      );
+      if (includeArchived) {
+        const rows = await prisma.goal.findMany({
+          where: { workspaceId: ctx.membership.workspaceId },
+          orderBy: [{ dueDate: "asc" }, { createdAt: "desc" }],
+          include: goalInclude,
+        });
+        const goals = await Promise.all(
+          rows.map(async (g) =>
+            dto(g, await computeGoalSavings(ctx.membership.workspaceId, g.id)),
+          ),
+        );
+        return { goals };
+      }
+      const goals = await listGoalsWithSavings(ctx.membership.workspaceId);
       return { goals };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
@@ -113,19 +110,12 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
-        const row = await prisma.goal.findFirst({
-          where: {
-            id: req.params.goalId,
-            workspaceId: ctx.membership.workspaceId,
-          },
-          include: goalInclude,
-        });
-        if (!row) return reply.code(404).send({ error: "not_found" });
-        const saved = await computeGoalSavings(
+        const goal = await getGoalWithSavings(
           ctx.membership.workspaceId,
-          row.id,
+          req.params.goalId,
         );
-        return { goal: dto(row, saved) };
+        if (!goal) return reply.code(404).send({ error: "not_found" });
+        return { goal };
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
         throw e;
@@ -142,36 +132,16 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const tier = await effectiveTier(ctx.session.userId);
-      if (tier.tier !== "pro") {
-        return reply.code(402).send({ error: "upgrade_required" });
-      }
-      const created = await prisma.goal.create({
-        data: {
-          workspaceId: ctx.membership.workspaceId,
-          title: parsed.data.title.trim(),
-          description: parsed.data.description ?? null,
-          targetAmount: new Prisma.Decimal(parsed.data.targetAmount),
-          savedAmount: new Prisma.Decimal(parsed.data.savedAmount ?? 0),
-          dueDate: dateOnly(parsed.data.dueDate),
-          icon: parsed.data.icon ?? null,
-          color: parsed.data.color ?? null,
-        },
-        include: goalInclude,
-      });
-      // Fire-and-forget LLM strategy generation. The user gets an
-      // immediate 201; the detail screen polls / refetches when shown
-      // and picks up the strategy once Gemini returns.
-      void generateAndStoreGoalStrategy(app.fina.env, created.id).catch(
-        () => {
-          // Swallowed inside the helper, but belt-and-suspenders here too.
-        },
-      );
-      const saved = await computeGoalSavings(
+      const goal = await createGoalService(
         ctx.membership.workspaceId,
-        created.id,
+        ctx.session.userId,
+        parsed.data,
       );
-      return reply.code(201).send({ goal: dto(created, saved) });
+      // Fire-and-forget LLM strategy generation. The user gets an
+      // immediate 201; the detail screen refetches and picks up the
+      // strategy once Gemini returns.
+      void generateAndStoreGoalStrategy(app.fina.env, goal.id).catch(() => {});
+      return reply.code(201).send({ goal });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
@@ -188,39 +158,14 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
-        const tier = await effectiveTier(ctx.session.userId);
-        if (tier.tier !== "pro") {
-          return reply.code(402).send({ error: "upgrade_required" });
-        }
-        const row = await prisma.goal.findFirst({
-          where: { id: req.params.goalId, workspaceId: ctx.membership.workspaceId },
-          select: { id: true },
-        });
-        if (!row) return reply.code(404).send({ error: "not_found" });
-        const d = parsed.data;
-        const data: Prisma.GoalUpdateInput = {};
-        if (d.title !== undefined) data.title = d.title.trim();
-        if (d.description !== undefined) data.description = d.description;
-        if (d.targetAmount !== undefined)
-          data.targetAmount = new Prisma.Decimal(d.targetAmount);
-        if (d.savedAmount !== undefined)
-          data.savedAmount = new Prisma.Decimal(d.savedAmount);
-        if (d.dueDate !== undefined) data.dueDate = dateOnly(d.dueDate);
-        if (d.icon !== undefined) data.icon = d.icon;
-        if (d.color !== undefined) data.color = d.color;
-        if (d.archived !== undefined) {
-          data.archivedAt = d.archived ? new Date() : null;
-        }
-        const updated = await prisma.goal.update({
-          where: { id: row.id },
-          data,
-          include: goalInclude,
-        });
-        const saved = await computeGoalSavings(
+        const goal = await patchGoalService(
           ctx.membership.workspaceId,
-          updated.id,
+          ctx.session.userId,
+          req.params.goalId,
+          parsed.data,
         );
-        return reply.code(200).send({ goal: dto(updated, saved) });
+        if (!goal) return reply.code(404).send({ error: "not_found" });
+        return reply.code(200).send({ goal });
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
         throw e;
@@ -245,18 +190,12 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
           select: { id: true },
         });
         if (!row) return reply.code(404).send({ error: "not_found" });
-        // Wait for generation to complete here (small + bounded) so the
-        // caller can refresh once and see the new plan, rather than poll.
+        // Wait for generation to complete (small + bounded) so the
+        // caller can refresh once and see the new plan.
         await generateAndStoreGoalStrategy(app.fina.env, row.id);
-        const updated = await prisma.goal.findUniqueOrThrow({
-          where: { id: row.id },
-          include: goalInclude,
-        });
-        const saved = await computeGoalSavings(
-          ctx.membership.workspaceId,
-          updated.id,
-        );
-        return reply.code(200).send({ goal: dto(updated, saved) });
+        const goal = await getGoalWithSavings(ctx.membership.workspaceId, row.id);
+        if (!goal) return reply.code(404).send({ error: "not_found" });
+        return reply.code(200).send({ goal });
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
         throw e;
