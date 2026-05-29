@@ -535,7 +535,13 @@ function isCardBlock(b: Block): boolean {
     b.type === "recurring_list" ||
     b.type === "recurring_form_card" ||
     b.type === "confirm_card" ||
-    b.type === "categorize_confirm_card"
+    b.type === "categorize_confirm_card" ||
+    b.type === "budget_list" ||
+    b.type === "accounts_list" ||
+    b.type === "scheduled_list" ||
+    b.type === "recurring_candidates" ||
+    b.type === "transaction_detail" ||
+    b.type === "category_list"
   );
 }
 

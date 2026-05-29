@@ -6,6 +6,12 @@ import { RecapBlock } from "./blocks/RecapBlock";
 import { RecurringFormBlock } from "./blocks/RecurringFormBlock";
 import { RecurringListBlock } from "./blocks/RecurringListBlock";
 import { TransactionsListBlock } from "./blocks/TransactionsListBlock";
+import { BudgetListBlock } from "./blocks/BudgetListBlock";
+import { AccountsListBlock } from "./blocks/AccountsListBlock";
+import { ScheduledListBlock } from "./blocks/ScheduledListBlock";
+import { RecurringCandidatesBlock } from "./blocks/RecurringCandidatesBlock";
+import { TransactionDetailBlock } from "./blocks/TransactionDetailBlock";
+import { CategoryListBlock } from "./blocks/CategoryListBlock";
 
 type Props = {
   block: Block;
@@ -113,6 +119,30 @@ export function PresentationBlock({
         </Pressable>
       </View>
     );
+  }
+  if (block.type === "budget_list") {
+    return <BudgetListBlock block={block} />;
+  }
+  if (block.type === "accounts_list") {
+    return <AccountsListBlock block={block} />;
+  }
+  if (block.type === "scheduled_list") {
+    return <ScheduledListBlock block={block} {...(onSubmitForm ? { onSubmitForm } : {})} />;
+  }
+  if (block.type === "recurring_candidates") {
+    return (
+      <RecurringCandidatesBlock
+        block={block}
+        {...(onSubmitForm ? { onSubmitForm } : {})}
+        {...(onFormFocusChange ? { onFormFocusChange } : {})}
+      />
+    );
+  }
+  if (block.type === "transaction_detail") {
+    return <TransactionDetailBlock block={block} />;
+  }
+  if (block.type === "category_list") {
+    return <CategoryListBlock block={block} />;
   }
   // Exhaustiveness — newer block types render a debug pill so users
   // see SOMETHING rather than a blank message.
