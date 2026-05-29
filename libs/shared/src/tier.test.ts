@@ -22,6 +22,11 @@ describe("trialRevertsTo", () => {
       trialRevertsTo({ trial: { active: true }, subscription: { tier: "lite", pendingTier: "lite" } }),
     ).toBe("lite");
   });
+  it("returns null when an upgrade to pro is scheduled during the trial", () => {
+    expect(
+      trialRevertsTo({ trial: { active: true }, subscription: { tier: "lite", pendingTier: "pro" } }),
+    ).toBeNull();
+  });
   it("trial + no sub → null", () => {
     expect(trialRevertsTo({ trial: { active: true }, subscription: null })).toBeNull();
   });

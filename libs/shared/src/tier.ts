@@ -65,7 +65,7 @@ export function trialDaysLeft(endsAt: string | Date | null | undefined): number 
  *  trial, no standing sub on file, or the post-trial tier is still Pro
  *  (nothing to warn about). Drives "Reverts to <Lite> on <date>" copy.
  *  Param/return are PaidTier (exactly MeDTO.subscription's shape) — a standing
- *  sub is never `free`, and the result narrows to "lite". */
+ *  sub is never `free`. */
 export function trialRevertsTo(me: {
   trial: { active: boolean };
   subscription: { tier: PaidTier; pendingTier: PaidTier | null } | null;
