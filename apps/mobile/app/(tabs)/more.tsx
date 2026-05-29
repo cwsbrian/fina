@@ -8,8 +8,6 @@ import {
   Alert,
   ActivityIndicator,
   Animated,
-  Linking,
-  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
@@ -38,6 +36,7 @@ import {
 } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { openManageBilling } from "../../src/iap/manage";
 
 type PlaidItemSummary = {
   status: string;
@@ -144,18 +143,7 @@ export default function More() {
     if (openingBilling) return;
     setOpeningBilling(true);
     try {
-      if (Platform.OS === "ios") {
-        await Linking.openURL("https://apps.apple.com/account/subscriptions");
-        return;
-      }
-      if (Platform.OS === "android" && me?.subscription) {
-        const productId =
-          me.subscription.tier === "pro" ? "pro_monthly" : "lite_monthly";
-        await Linking.openURL(
-          `https://play.google.com/store/account/subscriptions?package=app.fina&sku=${encodeURIComponent(productId)}`,
-        );
-        return;
-      }
+      await openManageBilling(me?.subscription?.tier);
     } finally {
       setOpeningBilling(false);
     }
