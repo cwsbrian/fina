@@ -296,20 +296,40 @@ export const findTransactions: ToolDef<Args, Result> = {
     });
 
     const periodLabel = searchPeriodLabel(args);
-    const block: PresentationBlock | undefined =
-      totalCount === 0
-        ? undefined
-        : {
-            type: "transactions_list",
-            title: searchTitle(args),
-            ...(periodLabel ? { period_label: periodLabel } : {}),
-            total_count: totalCount,
-            currency: workspace.currency,
-            rows: blockRows,
-            ...(totalCount > blockRows.length
-              ? { footer: `Showing ${blockRows.length} of ${totalCount}` }
-              : {}),
-          };
+    // Exactly one match → render the single-transaction detail card instead
+    // of a one-row list. Keeps "show me the X transaction" feeling like a
+    // detail view, while several matches still render the list (the LLM
+    // never has to ask "which one?").
+    const single = totalCount === 1 && rows.length === 1 ? rows[0]! : null;
+    let block: PresentationBlock | undefined;
+    if (totalCount === 0) {
+      block = undefined;
+    } else if (single) {
+      const primaryAlloc = single.allocations.find((a) => a.categoryId !== null);
+      const cat = primaryAlloc?.category;
+      block = {
+        type: "transaction_detail",
+        id: single.id,
+        merchant: single.merchantRaw,
+        amount: single.amount.toFixed(2),
+        currency: workspace.currency,
+        date_label: blockRows[0]!.date_label,
+        account: single.account.name,
+        ...(cat ? { category: { name: cat.name, color: cat.color ?? null, icon: cat.icon ?? null } } : {}),
+      };
+    } else {
+      block = {
+        type: "transactions_list",
+        title: searchTitle(args),
+        ...(periodLabel ? { period_label: periodLabel } : {}),
+        total_count: totalCount,
+        currency: workspace.currency,
+        rows: blockRows,
+        ...(totalCount > blockRows.length
+          ? { footer: `Showing ${blockRows.length} of ${totalCount}` }
+          : {}),
+      };
+    }
 
     return {
       transactions,

@@ -333,3 +333,45 @@ describe("findTransactions tz-aware boundaries", () => {
     expect(result.transactions.some((t) => t.id === tx.id)).toBe(true);
   });
 });
+
+describe("findTransactions single-vs-multi block type", () => {
+  let ctx: ToolContext;
+  let wsId: string;
+  let acctId: string;
+
+  beforeEach(async () => {
+    const stamp = `ftb-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "FTB", tz: "America/Toronto" } });
+    const ws = await prisma.workspace.create({ data: { name: "ftb-ws", currency: "CAD" } });
+    wsId = ws.id;
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
+    acctId = (await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" } })).id;
+    ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" } as ToolContext;
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  async function mk(merchant: string, date: string) {
+    await prisma.transaction.create({
+      data: { workspaceId: wsId, accountId: acctId, amount: "78.50", merchantRaw: merchant, occurredAt: new Date(`${date}T12:00:00Z`), source: "manual", pending: false, rawData: {} },
+    });
+  }
+
+  it("renders a transaction_detail card when exactly one matches", async () => {
+    await mk("Touchstone Climbing", "2026-05-11");
+    const r = await findTransactions.run(ctx, { merchant_query: "Touchstone" });
+    expect(r.block?.type).toBe("transaction_detail");
+    if (r.block?.type !== "transaction_detail") throw new Error("wrong block");
+    expect(r.block.merchant).toBe("Touchstone Climbing");
+    expect(r.block.amount).toBe("78.50");
+  });
+
+  it("renders a transactions_list when several match", async () => {
+    await mk("Touchstone Climbing", "2026-05-11");
+    await mk("Touchstone Climbing", "2026-04-11");
+    const r = await findTransactions.run(ctx, { merchant_query: "Touchstone" });
+    expect(r.block?.type).toBe("transactions_list");
+  });
+});
