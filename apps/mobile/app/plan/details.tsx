@@ -34,7 +34,7 @@ export default function PlanDetails() {
     }
   }, [openingBilling, me?.subscription]);
 
-  const Header = () => (
+  const header = (
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.head}>
@@ -48,7 +48,7 @@ export default function PlanDetails() {
   if (!me) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
-        <Header />
+        {header}
         <View style={styles.center}>
           <ActivityIndicator color={colors.primary} />
         </View>
@@ -62,7 +62,7 @@ export default function PlanDetails() {
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <Header />
+      {header}
       <ScrollView contentContainerStyle={styles.scroll}>
         <View style={styles.card}>
           <Text style={styles.cardLabel}>Current plan</Text>
