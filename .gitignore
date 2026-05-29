@@ -12,6 +12,7 @@ coverage/
 .env.*.local
 !.env.example
 !apps/api/.env.test
+.env.bak*
 *.log
 .DS_Store
 ios/Pods/
@@ -38,6 +39,9 @@ playwright-report/
 # Git worktrees
 .worktrees/
 .claude/worktrees/
+
+# Local planning / debug scratch (tool-generated)
+.planning/
 
 # Service account / private credentials — never commit raw JSON keys
 *service-account*.json
