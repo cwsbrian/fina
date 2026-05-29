@@ -42,6 +42,7 @@ playwright-report/
 
 # Local planning / debug scratch (tool-generated)
 .planning/
+.superpowers/
 
 # Service account / private credentials — never commit raw JSON keys
 *service-account*.json
