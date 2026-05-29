@@ -12,7 +12,7 @@ export function GoalDetailBlock({ block }: Props) {
   const pct = Math.max(0, Math.min(100, block.bar_pct));
   return (
     <Pressable
-      onPress={() => router.push(`/goals/${block.id}` as never)}
+      onPress={() => router.push(`/goal/${block.id}` as never)}
       accessibilityRole="button"
       accessibilityLabel={`Open goal ${block.title}`}
       style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}

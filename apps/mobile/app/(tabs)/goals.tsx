@@ -121,7 +121,7 @@ export default function Goals() {
         renderItem={({ item }) => (
           <GoalCard
             goal={item}
-            onPress={() => router.push(`/goals/${item.id}` as never)}
+            onPress={() => router.push(`/goal/${item.id}` as never)}
           />
         )}
         ListEmptyComponent={
@@ -152,7 +152,7 @@ export default function Goals() {
                   styles.cta,
                   pressed && { opacity: 0.85 },
                 ]}
-                onPress={() => router.push("/goals/new" as never)}
+                onPress={() => router.push("/goal/new" as never)}
               >
                 <Text style={styles.ctaText}>Create a goal</Text>
               </Pressable>
@@ -182,7 +182,7 @@ export default function Goals() {
               icon="add"
               size={22}
               accessibilityLabel="New goal"
-              onPress={() => router.push("/goals/new" as never)}
+              onPress={() => router.push("/goal/new" as never)}
             />
           </View>
         </View>
