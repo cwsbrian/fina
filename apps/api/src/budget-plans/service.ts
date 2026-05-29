@@ -392,3 +392,91 @@ export async function monthlyTotalSpend(
   });
   return Number(agg._sum.amount ?? 0);
 }
+
+export type BudgetSnapshotCategory = {
+  categoryId: string;
+  categoryName: string;
+  color: string | null;
+  icon: string | null;
+  /** Cap from the plan's categoryAllocations; null when no cap is set. */
+  allocated: string | null;
+  spent: string;
+  scheduled: string;
+};
+
+export type BudgetSnapshot = {
+  totalAmount: string;
+  totalSpent: string;
+  totalScheduled: string;
+  categories: BudgetSnapshotCategory[];
+};
+
+/** Single source for the chat budget tools — the same BudgetPlan data the
+ *  Home/`/budget` screens use. Returns null when the workspace has no plan
+ *  (no month snapshot and no default template). */
+export async function budgetPlanSnapshot(
+  workspaceId: string,
+  year: number,
+  month1to12: number,
+): Promise<BudgetSnapshot | null> {
+  const plan = await getOrSnapshotMonthBudget(workspaceId, year, month1to12);
+  if (!plan) return null;
+
+  const [spendByCat, scheduledByCat, totalSpent, totalScheduled] = await Promise.all([
+    monthlySpendByCategory(workspaceId, year, month1to12),
+    monthlyScheduledByCategory(workspaceId, year, month1to12),
+    monthlyTotalSpend(workspaceId, year, month1to12),
+    monthlyScheduledTotal(workspaceId, year, month1to12),
+  ]);
+
+  const allocById = new Map(plan.categoryAllocations.map((a) => [a.categoryId, a.amount]));
+  const spentById = new Map(spendByCat.map((c) => [c.categoryId, c.spent]));
+  const scheduledById = new Map(scheduledByCat.map((c) => [c.categoryId, c.spent]));
+  const nameById = new Map<string, string>();
+  for (const c of spendByCat) nameById.set(c.categoryId, c.categoryName);
+  for (const c of scheduledByCat) nameById.set(c.categoryId, c.categoryName);
+
+  const ids = Array.from(new Set<string>([...allocById.keys(), ...spentById.keys(), ...scheduledById.keys()]));
+  const cats = ids.length
+    ? await prisma.category.findMany({
+        where: { id: { in: ids }, workspaceId },
+        select: { id: true, name: true, color: true, icon: true },
+      })
+    : [];
+  const meta = new Map(cats.map((c) => [c.id, c]));
+
+  const categories: BudgetSnapshotCategory[] = ids.map((id) => ({
+    categoryId: id,
+    categoryName: meta.get(id)?.name ?? nameById.get(id) ?? "Unknown",
+    color: meta.get(id)?.color ?? null,
+    icon: meta.get(id)?.icon ?? null,
+    allocated: allocById.has(id) ? allocById.get(id)!.toFixed(2) : null,
+    spent: (spentById.get(id) ?? 0).toFixed(2),
+    scheduled: (scheduledById.get(id) ?? 0).toFixed(2),
+  }));
+
+  return {
+    totalAmount: plan.totalAmount,
+    totalSpent: totalSpent.toFixed(2),
+    totalScheduled: totalScheduled.toFixed(2),
+    categories,
+  };
+}
+
+export type ChatBudgetPeriod = "this_month" | "last_month" | "next_month";
+
+/** Map the chat period enum to a calendar year/month on the same UTC basis
+ *  budget-plans/current uses, so chat and Home agree on which month. */
+export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; month: number } {
+  const d = new Date();
+  let year = d.getUTCFullYear();
+  let month = d.getUTCMonth() + 1; // 1..12
+  if (period === "last_month") {
+    month -= 1;
+    if (month === 0) { month = 12; year -= 1; }
+  } else if (period === "next_month") {
+    month += 1;
+    if (month === 13) { month = 1; year += 1; }
+  }
+  return { year, month };
+}
