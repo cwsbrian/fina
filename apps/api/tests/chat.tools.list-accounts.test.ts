@@ -77,3 +77,48 @@ describe("listAccounts tool", () => {
     await prisma.workspace.delete({ where: { id: other.id } });
   });
 });
+
+describe("listAccounts chat tool", () => {
+  let ctx: ToolContext;
+  let wsId: string;
+
+  beforeEach(async () => {
+    const stamp = `la-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "LA" } });
+    const ws = await prisma.workspace.create({ data: { name: "la-ws", currency: "CAD" } });
+    wsId = ws.id;
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
+    ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" };
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  it("returns an accounts_list block with total_balance for single-currency", async () => {
+    await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Chequing", type: "depository", currency: "CAD", balanceCurrent: "1200.50" },
+    });
+    await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Savings", type: "depository", currency: "CAD", balanceCurrent: "800.00" },
+    });
+    const r = await listAccounts.run(ctx, {});
+    expect(r.block?.type).toBe("accounts_list");
+    if (r.block?.type !== "accounts_list") throw new Error("wrong block");
+    expect(r.block.rows).toHaveLength(2);
+    expect(r.block.total_balance).toBe("2000.50");
+  });
+
+  it("omits total_balance when currencies differ", async () => {
+    await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "CAD", type: "depository", currency: "CAD", balanceCurrent: "10.00" },
+    });
+    await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "USD", type: "depository", currency: "USD", balanceCurrent: "10.00" },
+    });
+    const r = await listAccounts.run(ctx, {});
+    if (r.block?.type !== "accounts_list") throw new Error("wrong block");
+    expect(r.block.total_balance).toBeUndefined();
+    expect(r.block.currency).toBeUndefined();
+  });
+});

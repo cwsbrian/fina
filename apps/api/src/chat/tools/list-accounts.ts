@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
 
@@ -30,7 +31,7 @@ type Account = {
   plaidItemLastSyncAt: string | null;
 };
 
-export const listAccounts: ToolDef<Args, { accounts: Account[] }> = {
+export const listAccounts: ToolDef<Args, { accounts: Account[]; block?: PresentationBlock }> = {
   name: "listAccounts",
   description:
     "List bank accounts in the workspace with balances, account status, and Plaid connection status.",
@@ -79,6 +80,29 @@ export const listAccounts: ToolDef<Args, { accounts: Account[] }> = {
       plaidItemLastSyncAt: r.plaidItem?.lastSyncAt?.toISOString() ?? null,
     }));
 
-    return { accounts };
+    const currencies = new Set(accounts.map((a) => a.currency));
+    const singleCurrency = currencies.size === 1 ? accounts[0]!.currency : undefined;
+    let totalBalance: string | undefined;
+    if (singleCurrency !== undefined) {
+      const sum = accounts.reduce(
+        (s, a) => s + (a.balanceCurrent ? parseFloat(a.balanceCurrent) : 0),
+        0,
+      );
+      totalBalance = sum.toFixed(2);
+    }
+    const block: PresentationBlock = {
+      type: "accounts_list",
+      title: "Accounts",
+      ...(singleCurrency !== undefined ? { currency: singleCurrency } : {}),
+      ...(totalBalance !== undefined ? { total_balance: totalBalance } : {}),
+      rows: accounts.map((a) => ({
+        id: a.id,
+        name: a.name,
+        balance: a.balanceCurrent,
+        institution: a.institutionName,
+        status: a.plaidItemStatus,
+      })),
+    };
+    return { accounts, block };
   },
 };
