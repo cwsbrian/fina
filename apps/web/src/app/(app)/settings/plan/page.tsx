@@ -6,6 +6,9 @@ import {
   PRICING,
   TIER_LIMITS,
   trialDaysLeft,
+  trialRevertsTo,
+  tierLabel,
+  formatShortDate,
   type MeDTO,
   type SubscriptionDTO,
   type PaidTier,
@@ -116,9 +119,11 @@ export default function PlanPage() {
       );
     }
     if (trialActive && sub) {
-      // Trial active AND a paid sub on file. The upcoming charge tier
-      // is whichever the user will be on at trial_end — pendingTier
-      // wins if scheduled, otherwise their current sub tier.
+      // Trial active AND a paid sub on file. `revertsTo` is non-null only when
+      // the post-trial tier is below Pro (a downgrade to warn about); it
+      // already folds in a scheduled pendingTier. When null, keep the existing
+      // charge / scheduled-switch copy untouched.
+      const revertsTo = trialRevertsTo(me);
       const upcomingTier =
         sub.pendingTier && sub.pendingTier !== sub.tier ? sub.pendingTier : sub.tier;
       const upcomingLabel = upcomingTier === "pro" ? "Pro" : "Lite";
@@ -132,9 +137,11 @@ export default function PlanPage() {
             <div className={styles.planCurrentName}>Pro trial</div>
             <div className={styles.planCurrentStatus}>
               {days != null ? `${days} day${days === 1 ? "" : "s"} left.` : ""}{" "}
-              {hasSchedule
-                ? `Switches to ${upcomingLabel} on ${at}. ${upcomingPrice} will be charged.`
-                : `${upcomingPrice} will be charged on ${at}.`}
+              {revertsTo
+                ? `Reverts to ${tierLabel(revertsTo, false)} on ${formatShortDate(me.trial.endsAt)}. ${upcomingPrice} will be charged.`
+                : hasSchedule
+                  ? `Switches to ${upcomingLabel} on ${at}. ${upcomingPrice} will be charged.`
+                  : `${upcomingPrice} will be charged on ${at}.`}
             </div>
           </div>
           <div className={styles.planCurrentActions}>
