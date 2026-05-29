@@ -459,6 +459,9 @@ const styles = StyleSheet.create({
   heroSaved: { marginBottom: 14 },
   heroSavedNum: {
     fontSize: 36,
+    // Explicit lineHeight so the top of the glyphs isn't clipped on
+    // Android (large Text with no lineHeight gets a too-short line box).
+    lineHeight: 44,
     fontWeight: "500",
     letterSpacing: -1.2,
     color: colors.ink,
