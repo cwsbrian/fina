@@ -140,7 +140,6 @@ model Workspace {
   categories         Category[]
   merchantMappings   MerchantMapping[]
   chatThreads        ChatThread[]
-  budgets            Budget[]
   recurringExpenses  RecurringExpense[]
   actionIntents      ActionIntent[]
   auditEvents        AuditEvent[]
@@ -436,29 +435,11 @@ model Category {
   allocations        TransactionAllocation[]
   scheduledSpends    ScheduledSpend[]
   merchantMappings   MerchantMapping[]
-  budgets            Budget[]
   recurringExpenses  RecurringExpense[]
   goalAllocations    GoalAllocation[]
 
   @@index([workspaceId, type])
   @@map("categories")
-}
-
-model Budget {
-  id           String   @id @default(cuid())
-  workspaceId  String
-  categoryId   String
-  amount       Decimal  @db.Decimal(10, 2)
-  periodStart  DateTime @db.Date
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-
-  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  category     Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-  @@unique([workspaceId, categoryId, periodStart])
-  @@index([workspaceId, periodStart])
-  @@map("budgets")
 }
 
 /// Monthly budget plan — a total cap with optional per-category split.
