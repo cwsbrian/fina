@@ -3,6 +3,7 @@ import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
 import { listScheduledSpendsService, type ScheduledSpendStatus } from "../../schedules/service.js";
+import { buildScheduledListBlock } from "./scheduled-list-block.js";
 
 const Args = z.object({
   from: z.string().optional().describe("YYYY-MM-DD inclusive"),
@@ -60,23 +61,12 @@ export const listScheduledSpends: ToolDef<z.infer<typeof Args>, Result> = {
       ...s,
       categoryName: catById.get(s.categoryId)?.name ?? "Unknown",
     }));
-    const block: PresentationBlock = {
-      type: "scheduled_list",
+    const block = buildScheduledListBlock({
       title: "Scheduled spending",
-      total_count: schedules.length,
       currency: workspace.currency,
-      rows: schedules.map((s) => {
-        const cat = catById.get(s.categoryId);
-        return {
-          id: s.id,
-          name: s.note ?? s.categoryName,
-          amount: s.amount,
-          scheduled_date: s.scheduledDate,
-          status: s.status,
-          ...(cat ? { category: { name: cat.name, color: cat.color, icon: cat.icon } } : {}),
-        };
-      }),
-    };
+      schedules,
+      catById,
+    });
     return { schedules, block };
   },
 };
