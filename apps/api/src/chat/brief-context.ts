@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import { resolveUserTz, partsInTz } from "./tools/periods.js";
+import { budgetPlanSnapshot } from "../budget-plans/service.js";
 
 export type BriefType = "daily" | "weekly" | "monthly";
 
@@ -20,7 +21,10 @@ export type WorkspaceContext = {
   uncategorizedCount: number;
   /** Upcoming schedule items in the relevant window. */
   schedule: Array<{ category: string; amount: string; date: string }>;
-  /** Budget progress for the relevant period. */
+  /** Overall monthly budget (BudgetPlan total cap) progress, or null when
+   *  the workspace has no plan. */
+  budgetTotal: { cap: string; spent: string; percent: number } | null;
+  /** Per-capped-category budget progress for the current month. */
   budgets: Array<{
     category: string;
     budgeted: string;
@@ -134,28 +138,34 @@ async function buildWorkspaceContext(
     date: s.scheduledDate.toISOString().slice(0, 10),
   }));
 
-  // Budgets — fetch this-month budgets via periodStart (DateTime @db.Date,
-  // first day of month). Compute first-of-this-month in the USER's tz so
-  // edge-of-month edge cases (e.g., UTC May 1 00:30 = Toronto April 30
-  // 20:30, user is still on April) match the user's intent.
+  // Budgets — from the real BudgetPlan (total cap + per-category caps) with
+  // actual spend, the same source as the Budget screen and chat. Uses the
+  // user's local calendar month. (Replaces the legacy per-category Budget
+  // table, which the app no longer writes — it was always empty here.)
   const nowInUserTz = partsInTz(now, tz);
-  const firstOfMonth = new Date(
-    Date.UTC(nowInUserTz.year, nowInUserTz.month - 1, 1),
-  );
-  const budgets = await prisma.budget.findMany({
-    where: { workspaceId, periodStart: firstOfMonth },
-    include: { category: { select: { name: true } } },
-    take: 50,
-  });
-  const budgetsFmt = budgets.map((b) => ({
-    category: b.category.name,
-    budgeted: b.amount.toString(),
-    // Spent amount: query allocations for this category in current month.
-    // For v1, we leave spent as placeholder "0" — real computation deferred
-    // to v1.5. The LLM can still produce a useful brief with budgeted alone.
-    spent: "0",
-    percent: 0,
-  }));
+  const snapshot = await budgetPlanSnapshot(workspaceId, nowInUserTz.year, nowInUserTz.month);
+  let budgetTotal: { cap: string; spent: string; percent: number } | null = null;
+  if (snapshot && parseFloat(snapshot.totalAmount) > 0) {
+    const cap = parseFloat(snapshot.totalAmount);
+    const spent = parseFloat(snapshot.totalSpent);
+    budgetTotal = {
+      cap: snapshot.totalAmount,
+      spent: snapshot.totalSpent,
+      percent: cap > 0 ? Math.round((spent / cap) * 100) : 0,
+    };
+  }
+  const budgetsFmt = (snapshot?.categories ?? [])
+    .filter((c) => c.allocated !== null)
+    .map((c) => {
+      const allocated = parseFloat(c.allocated!);
+      const spent = parseFloat(c.spent);
+      return {
+        category: c.categoryName,
+        budgeted: c.allocated!,
+        spent: c.spent,
+        percent: allocated > 0 ? Math.round((spent / allocated) * 100) : 0,
+      };
+    });
 
   // Recurring expenses due in window.
   const recurring = await prisma.recurringExpense.findMany({
@@ -186,6 +196,7 @@ async function buildWorkspaceContext(
     newTransactions: { count: newCount, sample },
     uncategorizedCount,
     schedule: scheduleFmt,
+    budgetTotal,
     budgets: budgetsFmt,
     recurring: recurringFmt,
     deviation: null,

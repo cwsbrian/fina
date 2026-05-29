@@ -97,4 +97,34 @@ describe("buildBriefContext", () => {
       "Starbucks",
     );
   });
+
+  it("sources budgets from the BudgetPlan (total + per-category with spend)", async () => {
+    const now = new Date();
+    const y = now.getUTCFullYear();
+    const m = now.getUTCMonth() + 1;
+    const firstOfMonth = new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
+    const u = await prisma.user.create({
+      data: { id: `bc-bud-${Date.now()}`, email: `bcb-${Date.now()}@t.co`, name: "BCB", tz: "UTC" },
+    });
+    const ws = await prisma.workspace.create({ data: { name: "W", currency: "CAD" } });
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    const dining = await prisma.category.create({ data: { workspaceId: ws.id, name: "Dining" } });
+    const acct = await prisma.bankAccount.create({ data: { workspaceId: ws.id, name: "Chq", type: "depository", currency: "CAD" } });
+    await prisma.budgetPlan.create({
+      data: { workspaceId: ws.id, periodStart: firstOfMonth, totalAmount: "900.00", categoryAllocations: [{ categoryId: dining.id, amount: 500 }] },
+    });
+    const tx = await prisma.transaction.create({
+      data: { workspaceId: ws.id, accountId: acct.id, amount: "200.00", merchantRaw: "Resto", occurredAt: firstOfMonth, source: "manual", pending: false, rawData: {} },
+    });
+    await prisma.transactionAllocation.create({ data: { transactionId: tx.id, categoryId: dining.id, amount: "200.00" } });
+
+    const ctx = await buildBriefContext(u.id, "daily");
+    const w = ctx.workspaces[0]!;
+    expect(w.budgetTotal).toEqual({ cap: "900.00", spent: "200.00", percent: 22 });
+    const d = w.budgets.find((b) => b.category === "Dining")!;
+    expect(d.budgeted).toBe("500.00");
+    expect(d.spent).toBe("200.00");
+    expect(d.percent).toBe(40);
+  });
+
 });
