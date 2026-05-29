@@ -87,6 +87,18 @@ function confirmationFor(
         ? `${g.title} 목표를 만들었어요 — ${g.dueDate}까지 $${g.targetAmount}.`
         : `Created goal "${g.title}" — $${g.targetAmount} by ${g.dueDate}.`;
     }
+    case "updateGoal": {
+      const g = (result as { goal?: { title: string } }).goal;
+      return ko
+        ? `${g?.title ? `${g.title} ` : ""}목표를 수정했어요.`
+        : `Updated goal "${g?.title ?? "goal"}".`;
+    }
+    case "archiveGoal": {
+      const g = (result as { goal?: { title: string } }).goal;
+      return ko
+        ? `${g?.title ? `${g.title} ` : ""}목표를 보관했어요.`
+        : `Archived goal "${g?.title ?? "goal"}".`;
+    }
     default:
       return null;
   }
@@ -135,6 +147,8 @@ export const CONFIRMABLE_TOOLS = [
   "dismissScheduledSpend",
   "removeScheduledSpend",
   "addGoal",
+  "updateGoal",
+  "archiveGoal",
 ] as const;
 
 // presentRecurringForm is a UI presenter — never a confirmable target,

@@ -15,6 +15,8 @@ export const AUDIT_WRITE_TOOLS = new Set([
   "dismissScheduledSpend",
   "removeScheduledSpend",
   "addGoal",
+  "updateGoal",
+  "archiveGoal",
 ]);
 
 const TARGET_TYPE_MAP: Record<string, string> = {
@@ -30,6 +32,8 @@ const TARGET_TYPE_MAP: Record<string, string> = {
   dismissScheduledSpend: "scheduled_spend",
   removeScheduledSpend: "scheduled_spend",
   addGoal: "goal",
+  updateGoal: "goal",
+  archiveGoal: "goal",
 };
 
 export function resolveTargetType(action: string): string | null {
@@ -71,7 +75,7 @@ export function extractTargetId(action: string, result: unknown): string | null 
     // For v1, return null (audit row is still created, just without targetId).
     return null;
   }
-  if (action === "addGoal") {
+  if (action === "addGoal" || action === "updateGoal" || action === "archiveGoal") {
     const g = (result as Record<string, unknown>).goal as Record<string, unknown> | undefined;
     return typeof g?.id === "string" ? g.id : null;
   }
