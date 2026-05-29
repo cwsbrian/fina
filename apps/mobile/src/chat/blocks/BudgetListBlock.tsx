@@ -17,7 +17,7 @@ export function BudgetListBlock({ block }: Props) {
       style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
     >
     <BlockCard>
-      <BlockHeader title={block.title} {...(block.period_label ? { subtitle: block.period_label } : {})} />
+      <BlockHeader title={block.title} chevron {...(block.period_label ? { subtitle: block.period_label } : {})} />
       {block.headline ? (
         <View style={styles.headline}>
           <Text style={styles.heroAmount}>{sym}{block.headline.spent}</Text>

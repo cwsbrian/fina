@@ -15,7 +15,7 @@ export function CategoryListBlock({ block }: { block: Block }) {
       style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
     >
     <BlockCard>
-      <BlockHeader title={block.title} />
+      <BlockHeader title={block.title} chevron />
       {block.rows.length === 0 ? (
         <BlockEmpty text="No categories yet." />
       ) : (

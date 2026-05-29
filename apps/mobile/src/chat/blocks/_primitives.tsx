@@ -45,16 +45,19 @@ export function BlockCard({ children }: { children: ReactNode }) {
 }
 
 /** Header row for cards — title + optional small subtitle (period_label,
- *  date range, etc). */
+ *  date range, etc). Pass `chevron` for cards whose whole surface is
+ *  tappable — it renders a trailing ›  to signal "tap to open". */
 export function BlockHeader({
   title,
   subtitle,
+  chevron,
 }: {
   title: string;
-  subtitle?: string;
+  subtitle?: string | undefined;
+  chevron?: boolean | undefined;
 }) {
-  return (
-    <View style={styles.header}>
+  const titleCol = (
+    <View style={chevron ? styles.headerTextCol : undefined}>
       <Text style={styles.title} numberOfLines={2}>
         {title}
       </Text>
@@ -63,6 +66,13 @@ export function BlockHeader({
           {subtitle}
         </Text>
       ) : null}
+    </View>
+  );
+  if (!chevron) return <View style={styles.header}>{titleCol}</View>;
+  return (
+    <View style={styles.headerRow}>
+      {titleCol}
+      <Ionicons name="chevron-forward" size={18} color={colors.muted} />
     </View>
   );
 }
@@ -219,6 +229,16 @@ const styles = StyleSheet.create({
     gap: space.xs,
   },
   header: {
+    gap: 2,
+  },
+  headerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+  },
+  headerTextCol: {
+    flex: 1,
+    minWidth: 0,
     gap: 2,
   },
   title: {

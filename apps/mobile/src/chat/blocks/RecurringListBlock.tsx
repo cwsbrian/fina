@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "react-native";
+import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
 import {
@@ -23,11 +24,17 @@ type Props = { block: Block };
 export function RecurringListBlock({ block }: Props) {
   const sym = currencySymbol(block.currency);
   return (
+    <Pressable
+      onPress={() => router.push("/subscriptions" as never)}
+      accessibilityRole="button"
+      accessibilityLabel="Manage subscriptions"
+      style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
+    >
     <BlockCard>
       {block.period_label ? (
-        <BlockHeader title={block.title} subtitle={block.period_label} />
+        <BlockHeader title={block.title} subtitle={block.period_label} chevron />
       ) : (
-        <BlockHeader title={block.title} />
+        <BlockHeader title={block.title} chevron />
       )}
 
       {block.total_monthly_amount ? (
@@ -61,6 +68,7 @@ export function RecurringListBlock({ block }: Props) {
 
       {block.footer ? <BlockFooter text={block.footer} /> : null}
     </BlockCard>
+    </Pressable>
   );
 }
 

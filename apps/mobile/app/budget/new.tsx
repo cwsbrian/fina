@@ -558,6 +558,8 @@ const styles = StyleSheet.create({
     color: colors.ink,
     width: 88,
     textAlign: "right",
+    textAlignVertical: "center",
+    includeFontPadding: false,
     paddingVertical: 0,
   },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
