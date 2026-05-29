@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, StyleSheet, Pressable } from "react-native";
+import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
 import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, currencySymbol } from "./_primitives";
@@ -9,8 +10,30 @@ type Props = { block: Block };
 export function BudgetListBlock({ block }: Props) {
   const sym = currencySymbol(block.currency);
   return (
+    <Pressable
+      onPress={() => router.push("/budget" as never)}
+      accessibilityRole="button"
+      accessibilityLabel="View budget"
+      style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
+    >
     <BlockCard>
       <BlockHeader title={block.title} {...(block.period_label ? { subtitle: block.period_label } : {})} />
+      {block.headline ? (
+        <View style={styles.headline}>
+          <Text style={styles.heroAmount}>{sym}{block.headline.spent}</Text>
+          <Text style={styles.heroCap}>of {sym}{block.headline.cap}</Text>
+          <View style={styles.track}>
+            <View style={[styles.fill, { width: `${Math.max(0, Math.min(100, block.headline.bar_pct))}%`, backgroundColor: colors.primary }]} />
+          </View>
+          <View style={styles.heroMetaRow}>
+            <Text style={styles.heroPct}>{Math.round(block.headline.bar_pct)}%</Text>
+            <Text style={styles.heroLeft}>{sym}{block.headline.left} left</Text>
+          </View>
+          {block.headline.scheduled ? (
+            <Text style={styles.heroScheduled}>+ {sym}{block.headline.scheduled} scheduled</Text>
+          ) : null}
+        </View>
+      ) : null}
       {block.rows.length === 0 ? (
         <BlockEmpty text="No budgets set yet." />
       ) : (
@@ -37,6 +60,7 @@ export function BudgetListBlock({ block }: Props) {
       )}
       {block.footer ? <BlockFooter text={block.footer} /> : null}
     </BlockCard>
+    </Pressable>
   );
 }
 
@@ -48,4 +72,11 @@ const styles = StyleSheet.create({
   amount: { ...type$.bodySm, color: colors.body, fontVariant: ["tabular-nums"] },
   track: { height: 6, borderRadius: 3, backgroundColor: colors.hairline, overflow: "hidden" },
   fill: { height: "100%" },
+  headline: { gap: 4, paddingVertical: space.xs },
+  heroAmount: { fontSize: 28, lineHeight: 34, fontWeight: "600", color: colors.ink, fontVariant: ["tabular-nums"] },
+  heroCap: { ...type$.bodySm, color: colors.muted },
+  heroMetaRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  heroPct: { ...type$.caption, color: colors.muted },
+  heroLeft: { ...type$.caption, color: colors.primary, fontWeight: "600" },
+  heroScheduled: { ...type$.caption, color: colors.muted },
 });
