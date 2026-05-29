@@ -12,6 +12,39 @@ function offsetFor(period: PeriodEnum): number {
   return 0;
 }
 
+/** Positive spend per category over a budget period. Extracted from
+ *  compareSpendingVsBudgetService so getBudget can reuse the exact same
+ *  aggregation. Takes the PERIOD ENUM (not a bare periodStart) because
+ *  the tx range for this_month/last_month comes from basicPeriodRange;
+ *  next_month is an empty range (spend always 0). */
+export async function spentByCategoryForPeriod(
+  ctx: { workspaceId: string; userId: string },
+  period: PeriodEnum,
+  categoryIds: string[],
+): Promise<Map<string, Prisma.Decimal>> {
+  if (categoryIds.length === 0) return new Map();
+  if (period === "next_month") return new Map();
+  const { gte, lt } = await basicPeriodRange(
+    ctx.userId,
+    period === "this_month" ? "this_month" : "last_month",
+  );
+  const sums = await prisma.transactionAllocation.groupBy({
+    by: ["categoryId"],
+    where: {
+      categoryId: { in: categoryIds },
+      amount: { gt: 0 },
+      transaction: {
+        workspaceId: ctx.workspaceId,
+        removedAt: null,
+        occurredAt: { gte, lt },
+        amount: { gt: 0 },
+      },
+    },
+    _sum: { amount: true },
+  });
+  return new Map(sums.map((s) => [s.categoryId!, s._sum.amount ?? new Prisma.Decimal(0)]));
+}
+
 export type SetBudgetInput = { categoryId: string; amount: number; period: PeriodEnum };
 export type SetBudgetOutput = { budget: { id: string; categoryId: string; amount: string; periodStart: string } };
 
@@ -131,16 +164,16 @@ export async function compareSpendingVsBudgetService(
   input: CompareSpendingInput,
 ): Promise<CompareSpendingOutput> {
   const periodStart = await firstOfMonthDateInTz(ctx.userId, offsetFor(input.period));
-  // Transaction filter range per period:
-  let gte: Date;
+  // `lt` is the period-end bound surfaced in the response. The per-category
+  // spend range is recomputed inside spentByCategoryForPeriod from the same
+  // period enum, so we only need the upper bound here.
   let lt: Date;
   if (input.period === "this_month") {
-    ({ gte, lt } = await basicPeriodRange(ctx.userId, "this_month"));
+    ({ lt } = await basicPeriodRange(ctx.userId, "this_month"));
   } else if (input.period === "last_month") {
-    ({ gte, lt } = await basicPeriodRange(ctx.userId, "last_month"));
+    ({ lt } = await basicPeriodRange(ctx.userId, "last_month"));
   } else {
-    // next_month: explicit empty range so spent=0 regardless of current spending.
-    gte = periodStart;
+    // next_month: empty range so spent=0 regardless of current spending.
     lt = periodStart;
   }
 
@@ -160,23 +193,7 @@ export async function compareSpendingVsBudgetService(
   }
 
   const budgetCategoryIds = budgets.map((b) => b.categoryId);
-  const sums = await prisma.transactionAllocation.groupBy({
-    by: ["categoryId"],
-    where: {
-      categoryId: { in: budgetCategoryIds },
-      amount: { gt: 0 },
-      transaction: {
-        workspaceId: ctx.workspaceId,
-        removedAt: null,
-        occurredAt: { gte, lt },
-        amount: { gt: 0 },
-      },
-    },
-    _sum: { amount: true },
-  });
-  const spentByCat = new Map<string, Prisma.Decimal>(
-    sums.map((s) => [s.categoryId!, s._sum.amount ?? new Prisma.Decimal(0)]),
-  );
+  const spentByCat = await spentByCategoryForPeriod(ctx, input.period, budgetCategoryIds);
 
   // Resolve user tz once — used for todayPct and the planned anti-join.
   const tz = await resolveUserTz(ctx.userId);
