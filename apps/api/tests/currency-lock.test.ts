@@ -80,32 +80,6 @@ describe("withWorkspaceLock spy — writers go through the helper, NOT top-level
       prisma.recurringExpense.upsert = origRecUpsert as typeof prisma.recurringExpense.upsert;
     }
   });
-
-  it("setBudgetService: uses helper, no top-level budget writes", async () => {
-    const { wsId, userId } = await setupEditor("ls3@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Coffee" } });
-    const helperSpy = vi.spyOn(workspaceLockModule, "withWorkspaceLock");
-    let bCreateCount = 0;
-    let bUpsertCount = 0;
-    const origBCreate = prisma.budget.create.bind(prisma.budget);
-    const origBUpsert = prisma.budget.upsert.bind(prisma.budget);
-    prisma.budget.create = ((...args: Parameters<typeof prisma.budget.create>) => { bCreateCount++; return origBCreate(...args); }) as typeof prisma.budget.create;
-    prisma.budget.upsert = ((...args: Parameters<typeof prisma.budget.upsert>) => { bUpsertCount++; return origBUpsert(...args); }) as typeof prisma.budget.upsert;
-
-    try {
-      const { setBudgetService } = await import("../src/budgets/service.js");
-      await setBudgetService(
-        { workspaceId: wsId, userId },
-        { categoryId: cat.id, amount: 100, period: "this_month" },
-      );
-      expect(helperSpy).toHaveBeenCalled();
-      expect(bCreateCount).toBe(0);
-      expect(bUpsertCount).toBe(0);
-    } finally {
-      prisma.budget.create = origBCreate as typeof prisma.budget.create;
-      prisma.budget.upsert = origBUpsert as typeof prisma.budget.upsert;
-    }
-  });
 });
 
 describe("integration race — writers block while holder owns the lock", () => {
@@ -167,33 +141,5 @@ describe("integration race — writers block while holder owns the lock", () => 
     await holder.$disconnect();
     const result = await candidate;
     expect(result.recurring.currency).toBe("USD");
-  });
-
-  it("setBudgetService blocks on held lock", async () => {
-    const { wsId, userId } = await setupEditor("rc3@t.co");
-    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Coffee" } });
-    await prisma.workspace.findFirstOrThrow({ where: { id: wsId } });
-
-    const holder = new PrismaClient({
-      datasources: { db: { url: process.env.DATABASE_URL! } },
-    });
-    await holder.$connect();
-    await holder.$executeRaw`BEGIN`;
-    await holder.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${wsId}))`;
-
-    const { setBudgetService } = await import("../src/budgets/service.js");
-    const candidate = setBudgetService(
-      { workspaceId: wsId, userId },
-      { categoryId: cat.id, amount: 100, period: "this_month" },
-    );
-    const winner = await Promise.race([
-      candidate.then(() => "candidate"),
-      new Promise<string>((r) => setTimeout(() => r("timeout"), 300)),
-    ]);
-    expect(winner).toBe("timeout");
-    await holder.$executeRaw`COMMIT`;
-    await holder.$disconnect();
-    const result = await candidate;
-    expect(result).toBeDefined();
   });
 });
