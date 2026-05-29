@@ -1,8 +1,12 @@
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
-import { getBudgetService, spentByCategoryForPeriod } from "../../budgets/service.js";
+import {
+  budgetPlanSnapshot,
+  periodToYearMonth,
+  type BudgetSnapshot,
+  type BudgetSnapshotCategory,
+} from "../../budget-plans/service.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
@@ -10,93 +14,106 @@ const Args = z.object({
   category_name: z.string().min(1).max(40).optional(),
   period: z.enum(["this_month", "last_month", "next_month"]).optional(),
 });
-
 type Args = z.infer<typeof Args>;
+
+/** Max category rows in the card; the rest live on the /budget screen. */
+const MAX_ROWS = 5;
 
 export const getBudget: ToolDef<
   Args,
-  {
-    budgets: Array<{ id: string; categoryId: string; categoryName: string; amount: string; periodStart: string }>;
-    block?: PresentationBlock;
-  }
+  { plan: BudgetSnapshot | null; block?: PresentationBlock }
 > = {
   name: "getBudget",
   description:
-    "List monthly budgets. Returns a single-element array when category_id or category_name is provided, else all budgets for the period.",
+    "Show the user's monthly budget — total cap, spend so far, and per-category caps with progress. Sources the real BudgetPlan (same as the Budget screen). period defaults to this_month.",
   args: Args,
   async run(ctx, args) {
     if (args.category_id && args.category_name) throw new Error("invalid_body");
-    let categoryId: string | undefined = args.category_id;
-    if (!categoryId && args.category_name) {
+    const period = args.period ?? "this_month";
+    const { year, month } = periodToYearMonth(period);
+
+    const [snap, workspace] = await Promise.all([
+      budgetPlanSnapshot(ctx.workspaceId, year, month),
+      prisma.workspace.findUniqueOrThrow({ where: { id: ctx.workspaceId }, select: { currency: true } }),
+    ]);
+
+    if (!snap || parseFloat(snap.totalAmount) <= 0) return { plan: null };
+
+    // Optional single-category filter (by id or name).
+    let filterId: string | undefined = args.category_id;
+    if (!filterId && args.category_name) {
       const cat = await prisma.category.findFirst({
-        where: {
-          workspaceId: ctx.workspaceId,
-          archivedAt: null,
-          name: { equals: args.category_name, mode: "insensitive" },
-        },
+        where: { workspaceId: ctx.workspaceId, archivedAt: null, name: { equals: args.category_name, mode: "insensitive" } },
         select: { id: true },
       });
-      if (!cat) return { budgets: [] };
-      categoryId = cat.id;
+      filterId = cat?.id;
     }
-    // Omit `categoryId` from the service input when it is undefined —
-    // GetBudgetInput is `{ categoryId?: string; ... }` and tsconfig.base.json
-    // sets `exactOptionalPropertyTypes: true`, so an explicit
-    // `categoryId: undefined` is a type error.
-    const period = args.period ?? "this_month";
-    const out = await getBudgetService(
-      { workspaceId: ctx.workspaceId, userId: ctx.userId },
-      categoryId ? { categoryId, period } : { period },
-    );
-    const ids = out.budgets.map((b) => b.categoryId);
-    const [cats, workspace] = await Promise.all([
-      prisma.category.findMany({
-        where: { id: { in: ids } },
-        select: { id: true, name: true, color: true, icon: true },
-      }),
-      prisma.workspace.findUniqueOrThrow({
-        where: { id: ctx.workspaceId },
-        select: { currency: true },
-      }),
-    ]);
-    const catById = new Map(cats.map((c) => [c.id, c]));
-    const budgets = out.budgets.map((b) => ({
-      ...b,
-      categoryName: catById.get(b.categoryId)?.name ?? "",
-    }));
 
-    if (budgets.length === 0) return { budgets };
+    const capped = snap.categories.filter((c) => c.allocated !== null);
 
-    const spentMap = await spentByCategoryForPeriod(
-      { workspaceId: ctx.workspaceId, userId: ctx.userId },
-      period,
-      ids,
-    );
-    const periodLabel =
-      period === "this_month" ? "This month" : period === "last_month" ? "Last month" : "Next month";
-    const rows = budgets.map((b) => {
-      const cat = catById.get(b.categoryId);
-      const spent = spentMap.get(b.categoryId) ?? new Prisma.Decimal(0);
-      const amountDec = new Prisma.Decimal(b.amount);
-      const barPct = amountDec.greaterThan(0)
-        ? Number(spent.div(amountDec).times(100).toFixed(2))
-        : 0;
+    let rowsSource: BudgetSnapshotCategory[];
+    let filterNote: string | null = null;
+    if (filterId) {
+      const matched = snap.categories.find((c) => c.categoryId === filterId);
+      if (matched && matched.allocated !== null) {
+        rowsSource = [matched];
+      } else {
+        rowsSource = [];
+        if (matched) filterNote = `${matched.categoryName} has no cap set`;
+      }
+    } else {
+      rowsSource = [...capped].sort((a, b) => ratio(b) - ratio(a)).slice(0, MAX_ROWS);
+    }
+
+    const rows = rowsSource.map((c) => {
+      const allocated = parseFloat(c.allocated!);
+      const spent = parseFloat(c.spent);
       return {
-        id: b.id,
-        category: { name: b.categoryName, color: cat?.color ?? null, icon: cat?.icon ?? null },
-        amount: b.amount,
-        spent: spent.toFixed(2),
-        bar_pct: barPct,
-        over: spent.greaterThan(amountDec),
+        id: c.categoryId,
+        category: { name: c.categoryName, color: c.color, icon: c.icon },
+        amount: c.allocated!,
+        spent: c.spent,
+        bar_pct: allocated > 0 ? Number(((spent / allocated) * 100).toFixed(2)) : 0,
+        over: spent > allocated,
       };
     });
+
+    const cap = parseFloat(snap.totalAmount);
+    const spentTotal = parseFloat(snap.totalSpent);
+    const headline = {
+      cap: snap.totalAmount,
+      spent: snap.totalSpent,
+      left: (cap - spentTotal).toFixed(2),
+      bar_pct: cap > 0 ? Number(((spentTotal / cap) * 100).toFixed(2)) : 0,
+      ...(parseFloat(snap.totalScheduled) > 0 ? { scheduled: snap.totalScheduled } : {}),
+    };
+
+    const uncapped = snap.categories.length - capped.length;
+    const footerParts: string[] = [];
+    if (filterNote) {
+      footerParts.push(filterNote);
+    } else if (!filterId && capped.length > rowsSource.length) {
+      footerParts.push(`+${capped.length - rowsSource.length} more capped`);
+    }
+    if (!filterId && uncapped > 0) footerParts.push(`${uncapped} uncapped`);
+    footerParts.push("See full budget");
+    const footer = footerParts.join(" · ");
+
+    const periodLabel = period === "this_month" ? "This month" : period === "last_month" ? "Last month" : "Next month";
     const block: PresentationBlock = {
       type: "budget_list",
-      title: "Budgets",
+      title: "Budget",
       period_label: periodLabel,
       currency: workspace.currency,
+      headline,
       rows,
+      footer,
     };
-    return { budgets, block };
+    return { plan: snap, block };
   },
 };
+
+function ratio(c: BudgetSnapshotCategory): number {
+  const a = parseFloat(c.allocated ?? "0");
+  return a > 0 ? parseFloat(c.spent) / a : 0;
+}
