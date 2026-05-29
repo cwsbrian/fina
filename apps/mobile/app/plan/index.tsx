@@ -122,13 +122,6 @@ export default function PlanPicker() {
             </Pressable>
           ))
         )}
-        {/* Apple Guideline 3.1.1 — Restore must be reachable from plan picker. */}
-        <Pressable
-          onPress={() => router.push("/plan/restore" as never)}
-          style={{ marginTop: 8, alignItems: "center" }}
-        >
-          <Text style={{ color: colors.primary }}>Restore purchases</Text>
-        </Pressable>
       </ScrollView>
     );
 

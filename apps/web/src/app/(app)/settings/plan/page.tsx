@@ -138,7 +138,7 @@ export default function PlanPage() {
             <div className={styles.planCurrentStatus}>
               {days != null ? `${days} day${days === 1 ? "" : "s"} left.` : ""}{" "}
               {revertsTo
-                ? `Reverts to ${tierLabel(revertsTo, false)} on ${formatShortDate(me.trial.endsAt)}. ${upcomingPrice} will be charged.`
+                ? `Switches to ${tierLabel(revertsTo, false)} on ${formatShortDate(me.trial.endsAt)}. ${upcomingPrice} will be charged.`
                 : hasSchedule
                   ? `Switches to ${upcomingLabel} on ${at}. ${upcomingPrice} will be charged.`
                   : `${upcomingPrice} will be charged on ${at}.`}

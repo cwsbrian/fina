@@ -74,7 +74,7 @@ export default function PlanDetails() {
           )}
           {revertsTo && (
             <Text style={styles.revertText}>
-              Reverts to {tierLabel(revertsTo, false)} on {formatShortDate(me.trial.endsAt)}
+              Switches to {tierLabel(revertsTo, false)} on {formatShortDate(me.trial.endsAt)}
             </Text>
           )}
         </View>
@@ -110,12 +110,6 @@ export default function PlanDetails() {
                 ) : (
                   <Text style={styles.btnOutlineText}>Manage billing</Text>
                 )}
-              </Pressable>
-              <Pressable
-                style={styles.btnGhost}
-                onPress={() => router.push("/plan/restore" as never)}
-              >
-                <Text style={styles.btnGhostText}>Restore purchases</Text>
               </Pressable>
             </>
           ) : (
@@ -155,6 +149,4 @@ const styles = StyleSheet.create({
   btnPrimaryText: { ...type$.bodyMd, color: "#fff", fontWeight: "600" },
   btnOutline: { borderWidth: 1, borderColor: colors.hairline, borderRadius: 999, paddingVertical: 14, alignItems: "center" },
   btnOutlineText: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
-  btnGhost: { paddingVertical: 12, alignItems: "center" },
-  btnGhostText: { ...type$.bodyMd, color: colors.primary },
 });

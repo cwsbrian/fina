@@ -24,6 +24,8 @@ import {
   initials,
   tierLabel,
   trialDaysLeft,
+  trialRevertsTo,
+  formatShortDate,
   type BankAccountDTO,
   type MeDTO as Me,
 } from "@fina/shared";
@@ -153,6 +155,7 @@ export default function More() {
     Alert.alert("Coming soon", `${label} screen is on the way.`);
 
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
+  const revertsTo = me ? trialRevertsTo(me) : null;
   const bankSubtitle = banks
     ? banks.length === 0
       ? "Connect to start importing"
@@ -196,6 +199,12 @@ export default function More() {
                   {me.trial.active && days !== null ? ` · ${days}d` : ""}
                 </Text>
               </View>
+              {revertsTo && (
+                <Text style={styles.profileRevert}>
+                  Switches to {tierLabel(revertsTo, false)} on{" "}
+                  {formatShortDate(me.trial.endsAt)}
+                </Text>
+              )}
             </View>
             <Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} />
           </Pressable>
@@ -349,12 +358,12 @@ export default function More() {
           />
         </Group>
 
-        {/* Subscription — three modes:
+        {/* Subscription — two modes:
             - Stripe-owned (web): rows look identical to other modes (Plan + Billing)
               but tap fires an Alert telling the user to manage on withfina.com.
-              No Restore (nothing to restore).
-            - IAP-owned (Apple/Google) OR free/trial: full IAP UX — Plan, Manage billing
-              (platform-native deep-link), Restore purchases. */}
+            - IAP-owned (Apple/Google) OR free/trial: Plan + Manage billing
+              (platform-native deep-link). Restore lives on the Choose Plan
+              screen (Apple Guideline 3.1.1), not duplicated here. */}
         {(() => {
           const sub = me?.subscription;
           const isStripeOwned = sub?.source === "stripe";
@@ -395,27 +404,17 @@ export default function More() {
                     last
                   />
                 ) : (
-                  <>
-                    <SettingsRow
-                      icon="card-outline"
-                      title="Manage billing"
-                      detail={
-                        openingBilling ? (
-                          <ActivityIndicator
-                            size="small"
-                            color={colors.primary}
-                          />
-                        ) : undefined
-                      }
-                      onPress={onManageBilling}
-                    />
-                    <SettingsRow
-                      icon="refresh-outline"
-                      title="Restore purchases"
-                      onPress={() => router.push("/plan/restore" as never)}
-                      last
-                    />
-                  </>
+                  <SettingsRow
+                    icon="card-outline"
+                    title="Manage billing"
+                    detail={
+                      openingBilling ? (
+                        <ActivityIndicator size="small" color={colors.primary} />
+                      ) : undefined
+                    }
+                    onPress={onManageBilling}
+                    last
+                  />
                 )}
               </Group>
             </>
@@ -701,6 +700,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   pillText: { ...type$.captionStrong, color: colors.body },
+  profileRevert: { ...type$.bodySm, color: colors.navy, marginTop: 6 },
 
   // Section label
   groupLabel: {

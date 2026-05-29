@@ -201,7 +201,7 @@ export default function HomePage() {
             </div>
             <div className={styles.bannerSub}>
               {revertsTo
-                ? `Reverts to ${tierLabel(revertsTo, false)} on ${formatShortDate(me?.trial.endsAt)}.`
+                ? `Switches to ${tierLabel(revertsTo, false)} on ${formatShortDate(me?.trial.endsAt)}.`
                 : "Add a card to keep Pro at $15/mo when the trial ends."}
             </div>
           </div>
