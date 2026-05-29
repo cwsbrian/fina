@@ -73,6 +73,40 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
     expect(r.items[0]!.categoryName).toBe("Dining");
   });
 
+  it("recap rows show only categories needing attention; on-pace ones are hidden", async () => {
+    const groceries = (await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } })).id;
+    // Dining: tiny cap, big spend -> over budget (attention).
+    // Groceries: large cap, trivial spend -> on pace (hidden).
+    await prisma.budgetPlan.create({
+      data: {
+        workspaceId: wsId,
+        periodStart: new Date("2026-05-01T12:00:00.000Z"),
+        totalAmount: "9000.00",
+        categoryAllocations: [
+          { categoryId: dining, amount: 100 },
+          { categoryId: groceries, amount: 5000 },
+        ],
+      },
+    });
+    const t1 = await prisma.transaction.create({
+      data: { workspaceId: wsId, accountId: acct, amount: "200.00", merchantRaw: "Resto", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+    });
+    await prisma.transactionAllocation.create({ data: { transactionId: t1.id, categoryId: dining, amount: "200.00" } });
+    const t2 = await prisma.transaction.create({
+      data: { workspaceId: wsId, accountId: acct, amount: "10.00", merchantRaw: "Mart", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+    });
+    await prisma.transactionAllocation.create({ data: { transactionId: t2.id, categoryId: groceries, amount: "10.00" } });
+
+    const r = await compareSpendingVsBudget.run(ctx, {});
+    if (r.block.type !== "recap") throw new Error("wrong block");
+    // Both capped categories are still in the structured data...
+    expect(r.items).toHaveLength(2);
+    // ...but only the over-budget one is shown as a row.
+    expect(r.block.rows).toHaveLength(1);
+    expect(r.block.rows[0]!.label).toBe("Dining");
+    expect(r.block.footer).toBe("+1 more on pace");
+  });
+
   it("no plan → empty items + recap", async () => {
     const r = await compareSpendingVsBudget.run(ctx, {});
     expect(r.items).toHaveLength(0);

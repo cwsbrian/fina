@@ -114,6 +114,24 @@ function toRecapBlock(
   const usedPct = budget > 0 ? Math.round((spent / budget) * 100) : 0;
   const remaining = budget - spent;
 
+  // Only surface categories that need ATTENTION — pacing over budget for
+  // this point in the month, or already over their cap. Categories that
+  // are on pace (or untouched) are noise on a "how am I doing" card, so
+  // we hide them and note the count instead. Most-strained first.
+  const attention = items
+    .filter((i) => i.status === "over-pace" || parseFloat(i.remaining) < 0)
+    .sort((a, b) => b.spentPct - a.spentPct);
+  const hiddenOnPace = items.length - attention.length;
+
+  let footer: string | undefined;
+  if (items.length === 0) {
+    footer = "No budgets set for this period yet.";
+  } else if (attention.length === 0) {
+    footer = "Every category is on pace.";
+  } else if (hiddenOnPace > 0) {
+    footer = `+${hiddenOnPace} more on pace`;
+  }
+
   return {
     type: "recap",
     title: "Budget · this period",
@@ -130,7 +148,7 @@ function toRecapBlock(
           }
         : {}),
     },
-    rows: items.map((i) => {
+    rows: attention.map((i) => {
       const rem = parseFloat(i.remaining);
       return {
         label: i.categoryName,
@@ -143,8 +161,6 @@ function toRecapBlock(
         },
       };
     }),
-    ...(items.length === 0
-      ? { footer: "No budgets set for this period yet." }
-      : {}),
+    ...(footer ? { footer } : {}),
   };
 }
