@@ -145,3 +145,19 @@ Home, tap → `/budget`.
   the `/budget` screen).
 - Web renderer; `setBudget` and the legacy `Budget` table (left as-is for any
   non-chat consumers).
+
+---
+
+## Addendum (2026-05-29): repoint `setBudget` to BudgetPlan
+
+The final review found a read/write split: `getBudget`/`compareSpendingVsBudget` now read `BudgetPlan`, but the `setBudget` chat tool still wrote the legacy `Budget` table — so "set my food budget" in chat succeeded but "show my budget" couldn't see it. Repoint `setBudget` to write the current month's `BudgetPlan.categoryAllocations`.
+
+**Behavior:**
+1. Resolve `categoryId` (by id or name, as today); map `period` → year/month via `periodToYearMonth`.
+2. Load the month plan via `getOrSnapshotMonthBudget`.
+3. Upsert `{categoryId, amount}` into `categoryAllocations` (replace the existing entry for that category, else append).
+4. `totalAmount = max(existing totalAmount, sum of allocations)` — preserves an explicit larger cap (e.g. a $9,000 plan stays $9,000 when a $540 category is set), grows the cap only when allocations would exceed it, and bootstraps a sensible total when no plan exists yet (total = the allocation sum).
+5. Write with `setMonthBudget(workspaceId, year, month, { totalAmount, categoryAllocations })` — the month snapshot only; the default template is untouched.
+6. Confirmation message unchanged ("Budget saved." / "예산을 저장했어요.").
+
+No longer calls `setBudgetService` (legacy `Budget` table). `setBudgetService`/`getBudgetService`/`deleteBudgetService` and the `/workspaces/:id/budgets` routes remain for now (other non-chat consumers); the daily-brief `brief-context.ts` legacy-budget read is a separate follow-up.
