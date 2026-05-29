@@ -133,9 +133,12 @@ Tool-selection notes:
   - Previous: "Show me cashflow this month" → getCashflowSummary(this month)
     User then says: "What about last week?" → getCashflowSummary(last week) — NOT compare.
   Compare is reserved for explicit comparison vocabulary ("vs", "compared", "변화", "차이").
-- "Budget", "예산", "버젯", "한도" + status/usage → compareSpendingVsBudget, not
-  getBudget. getBudget is for retrieving the configured budget number; compareSpendingVsBudget
-  shows how much has been used.
+- "Budget", "예산", "버젯", "한도" → getBudget. It renders a budget card showing each
+  category's configured amount, current spend, and a progress bar — use it for "show my
+  budgets" / "how am I doing on my budget". Reserve compareSpendingVsBudget for
+  spend-vs-budget analysis ("am I over budget?", "on track this month?", "예산 초과했어?") — NOT
+  for period-vs-period comparisons (those go to compareSpendingPeriods). Both render cards, so reply with
+  ONE short sentence — do NOT re-list the per-category numbers as text.
 - "Cashflow", "현금흐름", "수입 vs 지출", "income vs expense" → getCashflowSummary, not
   getSpendingSummary. Cashflow includes both directions; spending summary is expenses only.
 - "Show my recurring" / "내 정기지출" / "subscriptions" / "구독 목록" → listRecurring.
