@@ -104,6 +104,29 @@ describe("detectRecurringMerchants tool", () => {
     expect(gym?.occurrences).toBe(4);
   });
 
+  it("returns recurring_candidates with a consumable add_form_intent and excludes irregular", async () => {
+    const base = new Date();
+    for (let i = 0; i < 4; i++) {
+      const d = new Date(base.getFullYear(), base.getMonth() - i, 10);
+      await addTx("disney", "13.99", d);
+    }
+    const r = await detectRecurringMerchants.run(ctx, {});
+    if (!r.block) throw new Error("no block — ensure the suite seeds a detectable monthly merchant");
+    if (r.block.type !== "recurring_candidates") throw new Error("wrong block");
+    const row = r.block.rows[0]!;
+    expect(["monthly", "biweekly", "weekly", "semimonthly", "yearly"]).toContain(row.cadence);
+    expect(typeof row.add_form_intent).toBe("string");
+    expect(row.defaults.next_occurrence_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    const { consumeIntentService } = await import("../src/intents/service.js");
+    const out = await consumeIntentService(
+      { workspaceId: wsId, userId: ctx.userId, role: "owner", env: {} as never },
+      row.add_form_intent,
+      { next_occurrence_date: row.defaults.next_occurrence_date },
+    );
+    expect(out.result).toBeTruthy();
+  });
+
   it("excludes low-confidence irregular candidates", async () => {
     const base = new Date();
     // Irregular gaps AND irregular amounts — both signals weak, so confidence < 0.45.

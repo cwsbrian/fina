@@ -1,7 +1,9 @@
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { normalizeMerchant } from "../../categorize/normalize.js";
+import { createIntentService } from "../../intents/service.js";
 import type { ToolDef } from "./types.js";
 import { lookbackMonthStart } from "./periods.js";
 
@@ -50,7 +52,22 @@ type Candidate = {
 type Result = {
   lookbackMonths: number;
   candidates: Candidate[];
+  block?: PresentationBlock;
 };
+
+/** Next expected charge = last seen + one cadence interval. The detector
+ *  has no native next-date; this seeds the form's date field, which the
+ *  user can still adjust. Irregular candidates never reach here. */
+function deriveNextOccurrence(
+  lastSeenIso: string,
+  cadence: "weekly" | "biweekly" | "monthly",
+): string {
+  const d = new Date(lastSeenIso);
+  if (cadence === "weekly") d.setUTCDate(d.getUTCDate() + 7);
+  else if (cadence === "biweekly") d.setUTCDate(d.getUTCDate() + 14);
+  else d.setUTCMonth(d.getUTCMonth() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 function median(nums: number[]): number {
   if (nums.length === 0) return 0;
@@ -211,6 +228,57 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
       return parseFloat(b.latestAmount) - parseFloat(a.latestAmount);
     });
 
-    return { lookbackMonths, candidates: candidates.slice(0, limit) };
+    const top = candidates.slice(0, limit);
+    const stable = top.filter(
+      (c): c is Candidate & { cadence: "weekly" | "biweekly" | "monthly" } =>
+        c.cadence === "weekly" || c.cadence === "biweekly" || c.cadence === "monthly",
+    );
+
+    let block: PresentationBlock | undefined;
+    if (stable.length > 0) {
+      // One addRecurring form intent per stable candidate (≤limit). Re-calling
+      // creates fresh intents (no dedup); the hourly ActionIntent sweep + 1h TTL
+      // bound the accumulation. The card uses the latest id.
+      const rows: Extract<PresentationBlock, { type: "recurring_candidates" }>["rows"] =
+        await Promise.all(
+          stable.map(async (c) => {
+            const nextDate = deriveNextOccurrence(c.lastSeenAt, c.cadence);
+            const intent = await createIntentService(
+              { workspaceId: ctx.workspaceId, userId: ctx.userId },
+              {
+                tool: "addRecurring",
+                args: {
+                  name: c.displayName,
+                  amount: parseFloat(c.medianAmount),
+                  cadence: c.cadence,
+                  next_occurrence_date: nextDate,
+                },
+                skipStrictValidate: true,
+              },
+            );
+            return {
+              merchant: c.displayName,
+              amount: c.medianAmount,
+              cadence: c.cadence,
+              occurrences: c.occurrences,
+              add_form_intent: intent.intent.id,
+              defaults: {
+                name: c.displayName,
+                amount: c.medianAmount,
+                cadence: c.cadence,
+                next_occurrence_date: nextDate,
+              },
+            };
+          }),
+        );
+      block = {
+        type: "recurring_candidates",
+        title: "Possible subscriptions",
+        currency: stable[0]!.currency,
+        rows,
+      };
+    }
+
+    return { lookbackMonths, candidates: top, block };
   },
 };
