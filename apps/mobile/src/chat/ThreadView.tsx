@@ -13,10 +13,11 @@ import {
   KeyboardAvoidingView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import type {
-  ChatMessageDTO,
-  ChatThreadDTO,
-  PresentationBlock as Block,
+import {
+  isApiError,
+  type ChatMessageDTO,
+  type ChatThreadDTO,
+  type PresentationBlock as Block,
 } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
@@ -559,6 +560,18 @@ function markRead(threadId: string): void {
   apiFetch(`/chat/threads/${threadId}/read`, { method: "POST" }).catch(() => {});
 }
 
+/** Surface a clear message when an intent consume is rejected because the
+ *  user only has view access (editor required). Other errors stay silent —
+ *  the card action is best-effort and the user can retry from chat. */
+function notifyConsumeError(e: unknown): void {
+  if (isApiError(e) && e.code === "insufficient_role") {
+    Alert.alert(
+      "View-only access",
+      "You don't have permission to make changes in this workspace.",
+    );
+  }
+}
+
 /** Workspace-scoped helper that POSTs to /workspaces/:wsId/intents/:id/consume
  *  with the form's edited values + the active threadId so the server
  *  can post an assistant confirmation message into the same conversation.
@@ -641,10 +654,10 @@ function MessageBubble({
                     if (confirmation && onConfirmationMessage) {
                       onConfirmationMessage(confirmation);
                     }
-                  } catch {
-                    // Swallow — a transient network error shouldn't
-                    // crash the list. The user can re-issue the
-                    // request from chat if needed.
+                  } catch (e) {
+                    // Surface a permission error; other (transient) errors
+                    // stay silent so the list keeps flowing.
+                    notifyConsumeError(e);
                   }
                 }}
                 onReject={() => {
@@ -658,14 +671,19 @@ function MessageBubble({
                   }
                 }}
                 onSubmitForm={async (id, overrides) => {
-                  const confirmation = await submitFormIntent(
-                    workspaceId,
-                    threadId,
-                    id,
-                    overrides,
-                  );
-                  if (confirmation && onConfirmationMessage) {
-                    onConfirmationMessage(confirmation);
+                  try {
+                    const confirmation = await submitFormIntent(
+                      workspaceId,
+                      threadId,
+                      id,
+                      overrides,
+                    );
+                    if (confirmation && onConfirmationMessage) {
+                      onConfirmationMessage(confirmation);
+                    }
+                  } catch (e) {
+                    notifyConsumeError(e);
+                    throw e; // let the card's own handler react (keep form open, etc.)
                   }
                 }}
                 {...(onFormFocusChange ? { onFormFocusChange } : {})}
