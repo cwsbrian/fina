@@ -14,6 +14,31 @@ function getNotifications(): ExpoNotifications | null {
   return require("expo-notifications") as ExpoNotifications;
 }
 
+/** Foreground display config — call once at startup so in-app pushes show a
+ *  banner + sound instead of being swallowed silently. No-op in Expo Go. */
+export function setupForegroundNotificationHandler(): void {
+  const Notifications = getNotifications();
+  if (!Notifications) return;
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
+
+/** Subscribe to notification-tap responses. Returns a remover; in Expo Go it
+ *  returns a stub so callers can unconditionally call `.remove()` on cleanup. */
+export function addNotificationResponseListener(
+  handler: () => void,
+): { remove: () => void } {
+  const Notifications = getNotifications();
+  if (!Notifications) return { remove: () => {} };
+  return Notifications.addNotificationResponseReceivedListener(handler);
+}
+
 /** Sentinel value in apps/mobile/app.json `extra.eas.projectId`. Run
  *  `eas init` once the Expo project is initialized to overwrite it. */
 const EAS_PROJECT_ID_PLACEHOLDER = "REPLACE_WITH_EAS_PROJECT_ID";
@@ -26,6 +51,8 @@ const EAS_PROJECT_ID_PLACEHOLDER = "REPLACE_WITH_EAS_PROJECT_ID";
  *  Failures are silent — push is a "nice to have" wake-up channel; the
  *  brief still appears in the chat thread next time the app foregrounds. */
 export async function registerForPushNotifications(): Promise<string | null> {
+  const Notifications = getNotifications();
+  if (!Notifications) return null;
   // OS permission (iOS dialog / Android-13+ runtime).
   const { status: existing } = await Notifications.getPermissionsAsync();
   let finalStatus = existing;
@@ -77,6 +104,8 @@ export async function registerForPushNotifications(): Promise<string | null> {
  *  placeholder. Failures swallowed: sign-out continues regardless; stale
  *  rows are eventually reaped by the next push's DeviceNotRegistered. */
 export async function unregisterForPushNotifications(): Promise<void> {
+  const Notifications = getNotifications();
+  if (!Notifications) return;
   try {
     const projectId =
       Constants.expoConfig?.extra?.eas?.projectId ??

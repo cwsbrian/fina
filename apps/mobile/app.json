@@ -25,6 +25,7 @@
     },
     "android": {
       "package": "com.withfina.app",
+      "versionCode": 3,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#FFFFFF"

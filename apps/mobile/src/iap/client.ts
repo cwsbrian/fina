@@ -98,47 +98,129 @@ export async function fetchProducts(): Promise<LocalProduct[]> {
     });
 }
 
+/** Resolve the Android base-plan offerToken for a subscription SKU. Play
+ *  Billing v5+ requires it on the purchase request — launchBillingFlow fails
+ *  with "item could not be found" if a sub is launched without one. The
+ *  product query carries the token in subscriptionOfferDetailsAndroid. */
+async function androidOfferToken(
+  iap: RnIap,
+  productId: IAPProductId,
+): Promise<string | undefined> {
+  const raw = await iap.fetchProducts({ skus: [productId], type: "subs" });
+  const product = (raw as any[] | null)?.find((p) => String(p?.id) === productId);
+  const offers = product?.subscriptionOfferDetailsAndroid ?? product?.subscriptionOffers;
+  const token = offers?.[0]?.offerToken;
+  return token ? String(token) : undefined;
+}
+
+/** Map react-native-iap's string error codes (from purchaseErrorListener or a
+ *  synchronous launch throw) to our typed IapPurchaseError. */
+function toIapError(e: any): IapPurchaseError {
+  if (e instanceof IapPurchaseError) return e;
+  const code: string = e?.code ?? "";
+  if (code === "E_USER_CANCELLED") return new IapPurchaseError(code, true, "User cancelled");
+  if (code === "E_ALREADY_OWNED") return new IapPurchaseError(code, true, "Already owned — try Restore");
+  if (code === "E_NETWORK_ERROR") return new IapPurchaseError(code, true, "Network error");
+  if (code === "E_ITEM_UNAVAILABLE") return new IapPurchaseError(code, false, "Product unavailable");
+  if (code === "E_SERVICE_ERROR") return new IapPurchaseError(code, true, "Service unavailable");
+  return new IapPurchaseError(code || "E_UNKNOWN", false, e?.message ?? "Purchase failed");
+}
+
 export async function purchaseSubscription(args: {
   productId: IAPProductId;
   userId: string;
 }): Promise<{ receipt: string; platform: "ios" | "android"; purchase: Purchase }> {
   const iap = await ensureConnected();
-  try {
-    if (Platform.OS === "ios") {
-      const appAccountToken = deriveAppleToken(args.userId);
-      const result = await iap.requestPurchase({
-        request: { apple: { sku: args.productId, appAccountToken } },
-        type: "subs",
-      });
-      if (!result) throw new IapPurchaseError("E_NO_RECEIPT", false, "requestPurchase returned null");
-      const single: Purchase = Array.isArray(result) ? result[0] : result;
-      if (!single) throw new IapPurchaseError("E_NO_RECEIPT", false, "requestPurchase returned empty array");
-      const jws = (single as any).jwsRepresentationIOS ?? (single as any).transactionReceipt;
-      if (!jws) throw new IapPurchaseError("E_NO_RECEIPT", false, "No JWS receipt returned by StoreKit 2");
-      return { receipt: String(jws), platform: "ios", purchase: single };
-    }
-    // Android
-    const obfuscatedAccountId = deriveGoogleToken(args.userId);
-    const result = await iap.requestPurchase({
-      request: { google: { skus: [args.productId], obfuscatedAccountId } },
-      type: "subs",
-    });
-    if (!result) throw new IapPurchaseError("E_NO_RECEIPT", false, "requestPurchase returned null");
-    const single: Purchase = Array.isArray(result) ? result[0] : result;
-    if (!single) throw new IapPurchaseError("E_NO_RECEIPT", false, "requestPurchase returned empty array");
-    const purchaseToken = (single as any).purchaseToken ?? (single as any).purchaseTokenAndroid;
-    if (!purchaseToken) throw new IapPurchaseError("E_NO_RECEIPT", false, "No purchaseToken returned by Play Billing");
-    return { receipt: String(purchaseToken), platform: "android", purchase: single };
-  } catch (e: any) {
-    const code: string = e?.code ?? "";
-    if (code === "E_USER_CANCELLED") throw new IapPurchaseError(code, true, "User cancelled");
-    if (code === "E_ALREADY_OWNED") throw new IapPurchaseError(code, true, "Already owned — try Restore");
-    if (code === "E_NETWORK_ERROR") throw new IapPurchaseError(code, true, "Network error");
-    if (code === "E_ITEM_UNAVAILABLE") throw new IapPurchaseError(code, false, "Product unavailable");
-    if (code === "E_SERVICE_ERROR") throw new IapPurchaseError(code, true, "Service unavailable");
-    if (e instanceof IapPurchaseError) throw e;
-    throw new IapPurchaseError("E_UNKNOWN", false, e?.message ?? "Purchase failed");
-  }
+  const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
+
+  // react-native-iap v14 (Nitro) delivers the completed purchase through
+  // purchaseUpdatedListener — NOT as the return value of requestPurchase, which
+  // resolves empty on Android. Arm the listeners first, fire the request, then
+  // resolve on the matching purchase event (or reject via the error listener).
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    const subs: Array<{ remove: () => void }> = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      for (const s of subs) s.remove();
+    };
+    const fail = (e: any) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(toIapError(e));
+    };
+    const succeed = (purchase: Purchase) => {
+      if (settled) return;
+      const receipt =
+        platform === "ios"
+          ? (purchase as any).jwsRepresentationIOS ?? (purchase as any).transactionReceipt
+          : (purchase as any).purchaseToken ?? (purchase as any).purchaseTokenAndroid;
+      if (!receipt) {
+        fail(
+          new IapPurchaseError(
+            "E_NO_RECEIPT",
+            false,
+            platform === "ios"
+              ? "No JWS receipt returned by StoreKit 2"
+              : "No purchaseToken returned by Play Billing",
+          ),
+        );
+        return;
+      }
+      settled = true;
+      cleanup();
+      resolve({ receipt: String(receipt), platform, purchase });
+    };
+
+    subs.push(
+      iap.purchaseUpdatedListener((purchase) => {
+        const id = (purchase as any).productId ?? (purchase as any).id;
+        if (id && id !== args.productId) return; // a different SKU — keep waiting
+        succeed(purchase);
+      }),
+    );
+    subs.push(iap.purchaseErrorListener((err) => fail(err)));
+
+    // Safety net: if neither listener fires (e.g. the sheet is dismissed with
+    // no cancel event), don't leave the subscribe button spinning forever.
+    timer = setTimeout(
+      () => fail(new IapPurchaseError("E_UNKNOWN", true, "Purchase timed out")),
+      180_000,
+    );
+
+    void (async () => {
+      try {
+        if (platform === "ios") {
+          const appAccountToken = deriveAppleToken(args.userId);
+          await iap.requestPurchase({
+            request: { apple: { sku: args.productId, appAccountToken } },
+            type: "subs",
+          });
+        } else {
+          // Android — Play Billing requires the base-plan offerToken for subs.
+          const obfuscatedAccountId = deriveGoogleToken(args.userId);
+          const offerToken = await androidOfferToken(iap, args.productId);
+          await iap.requestPurchase({
+            request: {
+              google: {
+                skus: [args.productId],
+                obfuscatedAccountId,
+                ...(offerToken
+                  ? { subscriptionOffers: [{ sku: args.productId, offerToken }] }
+                  : {}),
+              },
+            },
+            type: "subs",
+          });
+        }
+      } catch (e) {
+        fail(e); // synchronous launch failure (e.g. bad offer token)
+      }
+    })();
+  });
 }
 
 /** Call ONLY after server returns 2xx — protects against
