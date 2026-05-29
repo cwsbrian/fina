@@ -9,6 +9,7 @@ import {
   txRowToBlockRow,
 } from "./tx-row-helpers.js";
 import type { ToolDef } from "./types.js";
+import { loadTransactionDetail } from "./get-transaction-details.js";
 
 const Args = z.object({
   merchant_query: z
@@ -305,19 +306,15 @@ export const findTransactions: ToolDef<Args, Result> = {
     if (totalCount === 0) {
       block = undefined;
     } else if (single) {
-      const primaryAlloc = single.allocations.find((a) => a.categoryId !== null);
-      const cat = primaryAlloc?.category;
-      block = {
-        type: "transaction_detail",
-        id: single.id,
-        merchant: single.merchantRaw,
-        amount: single.amount.toFixed(2),
-        currency: workspace.currency,
-        date_label: blockRows[0]!.date_label,
-        account: single.account.name,
-        ...(cat ? { category: { name: cat.name, color: cat.color ?? null, icon: cat.icon ?? null } } : {}),
-      };
-    } else {
+      // Load the full detail card (note, status, source, splits) so a single
+      // match shows a rich detail view, not a one-row list look-alike.
+      const detail = await loadTransactionDetail(
+        { workspaceId: ctx.workspaceId, userId: ctx.userId },
+        single.id,
+      );
+      block = detail?.block;
+    }
+    if (!block && totalCount > 0) {
       block = {
         type: "transactions_list",
         title: searchTitle(args),

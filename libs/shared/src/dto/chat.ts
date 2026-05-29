@@ -334,6 +334,8 @@ export type PresentationBlock =
       category?: { name: string; color?: string | null; icon?: string | null };
       note?: string | null;
       pending?: boolean;
+      /** Where the transaction came from — drives a "via Plaid / Manual" row. */
+      source?: "plaid" | "manual" | "csv";
       allocations?: Array<{
         category: { name: string; color?: string | null; icon?: string | null };
         amount: string;

@@ -53,15 +53,16 @@ type Result = {
   block?: PresentationBlock;
 };
 
-export const getTransactionDetails: ToolDef<Args, Result> = {
-  name: "getTransactionDetails",
-  description:
-    "Get full details for one transaction by id (account, category, note, splits), returned as a detail card. To find a transaction the user named, use findTransactions instead — it shows a detail card when exactly one matches.",
-  args: Args,
-  async run(ctx, args) {
+/** Load one transaction's full detail + its transaction_detail card block.
+ *  Shared by getTransactionDetails (by id) and findTransactions (single
+ *  match), so both render the same rich detail. Returns null if not found. */
+export async function loadTransactionDetail(
+  ctx: { workspaceId: string; userId: string },
+  txId: string,
+): Promise<Result | null> {
     const [tx, workspace, tz] = await Promise.all([
       prisma.transaction.findFirst({
-        where: { id: args.tx_id, workspaceId: ctx.workspaceId },
+        where: { id: txId, workspaceId: ctx.workspaceId },
         include: {
           account: { select: { id: true, name: true, type: true, subtype: true, currency: true } },
           allocations: {
@@ -81,7 +82,7 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
       }),
       resolveUserTz(ctx.userId),
     ]);
-    if (!tx) throw new Error("transaction_not_found");
+    if (!tx) return null;
 
     // Derive top-level category from the first allocation that has one.
     const primaryAlloc = tx.allocations.find((a) => a.categoryId !== null);
@@ -100,6 +101,7 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
       ...(cat ? { category: { name: cat.name, color: cat.color ?? null, icon: cat.icon ?? null } } : {}),
       note: tx.note,
       pending: tx.pending,
+      source: tx.source as "plaid" | "manual" | "csv",
       allocations: tx.allocations
         .filter((a) => a.categoryId !== null)
         .map((a) => ({
@@ -146,5 +148,19 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
       },
       block,
     };
+}
+
+export const getTransactionDetails: ToolDef<Args, Result> = {
+  name: "getTransactionDetails",
+  description:
+    "Get full details for one transaction by id (account, category, note, splits), returned as a detail card. To find a transaction the user named, use findTransactions instead — it shows a detail card when exactly one matches.",
+  args: Args,
+  async run(ctx, args) {
+    const detail = await loadTransactionDetail(
+      { workspaceId: ctx.workspaceId, userId: ctx.userId },
+      args.tx_id,
+    );
+    if (!detail) throw new Error("transaction_not_found");
+    return detail;
   },
 };
