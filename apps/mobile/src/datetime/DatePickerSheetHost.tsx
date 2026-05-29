@@ -17,7 +17,7 @@ type Ctx = {
   open: (
     value: Date,
     onConfirm: (next: Date) => void,
-    opts?: { mode?: "date" | "datetime" | "time"; maximumDate?: Date },
+    opts?: { mode?: "date" | "datetime" | "time"; maximumDate?: Date; minimumDate?: Date },
   ) => void;
 };
 
@@ -28,6 +28,7 @@ type Session = {
   onConfirm: (next: Date) => void;
   mode?: "date" | "datetime" | "time";
   maximumDate?: Date;
+  minimumDate?: Date;
 };
 
 export function DatePickerSheetHost({ children }: { children: ReactNode }) {
@@ -47,6 +48,7 @@ export function DatePickerSheetHost({ children }: { children: ReactNode }) {
         value={session?.value ?? new Date()}
         {...(session?.mode ? { mode: session.mode } : {})}
         {...(session?.maximumDate ? { maximumDate: session.maximumDate } : {})}
+        {...(session?.minimumDate ? { minimumDate: session.minimumDate } : {})}
         onClose={() => setSession(null)}
         onConfirm={(next) => {
           session?.onConfirm(next);

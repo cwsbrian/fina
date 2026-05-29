@@ -14,6 +14,7 @@ import { TransactionDetailBlock } from "./blocks/TransactionDetailBlock";
 import { CategoryListBlock } from "./blocks/CategoryListBlock";
 import { GoalsListBlock } from "./blocks/GoalsListBlock";
 import { GoalDetailBlock } from "./blocks/GoalDetailBlock";
+import { GoalFormBlock } from "./blocks/GoalFormBlock";
 
 type Props = {
   block: Block;
@@ -151,6 +152,18 @@ export function PresentationBlock({
   }
   if (block.type === "goal_detail") {
     return <GoalDetailBlock block={block} />;
+  }
+  if (block.type === "goal_form_card") {
+    return (
+      <GoalFormBlock
+        block={block}
+        onSubmit={async (id, overrides) => {
+          if (onSubmitForm) await onSubmitForm(id, overrides);
+        }}
+        onCancel={() => onReject?.(undefined)}
+        {...(onFormFocusChange ? { onFocusChange: onFormFocusChange } : {})}
+      />
+    );
   }
   // Exhaustiveness — newer block types render a debug pill so users
   // see SOMETHING rather than a blank message.

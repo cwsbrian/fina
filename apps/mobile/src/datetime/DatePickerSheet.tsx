@@ -25,6 +25,8 @@ type Props = {
   mode?: "date" | "datetime" | "time";
   /** Latest moment the user is allowed to pick. Default: now. */
   maximumDate?: Date;
+  /** Earliest moment the user is allowed to pick. Default: unbounded. */
+  minimumDate?: Date;
   /** Sheet dismiss (Cancel / backdrop / drag-down). Parent should
    *  clear its `visible` state. */
   onClose: () => void;
@@ -50,6 +52,7 @@ function AndroidDatePicker({
   value,
   mode = "date",
   maximumDate,
+  minimumDate,
   onClose,
   onConfirm,
 }: Props) {
@@ -60,6 +63,7 @@ function AndroidDatePicker({
       mode={mode}
       display="default"
       maximumDate={maximumDate ?? new Date()}
+      {...(minimumDate ? { minimumDate } : {})}
       onChange={(event: DateTimePickerEvent, selected?: Date) => {
         if (event.type === "set" && selected) onConfirm(selected);
         else onClose();
@@ -73,6 +77,7 @@ function IosDatePickerSheet({
   value,
   mode = "date",
   maximumDate,
+  minimumDate,
   onClose,
   onConfirm,
 }: Props) {
@@ -142,6 +147,7 @@ function IosDatePickerSheet({
             mode={mode}
             display="spinner"
             maximumDate={maximumDate ?? new Date()}
+            {...(minimumDate ? { minimumDate } : {})}
             onChange={(_, selected) => {
               if (selected) setDraft(selected);
             }}

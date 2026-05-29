@@ -550,7 +550,8 @@ function isCardBlock(b: Block): boolean {
     b.type === "transaction_detail" ||
     b.type === "category_list" ||
     b.type === "goals_list" ||
-    b.type === "goal_detail"
+    b.type === "goal_detail" ||
+    b.type === "goal_form_card"
   );
 }
 
