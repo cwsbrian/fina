@@ -46,3 +46,30 @@ describe("listCategories tool", () => {
     expect(Array.isArray(res.categories)).toBe(true);
   });
 });
+
+describe("listCategories chat tool", () => {
+  let ctx: ToolContext;
+  let wsId: string;
+
+  beforeEach(async () => {
+    const stamp = `lc-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "LC" } });
+    const ws = await prisma.workspace.create({ data: { name: "lc-ws", currency: "CAD" } });
+    wsId = ws.id;
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
+    ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" };
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  it("returns a category_list block with color/icon", async () => {
+    await prisma.category.create({ data: { workspaceId: wsId, name: "Food", color: "#abc123", icon: "🍔" } });
+    const r = await listCategories.run(ctx, {});
+    expect(r.block?.type).toBe("category_list");
+    if (r.block?.type !== "category_list") throw new Error("wrong block");
+    expect(r.block.rows[0]!.icon).toBe("🍔");
+    expect(r.block.rows[0]!.color).toBe("#abc123");
+  });
+});
