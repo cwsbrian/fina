@@ -8,6 +8,7 @@ import {
   BlockEmpty,
   withAlpha,
   currencySymbol,
+  CategoryIcon,
 } from "./_primitives";
 
 type Block = Extract<PresentationBlock, { type: "recurring_list" }>;
@@ -90,9 +91,7 @@ function RecurringRow({
                 },
               ]}
             >
-              {row.category.icon ? (
-                <Text style={styles.catIcon}>{row.category.icon}</Text>
-              ) : null}
+              <CategoryIcon icon={row.category.icon} color={row.category.color} size={12} />
               <Text
                 style={[
                   styles.catName,
@@ -198,7 +197,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6,
     borderRadius: 6,
   },
-  catIcon: { fontSize: 12 },
   catName: { ...type$.caption, fontWeight: "600" },
   nextDate: { ...type$.caption, color: colors.muted },
   amount: {

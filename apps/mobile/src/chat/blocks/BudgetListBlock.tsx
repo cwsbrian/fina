@@ -2,7 +2,7 @@ import { View, Text, StyleSheet, Pressable } from "react-native";
 import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
-import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, currencySymbol } from "./_primitives";
+import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, currencySymbol, CategoryIcon } from "./_primitives";
 
 type Block = Extract<PresentationBlock, { type: "budget_list" }>;
 type Props = { block: Block };
@@ -43,9 +43,10 @@ export function BudgetListBlock({ block }: Props) {
             return (
               <View key={r.id} style={[styles.row, i < block.rows.length - 1 && styles.rowBorder]}>
                 <View style={styles.line}>
-                  <Text style={styles.name} numberOfLines={1}>
-                    {r.category.icon ? `${r.category.icon} ` : ""}{r.category.name}
-                  </Text>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flex: 1, minWidth: 0 }}>
+                    <CategoryIcon icon={r.category.icon} color={r.category.color} size={14} />
+                    <Text style={styles.name} numberOfLines={1}>{r.category.name}</Text>
+                  </View>
                   <Text style={[styles.amount, r.over && { color: colors.down }]}>
                     {sym}{r.spent} / {sym}{r.amount}
                   </Text>

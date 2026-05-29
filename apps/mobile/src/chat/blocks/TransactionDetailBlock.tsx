@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet } from "react-native";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
-import { BlockCard, withAlpha, currencySymbol } from "./_primitives";
+import { BlockCard, withAlpha, currencySymbol, CategoryIcon } from "./_primitives";
 
 type Block = Extract<PresentationBlock, { type: "transaction_detail" }>;
 
@@ -21,13 +21,15 @@ function Chip({
         },
       ]}
     >
-      <Text
-        style={[styles.chipText, { color: category.color ?? colors.body }]}
-        numberOfLines={1}
-      >
-        {category.icon ? `${category.icon} ` : ""}
-        {category.name}
-      </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+        <CategoryIcon icon={category.icon} color={category.color} size={12} />
+        <Text
+          style={[styles.chipText, { color: category.color ?? colors.body }]}
+          numberOfLines={1}
+        >
+          {category.name}
+        </Text>
+      </View>
     </View>
   );
 }

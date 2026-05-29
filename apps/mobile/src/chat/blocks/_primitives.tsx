@@ -1,6 +1,41 @@
 import { ReactNode } from "react";
 import { View, Text, StyleSheet } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { colors, space, type as type$ } from "../../design/tokens";
+
+/** Render a category's icon. The `icon` field stores an Ionicons glyph
+ *  name (e.g. "cart-outline"); render it as a vector icon. Fall back to
+ *  text for any non-Ionicons value (e.g. a legacy emoji), and render
+ *  nothing when absent. */
+export function CategoryIcon({
+  icon,
+  size = 13,
+  color,
+}: {
+  icon?: string | null | undefined;
+  size?: number | undefined;
+  color?: string | null | undefined;
+}) {
+  if (!icon) return null;
+  // Decorative — the adjacent category name carries the meaning, so hide
+  // the icon from screen readers (otherwise they read the glyph name).
+  if (icon in Ionicons.glyphMap) {
+    return (
+      <Ionicons
+        name={icon as keyof typeof Ionicons.glyphMap}
+        size={size}
+        color={color ?? colors.body}
+        accessibilityElementsHidden
+        importantForAccessibility="no"
+      />
+    );
+  }
+  return (
+    <Text style={{ fontSize: size }} numberOfLines={1} accessibilityElementsHidden importantForAccessibility="no">
+      {icon}
+    </Text>
+  );
+}
 
 /** Outer container shared by every assistant block other than plain text.
  *  Same surface treatment as the existing confirm card so visual hierarchy

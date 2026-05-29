@@ -1,7 +1,7 @@
 import { View, Text, StyleSheet } from "react-native";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
-import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, withAlpha } from "./_primitives";
+import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, withAlpha, CategoryIcon } from "./_primitives";
 
 type Block = Extract<PresentationBlock, { type: "category_list" }>;
 
@@ -18,9 +18,12 @@ export function CategoryListBlock({ block }: { block: Block }) {
               key={r.id}
               style={[styles.chip, { backgroundColor: r.color ? withAlpha(r.color, 0.13) : colors.surfaceSoft }]}
             >
-              <Text style={[styles.chipText, { color: r.color ?? colors.body }]} numberOfLines={1}>
-                {r.icon ? `${r.icon} ` : ""}{r.name}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <CategoryIcon icon={r.icon} color={r.color} size={13} />
+                <Text style={[styles.chipText, { color: r.color ?? colors.body }]} numberOfLines={1}>
+                  {r.name}
+                </Text>
+              </View>
             </View>
           ))}
         </View>

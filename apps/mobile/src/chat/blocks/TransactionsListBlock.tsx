@@ -8,6 +8,7 @@ import {
   BlockHeader,
   BlockFooter,
   BlockEmpty,
+  CategoryIcon,
 } from "./_primitives";
 
 type Block = Extract<PresentationBlock, { type: "transactions_list" }>;
@@ -94,9 +95,7 @@ function TxRow({ row, isLast }: { row: Row; isLast: boolean }) {
                 },
               ]}
             >
-              {row.category.icon ? (
-                <Text style={styles.catIcon}>{row.category.icon}</Text>
-              ) : null}
+              <CategoryIcon icon={row.category.icon} color={row.category.color} size={12} />
               <Text
                 style={[
                   styles.catName,
@@ -223,9 +222,6 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     paddingHorizontal: 6,
     borderRadius: 6,
-  },
-  catIcon: {
-    fontSize: 12,
   },
   catName: {
     ...type$.caption,
