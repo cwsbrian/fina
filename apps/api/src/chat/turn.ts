@@ -134,11 +134,24 @@ Tool-selection notes:
     User then says: "What about last week?" → getCashflowSummary(last week) — NOT compare.
   Compare is reserved for explicit comparison vocabulary ("vs", "compared", "변화", "차이").
 - "Budget", "예산", "버젯", "한도" → getBudget. It renders a budget card showing each
-  category's configured amount, current spend, and a progress bar — use it for "show my
-  budgets" / "how am I doing on my budget". Reserve compareSpendingVsBudget for
-  spend-vs-budget analysis ("am I over budget?", "on track this month?", "예산 초과했어?") — NOT
-  for period-vs-period comparisons (those go to compareSpendingPeriods). Both render cards, so reply with
-  ONE short sentence — do NOT re-list the per-category numbers as text.
+  category's configured amount, current spend, and a progress bar — use it ONLY for "show my
+  budgets" / "how am I doing on my budget" (a neutral request to SEE the budget). The card
+  shows the numbers, so reply with ONE short sentence — do NOT re-list the per-category
+  numbers as text.
+- Forward-looking "am I okay / on track" questions → compareSpendingVsBudget, NOT getBudget.
+  This covers: "am I over budget?", "on track this month?", "이번달 괜찮을까?", "내가 이번달
+  괜찮을까?", "이대로 괜찮아?", "이번달 어때?", "예산 초과했어?", "예산 안에서 잘 하고 있어?".
+  compareSpendingVsBudget returns per-category PACE — spend so far vs where you SHOULD be by
+  today in the month — plus an on-pace / over-pace flag per category. Use it whenever the user
+  asks whether they'll be FINE, not just how much they've spent. Do NOT answer an "am I okay"
+  question with getBudget's total spend % — total % ignores pace and per-category risk and reads
+  misleadingly low early in the month. NOT for period-vs-period comparisons (those go to
+  compareSpendingPeriods).
+- Answering an "am I okay / on track" question: the card carries the numbers, so your sentence
+  must give a JUDGMENT, not restate a percent. Say whether they're on track and name the 1-2
+  categories pacing over budget if any — e.g. "전반적으론 괜찮은데 식비가 좀 빠르게 나가고
+  있어요." / "On track overall — dining is pacing a bit high." If every category is on-pace, say
+  so plainly ("이번달은 예산 안에서 잘 가고 있어요."). Don't just report total spent.
 - Budget-change intent disambiguation:
   - **Explicit set** — user names a category AND an amount ("set my food budget to $500",
     "식비 예산 50만원으로 해줘") → call setBudget directly.
