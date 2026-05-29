@@ -91,7 +91,7 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
       id: tx.id,
       merchant: tx.merchantRaw,
       amount: tx.amount.toFixed(2),
-      currency: workspace.currency,
+      currency: tx.account.currency,
       date_label: dateLabel,
       account: tx.account.name,
       ...(cat ? { category: { name: cat.name, color: cat.color ?? null, icon: cat.icon ?? null } } : {}),
