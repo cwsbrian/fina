@@ -6,6 +6,8 @@ import {
   BlockHeader,
   BlockFooter,
   BlockEmpty,
+  withAlpha,
+  currencySymbol,
 } from "./_primitives";
 
 type Block = Extract<PresentationBlock, { type: "recurring_list" }>;
@@ -18,7 +20,7 @@ type Props = { block: Block };
  *  category chip. Tap-to-detail is intentionally deferred — recurring
  *  detail screen isn't routed yet; we'll wire it when the page lands. */
 export function RecurringListBlock({ block }: Props) {
-  const currencySymbol = currencyToSymbol(block.currency);
+  const sym = currencySymbol(block.currency);
   return (
     <BlockCard>
       {block.period_label ? (
@@ -30,7 +32,7 @@ export function RecurringListBlock({ block }: Props) {
       {block.total_monthly_amount ? (
         <Text style={styles.totalLine}>
           <Text style={styles.totalAmount}>
-            {currencySymbol ?? ""}
+            {sym}
             {block.total_monthly_amount}
           </Text>{" "}
           <Text style={styles.totalCount}>/ mo · {block.total_count} active</Text>
@@ -49,7 +51,7 @@ export function RecurringListBlock({ block }: Props) {
             <RecurringRow
               key={r.id}
               row={r}
-              currencySymbol={currencySymbol}
+              currencySymbol={sym}
               isLast={i === block.rows.length - 1}
             />
           ))}
@@ -67,7 +69,7 @@ function RecurringRow({
   isLast,
 }: {
   row: Row;
-  currencySymbol: string | null;
+  currencySymbol: string;
   isLast: boolean;
 }) {
   return (
@@ -109,7 +111,7 @@ function RecurringRow({
       </View>
       <View style={styles.rowRight}>
         <Text style={styles.amount}>
-          {currencySymbol ?? ""}
+          {currencySymbol}
           {row.amount}
         </Text>
         <Text style={styles.cadence}>/ {cadenceLabel(row.cadence)}</Text>
@@ -162,38 +164,6 @@ function cadenceLabel(c: Row["cadence"]): string {
     case "weekly":      return "wk";
     case "yearly":      return "yr";
   }
-}
-
-function currencyToSymbol(code: string | undefined): string | null {
-  if (!code) return null;
-  switch (code.toUpperCase()) {
-    case "CAD": return "$";
-    case "USD": return "US$";
-    case "EUR": return "€";
-    case "GBP": return "£";
-    case "JPY": return "¥";
-    case "KRW": return "₩";
-    default:    return null;
-  }
-}
-
-/** Hex → translucent rgba for category chip backgrounds. */
-function withAlpha(hex: string, alpha: number): string {
-  const m6 = /^#([0-9a-f]{6})$/i.exec(hex);
-  const m3 = /^#([0-9a-f]{3})$/i.exec(hex);
-  let r: number, g: number, b: number;
-  if (m6) {
-    r = parseInt(m6[1]!.slice(0, 2), 16);
-    g = parseInt(m6[1]!.slice(2, 4), 16);
-    b = parseInt(m6[1]!.slice(4, 6), 16);
-  } else if (m3) {
-    r = parseInt(m3[1]![0]! + m3[1]![0]!, 16);
-    g = parseInt(m3[1]![1]! + m3[1]![1]!, 16);
-    b = parseInt(m3[1]![2]! + m3[1]![2]!, 16);
-  } else {
-    return hex;
-  }
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 const styles = StyleSheet.create({

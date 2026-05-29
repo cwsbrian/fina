@@ -137,6 +137,41 @@ export function BlockEmpty({ text }: { text: string }) {
   return <Text style={styles.empty}>{text}</Text>;
 }
 
+/** Hex → translucent rgba. Expands #rgb shorthand, handles #rrggbb, and
+ *  falls back to returning the input verbatim for any non-hex value
+ *  (named colors, rgba strings, etc.). */
+export function withAlpha(hex: string, alpha: number): string {
+  const m6 = /^#([0-9a-f]{6})$/i.exec(hex);
+  const m3 = /^#([0-9a-f]{3})$/i.exec(hex);
+  let r: number, g: number, b: number;
+  if (m6) {
+    r = parseInt(m6[1]!.slice(0, 2), 16);
+    g = parseInt(m6[1]!.slice(2, 4), 16);
+    b = parseInt(m6[1]!.slice(4, 6), 16);
+  } else if (m3) {
+    r = parseInt(m3[1]![0]! + m3[1]![0]!, 16);
+    g = parseInt(m3[1]![1]! + m3[1]![1]!, 16);
+    b = parseInt(m3[1]![2]! + m3[1]![2]!, 16);
+  } else {
+    return hex;
+  }
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+/** Currency code → display symbol. Always returns a string; unknown,
+ *  missing, or null codes fall back to "$". */
+export function currencySymbol(code: string | undefined | null): string {
+  switch ((code ?? "").toUpperCase()) {
+    case "CAD": return "$";
+    case "USD": return "US$";
+    case "EUR": return "€";
+    case "GBP": return "£";
+    case "JPY": return "¥";
+    case "KRW": return "₩";
+    default:    return "$";
+  }
+}
+
 const styles = StyleSheet.create({
   card: {
     backgroundColor: colors.canvas,

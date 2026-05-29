@@ -1,0 +1,37 @@
+import { View, Text, StyleSheet } from "react-native";
+import type { PresentationBlock } from "@fina/shared";
+import { colors, space, type as type$ } from "../../design/tokens";
+import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, withAlpha } from "./_primitives";
+
+type Block = Extract<PresentationBlock, { type: "category_list" }>;
+
+export function CategoryListBlock({ block }: { block: Block }) {
+  return (
+    <BlockCard>
+      <BlockHeader title={block.title} />
+      {block.rows.length === 0 ? (
+        <BlockEmpty text="No categories yet." />
+      ) : (
+        <View style={styles.chips}>
+          {block.rows.map((r) => (
+            <View
+              key={r.id}
+              style={[styles.chip, { backgroundColor: r.color ? withAlpha(r.color, 0.13) : colors.surfaceSoft }]}
+            >
+              <Text style={[styles.chipText, { color: r.color ?? colors.body }]} numberOfLines={1}>
+                {r.icon ? `${r.icon} ` : ""}{r.name}
+              </Text>
+            </View>
+          ))}
+        </View>
+      )}
+      {block.footer ? <BlockFooter text={block.footer} /> : null}
+    </BlockCard>
+  );
+}
+
+const styles = StyleSheet.create({
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: space.xs },
+  chip: { paddingVertical: 4, paddingHorizontal: 10, borderRadius: 999 },
+  chipText: { ...type$.caption, fontWeight: "600" },
+});
