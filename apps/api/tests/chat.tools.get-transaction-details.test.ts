@@ -131,3 +131,76 @@ describe("getTransactionDetails tool", () => {
     expect(catIds).toContain(c2.id);
   });
 });
+
+describe("getTransactionDetails transaction_detail block", () => {
+  let ctx: ToolContext;
+  let wsId: string;
+
+  beforeEach(async () => {
+    const stamp = `gtd-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "GTD" } });
+    const ws = await prisma.workspace.create({ data: { name: "gtd-ws", currency: "CAD" } });
+    wsId = ws.id;
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
+    ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" };
+  });
+
+  afterEach(async () => {
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  it("returns a transaction_detail block with allocation category chips", async () => {
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" },
+    });
+    const cat = await prisma.category.create({
+      data: { workspaceId: wsId, name: "Groceries", color: "#33aa55", icon: "🛒" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, amount: "42.10",
+        merchantRaw: "Loblaws", occurredAt: new Date("2026-05-10T12:00:00Z"),
+        source: "manual", pending: false, rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: cat.id, amount: "42.10" },
+    });
+    const r = await getTransactionDetails.run(ctx, { tx_id: tx.id });
+    expect(r.block?.type).toBe("transaction_detail");
+    if (r.block?.type !== "transaction_detail") throw new Error("wrong block");
+    expect(r.block.merchant).toBe("Loblaws");
+    expect(r.block.category?.name).toBe("Groceries");
+    expect(r.block.allocations?.[0]!.category.icon).toBe("🛒");
+  });
+
+  it("filters uncategorized allocations out of the block but keeps them for the LLM", async () => {
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Chq2", type: "depository", currency: "CAD" },
+    });
+    const cat = await prisma.category.create({
+      data: { workspaceId: wsId, name: "Dining", color: "#aa3355", icon: "🍽️" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, amount: "70.00",
+        merchantRaw: "Split Place", occurredAt: new Date("2026-05-11T12:00:00Z"),
+        source: "manual", pending: false, rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.createMany({
+      data: [
+        { transactionId: tx.id, categoryId: cat.id, amount: "30.00", source: "manual" },
+        { transactionId: tx.id, categoryId: null, amount: "40.00", source: "manual" },
+      ],
+    });
+    const r = await getTransactionDetails.run(ctx, { tx_id: tx.id });
+    if (r.block?.type !== "transaction_detail") throw new Error("wrong block");
+    // Block hides the uncategorized allocation.
+    expect(r.block.allocations).toHaveLength(1);
+    expect(r.block.allocations?.[0]!.category.name).toBe("Dining");
+    expect(r.block.allocations?.[0]!.amount).toBe("30.00");
+    // LLM-facing data still has both.
+    expect(r.transaction.allocations).toHaveLength(2);
+  });
+});

@@ -1,6 +1,9 @@
 import { z } from "zod";
+import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
+import { resolveUserTz } from "./periods.js";
+import { dateLabelForRow, recentLabelContext } from "./tx-row-helpers.js";
 
 const Args = z.object({
   tx_id: z
@@ -45,6 +48,7 @@ type Result = {
       parentName: string | null;
     } | null;
   };
+  block?: PresentationBlock;
 };
 
 export const getTransactionDetails: ToolDef<Args, Result> = {
@@ -52,7 +56,7 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
   description: "Get full details for one transaction, including account and category context.",
   args: Args,
   async run(ctx, args) {
-    const [tx, workspace] = await Promise.all([
+    const [tx, workspace, tz] = await Promise.all([
       prisma.transaction.findFirst({
         where: { id: args.tx_id, workspaceId: ctx.workspaceId },
         include: {
@@ -61,7 +65,7 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
             select: {
               id: true, categoryId: true, amount: true, source: true,
               category: {
-                select: { id: true, name: true, parentId: true, parent: { select: { name: true } } },
+                select: { id: true, name: true, parentId: true, color: true, icon: true, parent: { select: { name: true } } },
               },
             },
             orderBy: { createdAt: "asc" },
@@ -72,12 +76,34 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
         where: { id: ctx.workspaceId },
         select: { currency: true },
       }),
+      resolveUserTz(ctx.userId),
     ]);
     if (!tx) throw new Error("transaction_not_found");
 
     // Derive top-level category from the first allocation that has one.
     const primaryAlloc = tx.allocations.find((a) => a.categoryId !== null);
     const cat = primaryAlloc?.category ?? null;
+
+    const labelCtx = recentLabelContext(new Date(), tz);
+    const dateLabel = dateLabelForRow(tx.occurredAt, tz, labelCtx);
+    const block: PresentationBlock = {
+      type: "transaction_detail",
+      id: tx.id,
+      merchant: tx.merchantRaw,
+      amount: tx.amount.toFixed(2),
+      currency: workspace.currency,
+      date_label: dateLabel,
+      account: tx.account.name,
+      ...(cat ? { category: { name: cat.name, color: cat.color ?? null, icon: cat.icon ?? null } } : {}),
+      note: tx.note,
+      pending: tx.pending,
+      allocations: tx.allocations
+        .filter((a) => a.categoryId !== null)
+        .map((a) => ({
+          category: { name: a.category!.name, color: a.category!.color ?? null, icon: a.category!.icon ?? null },
+          amount: a.amount.toFixed(2),
+        })),
+    };
 
     return {
       transaction: {
@@ -115,6 +141,7 @@ export const getTransactionDetails: ToolDef<Args, Result> = {
             }
           : null,
       },
+      block,
     };
   },
 };
