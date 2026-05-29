@@ -31,6 +31,10 @@ import { removeScheduledSpend } from "./remove-scheduled-spend.js";
 import { pauseDailyBrief } from "./pause-daily-brief.js";
 import { addGoal } from "./add-goal.js";
 import { updateGoal } from "./update-goal.js";
+import { listGoals } from "./list-goals.js";
+import { getGoalDetails } from "./get-goal-details.js";
+import { presentGoalForm } from "./present-goal-form.js";
+import { archiveGoal } from "./archive-goal.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -65,4 +69,8 @@ export const REGISTRY: ToolDef[] = [
   pauseDailyBrief as ToolDef,
   addGoal as ToolDef,
   updateGoal as ToolDef,
+  listGoals as ToolDef,
+  getGoalDetails as ToolDef,
+  presentGoalForm as ToolDef,
+  archiveGoal as ToolDef,
 ];

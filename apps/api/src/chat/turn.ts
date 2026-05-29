@@ -230,6 +230,28 @@ Bulk-remove-recurring intent ('모든 구독 지워줘' / 'remove all subscripti
     accept_action: { tool: "removeAllRecurring", args: {} }
   }).
 
+- "Goals" / "목표" / "저축 목표" / "내 목표" → listGoals. It renders a goals
+  card with each goal's progress, percent bar, and D-day. NOTE: savings
+  accrue AUTOMATICALLY from staying under budget in a goal's categories —
+  there is NO manual deposit. Never tell the user to "add money" to a goal.
+- "X 목표 자세히" / "show my Japan goal" / a specific goal by name →
+  getGoalDetails with title set to a word from the name (or goal_id from a
+  prior card). If it returns ambiguous=true, call listGoals to show the
+  picker — do NOT ask "which one?".
+- "목표 만들어/추가" / "create a goal" / "여행자금 200만원 목표" → presentGoalForm
+  with whatever title/target_amount/due_date you can infer in defaults. The
+  form collects the rest and submits. Goals are Pro-only; presentGoalForm
+  returns a short upgrade message for non-Pro users.
+- Edit a goal: when the user gives a specific new value ("그 목표 300만원으로
+  늘려줘", "change the target to 3000") → presentConfirmCard with accept_action
+  { tool: "updateGoal", args: { goal_id, target_amount, ... } }. When they want
+  to edit but haven't pinned the value(s) ("그 목표 수정할래") → presentGoalForm
+  with goal_id so the form pre-fills and they adjust fields.
+- Archive a goal ("그 목표 보관해줘", "archive my Japan goal") →
+  presentConfirmCard with accept_action { tool: "archiveGoal", args: { goal_id } }.
+- Generating/editing a savings STRATEGY is screen-only — tell the user to tap
+  the goal card to open the goal screen; do NOT try to generate it in chat.
+
 For write tools (createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring), briefly confirm with the user before invoking unless the request is unambiguous. When you want a confirm-then-execute flow, call presentConfirmCard with \`accept_action\` set to the target tool + args — the user sees a Yes/No card and the action runs only when they tap accept. Use this for destructive ops (removeRecurring) and for changes the user might want to reconsider (e.g. tripling a budget, mapping a frequent merchant). Example unambiguous (direct call OK): '카테고리 만들어줘 — Coffee 라는 이름으로' or '식비 예산 500 달러로 설정해줘' or 'Starbucks를 Coffee 카테고리로 자동분류' or 'Netflix를 매월 19달러 정기지출로 추가, 다음 결제 2026-06-01'. Example needs presentConfirmCard: 'Netflix 정기지출 삭제해줘' or '식비 예산을 500→2000으로 늘려' or 'Starbucks를 다른 카테고리로 옮길까?'`;
 
 export type ToolCallRecord = {
@@ -323,8 +345,8 @@ export async function processChatTurn(
   // headroom. Override via env if a particular workspace needs deeper recall.
   const HISTORY_BUDGET_TOKENS = env.CHAT_HISTORY_BUDGET_TOKENS ?? 16_000;
   const MAX_TOOL_CALLS = env.CHAT_MAX_TOOL_CALLS_PER_TURN ?? 10;
-  // Chat is locked to Flash 2.5 — Lite is too weak at picking among 28
-  // tools, handling Konglish/Korean intent, and chaining multi-step
+  // Chat is locked to Flash 2.5 — Lite is too weak at picking among the
+  // full tool set, handling Konglish/Korean intent, and chaining multi-step
   // turns. Cost difference (~$0.001 vs $0.0005 per message) is absorbed
   // by the per-user weekly budget cap. Override via env only if Google
   // releases a clearly stronger model worth testing.
