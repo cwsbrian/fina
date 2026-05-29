@@ -1,4 +1,5 @@
-import { View, Text, StyleSheet } from "react-native";
+import { View, Text, Pressable, StyleSheet } from "react-native";
+import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
 import { BlockCard, BlockHeader, BlockFooter, BlockEmpty, withAlpha, CategoryIcon } from "./_primitives";
@@ -7,6 +8,12 @@ type Block = Extract<PresentationBlock, { type: "category_list" }>;
 
 export function CategoryListBlock({ block }: { block: Block }) {
   return (
+    <Pressable
+      onPress={() => router.push("/categories" as never)}
+      accessibilityRole="button"
+      accessibilityLabel="Manage categories"
+      style={({ pressed }) => (pressed ? { opacity: 0.7 } : null)}
+    >
     <BlockCard>
       <BlockHeader title={block.title} />
       {block.rows.length === 0 ? (
@@ -30,6 +37,7 @@ export function CategoryListBlock({ block }: { block: Block }) {
       )}
       {block.footer ? <BlockFooter text={block.footer} /> : null}
     </BlockCard>
+    </Pressable>
   );
 }
 
