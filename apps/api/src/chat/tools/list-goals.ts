@@ -32,6 +32,21 @@ export function daysLeft(dueDate: string, now: Date = new Date()): number {
   return dayDiff(dueDate, now);
 }
 
+/** Progress metrics shared by goals_list rows and the goal_detail card.
+ *  `bar_pct` is saved/target*100 rounded to 2dp (0 when target is 0);
+ *  `over` is true once savings exceed the target. */
+export function goalProgress(savedAmount: string, targetAmount: string): {
+  bar_pct: number;
+  over: boolean;
+} {
+  const saved = parseFloat(savedAmount);
+  const target = parseFloat(targetAmount);
+  return {
+    bar_pct: target > 0 ? Number(((saved / target) * 100).toFixed(2)) : 0,
+    over: saved > target,
+  };
+}
+
 export const listGoals: ToolDef<
   Args,
   { goals: GoalDTO[]; block?: PresentationBlock }
@@ -51,21 +66,16 @@ export const listGoals: ToolDef<
     if (goals.length === 0) return { goals };
 
     const shown = goals.slice(0, MAX_ROWS);
-    const rows = shown.map((g) => {
-      const saved = parseFloat(g.savedAmount);
-      const target = parseFloat(g.targetAmount);
-      return {
-        id: g.id,
-        title: g.title,
-        saved: g.savedAmount,
-        target: g.targetAmount,
-        bar_pct: target > 0 ? Number(((saved / target) * 100).toFixed(2)) : 0,
-        over: saved > target,
-        due_label: dDayLabel(g.dueDate),
-        icon: g.icon,
-        color: g.color,
-      };
-    });
+    const rows = shown.map((g) => ({
+      id: g.id,
+      title: g.title,
+      saved: g.savedAmount,
+      target: g.targetAmount,
+      ...goalProgress(g.savedAmount, g.targetAmount),
+      due_label: dDayLabel(g.dueDate),
+      icon: g.icon,
+      color: g.color,
+    }));
 
     const block: PresentationBlock = {
       type: "goals_list",
