@@ -6,6 +6,9 @@ import { QRCodeSVG } from "qrcode.react";
 import {
   displayName,
   trialDaysLeft,
+  tierLabel,
+  trialRevertsTo,
+  formatShortDate,
   type MeDTO as Me,
   type WorkspaceSummary as Workspace,
   type Member,
@@ -136,6 +139,7 @@ export default function HomePage() {
   }
 
   const days = me ? trialDaysLeft(me.trial.endsAt) : null;
+  const revertsTo = me ? trialRevertsTo(me) : null;
   const isTrial = !!me?.trial.active;
   const isFree = me?.tier === "free" && !me.trial.active;
 
@@ -196,7 +200,9 @@ export default function HomePage() {
               {days === 1 ? "day" : "days"} left
             </div>
             <div className={styles.bannerSub}>
-              Add a card to keep Pro at $15/mo when the trial ends.
+              {revertsTo
+                ? `Reverts to ${tierLabel(revertsTo, false)} on ${formatShortDate(me?.trial.endsAt)}.`
+                : "Add a card to keep Pro at $15/mo when the trial ends."}
             </div>
           </div>
           <button
@@ -204,7 +210,7 @@ export default function HomePage() {
             className={styles.bannerBtn}
             onClick={() => router.push("/settings/plan")}
           >
-            Stay on Pro
+            {revertsTo ? "Manage plan" : "Stay on Pro"}
           </button>
         </div>
       )}
