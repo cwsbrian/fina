@@ -347,4 +347,72 @@ export type PresentationBlock =
       title: string;
       rows: Array<{ id: string; name: string; color?: string | null; icon?: string | null }>;
       footer?: string;
+    }
+  | {
+      /** Read-only goals card. Used by listGoals. Each row pairs a goal's
+       *  COMPUTED `saved` with its `target` and a `bar_pct`
+       *  (saved/target*100, may exceed 100). `over` is true when
+       *  saved > target. `due_label` is a D-day string ("D-42", "D-DAY",
+       *  "D+3" when overdue). Amounts are decimal strings without a
+       *  currency symbol; the renderer formats with `currency`. */
+      type: "goals_list";
+      title: string;
+      currency?: string;
+      rows: Array<{
+        id: string;
+        title: string;
+        saved: string;
+        target: string;
+        bar_pct: number;
+        over?: boolean;
+        due_label: string;
+        icon?: string | null;
+        color?: string | null;
+      }>;
+      footer?: string;
+    }
+  | {
+      /** Single-goal detail card. Used by getGoalDetails. `note` is a
+       *  TOOL-TEMPLATED constant explaining savings accrue automatically
+       *  from staying under budget in the listed categories (NOT from
+       *  data). `strategy_note` carries Goal.strategy.notice ONLY (set
+       *  only when the LLM strategy generation failed; usually absent) —
+       *  do not expect a positive plan sentence here. `allocations` are
+       *  the per-category cuts from the saved plan. */
+      type: "goal_detail";
+      id: string;
+      title: string;
+      saved: string;
+      target: string;
+      bar_pct: number;
+      over?: boolean;
+      currency?: string;
+      due_label: string;
+      /** Whole days until the due date; negative when overdue. */
+      days_left?: number;
+      note?: string;
+      allocations?: Array<{
+        category: { name: string; color?: string | null; icon?: string | null };
+        monthly: string;
+        rationale?: string;
+      }>;
+      strategy_note?: string;
+    }
+  | {
+      /** Goal add/update form. Used by presentGoalForm. Mirrors
+       *  recurring_form_card. `target_amount` is a decimal STRING for
+       *  display; the stored intent arg is the NUMBER
+       *  parseFloat(target_amount). `due_date` default is always
+       *  >= minDueDateOneMonthUTC(). */
+      type: "goal_form_card";
+      question: string;
+      intent_id: string;
+      defaults: {
+        title?: string;
+        target_amount?: string;
+        /** YYYY-MM-DD. */
+        due_date?: string;
+      };
+      currency?: string;
+      mode?: "add" | "update";
     };

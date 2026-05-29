@@ -50,6 +50,7 @@ export const API_ERROR_CODES = [
   "category_not_found",
   "budget_not_found",
   "recurring_not_found",
+  "goal_not_found",
   "intent_not_found",
 
   // Limits

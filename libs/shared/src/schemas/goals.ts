@@ -24,13 +24,19 @@ export function minDueDateOneMonthUTC(now: Date = new Date()): Date {
   return t;
 }
 
-const DueDateMinOneMonth = DateOnly.refine(
-  (s) => {
-    const dueDate = new Date(`${s}T00:00:00.000Z`);
-    return dueDate.getTime() >= minDueDateOneMonthUTC().getTime();
-  },
-  { message: "dueDate must be at least 1 calendar month from today" },
-);
+/** True when `s` (YYYY-MM-DD) is at least one calendar month from today
+ *  (UTC). Single source of truth for the goal due-date floor — used by
+ *  CreateGoalBody/PatchGoalBody AND the chat addGoal/updateGoal/
+ *  presentGoalForm tools so a form submit can never fail the server
+ *  refine. */
+export function isDueDateAtLeastOneMonth(s: string): boolean {
+  const dueDate = new Date(`${s}T00:00:00.000Z`);
+  return dueDate.getTime() >= minDueDateOneMonthUTC().getTime();
+}
+
+const DueDateMinOneMonth = DateOnly.refine(isDueDateAtLeastOneMonth, {
+  message: "dueDate must be at least 1 calendar month from today",
+});
 
 export const CreateGoalBody = z.object({
   title: z.string().trim().min(1).max(GOAL_TITLE_MAX_LEN),
