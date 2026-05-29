@@ -20,6 +20,11 @@ android/app/build/
 .vscode/
 .idea/
 
+# Mobile build artifacts (never commit — produced by eas build / local builds)
+*.apk
+*.aab
+*.ipa
+
 # Next.js
 .next
 out
