@@ -80,9 +80,13 @@ function startOfDayUTC(date: Date): Date {
 }
 
 function formatDateLabel(d: Date): string {
+  // `d` is built by parseDateOnly as UTC-midnight for the calendar date, so it
+  // MUST be formatted in UTC — otherwise a negative-offset device (e.g.
+  // America/Vancouver) renders the previous day (Jun 10 → "Jun 9").
   return d.toLocaleDateString(undefined, {
     month: "short",
     day: "numeric",
+    timeZone: "UTC",
   });
 }
 
