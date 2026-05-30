@@ -3,6 +3,7 @@ import { DEFAULT_TZ } from "@fina/shared";
 import { prisma } from "../db.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { resolveUserTz, partsInTz } from "../chat/tools/periods.js";
+import { serverNow } from "../dev-clock.js";
 import {
   TxValidationError,
   validateAmount,
@@ -116,7 +117,7 @@ function toDTO(row: ScheduleRow, todayDateOnly: Date): ScheduleDTO {
  * component comparisons line up.
  */
 export function todayDateOnlyInTz(tz: string): Date {
-  const parts = partsInTz(new Date(), tz);
+  const parts = partsInTz(serverNow(), tz);
   return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
 }
 

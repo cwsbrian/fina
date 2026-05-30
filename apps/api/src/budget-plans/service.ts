@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { monthlyEquivalent, occurrencesInRange } from "../recurring/occurrences.js";
+import { serverNow } from "../dev-clock.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
@@ -225,7 +226,7 @@ export async function monthlySpendByCategory(
 export async function recentMonthlyAvgSpend(
   workspaceId: string,
 ): Promise<number> {
-  const since = new Date(Date.now() - 90 * 86_400_000);
+  const since = new Date(serverNow().getTime() - 90 * 86_400_000);
   const agg = await prisma.transaction.aggregate({
     where: {
       workspaceId,
@@ -242,7 +243,7 @@ export async function recentMonthlyAvgSpend(
 }
 
 function todayUTCMidnight(): Date {
-  const now = new Date();
+  const now = serverNow();
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
   );
@@ -479,7 +480,7 @@ export type ChatBudgetPeriod = "this_month" | "last_month" | "next_month";
 /** Map the chat period enum to a calendar year/month on the same UTC basis
  *  budget-plans/current uses, so chat and Home agree on which month. */
 export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; month: number } {
-  const d = new Date();
+  const d = serverNow();
   let year = d.getUTCFullYear();
   let month = d.getUTCMonth() + 1; // 1..12
   if (period === "last_month") {
@@ -504,7 +505,7 @@ export async function recentTypicalAmountByCategory(
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (categoryIds.length === 0) return out;
-  const since = new Date(Date.now() - 90 * 86_400_000);
+  const since = new Date(serverNow().getTime() - 90 * 86_400_000);
 
   const rows = await prisma.transactionAllocation.findMany({
     where: {
@@ -554,7 +555,7 @@ export async function recentDiscretionaryDailyByCategory(
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (categoryIds.length === 0) return out;
-  const since = new Date(Date.now() - 90 * 86_400_000);
+  const since = new Date(serverNow().getTime() - 90 * 86_400_000);
 
   const rows = await prisma.transactionAllocation.findMany({
     where: {

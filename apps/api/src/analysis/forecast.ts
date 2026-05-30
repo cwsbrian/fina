@@ -7,6 +7,7 @@ import {
   monthlyScheduledSpendByCategory,
 } from "../budget-plans/service.js";
 import { partsInTz, resolveUserTz } from "../chat/tools/periods.js";
+import { serverNow } from "../dev-clock.js";
 
 const WATCH_FACTOR = 1.1;
 
@@ -62,7 +63,7 @@ export async function projectMonthEnd(
   userId: string,
   year: number,
   month: number,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<MonthEndForecast> {
   const tz = await resolveUserTz(userId);
   const { daysLeft, todayDay, isThisMonth, daysInMonth } = daysLeftInMonth(year, month, now, tz);
