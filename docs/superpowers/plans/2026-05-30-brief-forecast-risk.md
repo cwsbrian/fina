@@ -16,7 +16,8 @@
 
 | File | Responsibility |
 |---|---|
-| `apps/api/src/analysis/forecast.ts` | Export `round2` for reuse (only change). |
+| `apps/api/src/analysis/forecast.ts` | Export `round2` for reuse. |
+| `apps/api/tests/analysis.forecast.test.ts` | Modify — backfill the portfolio `Math.max(committed, monthlyAvg)` run-rate coverage the monthly brief relies on. |
 | `apps/api/src/chat/brief-context.ts` | New `formatMoney` + `BriefForecast` + `summarizeForecast`; `forecast` field on `WorkspaceContext`; `buildWorkspaceContext` calls `projectMonthEnd`; remove dead `deviation`. |
 | `apps/api/src/chat/brief.ts` | English rewrite of `SYSTEM_PROMPT_PER_TYPE`; extract + translate + export `USER_INSTRUCTION` and `EMPTY_BRIEF_FALLBACK`. |
 | `apps/api/tests/brief.forecast-summary.test.ts` | New — `summarizeForecast` unit tests. |
@@ -164,11 +165,13 @@ Expected: FAIL — `summarizeForecast` is not exported / not defined.
 
 - [ ] **Step 4: Implement `formatMoney`, `BriefForecast`, `summarizeForecast`**
 
-In `apps/api/src/chat/brief-context.ts`, add imports at the top:
+In `apps/api/src/chat/brief-context.ts`, add this import at the top (only what
+the mapper uses — `projectMonthEnd` is added in Task 2, and `RiskTier` is not
+needed because `BriefForecast` uses inline literal unions; importing either now
+would be an unused import in this task's commit):
 
 ```ts
-import { projectMonthEnd, round2, type MonthEndForecast, type CategoryForecast } from "../analysis/forecast.js";
-import type { RiskTier } from "@fina/shared";
+import { round2, type MonthEndForecast, type CategoryForecast } from "../analysis/forecast.js";
 ```
 
 Then add, after the imports and before `export type WorkspaceContext`:
@@ -246,10 +249,37 @@ export function summarizeForecast(f: MonthEndForecast, currency: string): BriefF
 Run: `pnpm nx test api -- brief.forecast-summary`
 Expected: PASS (4 tests). If `$1,000.00` assertions fail, confirm Node has full ICU (Node 22 default) — the value should render with the comma + `$`.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 6: Backfill the portfolio run-rate engine test (coverage the monthly brief relies on)**
+
+The monthly brief frames the projection off `recentMonthlyAvgSpend` via
+`projectMonthEnd`'s `Math.max(committedTotal, monthlyAvg)` branch, which today
+has no direct test. Add one to the existing `describe("projectMonthEnd", ...)`
+block in `apps/api/tests/analysis.forecast.test.ts` (it already runs under
+`vi.setSystemTime("2026-05-15T12:00:00Z")` with `plan(cap)` and
+`spend(amount, day)` helpers). This test characterizes already-shipped engine
+behavior, so it is expected to **PASS on first run** (not fail-first):
+
+```ts
+  it("portfolio projection uses the trailing-90-day average when it exceeds committed spend", async () => {
+    await plan(2000); // helper sets totalAmount "9000.00", Dining cap 2000
+    // Heavy prior-90-day spend, nothing this month → monthlyAvg (~2000) > committed (~0)
+    for (const day of ["2026-03-10", "2026-03-25", "2026-04-10", "2026-04-25"]) {
+      await spend("1500.00", `${day}T12:00:00Z`);
+    }
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    expect(f.portfolio.spent).toBeCloseTo(0, 0);
+    expect(f.portfolio.projected).toBeGreaterThan(f.portfolio.spent + f.portfolio.scheduled);
+    expect(f.portfolio.projected).toBeGreaterThan(0);
+  });
+```
+
+Run: `pnpm nx test api -- analysis.forecast`
+Expected: PASS (the new case + all existing forecast tests).
+
+- [ ] **Step 7: Commit**
 
 ```bash
-git add apps/api/src/analysis/forecast.ts apps/api/src/chat/brief-context.ts apps/api/tests/brief.forecast-summary.test.ts
+git add apps/api/src/analysis/forecast.ts apps/api/src/chat/brief-context.ts apps/api/tests/brief.forecast-summary.test.ts apps/api/tests/analysis.forecast.test.ts
 git commit -m "feat(brief): summarizeForecast pure mapper (display-formatted BriefForecast)"
 ```
 
@@ -381,12 +411,26 @@ async function buildWorkspaceContext(
 Remove the local `const now = new Date();` line (now passed in). Keep
 `const nowInUserTz = partsInTz(now, tz);` (it already uses `now`).
 
-After the `budgetsFmt`/`budgetTotal` block and before the `return`, add:
+First add `projectMonthEnd` to the forecast import (Task 1 imported only
+`round2` + types):
+
+```ts
+import { projectMonthEnd, round2, type MonthEndForecast, type CategoryForecast } from "../analysis/forecast.js";
+```
+
+Then, after the `budgetsFmt`/`budgetTotal` block and before the `return`, add:
 
 ```ts
   const monthEnd = await projectMonthEnd(workspaceId, userId, nowInUserTz.year, nowInUserTz.month, now);
   const forecast = summarizeForecast(monthEnd, ws.currency);
 ```
+
+> Note: passing `now` aligns `year/month/daysLeft` with the brief's clock. The
+> trailing-90-day window helpers inside `projectMonthEnd`
+> (`recentMonthlyAvgSpend`, `recentTypicalAmountByCategory`,
+> `recentDiscretionaryDailyByCategory`) still read `serverNow()` internally, not
+> this `now` — in production both equal `new Date()`, and the integration test
+> uses the real clock, so they agree. (Fully unifying the clock is out of scope.)
 
 In the returned object, replace `deviation: null,` with `forecast,`.
 
@@ -411,24 +455,33 @@ In `buildBriefContext`, the loop currently calls
 
 - [ ] **Step 7: Fix the existing `WorkspaceContext` literal in `chat.brief.test.ts`**
 
-In `apps/api/tests/chat.brief.test.ts`, the `generateBrief` test builds a
-workspace literal (around lines 57–67) that has `deviation: null` and no
-`budgetTotal`/`forecast`. Replace `deviation: null,` with:
+In `apps/api/tests/chat.brief.test.ts`, the first `generateBrief` test ("emits a
+single text PresentationBlock") builds a workspace literal at lines 57–67. That
+literal currently has fields `id, name, currency, newTransactions,
+uncategorizedCount, schedule, budgets, recurring, deviation` — it does **not**
+contain a `budgetTotal` field, and `budgetTotal` is a required field on
+`WorkspaceContext`. Replace the single line `deviation: null,` with BOTH lines
+so the literal is a complete `WorkspaceContext`:
 
 ```ts
           budgetTotal: null,
           forecast: { daysLeft: 10, hasHistory: false, portfolio: null, topRisks: [] },
 ```
 
-(If `budgetTotal: null` is already present, only add the `forecast` line.)
+(This is unconditional — do not skip `budgetTotal`.)
 
 - [ ] **Step 8: Run the tests to verify they pass**
 
 Run: `pnpm nx test api -- brief.context-forecast`
 Expected: PASS (2 tests).
 Run: `pnpm nx typecheck api`
-Expected: PASS (no `deviation`/`forecast` type errors; the `chat.brief.test.ts`
-literal now matches `WorkspaceContext`).
+Expected: PASS — no `deviation`/`forecast` type errors in `src/`. NOTE: this
+target runs `tsc --noEmit -p apps/api/tsconfig.app.json`, whose `include` is
+`src/**/*.ts` only — it does **not** typecheck `tests/**`. So the
+`chat.brief.test.ts` literal is **not** validated here; its correctness is
+verified by the test running green in the next step (Vitest/esbuild strips
+types, so keeping the literal in sync with the new required fields is what
+matters, confirmed by the pre-existing test still passing).
 
 - [ ] **Step 9: Commit**
 
@@ -471,6 +524,20 @@ describe("brief LLM strings are English (no Hangul)", () => {
   it("user instruction + fallback contain no Hangul", () => {
     expect(HANGUL.test(USER_INSTRUCTION)).toBe(false);
     expect(HANGUL.test(EMPTY_BRIEF_FALLBACK)).toBe(false);
+  });
+
+  // Contract anchors: every per-type prompt carries the RULES block, so each
+  // must mention the forecast-first contract. A deleted RULES paragraph fails
+  // here (the only deterministic guard on the prompt contract below the LLM).
+  it("system prompts state the forecast-first contract anchors", () => {
+    for (const v of Object.values(SYSTEM_PROMPT_PER_TYPE)) {
+      expect(v).toContain("forecast.portfolio");
+      expect(v).toContain("forecast.topRisks");
+      expect(v).toContain("hasHistory");
+      expect(v).toContain("at_risk");
+      expect(v).toContain("highest-risk workspace");
+      expect(v).toContain("ask me for a plan to stay on track");
+    }
   });
 });
 ```
@@ -563,74 +630,68 @@ with:
 Run: `pnpm nx test api -- brief.prompts-english`
 Expected: PASS (2 tests).
 
-- [ ] **Step 6: Write the failing anti-repetition test**
+- [ ] **Step 6: Write the anti-repetition test (no change to the top-level mock)**
 
-In `apps/api/tests/chat.brief.test.ts`, add inside the
-`describe("generateBrief (mocked LLM)", ...)` block a new test that asserts
-`recent_briefs` reaches Gemini. The existing mock returns a fixed string; to
-inspect the request, extend the mock to capture the argument. At the top mock
-(lines 5–13), change `generateContent` to record calls — replace the mock with:
-
-```ts
-const generateContentMock = vi.fn().mockResolvedValue({
-  text: "On pace to finish under budget. Nice work — have a great day!",
-});
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: vi.fn().mockImplementation(() => ({
-    models: { generateContent: generateContentMock },
-  })),
-}));
-```
-
-(Move `generateContentMock` above the `vi.mock` call; `vi.mock` is hoisted, but
-referencing a top-level `const` declared with `vi.fn()` is the standard Vitest
-pattern. If hoisting complains, use `vi.hoisted`:
-`const { generateContentMock } = vi.hoisted(() => ({ generateContentMock: vi.fn() }));`
-then set its resolved value in `beforeEach`.)
-
-Then add the test:
+In `apps/api/tests/chat.brief.test.ts`, add a test inside the
+`describe("generateBrief (mocked LLM)", ...)` block that asserts `recent_briefs`
+reaches Gemini. **Do NOT touch the top-level `vi.mock` (lines 5–13)** — instead
+override it for this one call with a local capture fn, exactly like the existing
+"falls back to encouragement" test does (`mockImplementationOnce`). This keeps
+the other tests' default mock intact. Pass `workspaces: []` so the test needs no
+`WorkspaceContext` literal:
 
 ```ts
   it("passes recent_briefs through to Gemini (anti-repetition input)", async () => {
+    const mod = await import("@google/genai");
+    const captureGenerate = vi.fn().mockResolvedValue({ text: "Brief body." });
+    vi.mocked(mod.GoogleGenAI).mockImplementationOnce(() => ({
+      models: { generateContent: captureGenerate },
+    }) as unknown as InstanceType<typeof mod.GoogleGenAI>);
+
     const { generateBrief } = await import("../src/chat/brief.js");
     const { testEnv } = await import("./helpers/test-env.js");
-    generateContentMock.mockResolvedValue({ text: "Brief body." });
 
     await generateBrief(
       testEnv(),
-      {
-        user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" },
-        briefType: "daily",
-        date: "2026-05-22",
-        workspaces: [{
-          id: "ws1",
-          name: "Personal",
-          currency: "CAD",
-          newTransactions: { count: 0, sample: [] },
-          uncategorizedCount: 0,
-          schedule: [],
-          budgetTotal: null,
-          budgets: [],
-          recurring: [],
-          forecast: { daysLeft: 10, hasHistory: false, portfolio: null, topRisks: [] },
-        }],
-      },
+      { user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" }, briefType: "daily", date: "2026-05-22", workspaces: [] },
       ["BRIEF_FROM_YESTERDAY_MARKER"],
       "daily",
     );
 
-    const sentJson = JSON.stringify(generateContentMock.mock.calls[0]?.[0]);
+    const sentJson = JSON.stringify(captureGenerate.mock.calls[0]?.[0]);
     expect(sentJson).toContain("BRIEF_FROM_YESTERDAY_MARKER");
   });
 ```
 
-- [ ] **Step 7: Run the test to verify it fails, then passes**
+- [ ] **Step 6b: Update the pre-existing fallback assertion to the English string**
+
+Task 3 Step 4 changed `EMPTY_BRIEF_FALLBACK` to English, so the existing "falls
+back to encouragement when LLM returns empty" test — which asserts the Korean
+`좋은 아침` — now fails for a real reason. Update it to track the constant:
+
+- Change the import on line 2 of `apps/api/tests/chat.brief.test.ts` to also
+  import the constant:
+  ```ts
+  import { briefBlocksToText, EMPTY_BRIEF_FALLBACK } from "../src/chat/brief.js";
+  ```
+- In that test, replace the assertion:
+  ```ts
+  expect((blocks[0] as { markdown: string }).markdown).toContain("좋은 아침");
+  ```
+  with:
+  ```ts
+  expect((blocks[0] as { markdown: string }).markdown).toBe(EMPTY_BRIEF_FALLBACK);
+  ```
+
+The first "emits a single text PresentationBlock" test is **NOT** affected — the
+top-level mock is unchanged, so its `toContain("Starbucks")` still holds.
+
+- [ ] **Step 7: Run the brief test file**
 
 Run: `pnpm nx test api -- chat.brief`
-Expected: FAIL first if `generateContentMock` wiring is incomplete; once the
-mock is captured correctly, PASS. The pre-existing "emits a single text
-PresentationBlock" test must still pass (its workspace literal was fixed in
-Task 2 Step 7).
+Expected: PASS — every test in the file: the new anti-repetition test, the
+updated fallback test (now asserting the English `EMPTY_BRIEF_FALLBACK`), and the
+unchanged "Starbucks" test (its top-level mock was left intact).
 
 - [ ] **Step 8: Commit**
 
@@ -654,9 +715,14 @@ nothing in `brief*.ts`/`forecast.ts`/`brief*` tests.)
 - [ ] **Step 2: Run the whole brief + forecast test surface**
 
 Run: `pnpm nx test api -- brief forecast cron.daily-brief`
-Expected: PASS. In particular `cron.daily-brief.*` must stay green — the cron
-calls `buildBriefContext` + `generateBrief` unchanged; only the context gained a
-field and the prompts changed language.
+Expected: PASS. The `cron.daily-brief.*` tests stay green: they mock the LLM
+(English text, or stub `generateBrief` entirely) so the prompt-language change
+doesn't touch them, and `buildBriefContext` only gained a field. (Note:
+`cron.daily-brief.e2e.test.ts` mocks the LLM with a Korean string and asserts
+`/Starbucks/` on it — that's mock *input*, unaffected by our prompt rewrite, and
+not subject to the no-Hangul guard which only checks the source prompt
+constants. Leave it.) These tests also now exercise the new `projectMonthEnd`
+call inside `buildWorkspaceContext` against their seeds — confirm none throws.
 
 - [ ] **Step 3: Manual on-demand smoke (optional, dev DB)**
 
@@ -706,3 +772,13 @@ Only commit if a fix was required; otherwise nothing to do.
 - **Type consistency:** `BriefForecast` / `summarizeForecast(f, currency)` /
   `forecast: BriefForecast` (non-null) / `buildWorkspaceContext(..., userId,
   now)` are used identically across tasks.
+- **Accepted-risk (no deterministic test):** the multi-workspace
+  "highest-risk-first" ordering and the on_track/at_risk *phrasing* are pure
+  LLM-prompt instructions with no seam below the model, so they are guarded only
+  by the contract-anchor presence test (Task 3 Step 1), not by output
+  assertions. Verified by eye in the Task 4 Step 3 smoke run.
+- **Adversarial review:** this plan folds in 12 confirmed findings from a 4-lens
+  plan review (the EMPTY_BRIEF_FALLBACK / Starbucks pre-existing-assertion
+  breakage, the unconditional `budgetTotal` literal fix, the typecheck-scope
+  correction, the prompt-anchor + run-rate coverage gaps, the intermediate-commit
+  unused-import fix, and the serverNow clock note).
