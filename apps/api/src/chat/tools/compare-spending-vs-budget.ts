@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { PresentationBlock } from "@fina/shared";
+import type { PresentationBlock, RiskTier } from "@fina/shared";
 import { budgetPlanSnapshot, periodToYearMonth } from "../../budget-plans/service.js";
+import { projectMonthEnd, type CategoryForecast } from "../../analysis/forecast.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
@@ -22,6 +23,10 @@ type Item = {
   plannedPct: number;
   todayPct: number;
   status: "on-pace" | "over-pace";
+  projected: string;
+  projectedOverspend: string;
+  runwayDay: number | null;
+  severity: RiskTier;
 };
 
 type Result = {
@@ -41,6 +46,8 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
     const snap = await budgetPlanSnapshot(ctx.workspaceId, year, month);
 
     const todayPct = todayPctFor(period, year, month);
+    const forecast = await projectMonthEnd(ctx.workspaceId, ctx.userId, year, month);
+    const fcById = new Map<string, CategoryForecast>(forecast.categories.map((f) => [f.categoryId, f]));
     const items: Item[] = (snap?.categories ?? [])
       .filter((c) => c.allocated !== null)
       .map((c) => {
@@ -53,6 +60,7 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
         const spentPct = amount > 0 ? Number(((spent / amount) * 100).toFixed(2)) : 0;
         const plannedPct = amount > 0 ? Number(((planned / amount) * 100).toFixed(2)) : 0;
         const status: "on-pace" | "over-pace" = spentPct <= todayPct * 1.05 ? "on-pace" : "over-pace";
+        const fc = fcById.get(c.categoryId);
         return {
           categoryId: c.categoryId,
           categoryName: c.categoryName,
@@ -64,6 +72,10 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
           plannedPct,
           todayPct,
           status,
+          projected: (fc?.projected ?? spent).toFixed(2),
+          projectedOverspend: (fc?.projectedOverspend ?? 0).toFixed(2),
+          runwayDay: fc?.runwayDay ?? null,
+          severity: fc?.severity ?? "insufficient_history",
         };
       });
 
@@ -114,12 +126,14 @@ function toRecapBlock(
   const usedPct = budget > 0 ? Math.round((spent / budget) * 100) : 0;
   const remaining = budget - spent;
 
-  // Only surface categories that need ATTENTION — pacing over budget for
-  // this point in the month, or already over their cap. Categories that
-  // are on pace (or untouched) are noise on a "how am I doing" card, so
-  // we hide them and note the count instead. Most-strained first.
+  // Only surface categories that need ATTENTION — forecast severity is
+  // at_risk/watch, or already over their cap. Using forecast-based severity
+  // rather than pace alone means the filter accounts for discretionary
+  // run-rate projection, not just the current-day snapshot. Categories that
+  // are on_track (or have insufficient history) are noise on a "how am I
+  // doing" card, so we hide them and note the count instead. Most-strained first.
   const attention = items
-    .filter((i) => i.status === "over-pace" || parseFloat(i.remaining) < 0)
+    .filter((i) => i.severity === "at_risk" || i.severity === "watch" || parseFloat(i.remaining) < 0)
     .sort((a, b) => b.spentPct - a.spentPct);
   const hiddenOnPace = items.length - attention.length;
 
@@ -159,6 +173,8 @@ function toRecapBlock(
           value: Math.abs(rem).toFixed(2),
           direction: (rem >= 0 ? "down" : "up") as "up" | "down",
         },
+        projected: i.projected,
+        severity: i.severity,
       };
     }),
     ...(footer ? { footer } : {}),
