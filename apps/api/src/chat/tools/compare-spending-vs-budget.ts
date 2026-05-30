@@ -28,6 +28,7 @@ type Item = {
   scheduled: string;
   runwayDay: number | null;
   severity: RiskTier;
+  typicalAmount: string;
 };
 
 type Result = {
@@ -81,6 +82,7 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
           scheduled: planned.toFixed(2),
           runwayDay: fc?.runwayDay ?? null,
           severity: fc?.severity ?? "insufficient_history",
+          typicalAmount: (fc?.typicalAmount ?? 0).toFixed(2),
         };
       });
 

@@ -492,6 +492,54 @@ export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; mon
   return { year, month };
 }
 
+/** Per-category MEDIAN positive transaction-allocation amount over the trailing
+ *  90 days. Used by the advisor to size plan proposals ("typical spend per
+ *  transaction"). Only positive amounts are considered (refunds ignored).
+ *  Median = middle element of sorted positives (upper-middle for even counts).
+ *  Returns 0 for categories with no positive transactions in the window.
+ *  Result rounded to 2 decimals. */
+export async function recentTypicalAmountByCategory(
+  workspaceId: string,
+  categoryIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (categoryIds.length === 0) return out;
+  const since = new Date(Date.now() - 90 * 86_400_000);
+
+  const rows = await prisma.transactionAllocation.findMany({
+    where: {
+      categoryId: { in: categoryIds },
+      transaction: {
+        workspaceId,
+        removedAt: null,
+        pending: false,
+        occurredAt: { gte: since },
+      },
+      amount: { gt: 0 },
+    },
+    select: { amount: true, categoryId: true },
+  });
+
+  const byCat = new Map<string, number[]>();
+  for (const r of rows) {
+    if (!r.categoryId) continue;
+    const arr = byCat.get(r.categoryId) ?? [];
+    arr.push(Number(r.amount));
+    byCat.set(r.categoryId, arr);
+  }
+
+  for (const id of categoryIds) {
+    const positives = (byCat.get(id) ?? []).sort((a, b) => a - b);
+    if (positives.length === 0) {
+      out.set(id, 0);
+      continue;
+    }
+    const median = positives[Math.floor(positives.length / 2)]!;
+    out.set(id, Math.round(median * 100) / 100);
+  }
+  return out;
+}
+
 /** Per-category DISCRETIONARY daily spend rate over the trailing 90 days,
  *  for the month-end forecast. Discretionary = actual category spend with the
  *  category's recurring (subscription) monthly-equivalent removed, so fixed

@@ -212,4 +212,15 @@ describe("projectMonthEnd", () => {
     expect(f.categories).toEqual([]);
     expect(f.portfolio.severity).toBe("on_track");
   });
+
+  it("exposes a per-category typical (median) transaction amount", async () => {
+    await plan(500);
+    for (const a of ["10.00","20.00","60.00"]) {
+      const t = await prisma.transaction.create({ data: { workspaceId: wsId, accountId: acct, amount: a, merchantRaw: "M", occurredAt: new Date("2026-05-04T12:00:00Z"), source: "manual", pending: false, rawData: {} } });
+      await prisma.transactionAllocation.create({ data: { transactionId: t.id, categoryId: dining, amount: a } });
+    }
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    const c = f.categories.find((x) => x.categoryId === dining)!;
+    expect(c.typicalAmount).toBeCloseTo(20, 2);
+  });
 });

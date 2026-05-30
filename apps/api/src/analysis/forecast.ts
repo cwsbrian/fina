@@ -2,6 +2,7 @@ import type { RiskTier } from "@fina/shared";
 import {
   budgetPlanSnapshot,
   recentDiscretionaryDailyByCategory,
+  recentTypicalAmountByCategory,
   monthlySubscriptionByCategory,
   monthlyScheduledSpendByCategory,
 } from "../budget-plans/service.js";
@@ -23,6 +24,7 @@ export type CategoryForecast = {
   projectedUnderspend: number;
   runwayDay: number | null;
   severity: RiskTier;
+  typicalAmount: number;
 };
 
 export type MonthEndForecast = {
@@ -73,8 +75,9 @@ export async function projectMonthEnd(
   const capped = snap.categories.filter((c) => c.allocated !== null);
   const capIds = capped.map((c) => c.categoryId);
 
-  const [discRates, subs, scheduled] = await Promise.all([
+  const [discRates, typicals, subs, scheduled] = await Promise.all([
     recentDiscretionaryDailyByCategory(workspaceId, capIds),
+    recentTypicalAmountByCategory(workspaceId, capIds),
     monthlySubscriptionByCategory(workspaceId, year, month),
     monthlyScheduledSpendByCategory(workspaceId, year, month),
   ]);
@@ -106,6 +109,7 @@ export async function projectMonthEnd(
       categoryName: c.categoryName,
       cap, spent, fixedBills, plannedOneOffs, discRate, daysLeft,
       projected, projectedOverspend, projectedUnderspend, runwayDay, severity,
+      typicalAmount: typicals.get(c.categoryId) ?? 0,
     };
   });
 
