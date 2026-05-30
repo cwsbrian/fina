@@ -50,6 +50,17 @@ export function firstOfMonth(year: number, month1to12: number): Date {
   );
 }
 
+/** Upper bound for "spend so far this month" — capped at the (possibly
+ *  DEV_NOW-overridden) current instant so month-to-date actuals never include
+ *  future-dated transactions. For a fully past month this is just `to`; this
+ *  is what lets the run-rate forecast add "rest of month" without
+ *  double-counting spend that hasn't happened yet. No effect in real usage
+ *  (real actuals are never future-dated). */
+function spendUpperBound(to: Date): Date {
+  const n = serverNow();
+  return n < to ? n : to;
+}
+
 /** [from, to) midnight-UTC bounds for a calendar month. Use this (NOT
  *  firstOfMonth, which is UTC-noon) when filtering @db.Date columns
  *  (scheduledDate, nextOccurrenceDate) so items dated the 1st land in the
@@ -242,6 +253,19 @@ export async function recentMonthlyAvgSpend(
   return Math.round(total / 3);
 }
 
+/** Sum of the monthly-equivalent amount of every recurring expense in the
+ *  workspace — the "fixed" baseline that should be excluded when estimating
+ *  the workspace's typical DISCRETIONARY run-rate for the month-end forecast. */
+export async function workspaceRecurringMonthly(workspaceId: string): Promise<number> {
+  const subs = await prisma.recurringExpense.findMany({
+    where: { workspaceId },
+    select: { amount: true, cadence: true },
+  });
+  let total = 0;
+  for (const s of subs) total += monthlyEquivalent(Number(s.amount), s.cadence);
+  return Math.round(total * 100) / 100;
+}
+
 function todayUTCMidnight(): Date {
   const now = serverNow();
   return new Date(
@@ -397,7 +421,7 @@ export async function monthlyTotalSpend(
     where: {
       workspaceId,
       removedAt: null,
-      occurredAt: { gte: from, lt: to },
+      occurredAt: { gte: from, lt: spendUpperBound(to) },
       amount: { gt: 0 },
     },
     _sum: { amount: true },

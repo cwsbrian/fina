@@ -33,6 +33,9 @@ type Item = {
 
 type Result = {
   period: { start: string; end: string };
+  /** TOTAL (whole-budget) month-end projection — the headline judgment: will
+   *  the user blow their OVERALL budget. Lead with this; items are the "where". */
+  portfolio: { budget: string; spent: string; scheduled: string; projected: string; overspend: string; severity: RiskTier };
   items: Item[];
   block: PresentationBlock;
 };
@@ -94,10 +97,20 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
     // 13% when the user has actually spent 92% of their budget).
     const totalSpent = snap ? parseFloat(snap.totalSpent) : 0;
     const totalBudget = snap ? parseFloat(snap.totalAmount) : 0;
+    const pf = forecast.portfolio;
+    const pfOverspend = Math.max(0, Math.round((pf.projected - pf.cap) * 100) / 100);
     return {
       period: { start, end },
+      portfolio: {
+        budget: totalBudget.toFixed(2),
+        spent: totalSpent.toFixed(2),
+        scheduled: pf.scheduled.toFixed(2),
+        projected: pf.projected.toFixed(2),
+        overspend: pfOverspend.toFixed(2),
+        severity: pf.severity,
+      },
       items,
-      block: toRecapBlock(period, items, totalSpent, totalBudget, forecast.portfolio.scheduled),
+      block: toRecapBlock(period, items, totalSpent, totalBudget, pf.scheduled, pf.projected),
     };
   },
 };
@@ -122,6 +135,7 @@ function toRecapBlock(
   totalSpent: number,
   totalBudget: number,
   totalScheduled: number,
+  projectedTotal: number,
 ): PresentationBlock {
   const periodLabel =
     period === "this_month" ? "This month" :
@@ -173,6 +187,7 @@ function toRecapBlock(
             budget: budget.toFixed(2),
             spent: spent.toFixed(2),
             scheduled: totalScheduled.toFixed(2),
+            projected: projectedTotal.toFixed(2),
           }
         : {}),
     },

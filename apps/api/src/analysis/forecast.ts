@@ -5,6 +5,7 @@ import {
   recentTypicalAmountByCategory,
   monthlySubscriptionByCategory,
   monthlyScheduledSpendByCategory,
+  recentMonthlyAvgSpend,
 } from "../budget-plans/service.js";
 import { partsInTz, resolveUserTz } from "../chat/tools/periods.js";
 import { serverNow } from "../dev-clock.js";
@@ -120,8 +121,17 @@ export async function projectMonthEnd(
   // (both maps are already today-forward), across all categories — not the
   // snapshot's totalScheduled, which still counts past-dated scheduled rows.
   const sumMap = (m: Map<string, number>) => Array.from(m.values()).reduce((a, b) => a + b, 0);
-  const scheduledTotal = round2(sumMap(subs) + sumMap(scheduled));
-  const portfolioProjected = round2(totalSpent + scheduledTotal);
+  const scheduledTotal = round2(sumMap(subs) + sumMap(scheduled)); // committed, today-forward
+
+  // Workspace-wide month-end TOTAL projection — the number that actually
+  // decides "will I blow my overall budget". Robust form that does NOT add a
+  // run-rate on TOP of actuals (which double-counts once you've spent most of
+  // the month): the total will end at LEAST at what's already spent + still
+  // committed, and historically the workspace spends ~its monthly average, so
+  // take whichever is higher. Bounded — never explodes on a high-spend month.
+  const committedTotal = round2(totalSpent + scheduledTotal);
+  const monthlyAvg = isThisMonth ? await recentMonthlyAvgSpend(workspaceId) : 0;
+  const portfolioProjected = round2(Math.max(committedTotal, monthlyAvg));
   const portfolio = {
     cap: totalCap,
     spent: totalSpent,
