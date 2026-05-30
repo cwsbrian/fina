@@ -241,7 +241,7 @@ function todayUTCMidnight(): Date {
  *  given month, grouped by category. Includes only occurrences from
  *  today forward — earlier in the month they've either already
  *  matched real transactions (counted via actuals) or were missed. */
-async function subscriptionOccurrencesByCategory(
+export async function subscriptionOccurrencesByCategory(
   workspaceId: string,
   monthFrom: Date,
   monthTo: Date,
@@ -548,4 +548,48 @@ export async function recentDiscretionaryDailyByCategory(
     out.set(id, Math.max(0, discretionary90) / 90);
   }
   return out;
+}
+
+/** Subscription (RecurringExpense) occurrences for the month, grouped by
+ *  category, today-forward. Wraps subscriptionOccurrencesByCategory and
+ *  returns a flat categoryId -> amount map.
+ *
+ *  NOTE: RecurringExpense.nextOccurrenceDate is stored as @db.Date and comes
+ *  back from Prisma as midnight UTC (T00:00:00Z). firstOfMonth uses noon UTC
+ *  (T12:00:00Z), so we compute `to` as first-of-next-month at midnight to
+ *  correctly exclude occurrences that land exactly on the month boundary. */
+export async function monthlySubscriptionByCategory(
+  workspaceId: string,
+  year: number,
+  month1to12: number,
+): Promise<Map<string, number>> {
+  const from = firstOfMonth(year, month1to12);
+  const nextYear = month1to12 === 12 ? year + 1 : year;
+  const nextMonth = month1to12 === 12 ? 1 : month1to12 + 1;
+  // Midnight UTC to correctly exclude @db.Date occurrences that land on the
+  // first of next month (those come back as T00:00:00Z, which is < noon T12).
+  const to = new Date(Date.UTC(nextYear, nextMonth - 1, 1, 0, 0, 0, 0));
+  const m = await subscriptionOccurrencesByCategory(workspaceId, from, to);
+  return new Map(Array.from(m, ([id, v]) => [id, Math.round(v.spent * 100) / 100]));
+}
+
+/** Unmatched, undismissed ScheduledSpend for the month (scheduledDate from
+ *  month start — past-dated-this-month items are still expected), grouped by
+ *  category. Excludes subscriptions (those come from monthlySubscriptionByCategory). */
+export async function monthlyScheduledSpendByCategory(
+  workspaceId: string,
+  year: number,
+  month1to12: number,
+): Promise<Map<string, number>> {
+  const from = firstOfMonth(year, month1to12);
+  const to = firstOfMonth(month1to12 === 12 ? year + 1 : year, month1to12 === 12 ? 1 : month1to12 + 1);
+  const rows = await prisma.scheduledSpend.findMany({
+    where: { workspaceId, scheduledDate: { gte: from, lt: to }, matchedTxId: null, dismissedAt: null },
+    select: { amount: true, categoryId: true },
+  });
+  const sums = new Map<string, number>();
+  for (const r of rows) {
+    sums.set(r.categoryId, (sums.get(r.categoryId) ?? 0) + Number(r.amount));
+  }
+  return new Map(Array.from(sums, ([id, v]) => [id, Math.round(v * 100) / 100]));
 }

@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "../src/db.js";
-import { recentDiscretionaryDailyByCategory } from "../src/budget-plans/service.js";
+import {
+  recentDiscretionaryDailyByCategory,
+  monthlySubscriptionByCategory,
+  monthlyScheduledSpendByCategory,
+} from "../src/budget-plans/service.js";
 
 describe("recentDiscretionaryDailyByCategory", () => {
   let wsId: string;
@@ -65,5 +69,42 @@ describe("recentDiscretionaryDailyByCategory", () => {
     // positives [50,50] → median 50, cap 150, nothing capped; net = -100 → clamped to 0.
     const rates = await recentDiscretionaryDailyByCategory(wsId, [dining]);
     expect(rates.get(dining) ?? 0).toBeCloseTo(0, 4);
+  });
+});
+
+describe("subscription vs scheduled split", () => {
+  let wsId: string;
+  let groceries: string;
+  beforeEach(async () => {
+    const stamp = `split-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const ws = await prisma.workspace.create({ data: { name: stamp, currency: "CAD" } });
+    wsId = ws.id;
+    groceries = (await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } })).id;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  it("subscription occurrences are today-forward only", async () => {
+    await prisma.recurringExpense.create({
+      data: { workspaceId: wsId, name: "Box", nameNormalized: "box", amount: "40.00", categoryId: groceries, cadence: "weekly", nextOccurrenceDate: new Date("2026-05-18T12:00:00Z") },
+    });
+    const subs = await monthlySubscriptionByCategory(wsId, 2026, 5);
+    // 5/18 and 5/25 fall in [today=5/15, 6/1) → 2 occurrences * 40 = 80.
+    expect(subs.get(groceries)).toBeCloseTo(80, 2);
+  });
+
+  it("scheduled spend counts unmatched/undismissed items from month start (incl. past-dated this month)", async () => {
+    await prisma.scheduledSpend.create({
+      data: { workspaceId: wsId, categoryId: groceries, amount: "50.00", scheduledDate: new Date("2026-05-10") },
+    });
+    await prisma.scheduledSpend.create({
+      data: { workspaceId: wsId, categoryId: groceries, amount: "25.00", scheduledDate: new Date("2026-05-20") },
+    });
+    const sched = await monthlyScheduledSpendByCategory(wsId, 2026, 5);
+    expect(sched.get(groceries)).toBeCloseTo(75, 2);
   });
 });
