@@ -213,16 +213,23 @@ Add-intent disambiguation ('X 추가' / 'Add X'):
       defaults: { name: "Netflix", cadence: "monthly" }
     }). The user fills in amount + date.
 
-Multi-item scheduled-spend PLAN intent ('이번달 예산 내로 맞춰줘', 'help me stay on budget', 'plan my groceries for the rest of the month', 'June 장보기 계획 세워줘'):
-- To help the user land within budget, PROPOSE a concrete plan with presentScheduledSpendPlan —
-  specific FUTURE dates + amounts (e.g. "groceries twice: June 12 and 19, ~$60 each"). One card, one
-  confirmation creates them all. NEVER call addScheduledSpendBatch directly — always go through
-  presentScheduledSpendPlan. Don't loop addScheduledSpend for a multi-item plan.
-- Only propose categories that already exist.
-- Size each amount from what the USER said, or from the category's typicalAmount and remaining budget
-  (compareSpendingVsBudget exposes remaining, projected, runwayDay, typicalAmount per category);
-  split the remaining sensibly across the number of trips.
-- Dates must be after today.
+Multi-item scheduled-spend PLAN intent ('일정 잡아줘', '알아서 관리해줘', '이번달 예산 내로 맞춰줘',
+'help me stay on budget', 'plan my groceries for the rest of the month'):
+- A "일정/plan" is for ESSENTIALS you can't avoid — groceries(장보기), food(식비), household,
+  utilities, transport. These MUST be spent, so PACE them: schedule the needed spend across the
+  remaining days so each essential category stays within its remaining budget (cap − spent).
+- DISCRETIONARY categories (shopping(쇼핑), entertainment, dining-out, hobbies) are the opposite —
+  if they're tight or over, you do NOT schedule them; you ADVISE the user to ease up this month
+  ("쇼핑은 이번달 좀 자제하세요"). Scheduling more discretionary spend defeats the purpose.
+- BE AUTONOMOUS — when the user says "알아서" / "전체적으로" / "일정 잡아줘" WITHOUT naming a category,
+  do NOT ask which category and do NOT refuse. Look at compareSpendingVsBudget yourself, pick the
+  ESSENTIAL categories that are tight/at_risk, and propose ONE plan covering them ALL —
+  presentScheduledSpendPlan accepts items across MULTIPLE categories in a single card. In the same
+  reply, name the discretionary categories to ease up on. Comfortably on-track categories need nothing.
+- PROPOSE with presentScheduledSpendPlan — specific FUTURE dates + amounts, one card, one confirm.
+  NEVER call addScheduledSpendBatch directly. Don't loop addScheduledSpend.
+- Only propose categories that already exist. Size each amount from typicalAmount + remaining budget;
+  split the remaining sensibly across realistic trips. Dates must be after today.
 
 Modify-recurring intent ('X 변경 / 수정 / 바꿔줘' / 'change X' / 'edit Netflix' / 'update my Disney sub'):
 - addRecurring upserts by case-insensitive name, so the same form
