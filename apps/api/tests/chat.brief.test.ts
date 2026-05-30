@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { briefBlocksToText } from "../src/chat/brief.js";
+import { briefBlocksToText, EMPTY_BRIEF_FALLBACK } from "../src/chat/brief.js";
 
 // Mock Gemini at the top — must be hoisted before any module that imports it.
 vi.mock("@google/genai", () => ({
@@ -76,6 +76,27 @@ describe("generateBrief (mocked LLM)", () => {
     expect((blocks[0] as { markdown: string }).markdown).toContain("Starbucks");
   });
 
+  it("passes recent_briefs through to Gemini (anti-repetition input)", async () => {
+    const mod = await import("@google/genai");
+    const captureGenerate = vi.fn().mockResolvedValue({ text: "Brief body." });
+    vi.mocked(mod.GoogleGenAI).mockImplementationOnce(() => ({
+      models: { generateContent: captureGenerate },
+    }) as unknown as InstanceType<typeof mod.GoogleGenAI>);
+
+    const { generateBrief } = await import("../src/chat/brief.js");
+    const { testEnv } = await import("./helpers/test-env.js");
+
+    await generateBrief(
+      testEnv(),
+      { user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" }, briefType: "daily", date: "2026-05-22", workspaces: [] },
+      ["BRIEF_FROM_YESTERDAY_MARKER"],
+      "daily",
+    );
+
+    const sentJson = JSON.stringify(captureGenerate.mock.calls[0]?.[0]);
+    expect(sentJson).toContain("BRIEF_FROM_YESTERDAY_MARKER");
+  });
+
   it("falls back to encouragement when LLM returns empty", async () => {
     const mod = await import("@google/genai");
     vi.mocked(mod.GoogleGenAI).mockImplementationOnce(() => ({
@@ -95,6 +116,6 @@ describe("generateBrief (mocked LLM)", () => {
     );
 
     expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { markdown: string }).markdown).toContain("좋은 아침");
+    expect((blocks[0] as { markdown: string }).markdown).toBe(EMPTY_BRIEF_FALLBACK);
   });
 });
