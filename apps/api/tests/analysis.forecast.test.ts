@@ -98,23 +98,28 @@ describe("subscription vs scheduled split", () => {
     expect(subs.get(groceries)).toBeCloseTo(80, 2);
   });
 
-  it("scheduled spend counts unmatched/undismissed items from month start (incl. past-dated this month)", async () => {
+  it("scheduled spend counts only TODAY-forward items (past-dated excluded)", async () => {
+    // today is 2026-05-15. A past-dated unmatched scheduled spend has usually
+    // already happened (in the actuals) or is stale, so it must NOT be added.
     await prisma.scheduledSpend.create({
-      data: { workspaceId: wsId, categoryId: groceries, amount: "50.00", scheduledDate: new Date("2026-05-10") },
+      data: { workspaceId: wsId, categoryId: groceries, amount: "50.00", scheduledDate: new Date("2026-05-10") }, // past → excluded
     });
     await prisma.scheduledSpend.create({
-      data: { workspaceId: wsId, categoryId: groceries, amount: "25.00", scheduledDate: new Date("2026-05-20") },
+      data: { workspaceId: wsId, categoryId: groceries, amount: "25.00", scheduledDate: new Date("2026-05-20") }, // future → counted
     });
     const sched = await monthlyScheduledSpendByCategory(wsId, 2026, 5);
-    expect(sched.get(groceries)).toBeCloseTo(75, 2);
+    expect(sched.get(groceries)).toBeCloseTo(25, 2);
   });
 
-  it("scheduled spend includes the 1st of this month and excludes the 1st of next month", async () => {
+  it("scheduled spend includes today, excludes past and next month", async () => {
     await prisma.scheduledSpend.create({
-      data: { workspaceId: wsId, categoryId: groceries, amount: "11.00", scheduledDate: new Date("2026-05-01") }, // this month 1st → counted
+      data: { workspaceId: wsId, categoryId: groceries, amount: "11.00", scheduledDate: new Date("2026-05-15") }, // today → counted
     });
     await prisma.scheduledSpend.create({
-      data: { workspaceId: wsId, categoryId: groceries, amount: "99.00", scheduledDate: new Date("2026-06-01") }, // next month 1st → excluded
+      data: { workspaceId: wsId, categoryId: groceries, amount: "7.00", scheduledDate: new Date("2026-05-10") }, // past → excluded
+    });
+    await prisma.scheduledSpend.create({
+      data: { workspaceId: wsId, categoryId: groceries, amount: "99.00", scheduledDate: new Date("2026-06-01") }, // next month → excluded
     });
     const sched = await monthlyScheduledSpendByCategory(wsId, 2026, 5);
     expect(sched.get(groceries)).toBeCloseTo(11, 2);

@@ -274,7 +274,8 @@ brief tick. Mirrors the proven idempotency pattern (`User.lastTrialPushDays`,
 8. **Tool** — upgrade `compareSpendingVsBudget` + shared `analysis/forecast.ts` service.
 9. **Compute** — on-demand, indexed, cacheable later.
 10. **Subscriptions** — live in `RecurringExpense` (separate table), occurrences computed via `occurrencesInRange`; NOT stored as `ScheduledSpend`. Queried separately as `fixedBills`.
-11. **Past-dated unmatched ScheduledSpend** — counted as still-expected (`scheduledDate >= monthStart`, unmatched + undismissed), to avoid under-projection from the today-forward clamp.
+11. **Scheduled spends are TODAY-FORWARD** — `plannedOneOffs` counts only `scheduledDate >= today` (unmatched + undismissed), mirroring subscriptions. (Reversed after live testing: a *past-dated* unmatched scheduled spend has almost always already happened — so it's in the actuals — or is stale, and counting it double-adds. The original `>= monthStart` policy falsely flagged a near-capped category as over because of a 5-days-ago "Friends dinner" that was never matched.) Connects to Plaid sync ([[project]] task #5): without transaction import, scheduled items don't auto-match and linger.
+12. **Headline shows the numbers behind the %** — the budget recap headline carries `budget`/`spent`/`scheduled` (today-forward) alongside `Used %`, and each at-risk/watch row shows its `scheduled` component so `projected > spent` is explained.
 
 ---
 

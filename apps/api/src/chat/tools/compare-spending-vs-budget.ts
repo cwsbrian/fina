@@ -25,6 +25,7 @@ type Item = {
   status: "on-pace" | "over-pace";
   projected: string;
   projectedOverspend: string;
+  scheduled: string;
   runwayDay: number | null;
   severity: RiskTier;
 };
@@ -53,20 +54,23 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
       .map((c) => {
         const amount = parseFloat(c.allocated!);
         const spent = parseFloat(c.spent);
-        const planned = parseFloat(c.scheduled);
-        // Remaining headroom AFTER subtracting both actual spend and
-        // upcoming scheduled/subscription spend (planned) — not just cash left.
+        const fc = fcById.get(c.categoryId);
+        // "planned" = TODAY-FORWARD known future (subscriptions + scheduled
+        // spends) from the forecast — NOT the snapshot's scheduled, which
+        // still counts past-dated rows. Keeps remaining/attention consistent
+        // with the forecast (a past-dated scheduled spend no longer drags a
+        // category into the red).
+        const planned = fc ? fc.fixedBills + fc.plannedOneOffs : parseFloat(c.scheduled);
         const remaining = amount - spent - planned;
         const spentPct = amount > 0 ? Number(((spent / amount) * 100).toFixed(2)) : 0;
         const plannedPct = amount > 0 ? Number(((planned / amount) * 100).toFixed(2)) : 0;
         const status: "on-pace" | "over-pace" = spentPct <= todayPct * 1.05 ? "on-pace" : "over-pace";
-        const fc = fcById.get(c.categoryId);
         return {
           categoryId: c.categoryId,
           categoryName: c.categoryName,
           amount: c.allocated!,
           spent: c.spent,
-          planned: c.scheduled,
+          planned: planned.toFixed(2),
           remaining: remaining.toFixed(2),
           spentPct,
           plannedPct,
@@ -74,6 +78,7 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
           status,
           projected: (fc?.projected ?? spent).toFixed(2),
           projectedOverspend: (fc?.projectedOverspend ?? 0).toFixed(2),
+          scheduled: planned.toFixed(2),
           runwayDay: fc?.runwayDay ?? null,
           severity: fc?.severity ?? "insufficient_history",
         };
@@ -90,7 +95,7 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
     return {
       period: { start, end },
       items,
-      block: toRecapBlock(period, items, totalSpent, totalBudget),
+      block: toRecapBlock(period, items, totalSpent, totalBudget, forecast.portfolio.scheduled),
     };
   },
 };
@@ -114,6 +119,7 @@ function toRecapBlock(
   items: Item[],
   totalSpent: number,
   totalBudget: number,
+  totalScheduled: number,
 ): PresentationBlock {
   const periodLabel =
     period === "this_month" ? "This month" :
@@ -159,6 +165,12 @@ function toRecapBlock(
               value: Math.abs(remaining).toFixed(2),
               direction: (remaining >= 0 ? "down" : "up") as "up" | "down",
             },
+            // Show the underlying numbers behind the % so the headline isn't a
+            // bare percentage: budget cap, spent so far, and today-forward
+            // scheduled+subscription spend.
+            budget: budget.toFixed(2),
+            spent: spent.toFixed(2),
+            scheduled: totalScheduled.toFixed(2),
           }
         : {}),
     },
@@ -174,6 +186,7 @@ function toRecapBlock(
           direction: (rem >= 0 ? "down" : "up") as "up" | "down",
         },
         projected: i.projected,
+        ...(parseFloat(i.scheduled) > 0 ? { scheduled: i.scheduled } : {}),
         severity: i.severity,
       };
     }),

@@ -30,7 +30,7 @@ export type MonthEndForecast = {
   month: number;
   daysLeft: number;
   categories: CategoryForecast[];
-  portfolio: { cap: number; spent: number; projected: number; severity: RiskTier };
+  portfolio: { cap: number; spent: number; scheduled: number; projected: number; severity: RiskTier };
 };
 
 function severityFor(projected: number, cap: number): RiskTier {
@@ -67,7 +67,7 @@ export async function projectMonthEnd(
 
   const snap = await budgetPlanSnapshot(workspaceId, year, month);
   if (!snap) {
-    return { year, month, daysLeft, categories: [], portfolio: { cap: 0, spent: 0, projected: 0, severity: "on_track" } };
+    return { year, month, daysLeft, categories: [], portfolio: { cap: 0, spent: 0, scheduled: 0, projected: 0, severity: "on_track" } };
   }
 
   const capped = snap.categories.filter((c) => c.allocated !== null);
@@ -111,11 +111,16 @@ export async function projectMonthEnd(
 
   const totalCap = parseFloat(snap.totalAmount);
   const totalSpent = parseFloat(snap.totalSpent);
-  const totalScheduled = parseFloat(snap.totalScheduled);
-  const portfolioProjected = round2(totalSpent + totalScheduled);
+  // Workspace-wide scheduled = TODAY-FORWARD subscriptions + scheduled spends
+  // (both maps are already today-forward), across all categories — not the
+  // snapshot's totalScheduled, which still counts past-dated scheduled rows.
+  const sumMap = (m: Map<string, number>) => Array.from(m.values()).reduce((a, b) => a + b, 0);
+  const scheduledTotal = round2(sumMap(subs) + sumMap(scheduled));
+  const portfolioProjected = round2(totalSpent + scheduledTotal);
   const portfolio = {
     cap: totalCap,
     spent: totalSpent,
+    scheduled: scheduledTotal,
     projected: portfolioProjected,
     severity: (totalCap > 0 ? severityFor(portfolioProjected, totalCap) : "on_track") as RiskTier,
   };

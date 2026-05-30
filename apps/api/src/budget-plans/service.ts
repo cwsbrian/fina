@@ -588,8 +588,14 @@ export async function monthlyScheduledSpendByCategory(
   month1to12: number,
 ): Promise<Map<string, number>> {
   const { from, to } = monthBoundsUtc(year, month1to12);
+  // Count scheduled spends from TODAY forward only. A past-dated unmatched
+  // scheduled spend has almost always already happened (so it's in the
+  // actuals) or is stale — counting it would double-add against spend.
+  // Mirrors subscription occurrences, which are already clamped today-forward.
+  const today = todayUTCMidnight();
+  const effFrom = today > from ? today : from;
   const rows = await prisma.scheduledSpend.findMany({
-    where: { workspaceId, scheduledDate: { gte: from, lt: to }, matchedTxId: null, dismissedAt: null },
+    where: { workspaceId, scheduledDate: { gte: effFrom, lt: to }, matchedTxId: null, dismissedAt: null },
     select: { amount: true, categoryId: true },
   });
   const sums = new Map<string, number>();

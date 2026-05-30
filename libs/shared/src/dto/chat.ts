@@ -82,6 +82,12 @@ export type PresentationBlock =
         };
         /** Optional projected month-end total, stringified, no currency symbol. */
         projected?: string;
+        /** Optional budget total (cap), stringified, no currency symbol. */
+        budget?: string;
+        /** Optional total spent so far, stringified. */
+        spent?: string;
+        /** Optional total upcoming scheduled+subscription spend (today-forward). */
+        scheduled?: string;
       };
       /** Detail rows. Empty array means "no data this period" — renderer
        *  shows a friendly empty state. */
@@ -100,6 +106,9 @@ export type PresentationBlock =
         };
         /** Optional projected month-end spend for this row. */
         projected?: string;
+        /** Optional upcoming scheduled+subscription spend for this row
+         *  (today-forward) — explains why `projected` exceeds the amount spent. */
+        scheduled?: string;
         /** Optional forecast severity for this row. */
         severity?: RiskTier;
       }>;
