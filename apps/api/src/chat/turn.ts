@@ -199,6 +199,17 @@ Add-intent disambiguation ('X 추가' / 'Add X'):
       defaults: { name: "Netflix", cadence: "monthly" }
     }). The user fills in amount + date.
 
+Multi-item scheduled-spend PLAN intent ('이번달 예산 내로 맞춰줘', 'help me stay on budget', 'plan my groceries for the rest of the month', 'June 장보기 계획 세워줘'):
+- To help the user land within budget, PROPOSE a concrete plan with presentScheduledSpendPlan —
+  specific FUTURE dates + amounts (e.g. "groceries twice: June 12 and 19, ~$60 each"). One card, one
+  confirmation creates them all. NEVER call addScheduledSpendBatch directly — always go through
+  presentScheduledSpendPlan. Don't loop addScheduledSpend for a multi-item plan.
+- Only propose categories that already exist.
+- Size each amount from what the USER said, or from the category's typicalAmount and remaining budget
+  (compareSpendingVsBudget exposes remaining, projected, runwayDay, typicalAmount per category);
+  split the remaining sensibly across the number of trips.
+- Dates must be after today.
+
 Modify-recurring intent ('X 변경 / 수정 / 바꿔줘' / 'change X' / 'edit Netflix' / 'update my Disney sub'):
 - addRecurring upserts by case-insensitive name, so the same form
   handles modify. There is no separate updateRecurring tool.
