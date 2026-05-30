@@ -213,6 +213,18 @@ describe("projectMonthEnd", () => {
     expect(f.portfolio.severity).toBe("on_track");
   });
 
+  it("portfolio projection uses the trailing-90-day average when it exceeds committed spend", async () => {
+    await plan(2000); // helper sets totalAmount "9000.00", Dining cap 2000
+    // Heavy prior-90-day spend, nothing this month → monthlyAvg (~2000) > committed (~0)
+    for (const day of ["2026-03-10", "2026-03-25", "2026-04-10", "2026-04-25"]) {
+      await spend("1500.00", `${day}T12:00:00Z`);
+    }
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    expect(f.portfolio.spent).toBeCloseTo(0, 0);
+    expect(f.portfolio.projected).toBeGreaterThan(f.portfolio.spent + f.portfolio.scheduled);
+    expect(f.portfolio.projected).toBeGreaterThan(0);
+  });
+
   it("exposes a per-category typical (median) transaction amount", async () => {
     await plan(500);
     for (const a of ["10.00","20.00","60.00"]) {

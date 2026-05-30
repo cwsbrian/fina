@@ -1,8 +1,75 @@
 import { prisma } from "../db.js";
 import { resolveUserTz, partsInTz } from "./tools/periods.js";
 import { budgetPlanSnapshot } from "../budget-plans/service.js";
+import { round2, type MonthEndForecast, type CategoryForecast } from "../analysis/forecast.js";
 
 export type BriefType = "daily" | "weekly" | "monthly";
+
+/** Format a number as display currency, mirroring apps/mobile/src/format/money.ts
+ *  (locale "en-CA") for app-wide parity. Do NOT switch to en-US — matching the
+ *  client is intentional. Falls back gracefully on an unknown ISO code. */
+function formatMoney(amount: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-CA", {
+      style: "currency",
+      currency,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
+}
+
+/** Server-internal forecast summary fed to Gemini (never a client DTO). All
+ *  amounts are display-formatted so the prompt uses them verbatim. */
+export type BriefForecast = {
+  daysLeft: number;
+  /** False when projected === 0 (brand-new workspace, no spend + no 90-day avg). */
+  hasHistory: boolean;
+  portfolio: {
+    cap: string;
+    projected: string;
+    overspend: string; // "$0.00" when not over
+    severity: "on_track" | "watch" | "at_risk";
+  } | null; // null ⇔ no positive total cap (no plan OR totalAmount<=0)
+  topRisks: Array<{
+    category: string;
+    projected: string;
+    cap: string;
+    overspend: string;
+    severity: "watch" | "at_risk";
+  }>;
+};
+
+/** Pure mapper: MonthEndForecast + currency → BriefForecast. No DB, no clock. */
+export function summarizeForecast(f: MonthEndForecast, currency: string): BriefForecast {
+  const hasHistory = f.portfolio.projected > 0;
+  const portfolio =
+    f.portfolio.cap > 0
+      ? {
+          cap: formatMoney(f.portfolio.cap, currency),
+          projected: formatMoney(f.portfolio.projected, currency),
+          overspend: formatMoney(Math.max(0, round2(f.portfolio.projected - f.portfolio.cap)), currency),
+          severity: f.portfolio.severity as "on_track" | "watch" | "at_risk",
+        }
+      : null;
+  const topRisks = f.categories
+    .filter(
+      (c): c is CategoryForecast & { severity: "watch" | "at_risk" } =>
+        c.severity === "watch" || c.severity === "at_risk",
+    )
+    .sort((a, b) => b.projectedOverspend - a.projectedOverspend)
+    .slice(0, 3)
+    .map((c) => ({
+      category: c.categoryName,
+      projected: formatMoney(c.projected, currency),
+      cap: formatMoney(c.cap, currency),
+      overspend: formatMoney(c.projectedOverspend, currency),
+      severity: c.severity,
+    }));
+  return { daysLeft: f.daysLeft, hasHistory, portfolio, topRisks };
+}
 
 export type WorkspaceContext = {
   id: string;
