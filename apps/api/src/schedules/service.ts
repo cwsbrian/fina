@@ -287,6 +287,50 @@ export async function updateScheduledSpendService(
   });
 }
 
+export type ScheduledSpendBatchItem = {
+  categoryId: string;
+  amount: number;
+  scheduledDate: string;  // YYYY-MM-DD
+  note?: string;
+};
+
+export async function addScheduledSpendBatchService(input: {
+  workspaceId: string;
+  items: ScheduledSpendBatchItem[];
+}): Promise<{ schedules: ReturnType<typeof toDTO>[]; count: number }> {
+  // Validate + normalize every item up front (fail before any write).
+  const prepared = input.items.map((it) => ({
+    categoryId: it.categoryId,
+    amount: (rethrowValidation(() => validateAmount(it.amount)), it.amount),
+    scheduledDate: rethrowValidation(() => parseOccurredAt(it.scheduledDate)),
+    note: rethrowValidation(() => validateNote(it.note)),
+  }));
+  return await withWorkspaceLock(input.workspaceId, async (tx) => {
+    const ownerTz = await workspaceOwnerTz(input.workspaceId);
+    const today = todayDateOnlyInTz(ownerTz);
+    const schedules: ReturnType<typeof toDTO>[] = [];
+    for (const it of prepared) {
+      const cat = await tx.category.findFirst({
+        where: { id: it.categoryId, workspaceId: input.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!cat) throw new ScheduledSpendError("category_not_found");
+      const row = await tx.scheduledSpend.create({
+        data: {
+          workspaceId: input.workspaceId,
+          categoryId: it.categoryId,
+          amount: new Prisma.Decimal(it.amount),
+          scheduledDate: it.scheduledDate,
+          note: it.note,
+        },
+        include: { matchedTx: { select: { removedAt: true } } },
+      });
+      schedules.push(toDTO(row, today));
+    }
+    return { schedules, count: schedules.length };
+  });
+}
+
 export type RemoveResult =
   | { removed: true }
   | { removed: false; alreadyRemoved: true };
