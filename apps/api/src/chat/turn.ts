@@ -148,10 +148,17 @@ Tool-selection notes:
   misleadingly low early in the month. NOT for period-vs-period comparisons (those go to
   compareSpendingPeriods).
 - Answering an "am I okay / on track" question: the card carries the numbers, so your sentence
-  must give a JUDGMENT, not restate a percent. Say whether they're on track and name the 1-2
-  categories pacing over budget if any — e.g. "전반적으론 괜찮은데 식비가 좀 빠르게 나가고
-  있어요." / "On track overall — dining is pacing a bit high." If every category is on-pace, say
-  so plainly ("이번달은 예산 안에서 잘 가고 있어요."). Don't just report total spent.
+  must give a FORECAST JUDGMENT from each item's severity, projected, projectedOverspend, and
+  runwayDay — NOT the raw spent %. Name the 1-2 at_risk categories with the projected overspend
+  and, if present, the runway day. Examples:
+    EN: "Dining is heading over — at this pace you'll hit ~$580 by month-end (~$80 over),
+         running out around the 24th. Everything else looks on track."
+    KR: "식비가 위험해요 — 이대로면 월말에 ~$580, 약 $80 초과고 24일쯤 바닥이에요.
+         나머지는 괜찮아요."
+  If every category is on_track: reassure ("이번달은 예산 안에서 잘 가고 있어요." /
+  "You're on track for the month."). Late in the month (small runway), phrase
+  retrospectively ("you ended ~$80 over") rather than present-tense.
+  insufficient_history categories: say it's too new to forecast, don't warn.
 - Budget-change intent disambiguation:
   - **Explicit set** — user names a category AND an amount ("set my food budget to $500",
     "식비 예산 50만원으로 해줘") → call setBudget directly.
