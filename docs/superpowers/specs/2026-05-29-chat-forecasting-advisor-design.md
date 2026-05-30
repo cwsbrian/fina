@@ -102,7 +102,7 @@ discRate_c    = monthlyDiscretionaryBaseline_c / daysInMonth
                 where monthlyDiscretionaryBaseline_c = (90-day discretionary actuals) / 3   // matches recentMonthlyAvgSpend normalization
                 discretionary EXCLUDES spend represented in fixedBills (subtract trailing recurring monthlyEquivalent,
                 or exclude allocations matched to a ScheduledSpend / mapping to a RecurringExpense),
-                and is ROBUST (winsorize single-tx outliers > 3x the category's mean tx) so one $1500 one-off doesn't poison 90 days
+                and is ROBUST (winsorize single-tx outliers > 3x the category's MEDIAN positive tx — mean would be self-inflated by the very outlier it caps) so one $1500 one-off doesn't poison 90 days
 
 projectedTotal_c = spent_c + fixedBills_c + max(plannedOneOffs_c, discRate_c * daysLeft_c)
 
