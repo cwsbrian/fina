@@ -107,4 +107,15 @@ describe("subscription vs scheduled split", () => {
     const sched = await monthlyScheduledSpendByCategory(wsId, 2026, 5);
     expect(sched.get(groceries)).toBeCloseTo(75, 2);
   });
+
+  it("scheduled spend includes the 1st of this month and excludes the 1st of next month", async () => {
+    await prisma.scheduledSpend.create({
+      data: { workspaceId: wsId, categoryId: groceries, amount: "11.00", scheduledDate: new Date("2026-05-01") }, // this month 1st → counted
+    });
+    await prisma.scheduledSpend.create({
+      data: { workspaceId: wsId, categoryId: groceries, amount: "99.00", scheduledDate: new Date("2026-06-01") }, // next month 1st → excluded
+    });
+    const sched = await monthlyScheduledSpendByCategory(wsId, 2026, 5);
+    expect(sched.get(groceries)).toBeCloseTo(11, 2);
+  });
 });

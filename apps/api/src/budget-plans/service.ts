@@ -49,6 +49,17 @@ export function firstOfMonth(year: number, month1to12: number): Date {
   );
 }
 
+/** [from, to) midnight-UTC bounds for a calendar month. Use this (NOT
+ *  firstOfMonth, which is UTC-noon) when filtering @db.Date columns
+ *  (scheduledDate, nextOccurrenceDate) so items dated the 1st land in the
+ *  correct month. Date.UTC rolls Dec→Jan over automatically. */
+function monthBoundsUtc(year: number, month1to12: number): { from: Date; to: Date } {
+  return {
+    from: new Date(Date.UTC(year, month1to12 - 1, 1)),
+    to: new Date(Date.UTC(year, month1to12, 1)),
+  };
+}
+
 export function isDefaultPeriod(d: Date): boolean {
   return d.toISOString().slice(0, 10) === "1900-01-01";
 }
@@ -563,12 +574,7 @@ export async function monthlySubscriptionByCategory(
   year: number,
   month1to12: number,
 ): Promise<Map<string, number>> {
-  const from = firstOfMonth(year, month1to12);
-  const nextYear = month1to12 === 12 ? year + 1 : year;
-  const nextMonth = month1to12 === 12 ? 1 : month1to12 + 1;
-  // Midnight UTC to correctly exclude @db.Date occurrences that land on the
-  // first of next month (those come back as T00:00:00Z, which is < noon T12).
-  const to = new Date(Date.UTC(nextYear, nextMonth - 1, 1, 0, 0, 0, 0));
+  const { from, to } = monthBoundsUtc(year, month1to12);
   const m = await subscriptionOccurrencesByCategory(workspaceId, from, to);
   return new Map(Array.from(m, ([id, v]) => [id, Math.round(v.spent * 100) / 100]));
 }
@@ -581,8 +587,7 @@ export async function monthlyScheduledSpendByCategory(
   year: number,
   month1to12: number,
 ): Promise<Map<string, number>> {
-  const from = firstOfMonth(year, month1to12);
-  const to = firstOfMonth(month1to12 === 12 ? year + 1 : year, month1to12 === 12 ? 1 : month1to12 + 1);
+  const { from, to } = monthBoundsUtc(year, month1to12);
   const rows = await prisma.scheduledSpend.findMany({
     where: { workspaceId, scheduledDate: { gte: from, lt: to }, matchedTxId: null, dismissedAt: null },
     select: { amount: true, categoryId: true },
