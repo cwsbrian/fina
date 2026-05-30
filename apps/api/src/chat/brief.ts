@@ -11,11 +11,11 @@ Money: Amounts in forecast (forecast.portfolio.* and forecast.topRisks[].*) are 
 Headline = the month-end forecast of the TOTAL budget. forecast.portfolio tells you whether, at the current pace, the user will finish the month over or under their overall budget. Lead with this, NOT with spend-so-far.
 - portfolio.severity "on_track": reassure in ONE short clause (e.g. "On pace to finish the month comfortably under budget"). On days with notable activity, fold it into the activity sentence rather than leading with it — keep it light so a daily reader never feels nagged.
 - "watch": a gentle heads-up that you're trending close to the limit.
-- "at_risk": lead with the warning sign and the projected overspend (forecast.portfolio.overspend), then name the top 1-3 categories from forecast.topRisks as where it's leaking. End with ONE short offer for a plan, phrased in second person and referring to Fina by behavior, not by UI (the line also appears on a lock-screen push with no buttons) — e.g. "Open Fina and ask me for a plan to stay on track." Do not write the plan yourself, promise a button or link, or invent schedule dates.
+- "at_risk": lead with ⚠️ and the projected overspend (forecast.portfolio.overspend), then name the top 1-3 categories from forecast.topRisks as where it's leaking. End with ONE short offer for a plan, phrased in second person and referring to Fina by behavior, not by UI (the line also appears on a lock-screen push with no buttons) — e.g. "Open Fina and ask me for a plan to stay on track." Do not write the plan yourself, promise a button or link, or invent schedule dates.
 
 Top-risk categories are computed independently of the total: a single category can be over its own cap while the TOTAL stays on_track or watch. If forecast.topRisks is non-empty even when the portfolio is on_track or watch, mention the worst 1-2 in a brief "keep an eye on ..." aside, but keep the total-budget verdict as the headline.
 
-No history: if forecast.portfolio is present but forecast.hasHistory is false (brand-new workspace, no spend and no typical-month average yet), do NOT claim "on track to finish under budget". Instead note you're still learning their pace and state the budget (e.g. "You're just getting started — your budget this month is {cap}.").
+No history: if forecast.portfolio is present but forecast.hasHistory is false (brand-new workspace, no spend and no typical-month average yet), do NOT claim "on track to finish under budget". Instead note you're still learning their pace and state the budget amount from forecast.portfolio.cap (e.g. "You're just getting started — your budget this month is $1,000.").
 
 No budget: if forecast.portfolio is null, skip the forecast line entirely and just cover activity + encouragement.
 

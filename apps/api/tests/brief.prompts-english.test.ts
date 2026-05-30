@@ -34,4 +34,18 @@ describe("brief LLM strings are English (no Hangul)", () => {
       expect(v).toContain("ask me for a plan to stay on track");
     }
   });
+
+  // Each per-type prompt must carry its own framing tail (not only the shared
+  // RULES) — guards against a regression that drops a per-type suffix.
+  it("each brief type carries its own framing tail", () => {
+    expect(SYSTEM_PROMPT_PER_TYPE.daily).toContain("DAILY brief");
+    expect(SYSTEM_PROMPT_PER_TYPE.weekly).toContain("WEEKLY brief");
+    expect(SYSTEM_PROMPT_PER_TYPE.monthly).toContain("MONTHLY brief");
+  });
+
+  // The at_risk severity line must carry the literal warning glyph (the brief
+  // doubles as a lock-screen push; the glyph is the only visual severity cue).
+  it("at_risk guidance uses the literal warning glyph", () => {
+    expect(SYSTEM_PROMPT_PER_TYPE.daily).toContain("⚠️");
+  });
 });
