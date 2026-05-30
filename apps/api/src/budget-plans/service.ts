@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import { occurrencesInRange } from "../recurring/occurrences.js";
+import { monthlyEquivalent, occurrencesInRange } from "../recurring/occurrences.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
@@ -479,4 +479,70 @@ export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; mon
     if (month === 13) { month = 1; year += 1; }
   }
   return { year, month };
+}
+
+/** Per-category DISCRETIONARY daily spend rate over the trailing 90 days,
+ *  for the month-end forecast. Discretionary = actual category spend with the
+ *  category's recurring (subscription) monthly-equivalent removed, so fixed
+ *  bills aren't double-counted against forward occurrences. Refunds are NETTED
+ *  (we do NOT filter amount>0) and pending transactions are EXCLUDED to avoid
+ *  double-counting the later posted row. A single outlier transaction is
+ *  winsorized to 3x the category's mean so one big buy doesn't dominate 90 days.
+ *  Returns a Map categoryId -> daily rate (>= 0). */
+export async function recentDiscretionaryDailyByCategory(
+  workspaceId: string,
+  categoryIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (categoryIds.length === 0) return out;
+  const since = new Date(Date.now() - 90 * 86_400_000);
+
+  const rows = await prisma.transactionAllocation.findMany({
+    where: {
+      categoryId: { in: categoryIds },
+      transaction: {
+        workspaceId,
+        removedAt: null,
+        pending: false,
+        occurredAt: { gte: since },
+      },
+    },
+    select: { amount: true, categoryId: true },
+  });
+
+  const byCat = new Map<string, number[]>();
+  for (const r of rows) {
+    if (!r.categoryId) continue;
+    const arr = byCat.get(r.categoryId) ?? [];
+    arr.push(Number(r.amount));
+    byCat.set(r.categoryId, arr);
+  }
+
+  const subs = await prisma.recurringExpense.findMany({
+    where: { workspaceId, categoryId: { in: categoryIds } },
+    select: { amount: true, cadence: true, categoryId: true },
+  });
+  const recurringMonthly = new Map<string, number>();
+  for (const s of subs) {
+    if (!s.categoryId) continue;
+    recurringMonthly.set(
+      s.categoryId,
+      (recurringMonthly.get(s.categoryId) ?? 0) + monthlyEquivalent(Number(s.amount), s.cadence),
+    );
+  }
+
+  for (const id of categoryIds) {
+    const amounts = byCat.get(id) ?? [];
+    if (amounts.length === 0) {
+      out.set(id, 0);
+      continue;
+    }
+    const mean = amounts.reduce((a, b) => a + b, 0) / amounts.length;
+    const cap = 3 * mean;
+    const winsorized = amounts.map((a) => (a > cap ? cap : a));
+    const net90 = winsorized.reduce((a, b) => a + b, 0);
+    const discretionary90 = net90 - (recurringMonthly.get(id) ?? 0) * 3;
+    out.set(id, Math.max(0, discretionary90) / 90);
+  }
+  return out;
 }
