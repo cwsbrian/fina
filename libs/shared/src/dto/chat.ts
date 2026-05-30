@@ -1,4 +1,4 @@
-import type { ChatMessageRole, Cadence, ScheduledSpendStatus } from "../enums.js";
+import type { ChatMessageRole, Cadence, ScheduledSpendStatus, RiskTier } from "../enums.js";
 import type { PlaidItemStatus } from "./plaid.js";
 
 /** Plan 2-chat-user-scope: threads are user-owned with nullable workspace.
@@ -80,6 +80,8 @@ export type PresentationBlock =
           value: string;
           direction: "up" | "down";
         };
+        /** Optional projected month-end total, stringified, no currency symbol. */
+        projected?: string;
       };
       /** Detail rows. Empty array means "no data this period" — renderer
        *  shows a friendly empty state. */
@@ -96,6 +98,10 @@ export type PresentationBlock =
           value: string;
           direction: "up" | "down";
         };
+        /** Optional projected month-end spend for this row. */
+        projected?: string;
+        /** Optional forecast severity for this row. */
+        severity?: RiskTier;
       }>;
       /** Optional footer line — e.g. "Top 5 of 23 categories" or trend
        *  commentary. Renderer styles as small muted text. */
