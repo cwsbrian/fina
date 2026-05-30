@@ -42,7 +42,12 @@ export function RecapBlock({ block }: Props) {
       ) : null}
 
       {block.rows.length === 0 ? (
-        <BlockEmpty text="No data for this period yet." />
+        // Empty rows can mean two different things: genuinely no data, OR a
+        // budget recap where every category is on track so none need a row.
+        // In the latter case the server sends a footer ("Every category is on
+        // pace.") that already explains it — showing "No data" alongside it is
+        // contradictory. Only show the empty state when there's no footer.
+        block.footer ? null : <BlockEmpty text="No data for this period yet." />
       ) : (
         <View>
           {block.rows.map((r, i) => (
