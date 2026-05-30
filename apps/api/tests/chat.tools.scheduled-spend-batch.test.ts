@@ -6,6 +6,8 @@ import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { addScheduledSpendBatchService } from "../src/schedules/service.js";
 import { addScheduledSpendBatch } from "../src/chat/tools/add-scheduled-spend-batch.js";
+import { presentScheduledSpendPlan } from "../src/chat/tools/present-scheduled-spend-plan.js";
+import { consumeIntentService } from "../src/intents/service.js";
 import type { ToolContext } from "../src/chat/tools/types.js";
 import { testEnv } from "./helpers/test-env.js";
 
@@ -115,5 +117,94 @@ describe("addScheduledSpendBatch tool", () => {
 
     const rows = await prisma.scheduledSpend.findMany({ where: { workspaceId: wsId } });
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("presentScheduledSpendPlan + consume", () => {
+  it("(a) returns plan_proposal_card; intent consumed creates all rows; total correct", async () => {
+    const { wsId, userId } = await setup("presenter-ok@t.co");
+    // Use bootstrapped default categories (seeded at workspace creation)
+    await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
+    await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Dining" } });
+
+    const ctx: ToolContext = { env: {} as never, workspaceId: wsId, userId, role: "owner" };
+    const result = await presentScheduledSpendPlan.run(ctx, {
+      question: "Groceries twice in June?",
+      items: [
+        { category: "groceries", amount: 60, scheduled_date: "2026-06-03" },
+        { category: "Dining",    amount: 55, scheduled_date: "2026-06-10" },
+      ],
+    });
+
+    expect(result.block.type).toBe("plan_proposal_card");
+    expect(result.block.rows).toHaveLength(2);
+    expect(result.block.total).toBe("115.00");
+    expect(result.block.accept_label).toBe("Schedule it");
+    expect(result.block.reject_label).toBe("Not now");
+    expect(typeof result.block.accept_intent).toBe("string");
+
+    // No scheduled spends yet
+    const before = await prisma.scheduledSpend.findMany({ where: { workspaceId: wsId } });
+    expect(before).toHaveLength(0);
+
+    // Consume the intent
+    const intentId = result.block.accept_intent;
+    await consumeIntentService(
+      { env: {} as never, workspaceId: wsId, userId, role: "owner" },
+      intentId,
+    );
+
+    // Both rows created
+    const after = await prisma.scheduledSpend.findMany({ where: { workspaceId: wsId } });
+    expect(after).toHaveLength(2);
+  });
+
+  it("(b) unknown category → throws, zero ActionIntent rows written", async () => {
+    const { wsId, userId } = await setup("presenter-unknown-cat@t.co");
+    const ctx: ToolContext = { env: {} as never, workspaceId: wsId, userId, role: "owner" };
+
+    const intentsBefore = await prisma.actionIntent.count({ where: { workspaceId: wsId } });
+    await expect(
+      presentScheduledSpendPlan.run(ctx, {
+        question: "Bad category plan",
+        items: [{ category: "NoSuchCategory", amount: 60, scheduled_date: "2026-06-03" }],
+      }),
+    ).rejects.toThrow("category_not_found");
+
+    const intentsAfter = await prisma.actionIntent.count({ where: { workspaceId: wsId } });
+    expect(intentsAfter).toBe(intentsBefore);
+  });
+
+  it("(c) past-dated item → throws date_in_past, zero ActionIntent rows written", async () => {
+    const { wsId, userId } = await setup("presenter-past-date@t.co");
+    const ctx: ToolContext = { env: {} as never, workspaceId: wsId, userId, role: "owner" };
+
+    const intentsBefore = await prisma.actionIntent.count({ where: { workspaceId: wsId } });
+    await expect(
+      presentScheduledSpendPlan.run(ctx, {
+        question: "Past date plan",
+        items: [{ category: "Groceries", amount: 60, scheduled_date: "2020-01-01" }],
+      }),
+    ).rejects.toThrow("date_in_past");
+
+    const intentsAfter = await prisma.actionIntent.count({ where: { workspaceId: wsId } });
+    expect(intentsAfter).toBe(intentsBefore);
+  });
+
+  it("(d) 3-decimal amount (60.999) → throws zod refine, zero ActionIntent rows written", async () => {
+    const { wsId, userId } = await setup("presenter-3dec@t.co");
+    const ctx: ToolContext = { env: {} as never, workspaceId: wsId, userId, role: "owner" };
+
+    const intentsBefore = await prisma.actionIntent.count({ where: { workspaceId: wsId } });
+    await expect(
+      presentScheduledSpendPlan.run(ctx, {
+        question: "3-decimal plan",
+        // args schema's zod refine rejects 3-decimal amounts
+        items: [{ category: "Groceries", amount: 60.999, scheduled_date: "2026-06-03" }],
+      }),
+    ).rejects.toThrow();
+
+    const intentsAfter = await prisma.actionIntent.count({ where: { workspaceId: wsId } });
+    expect(intentsAfter).toBe(intentsBefore);
   });
 });

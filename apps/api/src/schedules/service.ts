@@ -115,7 +115,7 @@ function toDTO(row: ScheduleRow, todayDateOnly: Date): ScheduleDTO {
  * `@db.Date` round-trip representation of scheduledDate so component-by-
  * component comparisons line up.
  */
-function todayDateOnlyInTz(tz: string): Date {
+export function todayDateOnlyInTz(tz: string): Date {
   const parts = partsInTz(new Date(), tz);
   return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
 }
@@ -126,7 +126,7 @@ function todayDateOnlyInTz(tz: string): Date {
  * use the workspace OWNER's tz — not the caller's — so a shared workspace
  * shows consistent today/upcoming labels to every member.
  */
-async function workspaceOwnerTz(workspaceId: string): Promise<string> {
+export async function workspaceOwnerTz(workspaceId: string): Promise<string> {
   const owner = await prisma.membership.findFirst({
     where: { workspaceId, role: "owner" },
     orderBy: { createdAt: "asc" },

@@ -36,6 +36,7 @@ import { getGoalDetails } from "./get-goal-details.js";
 import { presentGoalForm } from "./present-goal-form.js";
 import { archiveGoal } from "./archive-goal.js";
 import { addScheduledSpendBatch } from "./add-scheduled-spend-batch.js";
+import { presentScheduledSpendPlan } from "./present-scheduled-spend-plan.js";
 
 export const REGISTRY: ToolDef[] = [
   listTransactions as ToolDef,
@@ -75,4 +76,5 @@ export const REGISTRY: ToolDef[] = [
   presentGoalForm as ToolDef,
   archiveGoal as ToolDef,
   addScheduledSpendBatch as ToolDef,
+  presentScheduledSpendPlan as ToolDef,
 ];
