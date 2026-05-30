@@ -6,7 +6,7 @@ vi.mock("@google/genai", () => ({
   GoogleGenAI: vi.fn().mockImplementation(() => ({
     models: {
       generateContent: vi.fn().mockResolvedValue({
-        text: "좋은 아침! 어제 Starbucks 한 건 분류 필요해. 오늘 시장 $100 잡혀있어.",
+        text: "Good morning! Your Starbucks charge from yesterday needs categorizing. $100 is scheduled for groceries today.",
       }),
     },
   })),
