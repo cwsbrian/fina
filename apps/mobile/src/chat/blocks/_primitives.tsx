@@ -127,6 +127,8 @@ export function KVPRow({
   sub,
   barPct,
   delta,
+  projected,
+  severity,
   isLast,
 }: {
   label: string;
@@ -134,6 +136,8 @@ export function KVPRow({
   sub?: string;
   barPct?: number;
   delta?: { value: string; direction: "up" | "down" };
+  projected?: string;
+  severity?: string;
   isLast?: boolean;
 }) {
   return (
@@ -146,6 +150,11 @@ export function KVPRow({
           {sub ? (
             <Text style={styles.rowSub} numberOfLines={1}>
               {sub}
+            </Text>
+          ) : null}
+          {projected ? (
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {severity === "at_risk" ? "⚠️ " : ""}projected {projected}
             </Text>
           ) : null}
         </View>

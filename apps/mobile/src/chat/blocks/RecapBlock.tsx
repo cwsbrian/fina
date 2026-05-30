@@ -50,6 +50,8 @@ export function RecapBlock({ block }: Props) {
               {...(r.sub !== undefined ? { sub: r.sub } : {})}
               {...(typeof r.bar_pct === "number" ? { barPct: r.bar_pct } : {})}
               {...(r.delta !== undefined ? { delta: r.delta } : {})}
+              {...(r.projected !== undefined ? { projected: r.projected } : {})}
+              {...(r.severity !== undefined ? { severity: r.severity } : {})}
               isLast={i === block.rows.length - 1}
             />
           ))}
