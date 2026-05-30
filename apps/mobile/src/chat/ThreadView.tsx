@@ -101,6 +101,11 @@ export function ThreadView({
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Bumped on every send to force-remount the composer TextInput. Clearing the
+  // controlled value (and even .clear()) leaves a residual marked-text syllable
+  // under the iOS Korean (CJK) IME, so the just-sent text reappears in the
+  // field. Remounting throws away the native input + its IME composition state.
+  const [composerKey, setComposerKey] = useState(0);
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
@@ -249,6 +254,16 @@ export function ThreadView({
     };
   }, [localId, scrollToBottom]);
 
+  // After a send completes the composer was force-remounted (key bump) to clear
+  // the CJK IME residual, which also drops focus. Refocus once it's editable
+  // again so the keyboard stays up for the next message. Only after a real send
+  // (composerKey > 0) — never steal focus on first open.
+  useEffect(() => {
+    if (sending || composerKey === 0) return;
+    const t = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [sending, composerKey]);
+
   const onSend = async () => {
     const body = draft.trim();
     if (!body || sending) return;
@@ -258,6 +273,8 @@ export function ThreadView({
     // residual composing syllable in the field under the Korean (CJK) IME,
     // so the text reappears after send. .clear() resets native composition.
     inputRef.current?.clear();
+    // Remount the composer so the CJK IME composing buffer is fully discarded.
+    setComposerKey((k) => k + 1);
     const tempId = `tmp-${Date.now()}`;
     setMessages((prev) => [
       ...prev,
@@ -455,6 +472,7 @@ export function ThreadView({
       {!formFocused && (
       <View style={styles.composer}>
         <TextInput
+          key={composerKey}
           ref={inputRef}
           style={styles.input}
           placeholder="Message Fina…"
