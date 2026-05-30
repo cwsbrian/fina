@@ -10,8 +10,6 @@ import { ScheduledPlanItem } from "./_scheduled-plan-item.js";
 const Args = z.object({
   question: z.string().min(1).max(500),
   items: z.array(ScheduledPlanItem).min(1).max(20),
-  accept_label: z.string().min(1).max(40).optional(),
-  reject_label: z.string().min(1).max(40).optional(),
 });
 
 type PlanCard = Extract<PresentationBlock, { type: "plan_proposal_card" }>;
@@ -62,8 +60,11 @@ export const presentScheduledSpendPlan: ToolDef<z.infer<typeof Args>, { block: P
           ...(it.note !== undefined ? { note: it.note } : {}),
         })),
         total: total.toFixed(2),
-        accept_label: args.accept_label ?? "Schedule it",
-        reject_label: args.reject_label ?? "Not now",
+        // UI chrome stays English (North-America launch) regardless of the
+        // conversation language — the LLM-authored `question` carries the
+        // localized message, the buttons do not.
+        accept_label: "Schedule it",
+        reject_label: "Not now",
         accept_intent: out.intent.id,
       },
     };

@@ -1,5 +1,6 @@
 import { DEFAULT_TZ } from "@fina/shared";
 import { prisma } from "../../db.js";
+import { serverNow } from "../../dev-clock.js";
 
 export type BasicPeriod = "today" | "this_week" | "this_month" | "last_month";
 export type ReviewPeriod = BasicPeriod | "all_time";
@@ -123,7 +124,7 @@ function addDaysLocal(d: Date, n: number, tz: string): Date {
 export async function lookbackMonthStart(
   userId: string,
   lookbackMonths: number,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<Date> {
   const tz = await resolveUserTz(userId);
   const p = partsInTz(now, tz);
@@ -147,7 +148,7 @@ export function dateKeyInTz(instant: Date, tz: string): string {
 export async function basicPeriodRange(
   userId: string,
   period: BasicPeriod,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<{ gte: Date; lt: Date }> {
   const tz = await resolveUserTz(userId);
   const p = partsInTz(now, tz);
@@ -172,7 +173,7 @@ export async function basicPeriodRange(
 export async function reviewPeriodRange(
   userId: string,
   period: ReviewPeriod,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<{ gte?: Date; lt?: Date }> {
   if (period === "all_time") return {};
   return basicPeriodRange(userId, period, now);
@@ -182,7 +183,7 @@ export async function comparisonRanges(
   userId: string,
   currentPeriod: CurrentPeriod,
   comparisonPeriod: ComparisonPeriod,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<{ current: { gte: Date; lt: Date }; comparison: { gte: Date; lt: Date } }> {
   if (currentPeriod === "this_month" && comparisonPeriod === "last_month") {
     const current = await basicPeriodRange(userId, "this_month", now);
@@ -269,7 +270,7 @@ export const UNTIL_ARG_DESC =
  *  resolve "이번달" / "this week" to specific ISO dates without guessing. */
 export async function todayKeyInTz(
   userId: string,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<{ today: string; tz: string }> {
   const tz = await resolveUserTz(userId);
   return { today: dateKeyInTz(now, tz), tz };
@@ -282,7 +283,7 @@ export async function todayKeyInTz(
 export async function firstOfMonthDateInTz(
   userId: string,
   monthsOffset: number,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<Date> {
   const tz = await resolveUserTz(userId);
   const p = partsInTz(now, tz);
