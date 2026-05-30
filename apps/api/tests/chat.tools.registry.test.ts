@@ -229,14 +229,15 @@ describe("REGISTRY (plan 1c-recurring-persist)", () => {
     }
   });
 
-  it("registry has 36 tools total", () => {
+  it("registry has 38 tools total", () => {
     // Cumulative source-of-truth count. Bump this when a new tool is added
     // to apps/api/src/chat/tools/index.ts REGISTRY. The number is checked
     // ONCE here, not in every plan-specific describe (prior duplicates
     // removed in 1K-cleanup). 30 base tools + 6 goal tools (listGoals,
     // getGoalDetails, presentGoalForm, addGoal, updateGoal, archiveGoal)
-    // = 36.
-    expect(REGISTRY).toHaveLength(36);
+    // + 2 scheduled-plan tools (addScheduledSpendBatch executor +
+    // presentScheduledSpendPlan presenter) = 38.
+    expect(REGISTRY).toHaveLength(38);
   });
 
   it("addRecurring, listRecurring, removeRecurring are all registered", () => {

@@ -2,10 +2,13 @@ import type { RiskTier } from "@fina/shared";
 import {
   budgetPlanSnapshot,
   recentDiscretionaryDailyByCategory,
+  recentTypicalAmountByCategory,
   monthlySubscriptionByCategory,
   monthlyScheduledSpendByCategory,
+  recentMonthlyAvgSpend,
 } from "../budget-plans/service.js";
 import { partsInTz, resolveUserTz } from "../chat/tools/periods.js";
+import { serverNow } from "../dev-clock.js";
 
 const WATCH_FACTOR = 1.1;
 
@@ -23,6 +26,7 @@ export type CategoryForecast = {
   projectedUnderspend: number;
   runwayDay: number | null;
   severity: RiskTier;
+  typicalAmount: number;
 };
 
 export type MonthEndForecast = {
@@ -60,7 +64,7 @@ export async function projectMonthEnd(
   userId: string,
   year: number,
   month: number,
-  now: Date = new Date(),
+  now: Date = serverNow(),
 ): Promise<MonthEndForecast> {
   const tz = await resolveUserTz(userId);
   const { daysLeft, todayDay, isThisMonth, daysInMonth } = daysLeftInMonth(year, month, now, tz);
@@ -73,8 +77,9 @@ export async function projectMonthEnd(
   const capped = snap.categories.filter((c) => c.allocated !== null);
   const capIds = capped.map((c) => c.categoryId);
 
-  const [discRates, subs, scheduled] = await Promise.all([
+  const [discRates, typicals, subs, scheduled] = await Promise.all([
     recentDiscretionaryDailyByCategory(workspaceId, capIds),
+    recentTypicalAmountByCategory(workspaceId, capIds),
     monthlySubscriptionByCategory(workspaceId, year, month),
     monthlyScheduledSpendByCategory(workspaceId, year, month),
   ]);
@@ -106,6 +111,7 @@ export async function projectMonthEnd(
       categoryName: c.categoryName,
       cap, spent, fixedBills, plannedOneOffs, discRate, daysLeft,
       projected, projectedOverspend, projectedUnderspend, runwayDay, severity,
+      typicalAmount: typicals.get(c.categoryId) ?? 0,
     };
   });
 
@@ -115,8 +121,17 @@ export async function projectMonthEnd(
   // (both maps are already today-forward), across all categories — not the
   // snapshot's totalScheduled, which still counts past-dated scheduled rows.
   const sumMap = (m: Map<string, number>) => Array.from(m.values()).reduce((a, b) => a + b, 0);
-  const scheduledTotal = round2(sumMap(subs) + sumMap(scheduled));
-  const portfolioProjected = round2(totalSpent + scheduledTotal);
+  const scheduledTotal = round2(sumMap(subs) + sumMap(scheduled)); // committed, today-forward
+
+  // Workspace-wide month-end TOTAL projection — the number that actually
+  // decides "will I blow my overall budget". Robust form that does NOT add a
+  // run-rate on TOP of actuals (which double-counts once you've spent most of
+  // the month): the total will end at LEAST at what's already spent + still
+  // committed, and historically the workspace spends ~its monthly average, so
+  // take whichever is higher. Bounded — never explodes on a high-spend month.
+  const committedTotal = round2(totalSpent + scheduledTotal);
+  const monthlyAvg = isThisMonth ? await recentMonthlyAvgSpend(workspaceId) : 0;
+  const portfolioProjected = round2(Math.max(committedTotal, monthlyAvg));
   const portfolio = {
     cap: totalCap,
     spent: totalSpent,

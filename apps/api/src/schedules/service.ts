@@ -3,6 +3,7 @@ import { DEFAULT_TZ } from "@fina/shared";
 import { prisma } from "../db.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { resolveUserTz, partsInTz } from "../chat/tools/periods.js";
+import { serverNow } from "../dev-clock.js";
 import {
   TxValidationError,
   validateAmount,
@@ -115,8 +116,8 @@ function toDTO(row: ScheduleRow, todayDateOnly: Date): ScheduleDTO {
  * `@db.Date` round-trip representation of scheduledDate so component-by-
  * component comparisons line up.
  */
-function todayDateOnlyInTz(tz: string): Date {
-  const parts = partsInTz(new Date(), tz);
+export function todayDateOnlyInTz(tz: string): Date {
+  const parts = partsInTz(serverNow(), tz);
   return new Date(Date.UTC(parts.year, parts.month - 1, parts.day));
 }
 
@@ -126,7 +127,7 @@ function todayDateOnlyInTz(tz: string): Date {
  * use the workspace OWNER's tz — not the caller's — so a shared workspace
  * shows consistent today/upcoming labels to every member.
  */
-async function workspaceOwnerTz(workspaceId: string): Promise<string> {
+export async function workspaceOwnerTz(workspaceId: string): Promise<string> {
   const owner = await prisma.membership.findFirst({
     where: { workspaceId, role: "owner" },
     orderBy: { createdAt: "asc" },
@@ -284,6 +285,53 @@ export async function updateScheduledSpendService(
     });
     const ownerTz = await workspaceOwnerTz(input.workspaceId);
     return { schedule: toDTO(row, todayDateOnlyInTz(ownerTz)) };
+  });
+}
+
+export type ScheduledSpendBatchItem = {
+  categoryId: string;
+  amount: number;
+  scheduledDate: string;  // YYYY-MM-DD
+  note?: string;
+};
+
+export async function addScheduledSpendBatchService(input: {
+  workspaceId: string;
+  items: ScheduledSpendBatchItem[];
+}): Promise<{ schedules: ScheduleDTO[]; count: number }> {
+  // Validate + normalize every item up front (fail before any write).
+  const prepared = input.items.map((it) => {
+    rethrowValidation(() => validateAmount(it.amount));
+    return {
+      categoryId: it.categoryId,
+      amount: it.amount,
+      scheduledDate: rethrowValidation(() => parseOccurredAt(it.scheduledDate)),
+      note: rethrowValidation(() => validateNote(it.note)),
+    };
+  });
+  return await withWorkspaceLock(input.workspaceId, async (tx) => {
+    const ownerTz = await workspaceOwnerTz(input.workspaceId);
+    const today = todayDateOnlyInTz(ownerTz);
+    const schedules: ScheduleDTO[] = [];
+    for (const it of prepared) {
+      const cat = await tx.category.findFirst({
+        where: { id: it.categoryId, workspaceId: input.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!cat) throw new ScheduledSpendError("category_not_found");
+      const row = await tx.scheduledSpend.create({
+        data: {
+          workspaceId: input.workspaceId,
+          categoryId: it.categoryId,
+          amount: new Prisma.Decimal(it.amount),
+          scheduledDate: it.scheduledDate,
+          note: it.note,
+        },
+        include: { matchedTx: { select: { removedAt: true } } },
+      });
+      schedules.push(toDTO(row, today));
+    }
+    return { schedules, count: schedules.length };
   });
 }
 

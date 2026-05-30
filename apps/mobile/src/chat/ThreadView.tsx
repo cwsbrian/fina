@@ -69,7 +69,14 @@ type Props = {
   ) => void;
 };
 
-type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
+type GetThreadResp = {
+  thread: ChatThreadDTO;
+  messages: ChatMessageDTO[];
+  /** accept_intent ids whose ActionIntent is already consumed or expired —
+   *  their action cards must stay closed across re-entry (the dismissal is
+   *  otherwise only in-memory). */
+  resolvedIntentIds?: string[];
+};
 type PostMessageResp = {
   threadId: string;
   userMessage: ChatMessageDTO;
@@ -94,6 +101,11 @@ export function ThreadView({
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  // Bumped on every send to force-remount the composer TextInput. Clearing the
+  // controlled value (and even .clear()) leaves a residual marked-text syllable
+  // under the iOS Korean (CJK) IME, so the just-sent text reappears in the
+  // field. Remounting throws away the native input + its IME composition state.
+  const [composerKey, setComposerKey] = useState(0);
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
@@ -225,6 +237,9 @@ export function ThreadView({
         if (cancelled) return;
         setThread(data.thread);
         setMessages(data.messages);
+        // Seed the dismissal set from server truth so already-resolved cards
+        // (consumed/expired intents) don't re-open on re-entry.
+        setDismissedIntents(new Set(data.resolvedIntentIds ?? []));
         scrollToBottom();
         // Mark as read on view — the user is looking at the messages
         // right now, so any unreadCount must drop to 0 immediately and
@@ -239,6 +254,16 @@ export function ThreadView({
     };
   }, [localId, scrollToBottom]);
 
+  // After a send completes the composer was force-remounted (key bump) to clear
+  // the CJK IME residual, which also drops focus. Refocus once it's editable
+  // again so the keyboard stays up for the next message. Only after a real send
+  // (composerKey > 0) — never steal focus on first open.
+  useEffect(() => {
+    if (sending || composerKey === 0) return;
+    const t = setTimeout(() => inputRef.current?.focus(), 0);
+    return () => clearTimeout(t);
+  }, [sending, composerKey]);
+
   const onSend = async () => {
     const body = draft.trim();
     if (!body || sending) return;
@@ -248,6 +273,8 @@ export function ThreadView({
     // residual composing syllable in the field under the Korean (CJK) IME,
     // so the text reappears after send. .clear() resets native composition.
     inputRef.current?.clear();
+    // Remount the composer so the CJK IME composing buffer is fully discarded.
+    setComposerKey((k) => k + 1);
     const tempId = `tmp-${Date.now()}`;
     setMessages((prev) => [
       ...prev,
@@ -445,6 +472,7 @@ export function ThreadView({
       {!formFocused && (
       <View style={styles.composer}>
         <TextInput
+          key={composerKey}
           ref={inputRef}
           style={styles.input}
           placeholder="Message Fina…"
@@ -551,7 +579,8 @@ function isCardBlock(b: Block): boolean {
     b.type === "category_list" ||
     b.type === "goals_list" ||
     b.type === "goal_detail" ||
-    b.type === "goal_form_card"
+    b.type === "goal_form_card" ||
+    b.type === "plan_proposal_card"
   );
 }
 
@@ -620,7 +649,7 @@ function MessageBubble({
   // this session — once tapped, the card collapses out of the thread.
   // Other block types are unaffected.
   const blocks = rawBlocks.filter((b) => {
-    if (b.type === "confirm_card") {
+    if (b.type === "confirm_card" || b.type === "plan_proposal_card") {
       return !dismissedIntents.has(b.accept_intent);
     }
     return true;
@@ -669,7 +698,7 @@ function MessageBubble({
                   // visually. Key the dismissal by accept_intent (the
                   // same id we filter by in the render path) since
                   // reject_intent can differ.
-                  if (b.type === "confirm_card") {
+                  if (b.type === "confirm_card" || b.type === "plan_proposal_card") {
                     onIntentDismissed(b.accept_intent);
                   }
                 }}

@@ -17,6 +17,7 @@ export const AUDIT_WRITE_TOOLS = new Set([
   "addGoal",
   "updateGoal",
   "archiveGoal",
+  "addScheduledSpendBatch",
 ]);
 
 const TARGET_TYPE_MAP: Record<string, string> = {
@@ -34,6 +35,7 @@ const TARGET_TYPE_MAP: Record<string, string> = {
   addGoal: "goal",
   updateGoal: "goal",
   archiveGoal: "goal",
+  addScheduledSpendBatch: "scheduled_spend",
 };
 
 export function resolveTargetType(action: string): string | null {
@@ -79,6 +81,7 @@ export function extractTargetId(action: string, result: unknown): string | null 
     const g = (result as Record<string, unknown>).goal as Record<string, unknown> | undefined;
     return typeof g?.id === "string" ? g.id : null;
   }
+  if (action === "addScheduledSpendBatch") return null; // N rows — detail is in payload/result
   return null;
 }
 

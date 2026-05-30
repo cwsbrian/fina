@@ -1,6 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { monthlyEquivalent, occurrencesInRange } from "../recurring/occurrences.js";
+import { serverNow } from "../dev-clock.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
@@ -47,6 +48,17 @@ export function firstOfMonth(year: number, month1to12: number): Date {
   return new Date(
     `${year}-${String(month1to12).padStart(2, "0")}-01T12:00:00.000Z`,
   );
+}
+
+/** Upper bound for "spend so far this month" — capped at the (possibly
+ *  DEV_NOW-overridden) current instant so month-to-date actuals never include
+ *  future-dated transactions. For a fully past month this is just `to`; this
+ *  is what lets the run-rate forecast add "rest of month" without
+ *  double-counting spend that hasn't happened yet. No effect in real usage
+ *  (real actuals are never future-dated). */
+function spendUpperBound(to: Date): Date {
+  const n = serverNow();
+  return n < to ? n : to;
 }
 
 /** [from, to) midnight-UTC bounds for a calendar month. Use this (NOT
@@ -225,7 +237,7 @@ export async function monthlySpendByCategory(
 export async function recentMonthlyAvgSpend(
   workspaceId: string,
 ): Promise<number> {
-  const since = new Date(Date.now() - 90 * 86_400_000);
+  const since = new Date(serverNow().getTime() - 90 * 86_400_000);
   const agg = await prisma.transaction.aggregate({
     where: {
       workspaceId,
@@ -241,8 +253,21 @@ export async function recentMonthlyAvgSpend(
   return Math.round(total / 3);
 }
 
+/** Sum of the monthly-equivalent amount of every recurring expense in the
+ *  workspace — the "fixed" baseline that should be excluded when estimating
+ *  the workspace's typical DISCRETIONARY run-rate for the month-end forecast. */
+export async function workspaceRecurringMonthly(workspaceId: string): Promise<number> {
+  const subs = await prisma.recurringExpense.findMany({
+    where: { workspaceId },
+    select: { amount: true, cadence: true },
+  });
+  let total = 0;
+  for (const s of subs) total += monthlyEquivalent(Number(s.amount), s.cadence);
+  return Math.round(total * 100) / 100;
+}
+
 function todayUTCMidnight(): Date {
-  const now = new Date();
+  const now = serverNow();
   return new Date(
     Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
   );
@@ -396,7 +421,7 @@ export async function monthlyTotalSpend(
     where: {
       workspaceId,
       removedAt: null,
-      occurredAt: { gte: from, lt: to },
+      occurredAt: { gte: from, lt: spendUpperBound(to) },
       amount: { gt: 0 },
     },
     _sum: { amount: true },
@@ -479,7 +504,7 @@ export type ChatBudgetPeriod = "this_month" | "last_month" | "next_month";
 /** Map the chat period enum to a calendar year/month on the same UTC basis
  *  budget-plans/current uses, so chat and Home agree on which month. */
 export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; month: number } {
-  const d = new Date();
+  const d = serverNow();
   let year = d.getUTCFullYear();
   let month = d.getUTCMonth() + 1; // 1..12
   if (period === "last_month") {
@@ -490,6 +515,54 @@ export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; mon
     if (month === 13) { month = 1; year += 1; }
   }
   return { year, month };
+}
+
+/** Per-category MEDIAN positive transaction-allocation amount over the trailing
+ *  90 days. Used by the advisor to size plan proposals ("typical spend per
+ *  transaction"). Only positive amounts are considered (refunds ignored).
+ *  Median = middle element of sorted positives (upper-middle for even counts).
+ *  Returns 0 for categories with no positive transactions in the window.
+ *  Result rounded to 2 decimals. */
+export async function recentTypicalAmountByCategory(
+  workspaceId: string,
+  categoryIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (categoryIds.length === 0) return out;
+  const since = new Date(serverNow().getTime() - 90 * 86_400_000);
+
+  const rows = await prisma.transactionAllocation.findMany({
+    where: {
+      categoryId: { in: categoryIds },
+      transaction: {
+        workspaceId,
+        removedAt: null,
+        pending: false,
+        occurredAt: { gte: since },
+      },
+      amount: { gt: 0 },
+    },
+    select: { amount: true, categoryId: true },
+  });
+
+  const byCat = new Map<string, number[]>();
+  for (const r of rows) {
+    if (!r.categoryId) continue;
+    const arr = byCat.get(r.categoryId) ?? [];
+    arr.push(Number(r.amount));
+    byCat.set(r.categoryId, arr);
+  }
+
+  for (const id of categoryIds) {
+    const positives = (byCat.get(id) ?? []).sort((a, b) => a - b);
+    if (positives.length === 0) {
+      out.set(id, 0);
+      continue;
+    }
+    const median = positives[Math.floor(positives.length / 2)]!;
+    out.set(id, Math.round(median * 100) / 100);
+  }
+  return out;
 }
 
 /** Per-category DISCRETIONARY daily spend rate over the trailing 90 days,
@@ -506,7 +579,7 @@ export async function recentDiscretionaryDailyByCategory(
 ): Promise<Map<string, number>> {
   const out = new Map<string, number>();
   if (categoryIds.length === 0) return out;
-  const since = new Date(Date.now() - 90 * 86_400_000);
+  const since = new Date(serverNow().getTime() - 90 * 86_400_000);
 
   const rows = await prisma.transactionAllocation.findMany({
     where: {
