@@ -1,54 +1,58 @@
-# Chat Forecasting Advisor — Phase 3 (Plan Proposals) Implementation Plan
+# Chat Forecasting Advisor — Phase 3 (Plan Proposals) Implementation Plan — R2
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`).
 
-**Goal:** Let the advisor propose a multi-item spending plan in chat ("schedule groceries twice — on the 3rd and the 10th — for ~$60 each?") and create all the ScheduledSpends with a single confirmation tap.
+**Goal:** Let the advisor propose a multi-item spending plan in chat ("groceries twice — June 3 and 10, ~$60 each?") and create all the ScheduledSpends with a single confirmation tap.
 
-**Architecture:** A new `addScheduledSpendBatch` executor inserts N scheduled spends atomically inside one workspace lock. A new `presentScheduledSpendPlan` presenter validates the items, creates ONE ActionIntent targeting the batch tool, and returns a `plan_proposal_card` listing each line. This reuses the existing intent → consume → audit machinery (no route changes) and the existing mobile confirm-card accept/reject consume flow.
+**Architecture:** A new `addScheduledSpendBatch` executor inserts N scheduled spends atomically in one workspace lock. A new `presentScheduledSpendPlan` presenter validates the items (category exists, amount is money-valid, date is in the future), creates ONE ActionIntent targeting the batch tool, and returns a `plan_proposal_card`. Reuses the existing intent → consume → audit machinery and the mobile confirm-card accept/reject flow. To let the advisor size proposals autonomously, the forecast now exposes a per-category **typicalAmount** (median tx).
 
-**Tech Stack:** Fastify + Prisma, Zod, Vitest (real DB), `@fina/shared`, Gemini chat tools, React Native (mobile renderer).
+**This is R2** — incorporates the multi-lens review. Changes vs R1 are flagged `[R2]`.
 
-**Spec:** `docs/superpowers/specs/2026-05-29-chat-forecasting-advisor-design.md` (§F, decision #4).
+**Decisions (user, 2026-05-30):** direct batch calls **forbidden via prompt** (not hard-excluded); **accept/reject only** (no per-field edit in v1); **autonomous sizing** via an exposed per-category median.
 
-**Correct commands:** api test `pnpm nx test api -- <pattern>`; mobile typecheck `pnpm nx typecheck mobile` (pre-existing unrelated errors exist — bar is no NEW error in changed files); shared build `pnpm nx build shared`. (`pnpm --filter ... test` does NOT work — no test script.)
+**Correct commands:** api test `pnpm nx test api -- <pattern>`; mobile typecheck `pnpm nx typecheck mobile` (baseline has exactly ONE pre-existing error: `auth/client.ts:7` — the bar is "no NEW error"); shared build `pnpm nx build shared`.
 
 ---
 
 ## File Structure
 
-| File | Create/Modify | Responsibility |
+| File | C/M | Responsibility |
 |---|---|---|
-| `libs/shared/src/dto/chat.ts` | Modify | Add `plan_proposal_card` PresentationBlock variant |
-| `apps/api/src/schedules/service.ts` | Modify | `addScheduledSpendBatchService` — validate all, insert N in one lock (atomic) |
-| `apps/api/src/chat/tools/add-scheduled-spend-batch.ts` | Create | `addScheduledSpendBatch` executor tool (resolve names → ids, call batch service) |
-| `apps/api/src/chat/tools/present-scheduled-spend-plan.ts` | Create | `presentScheduledSpendPlan` presenter (pre-validate, create intent, return card) |
-| `apps/api/src/chat/tools/index.ts` | Modify | Register both new tools in REGISTRY |
-| `apps/api/src/intents/service.ts` | Modify | Add to CONFIRMABLE_TOOLS + a `confirmationFor` case |
-| `apps/api/src/audit/service.ts` | Modify | AUDIT_WRITE_TOOLS + TARGET_TYPE_MAP + extractTargetId branch |
-| `apps/api/src/chat/turn.ts` | Modify | System-prompt copy: propose plans via presentScheduledSpendPlan |
-| `apps/mobile/src/chat/blocks/PlanProposalCardBlock.tsx` | Create | Renders the plan card + Yes/No wired to onAccept/onReject |
-| `apps/mobile/src/chat/PresentationBlock.tsx` | Modify | Dispatch `plan_proposal_card` → PlanProposalCardBlock |
-| `apps/api/tests/chat.tools.scheduled-spend-batch.test.ts` | Create | Batch executor + presenter + consume + audit + rollback tests |
+| `libs/shared/src/dto/chat.ts` | M | `plan_proposal_card` variant |
+| `apps/mobile/src/chat/blocks/PlanProposalCardBlock.tsx` | C | Card renderer (Yes/No → onAccept/onReject) |
+| `apps/mobile/src/chat/PresentationBlock.tsx` | M | Dispatch `plan_proposal_card` |
+| `apps/mobile/src/chat/ThreadView.tsx` | M | `[R2]` allowlist + dismissal + reject so the buttons are LIVE |
+| `apps/api/src/schedules/service.ts` | M | `addScheduledSpendBatchService` (atomic N-insert) |
+| `apps/api/src/budget-plans/service.ts` | M | `[R2]` `recentTypicalAmountByCategory` (median tx) |
+| `apps/api/src/analysis/forecast.ts` | M | `[R2]` `CategoryForecast.typicalAmount` |
+| `apps/api/src/chat/tools/_scheduled-plan-item.ts` | C | `[R2]` ONE shared item zod (kills two-copy drift) |
+| `apps/api/src/chat/tools/add-scheduled-spend-batch.ts` | C | `addScheduledSpendBatch` executor |
+| `apps/api/src/chat/tools/present-scheduled-spend-plan.ts` | C | `presentScheduledSpendPlan` presenter |
+| `apps/api/src/chat/tools/compare-spending-vs-budget.ts` | M | `[R2]` surface `typicalAmount` on items |
+| `apps/api/src/chat/tools/index.ts` | M | Register both tools |
+| `apps/api/src/intents/service.ts` | M | CONFIRMABLE_TOOLS + confirmationFor case |
+| `apps/api/src/audit/service.ts` | M | AUDIT_WRITE_TOOLS + TARGET_TYPE_MAP + extractTargetId |
+| `apps/api/src/chat/turn.ts` | M | Prompt: propose via presenter; forbid direct batch; size from remaining+typicalAmount; future dates only |
+| `apps/api/tests/chat.tools.scheduled-spend-batch.test.ts` | C | Batch + presenter + consume + rollback + past-date + bad-amount tests |
 
 ---
 
-## Task 1: Shared `plan_proposal_card` block
+## Task 1 `[R2 — ATOMIC]`: `plan_proposal_card` shared block + FULL mobile wiring (one commit)
 
-**Files:** Modify `libs/shared/src/dto/chat.ts`
+> Why atomic: adding the shared union variant breaks the mobile exhaustive renderer (`const _exhaustive: never`) until the renderer case exists, and the buttons are dead until `ThreadView` routes the block. Land all four together so `nx typecheck mobile` never goes red and the card is actually tappable.
 
-- [ ] **Step 1: Add the variant** to the `PresentationBlock` union (after the `confirm_card` variant, mirroring its shape):
+**Files:** `libs/shared/src/dto/chat.ts`, `apps/mobile/src/chat/blocks/PlanProposalCardBlock.tsx` (create), `apps/mobile/src/chat/PresentationBlock.tsx`, `apps/mobile/src/chat/ThreadView.tsx`
 
+- [ ] **Step 1: Shared variant** in `libs/shared/src/dto/chat.ts` (after `confirm_card`):
 ```ts
   | {
-      /** A proposed multi-item plan (e.g. "schedule groceries twice").
-       *  Backed by ONE ActionIntent targeting addScheduledSpendBatch; the
-       *  whole plan is created on accept. Mirrors confirm_card's accept/reject
-       *  intent flow — the renderer reuses the same consume path. */
+      /** A proposed multi-item plan (e.g. "groceries twice"). Backed by ONE
+       *  ActionIntent targeting addScheduledSpendBatch; accept creates them all.
+       *  Reuses confirm_card's accept/reject intent flow. */
       type: "plan_proposal_card";
       question: string;
       rows: { category: string; date: string; amount: string; note?: string }[];
-      /** Stringified sum of all row amounts, no currency symbol. */
-      total: string;
+      total: string; // sum of row amounts, no currency symbol
       accept_label: string;
       reject_label: string;
       accept_intent: string;
@@ -56,437 +60,7 @@
     }
 ```
 
-- [ ] **Step 2:** `pnpm nx build shared && pnpm nx typecheck mobile`
-Expected: shared builds; mobile fails ONLY at the pre-existing auth error AND a NEW exhaustiveness error in `PresentationBlock.tsx` (the `never` cast) — that's expected until Task 9 adds the renderer case. Note it; do not "fix" by reverting.
-
-- [ ] **Step 3: Commit**
-```bash
-git add libs/shared/src/dto/chat.ts
-git commit -m "feat(shared): plan_proposal_card presentation block"
-```
-
----
-
-## Task 2: `addScheduledSpendBatchService` (atomic N-insert)
-
-**Files:** Modify `apps/api/src/schedules/service.ts`; Test `apps/api/tests/chat.tools.scheduled-spend-batch.test.ts`
-
-First READ `apps/api/src/schedules/service.ts` to confirm the imports in scope: `withWorkspaceLock`, `workspaceOwnerTz`, `todayDateOnlyInTz`, `toDTO`, `ScheduledSpendError`, `rethrowValidation`, `validateAmount`, `parseOccurredAt`, `validateNote`, `Prisma`, and the `ScheduledSpendDTO` / `AddScheduledSpendResult` types. Reuse them; do not re-import duplicates.
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-// apps/api/tests/chat.tools.scheduled-spend-batch.test.ts
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { prisma } from "../src/db.js";
-import { addScheduledSpendBatchService } from "../src/schedules/service.js";
-
-describe("addScheduledSpendBatchService", () => {
-  let wsId: string;
-  let dining: string;
-  let groceries: string;
-
-  beforeEach(async () => {
-    const stamp = `ssb-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "SSB", tz: "America/Toronto" } });
-    const ws = await prisma.workspace.create({ data: { name: stamp, currency: "CAD" } });
-    wsId = ws.id;
-    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
-    dining = (await prisma.category.create({ data: { workspaceId: wsId, name: "Dining" } })).id;
-    groceries = (await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } })).id;
-  });
-  afterEach(async () => { await prisma.workspace.deleteMany({ where: { id: wsId } }); });
-
-  it("inserts every item and returns them", async () => {
-    const out = await addScheduledSpendBatchService({
-      workspaceId: wsId,
-      items: [
-        { categoryId: groceries, amount: 60, scheduledDate: "2026-06-03" },
-        { categoryId: groceries, amount: 60, scheduledDate: "2026-06-10", note: "stock up" },
-      ],
-    });
-    expect(out.count).toBe(2);
-    const rows = await prisma.scheduledSpend.findMany({ where: { workspaceId: wsId } });
-    expect(rows).toHaveLength(2);
-  });
-
-  it("is all-or-nothing: one bad category rolls back the whole batch", async () => {
-    await expect(
-      addScheduledSpendBatchService({
-        workspaceId: wsId,
-        items: [
-          { categoryId: groceries, amount: 60, scheduledDate: "2026-06-03" },
-          { categoryId: "does-not-exist", amount: 60, scheduledDate: "2026-06-10" },
-        ],
-      }),
-    ).rejects.toThrow();
-    const rows = await prisma.scheduledSpend.findMany({ where: { workspaceId: wsId } });
-    expect(rows).toHaveLength(0); // first insert rolled back
-  });
-
-  it("rejects an invalid amount before any write", async () => {
-    await expect(
-      addScheduledSpendBatchService({
-        workspaceId: wsId,
-        items: [{ categoryId: dining, amount: -5, scheduledDate: "2026-06-03" }],
-      }),
-    ).rejects.toThrow();
-    expect(await prisma.scheduledSpend.count({ where: { workspaceId: wsId } })).toBe(0);
-  });
-});
-```
-
-- [ ] **Step 2:** Run `pnpm nx test api -- scheduled-spend-batch` → FAIL (service not exported).
-
-- [ ] **Step 3: Implement** in `schedules/service.ts`:
-
-```ts
-export type ScheduledSpendBatchItem = {
-  categoryId: string;
-  amount: number;
-  scheduledDate: string; // YYYY-MM-DD
-  note?: string;
-};
-
-/** Insert N scheduled spends atomically in one workspace lock. Validates
- *  every item up front (amount/date/note) so a bad item fails BEFORE any
- *  write; category existence is re-checked inside the lock per row. If any
- *  row fails, the surrounding transaction rolls the whole batch back. */
-export async function addScheduledSpendBatchService(input: {
-  workspaceId: string;
-  items: ScheduledSpendBatchItem[];
-}): Promise<{ schedules: ReturnType<typeof toDTO>[]; count: number }> {
-  for (const it of input.items) {
-    rethrowValidation(() => validateAmount(it.amount));
-    rethrowValidation(() => parseOccurredAt(it.scheduledDate));
-    rethrowValidation(() => validateNote(it.note));
-  }
-  return await withWorkspaceLock(input.workspaceId, async (tx) => {
-    const ownerTz = await workspaceOwnerTz(input.workspaceId);
-    const today = todayDateOnlyInTz(ownerTz);
-    const schedules: ReturnType<typeof toDTO>[] = [];
-    for (const it of input.items) {
-      const cat = await tx.category.findFirst({
-        where: { id: it.categoryId, workspaceId: input.workspaceId, archivedAt: null },
-        select: { id: true },
-      });
-      if (!cat) throw new ScheduledSpendError("category_not_found");
-      const row = await tx.scheduledSpend.create({
-        data: {
-          workspaceId: input.workspaceId,
-          categoryId: it.categoryId,
-          amount: new Prisma.Decimal(it.amount),
-          scheduledDate: parseOccurredAt(it.scheduledDate),
-          note: validateNote(it.note),
-        },
-        include: { matchedTx: { select: { removedAt: true } } },
-      });
-      schedules.push(toDTO(row, today));
-    }
-    return { schedules, count: schedules.length };
-  });
-}
-```
-(If `toDTO`'s return type isn't easily referenced, declare an explicit `ScheduledSpendDTO[]` using the type `addScheduledSpendService` returns in its `schedule` field.)
-
-- [ ] **Step 4:** `pnpm nx test api -- scheduled-spend-batch` → 3 passing. `pnpm nx typecheck api` → no NEW error in schedules/service.ts.
-
-- [ ] **Step 5: Commit**
-```bash
-git add apps/api/src/schedules/service.ts apps/api/tests/chat.tools.scheduled-spend-batch.test.ts
-git commit -m "feat(api): addScheduledSpendBatchService — atomic N-insert"
-```
-
----
-
-## Task 3: `addScheduledSpendBatch` executor tool + registrations
-
-**Files:** Create `apps/api/src/chat/tools/add-scheduled-spend-batch.ts`; Modify `index.ts`, `intents/service.ts`, `audit/service.ts`; Test (append).
-
-- [ ] **Step 1: Append test** (to the batch test file):
-
-```ts
-import { addScheduledSpendBatch } from "../src/chat/tools/add-scheduled-spend-batch.js";
-import type { ToolContext } from "../src/chat/tools/types.js";
-
-describe("addScheduledSpendBatch tool", () => {
-  let ctx: ToolContext; let wsId: string; let groceries: string;
-  beforeEach(async () => {
-    const stamp = `ssbt-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "T", tz: "America/Toronto" } });
-    const ws = await prisma.workspace.create({ data: { name: stamp, currency: "CAD" } });
-    wsId = ws.id;
-    await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
-    groceries = (await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } })).id;
-    ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" };
-  });
-  afterEach(async () => { await prisma.workspace.deleteMany({ where: { id: wsId } }); });
-
-  it("resolves category names and creates all schedules", async () => {
-    const r = await addScheduledSpendBatch.run(ctx, {
-      items: [
-        { category: "groceries", amount: 60, scheduled_date: "2026-06-03" },
-        { category: "Groceries", amount: 55, scheduled_date: "2026-06-10" },
-      ],
-    });
-    expect(r.count).toBe(2);
-    expect(await prisma.scheduledSpend.count({ where: { workspaceId: wsId } })).toBe(2);
-  });
-
-  it("throws category_not_found and writes nothing when a name is unknown", async () => {
-    await expect(addScheduledSpendBatch.run(ctx, {
-      items: [
-        { category: "groceries", amount: 60, scheduled_date: "2026-06-03" },
-        { category: "Nope", amount: 60, scheduled_date: "2026-06-10" },
-      ],
-    })).rejects.toThrow();
-    expect(await prisma.scheduledSpend.count({ where: { workspaceId: wsId } })).toBe(0);
-  });
-});
-```
-
-- [ ] **Step 2:** Run → FAIL (tool missing).
-
-- [ ] **Step 3: Create** `apps/api/src/chat/tools/add-scheduled-spend-batch.ts`:
-
-```ts
-import { z } from "zod";
-import { MAX_AMOUNT } from "@fina/shared";
-import { prisma } from "../../db.js";
-import type { ToolDef } from "./types.js";
-import { addScheduledSpendBatchService } from "../../schedules/service.js";
-
-const Item = z.object({
-  category: z.string().min(1).max(80).describe("Category name (case-insensitive)"),
-  amount: z.number().positive().max(MAX_AMOUNT).describe("Planned amount"),
-  scheduled_date: z.string().describe("YYYY-MM-DD"),
-  note: z.string().max(1000).optional(),
-});
-const Args = z.object({ items: z.array(Item).min(1).max(20) });
-
-type Result = { schedules: unknown[]; count: number };
-
-export const addScheduledSpendBatch: ToolDef<z.infer<typeof Args>, Result> = {
-  name: "addScheduledSpendBatch",
-  description:
-    "Create SEVERAL one-time future scheduled expenses at once (e.g. two grocery trips). " +
-    "Each item is a category name + amount + YYYY-MM-DD date. Max 20 items. Use this (via " +
-    "presentScheduledSpendPlan) when proposing a concrete multi-step plan so the user confirms once.",
-  args: Args,
-  async run(ctx, args) {
-    // Resolve all category names → ids in one query, case-insensitively.
-    const cats = await prisma.category.findMany({
-      where: { workspaceId: ctx.workspaceId, archivedAt: null },
-      select: { id: true, name: true },
-    });
-    const byLower = new Map(cats.map((c) => [c.name.toLowerCase(), c.id]));
-    const items = args.items.map((it) => {
-      const id = byLower.get(it.category.toLowerCase());
-      if (!id) throw new Error("category_not_found");
-      return { categoryId: id, amount: it.amount, scheduledDate: it.scheduled_date, ...(it.note !== undefined ? { note: it.note } : {}) };
-    });
-    const out = await addScheduledSpendBatchService({ workspaceId: ctx.workspaceId, items });
-    return { schedules: out.schedules, count: out.count };
-  },
-};
-```
-
-- [ ] **Step 4: Register** in `apps/api/src/chat/tools/index.ts` — import `addScheduledSpendBatch` and add it to the `REGISTRY` array (follow the existing import+array pattern).
-
-- [ ] **Step 5: Mark confirmable** in `apps/api/src/intents/service.ts`: add `"addScheduledSpendBatch",` to the `CONFIRMABLE_TOOLS` array, and add a `confirmationFor` case:
-```ts
-    case "addScheduledSpendBatch": {
-      const n = (result as { count?: number }).count ?? 0;
-      return ko ? `예정 지출 ${n}개를 추가했어요.` : `Added ${n} scheduled item${n === 1 ? "" : "s"}.`;
-    }
-```
-
-- [ ] **Step 6: Audit** in `apps/api/src/audit/service.ts`: add `"addScheduledSpendBatch"` to `AUDIT_WRITE_TOOLS`; add `addScheduledSpendBatch: "scheduled_spend"` to `TARGET_TYPE_MAP`; add an `extractTargetId` branch:
-```ts
-  if (action === "addScheduledSpendBatch") {
-    // A batch maps to N rows — no single targetId. The audit row's payload
-    // (the items[]) and result (the created schedules) carry the detail.
-    return null;
-  }
-```
-
-- [ ] **Step 7:** Run `pnpm nx test api -- scheduled-spend-batch` → all passing. `pnpm nx typecheck api` → no new error in changed files.
-
-- [ ] **Step 8: Commit**
-```bash
-git add apps/api/src/chat/tools/add-scheduled-spend-batch.ts apps/api/src/chat/tools/index.ts apps/api/src/intents/service.ts apps/api/src/audit/service.ts apps/api/tests/chat.tools.scheduled-spend-batch.test.ts
-git commit -m "feat(chat): addScheduledSpendBatch executor + intent/audit registration"
-```
-
----
-
-## Task 4: `presentScheduledSpendPlan` presenter + consume test
-
-**Files:** Create `apps/api/src/chat/tools/present-scheduled-spend-plan.ts`; Modify `index.ts`; Test (append).
-
-- [ ] **Step 1: Append test** (presenter creates a valid intent + card; consume runs the batch):
-
-```ts
-import { presentScheduledSpendPlan } from "../src/chat/tools/present-scheduled-spend-plan.js";
-import { consumeIntentService } from "../src/intents/service.js";
-
-describe("presentScheduledSpendPlan + consume", () => {
-  let ctx: ToolContext; let wsId: string; let userId: string; let groceries: string;
-  beforeEach(async () => {
-    const stamp = `pssp-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "P", tz: "America/Toronto" } });
-    userId = u.id;
-    const ws = await prisma.workspace.create({ data: { name: stamp, currency: "CAD" } });
-    wsId = ws.id;
-    await prisma.membership.create({ data: { userId, workspaceId: wsId, role: "owner" } });
-    groceries = (await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } })).id;
-    ctx = { env: {} as never, workspaceId: wsId, userId, role: "owner" };
-  });
-  afterEach(async () => { await prisma.workspace.deleteMany({ where: { id: wsId } }); });
-
-  it("returns a plan_proposal_card whose intent, when consumed, creates all rows", async () => {
-    const r = await presentScheduledSpendPlan.run(ctx, {
-      question: "장 2번 잡을까요?",
-      items: [
-        { category: "Groceries", amount: 60, scheduled_date: "2026-06-03" },
-        { category: "Groceries", amount: 55, scheduled_date: "2026-06-10" },
-      ],
-    });
-    expect(r.block.type).toBe("plan_proposal_card");
-    expect(r.block.rows).toHaveLength(2);
-    expect(r.block.total).toBe("115.00");
-    const intentId = r.block.accept_intent;
-
-    await consumeIntentService({ env: {} as never, workspaceId: wsId, userId, role: "owner" }, intentId);
-    expect(await prisma.scheduledSpend.count({ where: { workspaceId: wsId } })).toBe(2);
-  });
-
-  it("rejects an unknown category before issuing a card", async () => {
-    await expect(presentScheduledSpendPlan.run(ctx, {
-      question: "?",
-      items: [{ category: "Nope", amount: 10, scheduled_date: "2026-06-03" }],
-    })).rejects.toThrow();
-    expect(await prisma.actionIntent.count({ where: { workspaceId: wsId } })).toBe(0);
-  });
-});
-```
-
-- [ ] **Step 2:** Run → FAIL.
-
-- [ ] **Step 3: Create** `apps/api/src/chat/tools/present-scheduled-spend-plan.ts`:
-
-```ts
-import { z } from "zod";
-import { MAX_AMOUNT, type PresentationBlock } from "@fina/shared";
-import { prisma } from "../../db.js";
-import { createIntentService } from "../../intents/service.js";
-import type { ToolDef } from "./types.js";
-
-const Item = z.object({
-  category: z.string().min(1).max(80),
-  amount: z.number().positive().max(MAX_AMOUNT),
-  scheduled_date: z.string().describe("YYYY-MM-DD"),
-  note: z.string().max(1000).optional(),
-});
-const Args = z.object({
-  question: z.string().min(1).max(500),
-  items: z.array(Item).min(1).max(20),
-  accept_label: z.string().min(1).max(40).optional(),
-  reject_label: z.string().min(1).max(40).optional(),
-});
-
-type PlanCard = Extract<PresentationBlock, { type: "plan_proposal_card" }>;
-
-export const presentScheduledSpendPlan: ToolDef<z.infer<typeof Args>, { block: PlanCard }> = {
-  name: "presentScheduledSpendPlan",
-  description:
-    "Propose a concrete multi-item spending plan (e.g. 'groceries twice — June 3 and 10, ~$60 each') as a " +
-    "single Yes/No card. On accept, all items are created as scheduled spends at once. Use after a forecast " +
-    "shows a category will run tight, or when the user asks for help planning. Category names must already exist.",
-  args: Args,
-  async run(ctx, args) {
-    // Pre-validate category existence so we never show a card that will fail
-    // on consume (the intent is single-use). Resolve names case-insensitively.
-    const cats = await prisma.category.findMany({
-      where: { workspaceId: ctx.workspaceId, archivedAt: null },
-      select: { id: true, name: true },
-    });
-    const byLower = new Map(cats.map((c) => [c.name.toLowerCase(), c.name]));
-    for (const it of args.items) {
-      if (!byLower.has(it.category.toLowerCase())) throw new Error("category_not_found");
-    }
-
-    const out = await createIntentService(
-      { workspaceId: ctx.workspaceId, userId: ctx.userId },
-      { tool: "addScheduledSpendBatch", args: { items: args.items } },
-    );
-
-    const total = args.items.reduce((sum, it) => sum + it.amount, 0);
-    return {
-      block: {
-        type: "plan_proposal_card",
-        question: args.question,
-        rows: args.items.map((it) => ({
-          category: byLower.get(it.category.toLowerCase())!, // canonical-cased name
-          date: it.scheduled_date,
-          amount: it.amount.toFixed(2),
-          ...(it.note !== undefined ? { note: it.note } : {}),
-        })),
-        total: total.toFixed(2),
-        accept_label: args.accept_label ?? "Schedule it",
-        reject_label: args.reject_label ?? "Not now",
-        accept_intent: out.intent.id,
-      },
-    };
-  },
-};
-```
-
-- [ ] **Step 4: Register** `presentScheduledSpendPlan` in `index.ts` REGISTRY (presenter is NOT added to CONFIRMABLE_TOOLS — it's the SOURCE of intents, like presentRecurringForm).
-
-- [ ] **Step 5:** Run `pnpm nx test api -- scheduled-spend-batch` → all passing. Typecheck api → clean.
-
-- [ ] **Step 6: Commit**
-```bash
-git add apps/api/src/chat/tools/present-scheduled-spend-plan.ts apps/api/src/chat/tools/index.ts apps/api/tests/chat.tools.scheduled-spend-batch.test.ts
-git commit -m "feat(chat): presentScheduledSpendPlan presenter + plan_proposal_card"
-```
-
----
-
-## Task 5: System-prompt copy — proposing plans
-
-**Files:** Modify `apps/api/src/chat/turn.ts`
-
-- [ ] **Step 1:** READ the system prompt area that lists scheduled-spend / confirm-card guidance (search `presentConfirmCard`, `addScheduledSpend`, `scheduled`). Add a rule near there:
-
-```
-- When the user wants help spending the rest of a category's budget, or a forecast shows a
-  category will run tight and the user agrees to plan, PROPOSE a concrete plan with
-  presentScheduledSpendPlan — specific dates + amounts (e.g. "groceries twice: June 3 and 10,
-  ~$60 each"). One card, one confirmation creates them all. Don't call addScheduledSpend in a
-  loop. Only propose categories that already exist. Keep proposals realistic vs the remaining budget.
-```
-Keep the existing single-add guidance for one-off scheduled spends.
-
-- [ ] **Step 2:** `pnpm nx typecheck api` → no new error in turn.ts (you edited a template string; check backticks).
-
-- [ ] **Step 3: Commit**
-```bash
-git add apps/api/src/chat/turn.ts
-git commit -m "feat(chat): prompt the advisor to propose multi-item plans"
-```
-
----
-
-## Task 6: Mobile `plan_proposal_card` renderer
-
-**Files:** Create `apps/mobile/src/chat/blocks/PlanProposalCardBlock.tsx`; Modify `apps/mobile/src/chat/PresentationBlock.tsx`
-
-First READ `apps/mobile/src/chat/PresentationBlock.tsx` (the `confirm_card` case, lines ~51-79, + the `styles` it uses) to reuse the card/button styles.
-
-- [ ] **Step 1: Create** `PlanProposalCardBlock.tsx` — render the question, a list of `{date · category · amount}` rows + total, and Yes/No buttons wired to callbacks. Mirror confirm_card's button styling (import shared styles or reproduce them locally with the same token usage). Signature:
-
+- [ ] **Step 2: Renderer** — create `apps/mobile/src/chat/blocks/PlanProposalCardBlock.tsx`. FIRST read the `confirm_card` case in `PresentationBlock.tsx` (lines ~51-79) + its `styles` to reuse the exact card/button tokens. Use `colors.onPrimary` for the accept-button text (the confirm card uses it; `colors.canvas` is near-invisible on the mint button).
 ```tsx
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import type { PresentationBlock } from "@fina/shared";
@@ -495,9 +69,7 @@ import { colors, space, type as type$ } from "../../design/tokens";
 type PlanCard = Extract<PresentationBlock, { type: "plan_proposal_card" }>;
 
 export function PlanProposalCardBlock({
-  block,
-  onAccept,
-  onReject,
+  block, onAccept, onReject,
 }: {
   block: PlanCard;
   onAccept?: (intent: string) => void;
@@ -542,15 +114,13 @@ const styles = StyleSheet.create({
   reject: { backgroundColor: colors.hairline },
   accept: { backgroundColor: colors.primary },
   rejectText: { ...type$.bodyMd, color: colors.body, fontWeight: "600" },
-  acceptText: { ...type$.bodyMd, color: colors.canvas, fontWeight: "600" },
+  acceptText: { ...type$.bodyMd, color: colors.onPrimary, fontWeight: "600" },
 });
 ```
-(If a token like `colors.primary`/`type$.bodySm` doesn't exist, use the nearest one the confirm_card case already uses — match what's in `design/tokens`.)
+(If any token name differs in `design/tokens`, use whatever the `confirm_card` case already uses — match it exactly.)
 
-- [ ] **Step 2: Dispatch** in `PresentationBlock.tsx` — add the import and a case BEFORE the final never-cast:
+- [ ] **Step 3: Dispatch** in `PresentationBlock.tsx` — import `PlanProposalCardBlock` and add a case before the `never` cast:
 ```tsx
-import { PlanProposalCardBlock } from "./blocks/PlanProposalCardBlock";
-// ...
   if (block.type === "plan_proposal_card") {
     return (
       <PlanProposalCardBlock
@@ -562,27 +132,263 @@ import { PlanProposalCardBlock } from "./blocks/PlanProposalCardBlock";
   }
 ```
 
-- [ ] **Step 3:** `pnpm nx typecheck mobile` → the Task-1 exhaustiveness error is now GONE; only the pre-existing auth error remains. Confirm no error references PlanProposalCardBlock / PresentationBlock.
+- [ ] **Step 4 `[R2 — the must-fix]`: ThreadView wiring** in `apps/mobile/src/chat/ThreadView.tsx` — without this the buttons are dead:
+  - In `isCardBlock(b)` (line ~538-557), add `b.type === "plan_proposal_card" ||` to the allowlist (so the block gets `<PresentationBlock>` WITH `onAccept`/`onReject`).
+  - In the dismissal filter (line ~623, currently `if (b.type === "confirm_card") return !dismissedIntents.has(b.accept_intent);`), broaden to also collapse a resolved plan card: `if (b.type === "confirm_card" || b.type === "plan_proposal_card") return !dismissedIntents.has(b.accept_intent);`
+  - In the `onReject` handler (line ~672, `if (b.type === "confirm_card") onIntentDismissed(b.accept_intent);`), broaden likewise to `if (b.type === "confirm_card" || b.type === "plan_proposal_card")`.
+  - The `onAccept` handler (line ~644) already consumes any `intentId` generically — no change. `[R2]` confirm it surfaces a friendly message on `intent_gone`/410 (a burned single-use intent) rather than a raw error; if it currently shows a generic error, map 410 → "that proposal expired — ask me to plan again".
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Verify atomic green** — `pnpm nx build shared && pnpm nx typecheck mobile`. Expected: shared builds; mobile shows ONLY the pre-existing `auth/client.ts:7` error — NO exhaustiveness error, NO error in PlanProposalCardBlock/PresentationBlock/ThreadView.
+
+- [ ] **Step 6: Commit (one)**
 ```bash
-git add apps/mobile/src/chat/blocks/PlanProposalCardBlock.tsx apps/mobile/src/chat/PresentationBlock.tsx
-git commit -m "feat(mobile): render plan_proposal_card with one-tap confirm"
+git add libs/shared/src/dto/chat.ts apps/mobile/src/chat/blocks/PlanProposalCardBlock.tsx apps/mobile/src/chat/PresentationBlock.tsx apps/mobile/src/chat/ThreadView.tsx
+git commit -m "feat(plan-card): plan_proposal_card shared block + live mobile card"
 ```
 
 ---
 
-## Self-Review (completed by plan author)
+## Task 2: `addScheduledSpendBatchService` (atomic N-insert)
 
-**Spec coverage:** batch tool atomic (Task 2), max 20 + MAX_AMOUNT per item (Task 3 zod), full validation before intent stamped (presenter pre-validates categories Task 4; service validates amounts before write Task 2), audit summary row with items[] payload (Task 3), routed through ActionIntent/confirm flow with editor+Pro consume gate inherited (presenter creates intent; consume route unchanged), one-confirmation UX (Task 6). Brief-warns/chat-proposes split lives in prompt copy (Task 5); the brief-side surfacing is Phase 4.
+**Files:** `apps/api/src/schedules/service.ts`; Test `apps/api/tests/chat.tools.scheduled-spend-batch.test.ts`
 
-**Placeholder scan:** none — every step has real code/tests.
+READ `schedules/service.ts` first to confirm in-scope helpers: `withWorkspaceLock`, `workspaceOwnerTz`, `todayDateOnlyInTz`, `toDTO`, `ScheduledSpendError`, `rethrowValidation`, `validateAmount`, `parseOccurredAt`, `validateNote`, `Prisma`.
 
-**Type consistency:** `plan_proposal_card` shape identical across dto (Task 1), presenter return (Task 4), and mobile renderer (Task 6). `addScheduledSpendBatch` name consistent across tool/index/CONFIRMABLE_TOOLS/AUDIT_WRITE_TOOLS/TARGET_TYPE_MAP/extractTargetId/confirmationFor. `addScheduledSpendBatchService` item shape (`{categoryId, amount, scheduledDate, note?}`) matches between Task 2 and the Task 3 tool's mapping.
+- [ ] **Step 1: Failing tests** (3): inserts all + returns; all-or-nothing (one bad category → zero rows); invalid amount rejected before any write. (Same as R1 — see git history; use category ids `groceries`/`dining`, a bogus id for the rollback case, `amount:-5` for the validation case.)
 
-**Consume-burn risk:** the intent is stamped consumed before `tool.run` (intents/service.ts:227). Mitigated: presenter pre-validates categories so the card only shows for a valid plan; the executor validates all amounts/dates BEFORE the transaction and inserts atomically, so a consume either fully succeeds or fully rolls back (no partial rows). A genuine mid-run failure still burns the intent — acceptable v1; the user re-asks. Not adding a re-issue path in v1.
+- [ ] **Step 2:** `pnpm nx test api -- scheduled-spend-batch` → FAIL.
 
-**Viewer gate:** add a `consumeIntentService` viewer-role test only if the consume route's role enforcement isn't already covered elsewhere — the route (`routes/intents.ts`) enforces editor+Pro before calling the service, so role gating is a route concern, not re-tested here.
+- [ ] **Step 3: Implement** `[R2 — validators hoisted, no double-parse / no error-type divergence]`:
+```ts
+export type ScheduledSpendBatchItem = { categoryId: string; amount: number; scheduledDate: string; note?: string };
 
-**Test runner:** real DB — ensure Postgres (5433) up + migrated before running.
+export async function addScheduledSpendBatchService(input: {
+  workspaceId: string;
+  items: ScheduledSpendBatchItem[];
+}): Promise<{ schedules: ReturnType<typeof toDTO>[]; count: number }> {
+  // Validate + normalize every item up front (fail before any write).
+  const prepared = input.items.map((it) => ({
+    categoryId: it.categoryId,
+    amount: (rethrowValidation(() => validateAmount(it.amount)), it.amount),
+    scheduledDate: rethrowValidation(() => parseOccurredAt(it.scheduledDate)),
+    note: rethrowValidation(() => validateNote(it.note)),
+  }));
+  return await withWorkspaceLock(input.workspaceId, async (tx) => {
+    const today = todayDateOnlyInTz(await workspaceOwnerTz(input.workspaceId));
+    const schedules: ReturnType<typeof toDTO>[] = [];
+    for (const it of prepared) {
+      const cat = await tx.category.findFirst({
+        where: { id: it.categoryId, workspaceId: input.workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!cat) throw new ScheduledSpendError("category_not_found");
+      const row = await tx.scheduledSpend.create({
+        data: { workspaceId: input.workspaceId, categoryId: it.categoryId, amount: new Prisma.Decimal(it.amount), scheduledDate: it.scheduledDate, note: it.note },
+        include: { matchedTx: { select: { removedAt: true } } },
+      });
+      schedules.push(toDTO(row, today));
+    }
+    return { schedules, count: schedules.length };
+  });
+}
 ```
+(If `validateAmount` returns void, keep the comma-expression or split into a statement before the map — just ensure it throws on a bad amount before the lock.)
+
+- [ ] **Step 4:** tests green; `pnpm nx typecheck api` no new error. **Step 5: Commit** `feat(api): addScheduledSpendBatchService — atomic N-insert`.
+
+---
+
+## Task 3 `[R2 — autonomous sizing]`: expose per-category `typicalAmount`
+
+**Files:** `apps/api/src/budget-plans/service.ts`, `apps/api/src/analysis/forecast.ts`, `apps/api/src/chat/tools/compare-spending-vs-budget.ts`; Test append to `analysis.forecast.test.ts`.
+
+- [ ] **Step 1: Failing test** in `analysis.forecast.test.ts`:
+```ts
+  it("exposes a per-category typical (median) transaction amount", async () => {
+    await plan(500);
+    for (const a of ["10.00","20.00","60.00"]) {
+      const t = await prisma.transaction.create({ data: { workspaceId: wsId, accountId: acct, amount: a, merchantRaw: "M", occurredAt: new Date("2026-05-04T12:00:00Z"), source: "manual", pending: false, rawData: {} } });
+      await prisma.transactionAllocation.create({ data: { transactionId: t.id, categoryId: dining, amount: a } });
+    }
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    const c = f.categories.find((x) => x.categoryId === dining)!;
+    expect(c.typicalAmount).toBeCloseTo(20, 2); // median of [10,20,60]
+  });
+```
+
+- [ ] **Step 2:** FAIL (typicalAmount missing).
+
+- [ ] **Step 3: Implement.** In `budget-plans/service.ts` add `recentTypicalAmountByCategory(workspaceId, categoryIds)` — 90-day positive allocations per category, return `Map<id, median>` (sort positives, pick middle; 0 if none). In `forecast.ts`: add `typicalAmount: number` to `CategoryForecast`; call the new fn in the `Promise.all`; set `typicalAmount: typicals.get(c.categoryId) ?? 0` per category; no-snap path doesn't list categories so unaffected. In `compare-spending-vs-budget.ts`: add `typicalAmount: string` to `Item`, set `typicalAmount: (fc?.typicalAmount ?? 0).toFixed(2)` (so the LLM sees it in the tool result — no card change).
+
+- [ ] **Step 4:** test green; existing forecast/compare tests still green (run both files); typecheck api clean. **Step 5: Commit** `feat(api): expose per-category typical (median) amount for plan sizing`.
+
+---
+
+## Task 4: shared item zod + `addScheduledSpendBatch` executor + registrations
+
+**Files:** create `apps/api/src/chat/tools/_scheduled-plan-item.ts`, `add-scheduled-spend-batch.ts`; modify `index.ts`, `intents/service.ts`, `audit/service.ts`; test append.
+
+- [ ] **Step 1 `[R2 — one shared item zod, money-valid amount]`:** create `_scheduled-plan-item.ts`:
+```ts
+import { z } from "zod";
+import { isValidAmount } from "@fina/shared";
+
+/** Shared item shape for the batch executor AND the plan presenter so the two
+ *  can never drift. amount uses the SAME money contract as validateAmount
+ *  (AMOUNT_RE: <=2 decimals, in range) — a 3-decimal amount fails HERE, at
+ *  card-creation, not later as a burned-intent consume failure. */
+export const ScheduledPlanItem = z.object({
+  category: z.string().min(1).max(80).describe("Category name (case-insensitive)"),
+  amount: z.number().positive().refine(isValidAmount, "amount must have at most 2 decimals and be in range"),
+  scheduled_date: z.string().describe("YYYY-MM-DD"),
+  note: z.string().max(1000).optional(),
+});
+export type ScheduledPlanItemT = z.infer<typeof ScheduledPlanItem>;
+```
+
+- [ ] **Step 2: Failing tests** (executor): resolves names + creates all; unknown name → throws + zero rows. (As R1.)
+
+- [ ] **Step 3: Executor** `add-scheduled-spend-batch.ts`:
+```ts
+import { z } from "zod";
+import { prisma } from "../../db.js";
+import type { ToolDef } from "./types.js";
+import { addScheduledSpendBatchService } from "../../schedules/service.js";
+import { ScheduledPlanItem } from "./_scheduled-plan-item.js";
+
+const Args = z.object({ items: z.array(ScheduledPlanItem).min(1).max(20) });
+
+export const addScheduledSpendBatch: ToolDef<z.infer<typeof Args>, { schedules: unknown[]; count: number }> = {
+  name: "addScheduledSpendBatch",
+  description:
+    "Create SEVERAL one-time scheduled expenses at once (max 20). DO NOT call directly — only via " +
+    "presentScheduledSpendPlan so the user confirms once. Each item is a category name + amount + future YYYY-MM-DD.",
+  args: Args,
+  async run(ctx, args) {
+    const cats = await prisma.category.findMany({
+      where: { workspaceId: ctx.workspaceId, archivedAt: null },
+      select: { id: true, name: true },
+      orderBy: [{ name: "asc" }, { createdAt: "asc" }, { id: "asc" }], // [R2] deterministic resolution
+    });
+    const byLower = new Map<string, string>();
+    for (const c of cats) { const k = c.name.toLowerCase(); if (!byLower.has(k)) byLower.set(k, c.id); } // first by orderBy
+    const items = args.items.map((it) => {
+      const id = byLower.get(it.category.toLowerCase());
+      if (!id) throw new Error("category_not_found");
+      return { categoryId: id, amount: it.amount, scheduledDate: it.scheduled_date, ...(it.note !== undefined ? { note: it.note } : {}) };
+    });
+    const out = await addScheduledSpendBatchService({ workspaceId: ctx.workspaceId, items });
+    return { schedules: out.schedules, count: out.count };
+  },
+};
+```
+
+- [ ] **Step 4: Register** in `index.ts` (REGISTRY). **Step 5:** `intents/service.ts` — add `"addScheduledSpendBatch"` to `CONFIRMABLE_TOOLS` + confirmationFor case (`예정 지출 N개를 추가했어요.` / `Added N scheduled items.`). **Step 6:** `audit/service.ts` — add to `AUDIT_WRITE_TOOLS`, `TARGET_TYPE_MAP` (`scheduled_spend`), and an `extractTargetId` branch returning `null` (N rows, detail in payload/result).
+- [ ] **Step 7:** tests green; typecheck clean. **Step 8: Commit** `feat(chat): addScheduledSpendBatch executor + intent/audit registration`.
+
+---
+
+## Task 5: `presentScheduledSpendPlan` presenter (pre-validate category + future date)
+
+**Files:** create `present-scheduled-spend-plan.ts`; modify `index.ts`; test append.
+
+- [ ] **Step 1: Failing tests:** (a) returns plan_proposal_card whose intent, consumed, creates all rows + `total` correct; (b) unknown category → throws, zero intents; `[R2]` (c) **past-dated** item → throws `date_in_past`, zero intents; `[R2]` (d) 3-decimal amount → throws (zod refine), zero intents.
+
+- [ ] **Step 2:** FAIL.
+
+- [ ] **Step 3: Presenter:**
+```ts
+import { z } from "zod";
+import type { PresentationBlock } from "@fina/shared";
+import { prisma } from "../../db.js";
+import { createIntentService } from "../../intents/service.js";
+import { workspaceOwnerTz, todayDateOnlyInTz } from "../../schedules/service.js"; // export these if not already
+import { parseOccurredAt } from "@fina/shared";
+import type { ToolDef } from "./types.js";
+import { ScheduledPlanItem } from "./_scheduled-plan-item.js";
+
+const Args = z.object({
+  question: z.string().min(1).max(500),
+  items: z.array(ScheduledPlanItem).min(1).max(20),
+  accept_label: z.string().min(1).max(40).optional(),
+  reject_label: z.string().min(1).max(40).optional(),
+});
+type PlanCard = Extract<PresentationBlock, { type: "plan_proposal_card" }>;
+
+export const presentScheduledSpendPlan: ToolDef<z.infer<typeof Args>, { block: PlanCard }> = {
+  name: "presentScheduledSpendPlan",
+  description:
+    "Propose a concrete multi-item spending plan as ONE Yes/No card; accept creates all items as scheduled spends. " +
+    "Use after a forecast shows a category will run tight, or when the user asks for help planning. Dates MUST be in the " +
+    "future; categories must already exist; size amounts from the user's words or the category's typicalAmount/remaining.",
+  args: Args,
+  async run(ctx, args) {
+    // Resolve categories deterministically (same orderBy as the executor).
+    const cats = await prisma.category.findMany({
+      where: { workspaceId: ctx.workspaceId, archivedAt: null },
+      select: { id: true, name: true },
+      orderBy: [{ name: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    });
+    const canonical = new Map<string, string>();
+    for (const c of cats) { const k = c.name.toLowerCase(); if (!canonical.has(k)) canonical.set(k, c.name); }
+    // [R2] reject future-date violations + unknown categories BEFORE issuing the single-use intent.
+    const today = todayDateOnlyInTz(await workspaceOwnerTz(ctx.workspaceId)).getTime();
+    for (const it of args.items) {
+      if (!canonical.has(it.category.toLowerCase())) throw new Error("category_not_found");
+      if (parseOccurredAt(it.scheduled_date).getTime() < today) throw new Error("date_in_past");
+    }
+
+    const out = await createIntentService(
+      { workspaceId: ctx.workspaceId, userId: ctx.userId },
+      { tool: "addScheduledSpendBatch", args: { items: args.items } },
+    );
+    const total = args.items.reduce((s, it) => s + it.amount, 0);
+    return {
+      block: {
+        type: "plan_proposal_card",
+        question: args.question,
+        rows: args.items.map((it) => ({ category: canonical.get(it.category.toLowerCase())!, date: it.scheduled_date, amount: it.amount.toFixed(2), ...(it.note !== undefined ? { note: it.note } : {}) })),
+        total: total.toFixed(2),
+        accept_label: args.accept_label ?? "Schedule it",
+        reject_label: args.reject_label ?? "Not now",
+        accept_intent: out.intent.id,
+      },
+    };
+  },
+};
+```
+(If `workspaceOwnerTz`/`todayDateOnlyInTz` are not exported from schedules/service.ts, add `export`. `parseOccurredAt` is exported from `@fina/shared`.)
+
+- [ ] **Step 4: Register** in `index.ts` (NOT in CONFIRMABLE_TOOLS). **Step 5:** tests green; typecheck clean. **Step 6: Commit** `feat(chat): presentScheduledSpendPlan presenter (future-date + category guards)`.
+
+---
+
+## Task 6: System-prompt copy
+
+**Files:** `apps/api/src/chat/turn.ts`
+
+- [ ] **Step 1:** READ the scheduled/confirm guidance area. Add:
+```
+- To help the user land within budget, PROPOSE a concrete plan with presentScheduledSpendPlan —
+  specific FUTURE dates + amounts (e.g. "groceries twice: June 12 and 19, ~$60 each"). One card, one
+  confirmation creates them all. NEVER call addScheduledSpendBatch directly — always go through
+  presentScheduledSpendPlan. Don't loop addScheduledSpend. Only propose categories that exist.
+  Size each amount from what the USER said, or from the category's typicalAmount and remaining budget
+  (compareSpendingVsBudget exposes remaining, projected, runwayDay, typicalAmount per category); split
+  the remaining sensibly across the number of trips. Dates must be after today.
+```
+- [ ] **Step 2:** typecheck api (no new error in turn.ts — check backticks). **Step 3: Commit** `feat(chat): prompt advisor to propose multi-item plans (guarded)`.
+
+---
+
+## Self-Review (R2)
+
+**MUST-FIX folded in:** (1) ThreadView allowlist/dismissal/reject — Task 1 Step 4. (2) money-valid amount — `isValidAmount` refine in `_scheduled-plan-item.ts` (Task 4 Step 1), tested Task 5(d). (3) future-date guard in presenter — Task 5 Step 3, tested Task 5(c). (4) atomic shared+mobile commit — Task 1.
+
+**SHOULD-CONSIDER folded in:** deterministic case-resolution (orderBy + first-wins, both tools), accept-button `colors.onPrimary`, hoisted validators (no double-parse), shared item zod (one source), `intent_gone`→friendly message (Task 1 Step 4). Inline snake_case zod over the spec's shared `ScheduledSpendBatchBody` is intentional (chat-tool args are snake_case, single consumer, no REST route) — factored into ONE api-local module to kill drift.
+
+**Decisions:** direct-call forbidden via prompt (Task 6); accept/reject-only (no edit path — prompt sizes from user words/typicalAmount); autonomous sizing via exposed typicalAmount (Task 3).
+
+**Type consistency:** `plan_proposal_card` identical across dto (T1), presenter return (T5), renderer (T1). `ScheduledPlanItem` is the ONE item zod used by both tools (T4/T5). `typicalAmount` flows forecast→item (T3). All registration touchpoints (CONFIRMABLE/AUDIT/TARGET_TYPE/extractTargetId/confirmationFor/REGISTRY) covered.
+
+**Known v1 limits (accepted):** a genuine mid-run consume failure still burns the single-use intent (atomic, no partial rows; user re-asks). No per-field edit. Test DB (5433) must be up.
