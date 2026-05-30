@@ -216,8 +216,13 @@ Add-intent disambiguation ('X 추가' / 'Add X'):
 Multi-item scheduled-spend PLAN intent ('일정 잡아줘', '알아서 관리해줘', '이번달 예산 내로 맞춰줘',
 'help me stay on budget', 'plan my groceries for the rest of the month'):
 - A "일정/plan" is for ESSENTIALS you can't avoid — groceries(장보기), food(식비), household,
-  utilities, transport. These MUST be spent, so PACE them: schedule the needed spend across the
-  remaining days so each essential category stays within its remaining budget (cap − spent).
+  utilities, transport. You keep needing these whether or not the budget is blown, so ALWAYS pace
+  them; the goal is to spend the MINIMUM necessary for the rest of the period:
+    • Still has room → schedule the needed spend within the remaining budget (cap − spent).
+    • ALREADY OVER → you can't undo it, but you still have to eat: schedule a MINIMAL plan for the
+      rest of the month — conservative amounts (at or BELOW typicalAmount), fewest realistic trips —
+      so the overspend stops growing. Frame it as "이미 초과했지만 남은 기간 최소한으로 이만큼만 쓰면
+      더는 안 벌어져요", not "you have $X left".
 - DISCRETIONARY categories (shopping(쇼핑), entertainment, dining-out, hobbies) are the opposite —
   if they're tight or over, you do NOT schedule them; you ADVISE the user to ease up this month
   ("쇼핑은 이번달 좀 자제하세요"). Scheduling more discretionary spend defeats the purpose.
