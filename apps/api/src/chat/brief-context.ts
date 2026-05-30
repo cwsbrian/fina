@@ -1,7 +1,7 @@
 import { prisma } from "../db.js";
 import { resolveUserTz, partsInTz } from "./tools/periods.js";
 import { budgetPlanSnapshot } from "../budget-plans/service.js";
-import { round2, type MonthEndForecast, type CategoryForecast } from "../analysis/forecast.js";
+import { projectMonthEnd, round2, type MonthEndForecast, type CategoryForecast } from "../analysis/forecast.js";
 
 export type BriefType = "daily" | "weekly" | "monthly";
 
@@ -105,8 +105,9 @@ export type WorkspaceContext = {
     cadence: string;
     nextDate: string;
   }>;
-  /** Pace deviation summary (one sentence). */
-  deviation: string | null;
+  /** Month-end forecast summary (server-internal; fed to Gemini). Always
+   *  present; only `portfolio` is nullable (no positive total budget). */
+  forecast: BriefForecast;
 };
 
 export type BriefContext = {
@@ -135,10 +136,11 @@ export async function buildBriefContext(
     },
   });
 
+  const now = new Date();
   const workspaces: WorkspaceContext[] = [];
   for (const m of memberships) {
     workspaces.push(
-      await buildWorkspaceContext(m.workspaceId, m.workspace, briefType, tz),
+      await buildWorkspaceContext(m.workspaceId, m.workspace, briefType, tz, userId, now),
     );
   }
 
@@ -151,8 +153,9 @@ async function buildWorkspaceContext(
   ws: { id: string; name: string; currency: string },
   briefType: BriefType,
   tz: string,
+  userId: string,
+  now: Date,
 ): Promise<WorkspaceContext> {
-  const now = new Date();
   const txWindowStart = txWindowStartFor(briefType, now, tz);
   const scheduleWindowEnd = scheduleWindowEndFor(briefType, now, tz);
 
@@ -256,6 +259,9 @@ async function buildWorkspaceContext(
     nextDate: r.nextOccurrenceDate.toISOString().slice(0, 10),
   }));
 
+  const monthEnd = await projectMonthEnd(workspaceId, userId, nowInUserTz.year, nowInUserTz.month, now);
+  const forecast = summarizeForecast(monthEnd, ws.currency);
+
   return {
     id: ws.id,
     name: ws.name,
@@ -266,7 +272,7 @@ async function buildWorkspaceContext(
     budgetTotal,
     budgets: budgetsFmt,
     recurring: recurringFmt,
-    deviation: null,
+    forecast,
   };
 }
 
