@@ -69,7 +69,14 @@ type Props = {
   ) => void;
 };
 
-type GetThreadResp = { thread: ChatThreadDTO; messages: ChatMessageDTO[] };
+type GetThreadResp = {
+  thread: ChatThreadDTO;
+  messages: ChatMessageDTO[];
+  /** accept_intent ids whose ActionIntent is already consumed or expired —
+   *  their action cards must stay closed across re-entry (the dismissal is
+   *  otherwise only in-memory). */
+  resolvedIntentIds?: string[];
+};
 type PostMessageResp = {
   threadId: string;
   userMessage: ChatMessageDTO;
@@ -225,6 +232,9 @@ export function ThreadView({
         if (cancelled) return;
         setThread(data.thread);
         setMessages(data.messages);
+        // Seed the dismissal set from server truth so already-resolved cards
+        // (consumed/expired intents) don't re-open on re-entry.
+        setDismissedIntents(new Set(data.resolvedIntentIds ?? []));
         scrollToBottom();
         // Mark as read on view — the user is looking at the messages
         // right now, so any unreadCount must drop to 0 immediately and

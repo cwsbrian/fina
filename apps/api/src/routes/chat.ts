@@ -171,12 +171,36 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       });
       const messages = recent.reverse();
 
+      // Action cards (confirm_card / *_form_card / plan_proposal_card) persist
+      // an accept_intent in their block. The client's "already resolved"
+      // dismissal is in-memory, so on reload a tapped/expired card would
+      // re-open (and re-tapping hits intent_gone). Surface which of those
+      // intents are already consumed OR expired so the client keeps the
+      // resolved cards closed across re-entry.
+      const intentIds = new Set<string>();
+      for (const m of messages) {
+        const blocks = Array.isArray(m.blocks) ? (m.blocks as Array<{ accept_intent?: unknown }>) : [];
+        for (const b of blocks) {
+          if (b && typeof b.accept_intent === "string") intentIds.add(b.accept_intent);
+        }
+      }
+      const resolvedIntentIds = intentIds.size === 0 ? [] : (
+        await prisma.actionIntent.findMany({
+          where: {
+            id: { in: [...intentIds] },
+            OR: [{ consumedAt: { not: null } }, { expiresAt: { lte: new Date() } }],
+          },
+          select: { id: true },
+        })
+      ).map((r) => r.id);
+
       return {
         thread: serializeThread(thread),
         messages: messages.map((m) => ({
           id: m.id, role: m.role, blocks: m.blocks,
           createdAt: m.createdAt.toISOString(),
         })),
+        resolvedIntentIds,
       };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
