@@ -487,7 +487,7 @@ export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; mon
  *  bills aren't double-counted against forward occurrences. Refunds are NETTED
  *  (we do NOT filter amount>0) and pending transactions are EXCLUDED to avoid
  *  double-counting the later posted row. A single outlier transaction is
- *  winsorized to 3x the category's mean so one big buy doesn't dominate 90 days.
+ *  winsorized to 3x the category's median positive spend so one big buy doesn't dominate 90 days.
  *  Returns a Map categoryId -> daily rate (>= 0). */
 export async function recentDiscretionaryDailyByCategory(
   workspaceId: string,
@@ -537,9 +537,12 @@ export async function recentDiscretionaryDailyByCategory(
       out.set(id, 0);
       continue;
     }
-    const mean = amounts.reduce((a, b) => a + b, 0) / amounts.length;
-    const cap = 3 * mean;
-    const winsorized = amounts.map((a) => (a > cap ? cap : a));
+    // Winsorize cap from the median of POSITIVE amounts (robust to a single
+    // big buy, unlike a mean that the outlier itself inflates). Only positive
+    // values are capped, so refunds (negatives) net through untouched.
+    const positives = amounts.filter((a) => a > 0).sort((a, b) => a - b);
+    const cap = positives.length > 0 ? 3 * positives[Math.floor(positives.length / 2)]! : 0;
+    const winsorized = amounts.map((a) => (a > 0 && a > cap ? cap : a));
     const net90 = winsorized.reduce((a, b) => a + b, 0);
     const discretionary90 = net90 - (recurringMonthly.get(id) ?? 0) * 3;
     out.set(id, Math.max(0, discretionary90) / 90);

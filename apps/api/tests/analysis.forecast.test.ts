@@ -48,12 +48,22 @@ describe("recentDiscretionaryDailyByCategory", () => {
     expect(rates.get(dining) ?? 0).toBeCloseTo(0, 4);
   });
 
-  it("winsorizes a single outlier to 3x the category mean so one big buy doesn't poison 90 days", async () => {
+  it("winsorizes a positive outlier to 3x the median positive amount", async () => {
     await tx("10.00", "2026-04-10T12:00:00Z");
     await tx("10.00", "2026-04-12T12:00:00Z");
-    await tx("1000.00", "2026-04-15T12:00:00Z");
+    await tx("1000.00", "2026-04-15T12:00:00Z"); // outlier
+    // positives sorted [10,10,1000], median=10, cap=30 → 1000 capped to 30.
     const rates = await recentDiscretionaryDailyByCategory(wsId, [dining]);
-    const uncapped = (10 + 10 + 1000) / 90;
-    expect(rates.get(dining)!).toBeLessThanOrEqual(uncapped + 1e-9);
+    expect(rates.get(dining)!).toBeCloseTo((10 + 10 + 30) / 90, 4);
+    expect(rates.get(dining)!).toBeLessThan((10 + 10 + 1000) / 90);
+  });
+
+  it("a refund does not distort the winsorize cap (negatives net, never capped)", async () => {
+    await tx("50.00", "2026-04-10T12:00:00Z");
+    await tx("50.00", "2026-04-12T12:00:00Z");
+    await tx("-200.00", "2026-04-15T12:00:00Z"); // big refund
+    // positives [50,50] → median 50, cap 150, nothing capped; net = -100 → clamped to 0.
+    const rates = await recentDiscretionaryDailyByCategory(wsId, [dining]);
+    expect(rates.get(dining) ?? 0).toBeCloseTo(0, 4);
   });
 });
