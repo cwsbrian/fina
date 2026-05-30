@@ -15,6 +15,7 @@ import { CategoryListBlock } from "./blocks/CategoryListBlock";
 import { GoalsListBlock } from "./blocks/GoalsListBlock";
 import { GoalDetailBlock } from "./blocks/GoalDetailBlock";
 import { GoalFormBlock } from "./blocks/GoalFormBlock";
+import { PlanProposalCardBlock } from "./blocks/PlanProposalCardBlock";
 
 type Props = {
   block: Block;
@@ -162,6 +163,15 @@ export function PresentationBlock({
         }}
         onCancel={() => onReject?.(undefined)}
         {...(onFormFocusChange ? { onFocusChange: onFormFocusChange } : {})}
+      />
+    );
+  }
+  if (block.type === "plan_proposal_card") {
+    return (
+      <PlanProposalCardBlock
+        block={block}
+        {...(onAccept ? { onAccept } : {})}
+        {...(onReject ? { onReject } : {})}
       />
     );
   }

@@ -430,4 +430,17 @@ export type PresentationBlock =
       };
       currency?: string;
       mode?: "add" | "update";
+    }
+  | {
+      /** A proposed multi-item plan (e.g. "groceries twice"). Backed by ONE
+       *  ActionIntent targeting addScheduledSpendBatch; accept creates them all.
+       *  Reuses confirm_card's accept/reject intent flow. */
+      type: "plan_proposal_card";
+      question: string;
+      rows: { category: string; date: string; amount: string; note?: string }[];
+      total: string; // sum of row amounts, no currency symbol
+      accept_label: string;
+      reject_label: string;
+      accept_intent: string;
+      reject_intent?: string;
     };

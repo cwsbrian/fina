@@ -551,7 +551,8 @@ function isCardBlock(b: Block): boolean {
     b.type === "category_list" ||
     b.type === "goals_list" ||
     b.type === "goal_detail" ||
-    b.type === "goal_form_card"
+    b.type === "goal_form_card" ||
+    b.type === "plan_proposal_card"
   );
 }
 
@@ -620,7 +621,7 @@ function MessageBubble({
   // this session — once tapped, the card collapses out of the thread.
   // Other block types are unaffected.
   const blocks = rawBlocks.filter((b) => {
-    if (b.type === "confirm_card") {
+    if (b.type === "confirm_card" || b.type === "plan_proposal_card") {
       return !dismissedIntents.has(b.accept_intent);
     }
     return true;
@@ -669,7 +670,7 @@ function MessageBubble({
                   // visually. Key the dismissal by accept_intent (the
                   // same id we filter by in the render path) since
                   // reject_intent can differ.
-                  if (b.type === "confirm_card") {
+                  if (b.type === "confirm_card" || b.type === "plan_proposal_card") {
                     onIntentDismissed(b.accept_intent);
                   }
                 }}
