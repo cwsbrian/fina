@@ -83,15 +83,18 @@ export function HeadlineAmount({
   label,
   amount,
   delta,
+  sub,
 }: {
   label?: string;
   amount: string;
   delta?: { value: string; direction: "up" | "down" };
+  sub?: string;
 }) {
   return (
     <View style={styles.headline}>
       {label ? <Text style={styles.headlineLabel}>{label}</Text> : null}
       <Text style={styles.headlineAmount}>{amount}</Text>
+      {sub ? <Text style={styles.rowSub}>{sub}</Text> : null}
       {delta ? <DeltaPill value={delta.value} direction={delta.direction} /> : null}
     </View>
   );
@@ -127,6 +130,9 @@ export function KVPRow({
   sub,
   barPct,
   delta,
+  projected,
+  scheduled,
+  severity,
   isLast,
 }: {
   label: string;
@@ -134,6 +140,9 @@ export function KVPRow({
   sub?: string;
   barPct?: number;
   delta?: { value: string; direction: "up" | "down" };
+  projected?: string;
+  scheduled?: string;
+  severity?: string;
   isLast?: boolean;
 }) {
   return (
@@ -146,6 +155,12 @@ export function KVPRow({
           {sub ? (
             <Text style={styles.rowSub} numberOfLines={1}>
               {sub}
+            </Text>
+          ) : null}
+          {projected ? (
+            <Text style={styles.rowSub} numberOfLines={1}>
+              {severity === "at_risk" ? "⚠️ " : ""}projected {projected}
+              {scheduled ? ` · incl. ${scheduled} scheduled` : ""}
             </Text>
           ) : null}
         </View>

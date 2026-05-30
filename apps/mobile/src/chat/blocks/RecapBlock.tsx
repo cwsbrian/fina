@@ -35,11 +35,19 @@ export function RecapBlock({ block }: Props) {
           {...(block.headline.label !== undefined ? { label: block.headline.label } : {})}
           amount={formatHeadline(block.headline.amount, currencySymbol)}
           {...(block.headline.delta !== undefined ? { delta: block.headline.delta } : {})}
+          {...(budgetSpentScheduledSub(block.headline, currencySymbol) !== undefined
+            ? { sub: budgetSpentScheduledSub(block.headline, currencySymbol)! }
+            : {})}
         />
       ) : null}
 
       {block.rows.length === 0 ? (
-        <BlockEmpty text="No data for this period yet." />
+        // Empty rows can mean two different things: genuinely no data, OR a
+        // budget recap where every category is on track so none need a row.
+        // In the latter case the server sends a footer ("Every category is on
+        // pace.") that already explains it — showing "No data" alongside it is
+        // contradictory. Only show the empty state when there's no footer.
+        block.footer ? null : <BlockEmpty text="No data for this period yet." />
       ) : (
         <View>
           {block.rows.map((r, i) => (
@@ -50,6 +58,9 @@ export function RecapBlock({ block }: Props) {
               {...(r.sub !== undefined ? { sub: r.sub } : {})}
               {...(typeof r.bar_pct === "number" ? { barPct: r.bar_pct } : {})}
               {...(r.delta !== undefined ? { delta: r.delta } : {})}
+              {...(r.projected !== undefined ? { projected: r.projected } : {})}
+              {...(r.scheduled !== undefined ? { scheduled: formatRowAmount(r.scheduled, currencySymbol) } : {})}
+              {...(r.severity !== undefined ? { severity: r.severity } : {})}
               isLast={i === block.rows.length - 1}
             />
           ))}
@@ -59,6 +70,25 @@ export function RecapBlock({ block }: Props) {
       {block.footer ? <BlockFooter text={block.footer} /> : null}
     </BlockCard>
   );
+}
+
+/** Build the "Budget $X · Spent $Y · Scheduled $Z" sub-line under the headline
+ *  % when the budget recap supplies those numbers. Returns undefined for recaps
+ *  that don't (so other recap tools keep a bare headline). */
+function budgetSpentScheduledSub(
+  headline: NonNullable<Extract<PresentationBlock, { type: "recap" }>["headline"]>,
+  currencySymbol: string | null,
+): string | undefined {
+  if (headline.budget === undefined && headline.spent === undefined && headline.scheduled === undefined) {
+    return undefined;
+  }
+  const parts: string[] = [];
+  if (headline.budget !== undefined) parts.push(`Budget ${formatHeadline(headline.budget, currencySymbol)}`);
+  if (headline.spent !== undefined) parts.push(`Spent ${formatHeadline(headline.spent, currencySymbol)}`);
+  if (headline.scheduled !== undefined && parseFloat(headline.scheduled) > 0) {
+    parts.push(`Scheduled ${formatHeadline(headline.scheduled, currencySymbol)}`);
+  }
+  return parts.join("  ·  ");
 }
 
 /** Render the headline number with a currency prefix when one is supplied;

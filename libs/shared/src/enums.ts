@@ -31,3 +31,14 @@ export type ScheduledSpendListFilter = (typeof SCHEDULED_SPEND_LIST_FILTERS)[num
 /** Chat message author roles. Mirror of the Prisma `ChatMessageRole` enum. */
 export const CHAT_MESSAGE_ROLES = ["user", "assistant", "tool"] as const;
 export type ChatMessageRole = (typeof CHAT_MESSAGE_ROLES)[number];
+
+/** Forecast severity tiers surfaced by the chat advisor + daily brief.
+ *  Ordered by increasing risk; `insufficient_history` means "too new to
+ *  forecast", not a risk level. */
+export const RISK_TIERS = [
+  "on_track",
+  "watch",
+  "at_risk",
+  "insufficient_history",
+] as const;
+export type RiskTier = (typeof RISK_TIERS)[number];

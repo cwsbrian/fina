@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { PresentationBlock } from "@fina/shared";
+import type { PresentationBlock, RiskTier } from "@fina/shared";
 import { budgetPlanSnapshot, periodToYearMonth } from "../../budget-plans/service.js";
+import { projectMonthEnd, type CategoryForecast } from "../../analysis/forecast.js";
 import type { ToolDef } from "./types.js";
 
 const Args = z.object({
@@ -22,6 +23,11 @@ type Item = {
   plannedPct: number;
   todayPct: number;
   status: "on-pace" | "over-pace";
+  projected: string;
+  projectedOverspend: string;
+  scheduled: string;
+  runwayDay: number | null;
+  severity: RiskTier;
 };
 
 type Result = {
@@ -41,14 +47,20 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
     const snap = await budgetPlanSnapshot(ctx.workspaceId, year, month);
 
     const todayPct = todayPctFor(period, year, month);
+    const forecast = await projectMonthEnd(ctx.workspaceId, ctx.userId, year, month);
+    const fcById = new Map<string, CategoryForecast>(forecast.categories.map((f) => [f.categoryId, f]));
     const items: Item[] = (snap?.categories ?? [])
       .filter((c) => c.allocated !== null)
       .map((c) => {
         const amount = parseFloat(c.allocated!);
         const spent = parseFloat(c.spent);
-        const planned = parseFloat(c.scheduled);
-        // Remaining headroom AFTER subtracting both actual spend and
-        // upcoming scheduled/subscription spend (planned) — not just cash left.
+        const fc = fcById.get(c.categoryId);
+        // "planned" = TODAY-FORWARD known future (subscriptions + scheduled
+        // spends) from the forecast — NOT the snapshot's scheduled, which
+        // still counts past-dated rows. Keeps remaining/attention consistent
+        // with the forecast (a past-dated scheduled spend no longer drags a
+        // category into the red).
+        const planned = fc ? fc.fixedBills + fc.plannedOneOffs : parseFloat(c.scheduled);
         const remaining = amount - spent - planned;
         const spentPct = amount > 0 ? Number(((spent / amount) * 100).toFixed(2)) : 0;
         const plannedPct = amount > 0 ? Number(((planned / amount) * 100).toFixed(2)) : 0;
@@ -58,12 +70,17 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
           categoryName: c.categoryName,
           amount: c.allocated!,
           spent: c.spent,
-          planned: c.scheduled,
+          planned: planned.toFixed(2),
           remaining: remaining.toFixed(2),
           spentPct,
           plannedPct,
           todayPct,
           status,
+          projected: (fc?.projected ?? spent).toFixed(2),
+          projectedOverspend: (fc?.projectedOverspend ?? 0).toFixed(2),
+          scheduled: planned.toFixed(2),
+          runwayDay: fc?.runwayDay ?? null,
+          severity: fc?.severity ?? "insufficient_history",
         };
       });
 
@@ -78,7 +95,7 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
     return {
       period: { start, end },
       items,
-      block: toRecapBlock(period, items, totalSpent, totalBudget),
+      block: toRecapBlock(period, items, totalSpent, totalBudget, forecast.portfolio.scheduled),
     };
   },
 };
@@ -102,6 +119,7 @@ function toRecapBlock(
   items: Item[],
   totalSpent: number,
   totalBudget: number,
+  totalScheduled: number,
 ): PresentationBlock {
   const periodLabel =
     period === "this_month" ? "This month" :
@@ -114,12 +132,14 @@ function toRecapBlock(
   const usedPct = budget > 0 ? Math.round((spent / budget) * 100) : 0;
   const remaining = budget - spent;
 
-  // Only surface categories that need ATTENTION — pacing over budget for
-  // this point in the month, or already over their cap. Categories that
-  // are on pace (or untouched) are noise on a "how am I doing" card, so
-  // we hide them and note the count instead. Most-strained first.
+  // Only surface categories that need ATTENTION — forecast severity is
+  // at_risk/watch, or already over their cap. Using forecast-based severity
+  // rather than pace alone means the filter accounts for discretionary
+  // run-rate projection, not just the current-day snapshot. Categories that
+  // are on_track (or have insufficient history) are noise on a "how am I
+  // doing" card, so we hide them and note the count instead. Most-strained first.
   const attention = items
-    .filter((i) => i.status === "over-pace" || parseFloat(i.remaining) < 0)
+    .filter((i) => i.severity === "at_risk" || i.severity === "watch" || parseFloat(i.remaining) < 0)
     .sort((a, b) => b.spentPct - a.spentPct);
   const hiddenOnPace = items.length - attention.length;
 
@@ -145,6 +165,12 @@ function toRecapBlock(
               value: Math.abs(remaining).toFixed(2),
               direction: (remaining >= 0 ? "down" : "up") as "up" | "down",
             },
+            // Show the underlying numbers behind the % so the headline isn't a
+            // bare percentage: budget cap, spent so far, and today-forward
+            // scheduled+subscription spend.
+            budget: budget.toFixed(2),
+            spent: spent.toFixed(2),
+            scheduled: totalScheduled.toFixed(2),
           }
         : {}),
     },
@@ -159,6 +185,9 @@ function toRecapBlock(
           value: Math.abs(rem).toFixed(2),
           direction: (rem >= 0 ? "down" : "up") as "up" | "down",
         },
+        projected: i.projected,
+        ...(parseFloat(i.scheduled) > 0 ? { scheduled: i.scheduled } : {}),
+        severity: i.severity,
       };
     }),
     ...(footer ? { footer } : {}),

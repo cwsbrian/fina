@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import { occurrencesInRange } from "../recurring/occurrences.js";
+import { monthlyEquivalent, occurrencesInRange } from "../recurring/occurrences.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
@@ -47,6 +47,17 @@ export function firstOfMonth(year: number, month1to12: number): Date {
   return new Date(
     `${year}-${String(month1to12).padStart(2, "0")}-01T12:00:00.000Z`,
   );
+}
+
+/** [from, to) midnight-UTC bounds for a calendar month. Use this (NOT
+ *  firstOfMonth, which is UTC-noon) when filtering @db.Date columns
+ *  (scheduledDate, nextOccurrenceDate) so items dated the 1st land in the
+ *  correct month. Date.UTC rolls Dec→Jan over automatically. */
+function monthBoundsUtc(year: number, month1to12: number): { from: Date; to: Date } {
+  return {
+    from: new Date(Date.UTC(year, month1to12 - 1, 1)),
+    to: new Date(Date.UTC(year, month1to12, 1)),
+  };
 }
 
 export function isDefaultPeriod(d: Date): boolean {
@@ -241,7 +252,7 @@ function todayUTCMidnight(): Date {
  *  given month, grouped by category. Includes only occurrences from
  *  today forward — earlier in the month they've either already
  *  matched real transactions (counted via actuals) or were missed. */
-async function subscriptionOccurrencesByCategory(
+export async function subscriptionOccurrencesByCategory(
   workspaceId: string,
   monthFrom: Date,
   monthTo: Date,
@@ -479,4 +490,117 @@ export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; mon
     if (month === 13) { month = 1; year += 1; }
   }
   return { year, month };
+}
+
+/** Per-category DISCRETIONARY daily spend rate over the trailing 90 days,
+ *  for the month-end forecast. Discretionary = actual category spend with the
+ *  category's recurring (subscription) monthly-equivalent removed, so fixed
+ *  bills aren't double-counted against forward occurrences. Refunds are NETTED
+ *  (we do NOT filter amount>0) and pending transactions are EXCLUDED to avoid
+ *  double-counting the later posted row. A single outlier transaction is
+ *  winsorized to 3x the category's median positive spend so one big buy doesn't dominate 90 days.
+ *  Returns a Map categoryId -> daily rate (>= 0). */
+export async function recentDiscretionaryDailyByCategory(
+  workspaceId: string,
+  categoryIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (categoryIds.length === 0) return out;
+  const since = new Date(Date.now() - 90 * 86_400_000);
+
+  const rows = await prisma.transactionAllocation.findMany({
+    where: {
+      categoryId: { in: categoryIds },
+      transaction: {
+        workspaceId,
+        removedAt: null,
+        pending: false,
+        occurredAt: { gte: since },
+      },
+    },
+    select: { amount: true, categoryId: true },
+  });
+
+  const byCat = new Map<string, number[]>();
+  for (const r of rows) {
+    if (!r.categoryId) continue;
+    const arr = byCat.get(r.categoryId) ?? [];
+    arr.push(Number(r.amount));
+    byCat.set(r.categoryId, arr);
+  }
+
+  const subs = await prisma.recurringExpense.findMany({
+    where: { workspaceId, categoryId: { in: categoryIds } },
+    select: { amount: true, cadence: true, categoryId: true },
+  });
+  const recurringMonthly = new Map<string, number>();
+  for (const s of subs) {
+    if (!s.categoryId) continue;
+    recurringMonthly.set(
+      s.categoryId,
+      (recurringMonthly.get(s.categoryId) ?? 0) + monthlyEquivalent(Number(s.amount), s.cadence),
+    );
+  }
+
+  for (const id of categoryIds) {
+    const amounts = byCat.get(id) ?? [];
+    if (amounts.length === 0) {
+      out.set(id, 0);
+      continue;
+    }
+    // Winsorize cap from the median of POSITIVE amounts (robust to a single
+    // big buy, unlike a mean that the outlier itself inflates). Only positive
+    // values are capped, so refunds (negatives) net through untouched.
+    const positives = amounts.filter((a) => a > 0).sort((a, b) => a - b);
+    const cap = positives.length > 0 ? 3 * positives[Math.floor(positives.length / 2)]! : 0;
+    const winsorized = amounts.map((a) => (a > 0 && a > cap ? cap : a));
+    const net90 = winsorized.reduce((a, b) => a + b, 0);
+    const discretionary90 = net90 - (recurringMonthly.get(id) ?? 0) * 3;
+    out.set(id, Math.max(0, discretionary90) / 90);
+  }
+  return out;
+}
+
+/** Subscription (RecurringExpense) occurrences for the month, grouped by
+ *  category, today-forward. Wraps subscriptionOccurrencesByCategory and
+ *  returns a flat categoryId -> amount map.
+ *
+ *  NOTE: RecurringExpense.nextOccurrenceDate is stored as @db.Date and comes
+ *  back from Prisma as midnight UTC (T00:00:00Z). firstOfMonth uses noon UTC
+ *  (T12:00:00Z), so we compute `to` as first-of-next-month at midnight to
+ *  correctly exclude occurrences that land exactly on the month boundary. */
+export async function monthlySubscriptionByCategory(
+  workspaceId: string,
+  year: number,
+  month1to12: number,
+): Promise<Map<string, number>> {
+  const { from, to } = monthBoundsUtc(year, month1to12);
+  const m = await subscriptionOccurrencesByCategory(workspaceId, from, to);
+  return new Map(Array.from(m, ([id, v]) => [id, Math.round(v.spent * 100) / 100]));
+}
+
+/** Unmatched, undismissed ScheduledSpend for the month (scheduledDate from
+ *  month start — past-dated-this-month items are still expected), grouped by
+ *  category. Excludes subscriptions (those come from monthlySubscriptionByCategory). */
+export async function monthlyScheduledSpendByCategory(
+  workspaceId: string,
+  year: number,
+  month1to12: number,
+): Promise<Map<string, number>> {
+  const { from, to } = monthBoundsUtc(year, month1to12);
+  // Count scheduled spends from TODAY forward only. A past-dated unmatched
+  // scheduled spend has almost always already happened (so it's in the
+  // actuals) or is stale — counting it would double-add against spend.
+  // Mirrors subscription occurrences, which are already clamped today-forward.
+  const today = todayUTCMidnight();
+  const effFrom = today > from ? today : from;
+  const rows = await prisma.scheduledSpend.findMany({
+    where: { workspaceId, scheduledDate: { gte: effFrom, lt: to }, matchedTxId: null, dismissedAt: null },
+    select: { amount: true, categoryId: true },
+  });
+  const sums = new Map<string, number>();
+  for (const r of rows) {
+    sums.set(r.categoryId, (sums.get(r.categoryId) ?? 0) + Number(r.amount));
+  }
+  return new Map(Array.from(sums, ([id, v]) => [id, Math.round(v * 100) / 100]));
 }

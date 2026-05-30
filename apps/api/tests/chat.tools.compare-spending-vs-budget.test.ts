@@ -112,4 +112,25 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
     expect(r.items).toHaveLength(0);
     expect(r.block.type).toBe("recap");
   });
+
+  it("surfaces a month-end forecast: projected + severity on over-pace categories", async () => {
+    await prisma.budgetPlan.create({
+      data: { workspaceId: wsId, periodStart: new Date("2026-05-01T12:00:00.000Z"), totalAmount: "9000.00", categoryAllocations: [{ categoryId: dining, amount: 300 }] },
+    });
+    // Heavy historical dining so the 90-day discretionary rate projects over cap.
+    for (const day of ["2026-03-05","2026-03-20","2026-04-05","2026-04-20","2026-04-25","2026-04-28"]) {
+      const t = await prisma.transaction.create({
+        data: { workspaceId: wsId, accountId: acct, amount: "300.00", merchantRaw: "Resto", occurredAt: new Date(`${day}T12:00:00Z`), source: "manual", pending: false, rawData: {} },
+      });
+      await prisma.transactionAllocation.create({ data: { transactionId: t.id, categoryId: dining, amount: "300.00" } });
+    }
+    const r = await compareSpendingVsBudget.run(ctx, {});
+    const item = r.items.find((i) => i.categoryName === "Dining")!;
+    expect(item.severity).toBe("at_risk");
+    expect(Number(item.projected)).toBeGreaterThan(300);
+    if (r.block.type !== "recap") throw new Error("wrong block");
+    const row = r.block.rows.find((x) => x.label === "Dining")!;
+    expect(row.projected).toBeDefined();
+    expect(row.severity).toBe("at_risk");
+  });
 });
