@@ -5,6 +5,7 @@ import {
   monthlySubscriptionByCategory,
   monthlyScheduledSpendByCategory,
 } from "../src/budget-plans/service.js";
+import { projectMonthEnd } from "../src/analysis/forecast.js";
 
 describe("recentDiscretionaryDailyByCategory", () => {
   let wsId: string;
@@ -117,5 +118,93 @@ describe("subscription vs scheduled split", () => {
     });
     const sched = await monthlyScheduledSpendByCategory(wsId, 2026, 5);
     expect(sched.get(groceries)).toBeCloseTo(11, 2);
+  });
+});
+
+describe("projectMonthEnd", () => {
+  let wsId: string;
+  let userId: string;
+  let dining: string;
+  let acct: string;
+
+  beforeEach(async () => {
+    const stamp = `fc-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
+    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "FC", tz: "America/Toronto" } });
+    userId = u.id;
+    const ws = await prisma.workspace.create({ data: { name: stamp, currency: "CAD" } });
+    wsId = ws.id;
+    await prisma.membership.create({ data: { userId, workspaceId: wsId, role: "owner" } });
+    dining = (await prisma.category.create({ data: { workspaceId: wsId, name: "Dining" } })).id;
+    acct = (await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" } })).id;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
+  });
+  afterEach(async () => {
+    vi.useRealTimers();
+    await prisma.workspace.deleteMany({ where: { id: wsId } });
+  });
+
+  async function spend(amount: string, day: string) {
+    const t = await prisma.transaction.create({
+      data: { workspaceId: wsId, accountId: acct, amount, merchantRaw: "M", occurredAt: new Date(day), source: "manual", pending: false, rawData: {} },
+    });
+    await prisma.transactionAllocation.create({ data: { transactionId: t.id, categoryId: dining, amount } });
+  }
+  async function plan(cap: number) {
+    await prisma.budgetPlan.create({
+      data: { workspaceId: wsId, periodStart: new Date("2026-05-01T12:00:00.000Z"), totalAmount: "9000.00", categoryAllocations: [{ categoryId: dining, amount: cap }] },
+    });
+  }
+
+  it("a rent-only category projects ~cap, NOT cap+rent (no double-count)", async () => {
+    await plan(2000);
+    await spend("2000.00", "2026-03-01T12:00:00Z");
+    await spend("2000.00", "2026-04-01T12:00:00Z");
+    await spend("2000.00", "2026-05-01T12:00:00Z");
+    await prisma.recurringExpense.create({
+      data: { workspaceId: wsId, name: "Rent", nameNormalized: "rent", amount: "2000.00", categoryId: dining, cadence: "monthly", nextOccurrenceDate: new Date("2026-06-01T12:00:00Z") },
+    });
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    const c = f.categories.find((x) => x.categoryId === dining)!;
+    expect(c.projected).toBeCloseTo(2000, 0);
+    expect(c.severity).toBe("on_track");
+  });
+
+  it("flags at_risk when the discretionary run-rate projects past cap*1.10", async () => {
+    await plan(300);
+    // Heavy historical dining: $300 x 6 across the trailing 90 days (prior
+    // months), nothing yet this month → 90-day discretionary rate ~ $20/day.
+    for (const day of ["2026-03-05","2026-03-20","2026-04-05","2026-04-20","2026-04-25","2026-04-28"]) {
+      await spend("300.00", `${day}T12:00:00Z`);
+    }
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    const c = f.categories.find((x) => x.categoryId === dining)!;
+    expect(c.severity).toBe("at_risk");
+    expect(c.projected).toBeGreaterThan(300 * 1.1);
+    expect(c.projectedOverspend).toBeGreaterThan(0);
+    expect(c.runwayDay).not.toBeNull();
+  });
+
+  it("returns insufficient_history for a brand-new capped category with no data", async () => {
+    await plan(500);
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    const c = f.categories.find((x) => x.categoryId === dining)!;
+    expect(c.severity).toBe("insufficient_history");
+    expect(c.runwayDay).toBeNull();
+  });
+
+  it("runwayDay is null when already over cap", async () => {
+    await plan(100);
+    await spend("150.00", "2026-05-03T12:00:00Z");
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    const c = f.categories.find((x) => x.categoryId === dining)!;
+    expect(c.runwayDay).toBeNull();
+    expect(c.severity).toBe("at_risk");
+  });
+
+  it("returns empty categories + on_track portfolio when no budget plan exists", async () => {
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    expect(f.categories).toEqual([]);
+    expect(f.portfolio.severity).toBe("on_track");
   });
 });
