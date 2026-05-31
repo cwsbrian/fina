@@ -19,11 +19,21 @@ export function parseDevOrigins(value: string | undefined): string[] {
 }
 
 export function createAuth(env: Env) {
-  const socialProviders: Record<string, { clientId: string; clientSecret: string }> = {};
+  const socialProviders: Record<
+    string,
+    { clientId: string; clientSecret: string; appBundleIdentifier?: string }
+  > = {};
   if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
     socialProviders.google = {
       clientId: env.GOOGLE_CLIENT_ID,
       clientSecret: env.GOOGLE_CLIENT_SECRET,
+    };
+  }
+  if (env.APPLE_CLIENT_ID && env.APPLE_CLIENT_SECRET) {
+    socialProviders.apple = {
+      clientId: env.APPLE_CLIENT_ID, // Services ID (web flow audience)
+      clientSecret: env.APPLE_CLIENT_SECRET, // .p8-derived JWT, ≤6mo (operator regenerates)
+      appBundleIdentifier: "com.withfina.app", // native iOS idToken audience
     };
   }
 
@@ -66,6 +76,11 @@ export function createAuth(env: Env) {
       },
     },
     socialProviders,
+    // Link a social sign-in to a pre-existing user by email. Default semantics
+    // (NOT trustedProviders, which would skip the provider email-verified check
+    // and risk takeover): link only when BOTH the provider email_verified AND
+    // the local account are verified.
+    account: { accountLinking: { enabled: true } },
     plugins: [
       // Expo plugin enables mobile native scheme (e.g. `fina://`) as a
       // trusted origin and stops Better Auth from rejecting requests with

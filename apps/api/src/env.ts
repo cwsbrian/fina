@@ -8,6 +8,11 @@ const Schema = z.object({
   BETTER_AUTH_URL: z.string().url(),
   GOOGLE_CLIENT_ID: z.string().optional(),
   GOOGLE_CLIENT_SECRET: z.string().optional(),
+  // Sign in with Apple (OAuth) — distinct from the IAP-scoped APPLE_* keys.
+  // APPLE_CLIENT_ID = Services ID (web flow audience). APPLE_CLIENT_SECRET =
+  // .p8-derived JWT (static; Apple caps at ≤6mo, operator regenerates).
+  APPLE_CLIENT_ID: z.string().optional(),
+  APPLE_CLIENT_SECRET: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
   WEB_APP_URL: z.string().url(),
   EMAIL_FROM: z.string().default("Fina <noreply@withfina.com>"),
