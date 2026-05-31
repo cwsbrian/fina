@@ -28,8 +28,10 @@ WebBrowser.maybeCompleteAuthSession();
  *  ship `react-native-plaid-link-sdk` (native module), so the flow is:
  *  - POST /plaid/link-token with hosted=true + completion_redirect_uri
  *  - Open the returned hostedLinkUrl in a WebBrowser auth session
- *  - Plaid redirects back to fina://plaid/oauth?public_token=...
- *  - POST /plaid/exchange to finalize, then notify the parent. */
+ *  - Plaid redirects back to the completion URI. Hosted Link does NOT put
+ *    the public_token in that redirect — it only signals the session ended.
+ *  - POST /plaid/hosted-token to fetch the public_token + real institution
+ *    server-side (via /link/token/get), then POST /plaid/exchange to finalize. */
 export function ConnectBankButton({ onConnected, compact, label }: Props) {
   const [busy, setBusy] = useState(false);
 
@@ -70,28 +72,37 @@ export function ConnectBankButton({ onConnected, compact, label }: Props) {
         return;
       }
 
-      const parsed = Linking.parse(result.url);
-      const publicToken = parsed.queryParams?.public_token as
-        | string
-        | undefined;
-      if (!publicToken) {
+      // The redirect only signals completion — Hosted Link doesn't include the
+      // public_token. Retrieve it (+ the real institution) from the server via
+      // /link/token/get, then exchange.
+      type HostedTokenResp = {
+        publicToken: string;
+        institutionId: string;
+        institutionName: string;
+      };
+      let resolved: HostedTokenResp;
+      try {
+        resolved = await apiFetch<HostedTokenResp>(
+          `/workspaces/${wsId}/plaid/hosted-token`,
+          {
+            method: "POST",
+            body: JSON.stringify({ linkToken: tokenResp.linkToken }),
+          },
+        );
+      } catch (e) {
+        const code = (e as { code?: string }).code ?? "error";
         Alert.alert(
           "Couldn't link",
-          "No public token returned from Plaid. Try again.",
+          code === "plaid_link_incomplete"
+            ? "Bank linking wasn't completed. Try again."
+            : `Try again (${code}).`,
         );
         return;
       }
 
-      // Institution metadata isn't part of the hosted-link redirect — pass
-      // placeholders. The Plaid sync that follows the exchange pulls real
-      // account/institution data from /accounts/get.
       await apiFetch(`/workspaces/${wsId}/plaid/exchange`, {
         method: "POST",
-        body: JSON.stringify({
-          publicToken,
-          institutionId: "unknown",
-          institutionName: "Bank",
-        }),
+        body: JSON.stringify(resolved),
       });
 
       onConnected?.();

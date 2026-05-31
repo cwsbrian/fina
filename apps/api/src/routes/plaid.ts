@@ -18,6 +18,10 @@ const ExchangeBody = z.object({
   institutionName: z.string().min(1),
 });
 
+const HostedTokenBody = z.object({
+  linkToken: z.string().min(1),
+});
+
 async function checkPlaidItemLimit(
   userId: string,
   workspaceId: string,
@@ -266,5 +270,53 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return reply.code(200).send({ plaidItemId, accountCount, transactionCount, syncOk });
+  });
+
+  // Hosted Link doesn't return the public_token in the completion redirect (it
+  // only signals the session ended). The mobile client posts back the
+  // `linkToken` it created; we fetch the completed session server-side via
+  // /link/token/get and hand back the public_token + real institution, which
+  // the client then sends to /exchange (same path the web SDK's onSuccess uses).
+  app.post("/workspaces/:id/plaid/hosted-token", { config: withRateLimit("plaidExchange") }, async (req, reply) => {
+    const params = req.params as { id: string };
+    const parsed = HostedTokenBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
+      if (ctx.membership.workspaceId !== params.id) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const limitErr = await checkPlaidItemLimit(ctx.session.userId, ctx.membership.workspaceId);
+      if (limitErr) return reply.code(402).send(limitErr);
+
+      const res = await plaidClient(app.fina.env).linkTokenGet({
+        link_token: parsed.data.linkToken,
+      });
+
+      // A link_token can spawn multiple sessions (retries); the last one with a
+      // completed Item add is the most recent success. `item_add_results` is the
+      // current field (the legacy `on_success` shape is being retired by Plaid).
+      let picked:
+        | { publicToken: string; institutionId: string; institutionName: string }
+        | null = null;
+      for (const session of res.data.link_sessions ?? []) {
+        const add = session.results?.item_add_results?.find((r) => r.public_token);
+        if (add) {
+          picked = {
+            publicToken: add.public_token,
+            institutionId: add.institution?.institution_id ?? "unknown",
+            institutionName: add.institution?.name ?? "Bank",
+          };
+        }
+      }
+
+      if (!picked) return reply.code(422).send({ error: "plaid_link_incomplete" });
+      return reply.code(200).send(picked);
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      const m = mapPlaidError(e);
+      return reply.code(m.statusCode).send({ error: m.code });
+    }
   });
 }

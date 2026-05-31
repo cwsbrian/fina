@@ -66,6 +66,7 @@ export const API_ERROR_CODES = [
   "already_connected",
   "plaid_item_not_found",
   "plaid_link_expired",
+  "plaid_link_incomplete",
   "plaid_login_required",
   "plaid_unavailable",
   "sync_in_progress",
