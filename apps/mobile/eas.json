@@ -29,7 +29,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "http://100.65.93.102:4000",
-        "EXPO_PUBLIC_WEB_URL": "http://100.65.93.102:3100"
+        "EXPO_PUBLIC_WEB_URL": "http://100.65.93.102:3100",
+        "FINA_LOCAL_BUILD": "1"
       }
     },
     "preview-aab": {
@@ -39,7 +40,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "http://100.65.93.102:4000",
-        "EXPO_PUBLIC_WEB_URL": "http://100.65.93.102:3100"
+        "EXPO_PUBLIC_WEB_URL": "http://100.65.93.102:3100",
+        "FINA_LOCAL_BUILD": "1"
       }
     }
   },
