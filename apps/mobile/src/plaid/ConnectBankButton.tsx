@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Pressable, Text, StyleSheet, Alert, ActivityIndicator } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
+import { isApiError, type ApiErrorCode } from "@fina/shared";
 import { apiFetch } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { colors, space, type as type$ } from "../design/tokens";
@@ -80,25 +81,13 @@ export function ConnectBankButton({ onConnected, compact, label }: Props) {
         institutionId: string;
         institutionName: string;
       };
-      let resolved: HostedTokenResp;
-      try {
-        resolved = await apiFetch<HostedTokenResp>(
-          `/workspaces/${wsId}/plaid/hosted-token`,
-          {
-            method: "POST",
-            body: JSON.stringify({ linkToken: tokenResp.linkToken }),
-          },
-        );
-      } catch (e) {
-        const code = (e as { code?: string }).code ?? "error";
-        Alert.alert(
-          "Couldn't link",
-          code === "plaid_link_incomplete"
-            ? "Bank linking wasn't completed. Try again."
-            : `Try again (${code}).`,
-        );
-        return;
-      }
+      const resolved = await apiFetch<HostedTokenResp>(
+        `/workspaces/${wsId}/plaid/hosted-token`,
+        {
+          method: "POST",
+          body: JSON.stringify({ linkToken: tokenResp.linkToken }),
+        },
+      );
 
       await apiFetch(`/workspaces/${wsId}/plaid/exchange`, {
         method: "POST",
@@ -107,15 +96,26 @@ export function ConnectBankButton({ onConnected, compact, label }: Props) {
 
       onConnected?.();
     } catch (e) {
-      const code = (e as { code?: string }).code ?? "error";
-      Alert.alert(
-        "Couldn't connect bank",
-        code === "upgrade_required"
-          ? "Pro tier is required to connect a bank."
-          : code === "plaid_item_limit"
-            ? "Reached your tier's bank-account limit."
-            : `Try again (${code}).`,
-      );
+      if (!isApiError(e)) {
+        Alert.alert("Couldn't connect bank", "Something went wrong. Try again.");
+        return;
+      }
+      // `satisfies` validates every key against the shared ApiErrorCode union
+      // (a typo is a TS error — the old `plaid_item_limit` check never matched
+      // `plaid_item_limit_reached`) while keeping the object plainly indexable
+      // (ApiErrorCode's `http_${number}` member blocks a direct Record index).
+      const messages = {
+        plaid_link_incomplete: "Bank linking wasn't completed. Try again.",
+        upgrade_required: "Pro tier is required to connect a bank.",
+        plaid_item_limit_reached: "Reached your tier's bank-account limit.",
+        currency_mismatch: "That account's currency doesn't match this workspace.",
+        already_connected: "That bank is already connected.",
+        plaid_link_expired: "The link expired — try connecting again.",
+      } satisfies Partial<Record<ApiErrorCode, string>>;
+      const msg =
+        (messages as Record<string, string | undefined>)[e.code] ??
+        `Try again (${e.code}).`;
+      Alert.alert("Couldn't connect bank", msg);
     } finally {
       setBusy(false);
     }

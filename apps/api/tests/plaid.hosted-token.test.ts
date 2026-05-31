@@ -98,6 +98,42 @@ describe("POST /workspaces/:id/plaid/hosted-token", () => {
     await app.close();
   });
 
+  it("picks the most recently finished session, not array position", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "ht5@x.com", name: "HT5" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+    // Two completed sessions; the chronologically LATER one is FIRST in the
+    // array. Array-position selection would wrongly pick the older (last) one.
+    plaidMock.linkTokenGet.push({
+      data: {
+        link_token: "link_test",
+        link_sessions: [
+          {
+            link_session_id: "ls_new",
+            finished_at: "2026-05-30T05:00:00Z",
+            results: { item_add_results: [{ public_token: "public-NEW", institution: { institution_id: "ins_new", name: "New Bank" }, accounts: [] }] },
+          },
+          {
+            link_session_id: "ls_old",
+            finished_at: "2026-05-30T01:00:00Z",
+            results: { item_add_results: [{ public_token: "public-OLD", institution: { institution_id: "ins_old", name: "Old Bank" }, accounts: [] }] },
+          },
+        ],
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/hosted-token`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsId },
+      payload: { linkToken: "link_test" },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ publicToken: "public-NEW", institutionName: "New Bank" });
+    await app.close();
+  });
+
   it("returns 422 plaid_link_incomplete when no session produced a public token", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "ht3@x.com", name: "HT3" });

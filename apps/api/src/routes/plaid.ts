@@ -294,25 +294,35 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         link_token: parsed.data.linkToken,
       });
 
-      // A link_token can spawn multiple sessions (retries); the last one with a
-      // completed Item add is the most recent success. `item_add_results` is the
-      // current field (the legacy `on_success` shape is being retired by Plaid).
-      let picked:
-        | { publicToken: string; institutionId: string; institutionName: string }
-        | null = null;
-      for (const session of res.data.link_sessions ?? []) {
-        const add = session.results?.item_add_results?.find((r) => r.public_token);
-        if (add) {
-          picked = {
-            publicToken: add.public_token,
-            institutionId: add.institution?.institution_id ?? "unknown",
-            institutionName: add.institution?.name ?? "Bank",
+      // A link_token can spawn multiple sessions (retries / re-opens). The Plaid
+      // SDK does NOT guarantee `link_sessions` is chronologically ordered, so we
+      // pick the session whose Item add finished most recently rather than
+      // trusting array position. `item_add_results` is the current field (the
+      // legacy `on_success` shape is being retired by Plaid).
+      //
+      // Single-Item assumption: Fina connects ONE bank per session (the
+      // link-token above is created without multi-Item config), so we take the
+      // first item_add_result. `item_add_results` is an array that can carry
+      // multiple entries only when multi-Item Link is enabled, which this flow
+      // does not use.
+      const candidate = (res.data.link_sessions ?? [])
+        .map((session) => {
+          const add = session.results?.item_add_results?.find((r) => r.public_token);
+          if (!add) return null;
+          return {
+            ts: new Date(session.finished_at ?? session.started_at ?? 0).getTime(),
+            picked: {
+              publicToken: add.public_token,
+              institutionId: add.institution?.institution_id ?? "unknown",
+              institutionName: add.institution?.name ?? "Bank",
+            },
           };
-        }
-      }
+        })
+        .filter((c): c is NonNullable<typeof c> => c !== null)
+        .sort((a, b) => b.ts - a.ts)[0];
 
-      if (!picked) return reply.code(422).send({ error: "plaid_link_incomplete" });
-      return reply.code(200).send(picked);
+      if (!candidate) return reply.code(422).send({ error: "plaid_link_incomplete" });
+      return reply.code(200).send(candidate.picked);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       const m = mapPlaidError(e);
