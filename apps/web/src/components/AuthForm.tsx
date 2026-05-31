@@ -5,12 +5,14 @@ import { useRouter, useSearchParams } from "next/navigation";
 import {
   MIN_PASSWORD_LENGTH,
   meetsPasswordPolicy,
+  classifySocialAuthError,
   type InvitePreview as InvitePreviewDTO,
 } from "@fina/shared";
 import { signIn, signUp } from "../auth/client";
 import { apiFetch } from "../lib/api";
 import { env } from "../env";
 import { AuthTopBar } from "./AuthTopBar";
+import { SocialButton } from "./SocialButton";
 import { WebIcon } from "./WebIcon";
 import styles from "./auth.module.css";
 
@@ -146,6 +148,25 @@ export function AuthForm({ mode }: { mode: Mode }) {
       setErr(e2 instanceof Error ? e2.message : "Auth failed");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function social(provider: "google" | "apple") {
+    setErr(null);
+    const callbackURL = `${window.location.origin}${safeFrom ?? "/home"}`;
+    try {
+      const res = await signIn.social({ provider, callbackURL });
+      if (res.error) {
+        const code = classifySocialAuthError(res.error);
+        if (code !== "oauth_cancelled")
+          setErr("Couldn't sign in. Please try again.");
+      }
+      // On success Better Auth navigates to the provider's consent screen, then
+      // back to callbackURL.
+    } catch (e) {
+      // Rare: a throw before the redirect (parity with mobile's report()).
+      if (classifySocialAuthError(e) !== "oauth_cancelled")
+        setErr("Couldn't sign in. Please try again.");
     }
   }
 
@@ -294,33 +315,8 @@ export function AuthForm({ mode }: { mode: Mode }) {
 
           <div className={styles.divider}>or</div>
 
-          <button
-            type="button"
-            className={styles.social}
-            onClick={() => {
-              setErr("Google sign-in is not wired yet.");
-            }}
-          >
-            <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
-              <path
-                fill="#4285F4"
-                d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.79 2.71v2.25h2.9c1.7-1.56 2.69-3.87 2.69-6.6z"
-              />
-              <path
-                fill="#34A853"
-                d="M9 18c2.43 0 4.47-.81 5.96-2.18l-2.9-2.25c-.81.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.96v2.33A9 9 0 0 0 9 18z"
-              />
-              <path
-                fill="#FBBC05"
-                d="M3.95 10.71c-.18-.54-.28-1.12-.28-1.71 0-.59.1-1.17.28-1.71V4.96H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.04l2.99-2.33z"
-              />
-              <path
-                fill="#EA4335"
-                d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .96 4.96L3.95 7.29C4.66 5.16 6.65 3.58 9 3.58z"
-              />
-            </svg>
-            Continue with Google
-          </button>
+          <SocialButton provider="google" label="Continue with Google" onClick={() => social("google")} />
+          <SocialButton provider="apple" label="Continue with Apple" onClick={() => social("apple")} />
 
           {mode === "signUp" && (
             <p className={styles.legal}>

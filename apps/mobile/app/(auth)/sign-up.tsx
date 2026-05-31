@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
@@ -14,6 +14,7 @@ import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
 import { colors, type } from "../../src/design/tokens";
+import { signInWithGoogle, signInWithApple, appleAvailable } from "../../src/auth/social";
 
 const STRENGTH_LABELS = {
   weak: "Weak",
@@ -33,6 +34,11 @@ export default function SignUpScreen() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const [showApple, setShowApple] = useState(false);
+  useEffect(() => {
+    appleAvailable().then(setShowApple);
+  }, []);
 
   const canSubmit =
     name.trim().length > 0 && email.includes("@") && meetsPasswordPolicy(password);
@@ -129,9 +135,13 @@ export default function SignUpScreen() {
         <View style={styles.dividerLine} />
       </View>
 
-      <SocialButton provider="google" label="Continue with Google" />
-      <View style={{ height: 10 }} />
-      <SocialButton provider="apple" label="Continue with Apple" />
+      <SocialButton provider="google" label="Continue with Google" onPress={signInWithGoogle} />
+      {showApple && (
+        <>
+          <View style={{ height: 10 }} />
+          <SocialButton provider="apple" label="Continue with Apple" onPress={signInWithApple} />
+        </>
+      )}
 
       <Text style={styles.legal}>
         By creating an account you agree to Fina&apos;s{" "}

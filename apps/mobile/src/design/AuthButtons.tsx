@@ -51,30 +51,40 @@ type SocialProps = {
   provider: "google" | "apple" | "magic";
   label: string;
   onPress?: () => void;
+  busy?: boolean;
+  disabled?: boolean;
 };
 
-export function SocialButton({ provider, label, onPress }: SocialProps) {
+export function SocialButton({ provider, label, onPress, busy, disabled }: SocialProps) {
   const isApple = provider === "apple";
+  const isDisabled = disabled || busy;
   return (
     <Pressable
-      onPress={onPress}
+      onPress={isDisabled ? undefined : onPress}
       style={[
         styles.social,
         isApple && { backgroundColor: colors.ink, borderColor: colors.ink },
+        isDisabled && { opacity: 0.6 },
       ]}
     >
-      {provider === "google" && <GoogleGlyph />}
-      {provider === "apple" && <AppleGlyph />}
-      {provider === "magic" && <MailGlyph />}
-      <Text
-        style={[
-          styles.socialText,
-          isApple && { color: "#fff" },
-          provider === "magic" && { fontWeight: "500" },
-        ]}
-      >
-        {label}
-      </Text>
+      {busy ? (
+        <ActivityIndicator color={isApple ? "#fff" : colors.ink} />
+      ) : (
+        <>
+          {provider === "google" && <GoogleGlyph />}
+          {provider === "apple" && <AppleGlyph />}
+          {provider === "magic" && <MailGlyph />}
+          <Text
+            style={[
+              styles.socialText,
+              isApple && { color: "#fff" },
+              provider === "magic" && { fontWeight: "500" },
+            ]}
+          >
+            {label}
+          </Text>
+        </>
+      )}
     </Pressable>
   );
 }
