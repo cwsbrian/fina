@@ -29,10 +29,11 @@
 //                   timeout test which pushes `new Promise(() => {})`)
 type AnyResponse = { data: unknown } | Error | Promise<{ data: unknown } | Error>;
 
-type QueueKey = "linkTokenCreate" | "itemPublicTokenExchange" | "accountsGet" | "transactionsSync" | "itemRemove" | "webhookVerificationKeyGet" | "itemWebhookUpdate";
+type QueueKey = "linkTokenCreate" | "linkTokenGet" | "itemPublicTokenExchange" | "accountsGet" | "transactionsSync" | "itemRemove" | "webhookVerificationKeyGet" | "itemWebhookUpdate";
 
 export const plaidMock = {
   linkTokenCreate: [] as AnyResponse[],
+  linkTokenGet: [] as AnyResponse[],
   itemPublicTokenExchange: [] as AnyResponse[],
   accountsGet: [] as AnyResponse[],
   transactionsSync: [] as AnyResponse[],
@@ -40,14 +41,16 @@ export const plaidMock = {
   webhookVerificationKeyGet: [] as AnyResponse[],
   itemWebhookUpdate: [] as AnyResponse[],
   linkTokenCreateCalls: [] as unknown[][],
+  linkTokenGetCalls: [] as unknown[][],
 };
 
 export function resetPlaidMock(): void {
-  const queueKeys: QueueKey[] = ["linkTokenCreate", "itemPublicTokenExchange", "accountsGet", "transactionsSync", "itemRemove", "webhookVerificationKeyGet", "itemWebhookUpdate"];
+  const queueKeys: QueueKey[] = ["linkTokenCreate", "linkTokenGet", "itemPublicTokenExchange", "accountsGet", "transactionsSync", "itemRemove", "webhookVerificationKeyGet", "itemWebhookUpdate"];
   for (const k of queueKeys) {
     plaidMock[k].length = 0;
   }
   plaidMock.linkTokenCreateCalls.length = 0;
+  plaidMock.linkTokenGetCalls.length = 0;
 }
 
 function pop(method: QueueKey): AnyResponse {
@@ -91,6 +94,10 @@ export function plaidMockFactory() {
       async linkTokenCreate(args: unknown) {
         plaidMock.linkTokenCreateCalls.push([args]);
         return callOrThrow("linkTokenCreate");
+      }
+      async linkTokenGet(args: unknown) {
+        plaidMock.linkTokenGetCalls.push([args]);
+        return callOrThrow("linkTokenGet");
       }
       async itemPublicTokenExchange() { return callOrThrow("itemPublicTokenExchange"); }
       async accountsGet() { return callOrThrow("accountsGet"); }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Pressable, Text, StyleSheet, Alert, ActivityIndicator } from "react-native";
 import * as WebBrowser from "expo-web-browser";
 import * as Linking from "expo-linking";
+import { isApiError, type ApiErrorCode } from "@fina/shared";
 import { apiFetch } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { colors, space, type as type$ } from "../design/tokens";
@@ -28,8 +29,10 @@ WebBrowser.maybeCompleteAuthSession();
  *  ship `react-native-plaid-link-sdk` (native module), so the flow is:
  *  - POST /plaid/link-token with hosted=true + completion_redirect_uri
  *  - Open the returned hostedLinkUrl in a WebBrowser auth session
- *  - Plaid redirects back to fina://plaid/oauth?public_token=...
- *  - POST /plaid/exchange to finalize, then notify the parent. */
+ *  - Plaid redirects back to the completion URI. Hosted Link does NOT put
+ *    the public_token in that redirect — it only signals the session ended.
+ *  - POST /plaid/hosted-token to fetch the public_token + real institution
+ *    server-side (via /link/token/get), then POST /plaid/exchange to finalize. */
 export function ConnectBankButton({ onConnected, compact, label }: Props) {
   const [busy, setBusy] = useState(false);
 
@@ -70,41 +73,49 @@ export function ConnectBankButton({ onConnected, compact, label }: Props) {
         return;
       }
 
-      const parsed = Linking.parse(result.url);
-      const publicToken = parsed.queryParams?.public_token as
-        | string
-        | undefined;
-      if (!publicToken) {
-        Alert.alert(
-          "Couldn't link",
-          "No public token returned from Plaid. Try again.",
-        );
-        return;
-      }
+      // The redirect only signals completion — Hosted Link doesn't include the
+      // public_token. Retrieve it (+ the real institution) from the server via
+      // /link/token/get, then exchange.
+      type HostedTokenResp = {
+        publicToken: string;
+        institutionId: string;
+        institutionName: string;
+      };
+      const resolved = await apiFetch<HostedTokenResp>(
+        `/workspaces/${wsId}/plaid/hosted-token`,
+        {
+          method: "POST",
+          body: JSON.stringify({ linkToken: tokenResp.linkToken }),
+        },
+      );
 
-      // Institution metadata isn't part of the hosted-link redirect — pass
-      // placeholders. The Plaid sync that follows the exchange pulls real
-      // account/institution data from /accounts/get.
       await apiFetch(`/workspaces/${wsId}/plaid/exchange`, {
         method: "POST",
-        body: JSON.stringify({
-          publicToken,
-          institutionId: "unknown",
-          institutionName: "Bank",
-        }),
+        body: JSON.stringify(resolved),
       });
 
       onConnected?.();
     } catch (e) {
-      const code = (e as { code?: string }).code ?? "error";
-      Alert.alert(
-        "Couldn't connect bank",
-        code === "upgrade_required"
-          ? "Pro tier is required to connect a bank."
-          : code === "plaid_item_limit"
-            ? "Reached your tier's bank-account limit."
-            : `Try again (${code}).`,
-      );
+      if (!isApiError(e)) {
+        Alert.alert("Couldn't connect bank", "Something went wrong. Try again.");
+        return;
+      }
+      // `satisfies` validates every key against the shared ApiErrorCode union
+      // (a typo is a TS error — the old `plaid_item_limit` check never matched
+      // `plaid_item_limit_reached`) while keeping the object plainly indexable
+      // (ApiErrorCode's `http_${number}` member blocks a direct Record index).
+      const messages = {
+        plaid_link_incomplete: "Bank linking wasn't completed. Try again.",
+        upgrade_required: "Pro tier is required to connect a bank.",
+        plaid_item_limit_reached: "Reached your tier's bank-account limit.",
+        currency_mismatch: "That account's currency doesn't match this workspace.",
+        already_connected: "That bank is already connected.",
+        plaid_link_expired: "The link expired — try connecting again.",
+      } satisfies Partial<Record<ApiErrorCode, string>>;
+      const msg =
+        (messages as Record<string, string | undefined>)[e.code] ??
+        `Try again (${e.code}).`;
+      Alert.alert("Couldn't connect bank", msg);
     } finally {
       setBusy(false);
     }
