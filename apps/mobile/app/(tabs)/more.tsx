@@ -135,7 +135,11 @@ export default function More() {
         onPress: async () => {
           await unregisterForPushNotifications();
           await signOut();
-          router.replace("/" as never);
+          // Go straight to sign-in. Routing through "/" (index) re-reads
+          // useSession, whose session atom clears asynchronously after
+          // signOut — at that instant it can still hold the old user and
+          // redirect back to /(tabs), stranding the user signed-in.
+          router.replace("/(auth)/sign-in");
         },
       },
     ]);
@@ -487,7 +491,9 @@ export default function More() {
               await signOut();
               await AsyncStorage.removeItem(ONBOARDING_SEEN_KEY);
               await clearActiveWorkspaceId();
-              router.replace("/" as never);
+              // Onboarding was just cleared; go straight there. (Routing
+              // through "/" can bounce to /(tabs) on the stale session atom.)
+              router.replace("/(onboarding)");
             }}
           >
             <Text style={styles.devBtnText}>

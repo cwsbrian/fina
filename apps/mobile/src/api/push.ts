@@ -1,21 +1,29 @@
 import Constants from "expo-constants";
 import { Platform } from "react-native";
 import { apiFetch } from "./client";
-import { isExpoGo } from "../env";
 
 type ExpoNotifications = typeof import("expo-notifications");
 
-/** Lazy-require expo-notifications. Returns null in Expo Go — SDK 53 removed
- *  remote push there, and the static import alone logs a red console.error.
- *  Push is unavailable in Expo Go regardless, so callers no-op. */
+/** Lazy-require expo-notifications. We attempt the require everywhere,
+ *  including Expo Go: on iOS Expo Go push delivery AND the foreground handler
+ *  work, so blanket-disabling them there needlessly swallowed foreground
+ *  banners and blocked token (re-)registration. Android Expo Go (SDK 53
+ *  dropped remote push) degrades gracefully — getExpoPushTokenAsync throws and
+ *  its caller returns null. The try wraps a possible module-load failure so the
+ *  worst case is the previous no-op (never a crash); the only cost in Expo Go
+ *  is a dev-only console warning on require. */
 function getNotifications(): ExpoNotifications | null {
-  if (isExpoGo) return null;
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
-  return require("expo-notifications") as ExpoNotifications;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require("expo-notifications") as ExpoNotifications;
+  } catch {
+    return null;
+  }
 }
 
 /** Foreground display config — call once at startup so in-app pushes show a
- *  banner + sound instead of being swallowed silently. No-op in Expo Go. */
+ *  banner + sound instead of being swallowed silently. No-op only if
+ *  expo-notifications can't load (see getNotifications). */
 export function setupForegroundNotificationHandler(): void {
   const Notifications = getNotifications();
   if (!Notifications) return;

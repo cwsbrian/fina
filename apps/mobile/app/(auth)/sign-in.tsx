@@ -54,7 +54,6 @@ export default function SignInScreen() {
         />
       </View>
       <View style={styles.head}>
-        <Text style={styles.title}>Welcome back.</Text>
         <Text style={styles.sub}>Pick up right where you left off.</Text>
       </View>
 
@@ -118,11 +117,10 @@ export default function SignInScreen() {
 }
 
 const styles = StyleSheet.create({
-  brand: { alignItems: "center", marginBottom: 12 },
+  brand: { alignItems: "flex-start", marginBottom: 12 },
   logo: { height: 56, aspectRatio: 2172 / 724 },
   head: { marginTop: 12 },
-  title: { ...type.authTitle, color: colors.ink, textAlign: "center"},
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center"},
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "left" },
   form: { gap: 10, marginTop: 28 },
   helperRow: {
     flexDirection: "row",
@@ -152,8 +150,8 @@ const styles = StyleSheet.create({
     marginTop: 12,
     ...type.bodySm,
     color: colors.down,
-    textAlign: "center",
+    textAlign: "left",
   },
-  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
+  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "left" },
   footLink: { color: colors.primary, fontWeight: "600" },
 });
