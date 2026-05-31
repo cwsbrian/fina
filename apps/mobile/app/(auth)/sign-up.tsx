@@ -168,8 +168,8 @@ export default function SignUpScreen() {
 
 const styles = StyleSheet.create({
   head: { marginTop: 0, marginBottom: 0 },
-  title: { ...type.authTitle, color: colors.ink, textAlign: "center" },
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
+  title: { ...type.authTitle, color: colors.ink, textAlign: "left" },
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "left" },
   form: { gap: 10, marginTop: 28 },
   divider: {
     flexDirection: "row",
@@ -188,15 +188,15 @@ const styles = StyleSheet.create({
     marginTop: 18,
     ...type.caption,
     color: colors.muted,
-    textAlign: "center",
+    textAlign: "left",
   },
   legalLink: { color: colors.ink, fontWeight: "600" },
   error: {
     marginTop: 12,
     ...type.bodySm,
     color: colors.down,
-    textAlign: "center",
+    textAlign: "left",
   },
-  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
+  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "left" },
   footLink: { color: colors.primary, fontWeight: "600" },
 });
