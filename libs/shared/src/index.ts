@@ -8,6 +8,9 @@ export * from "./enums.js";
 export * from "./errors.js";
 export * from "./notifications.js";
 
+// Auth helpers (client-side; not REST ApiErrorCode)
+export * from "./auth/social-errors.js";
+
 // Pricing / billing
 export * from "./pricing.js";
 
