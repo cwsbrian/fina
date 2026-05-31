@@ -61,7 +61,8 @@ describe("classifySocialAuthError", () => {
     expect(classifySocialAuthError({ message: "Sign in with Apple is not available" })).toBe("apple_signin_unavailable");
   });
   it("maps Better Auth client errors + unknown to oauth_failed", () => {
-    expect(classifySocialAuthError({ error: { code: "INVALID_TOKEN", message: "bad" } })).toBe("oauth_failed");
+    // Call sites pass the UNWRAPPED `res.error` (top-level code), e.g.:
+    expect(classifySocialAuthError({ code: "INVALID_TOKEN", message: "Invalid token", status: 401 })).toBe("oauth_failed");
     expect(classifySocialAuthError(new Error("network"))).toBe("oauth_failed");
     expect(classifySocialAuthError(undefined)).toBe("oauth_failed");
   });
@@ -140,10 +141,32 @@ git commit -m "feat(shared): classifySocialAuthError + SocialAuthError union"
 ## Task 2: Server — Apple provider + safe account linking
 
 **Files:**
+- Modify: `apps/api/src/env.ts` (add the two Apple OAuth keys)
 - Modify: `apps/api/src/auth.ts:22-28, 68`
 - Test: `apps/api/tests/auth.social-providers.test.ts` (create)
 
-Note: `GOOGLE_*` and `APPLE_*` env vars already exist (optional) in `apps/api/src/env.ts` — no env-schema change.
+Note: `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` already exist (optional) in
+`apps/api/src/env.ts`. The Apple **OAuth** keys do **NOT** — the only `APPLE_*`
+keys there are IAP-scoped (`APPLE_BUNDLE_ID`, `APPLE_ASC_*`, `APPLE_ENV`). Step 0
+adds `APPLE_CLIENT_ID` + `APPLE_CLIENT_SECRET` first, so the auth.ts code + the
+test (which reads `env.APPLE_*` and passes them to `testEnv`) typecheck.
+
+- [ ] **Step 0: Add the Apple OAuth env keys**
+
+In `apps/api/src/env.ts`, inside the `z.object({ ... })` schema, add right after
+the existing `GOOGLE_CLIENT_SECRET` line:
+
+```ts
+  // Sign in with Apple (OAuth) — distinct from the IAP-scoped APPLE_* keys.
+  // APPLE_CLIENT_ID = Services ID (web flow audience). APPLE_CLIENT_SECRET =
+  // .p8-derived JWT (static; Apple caps at ≤6mo, operator regenerates).
+  APPLE_CLIENT_ID: z.string().optional(),
+  APPLE_CLIENT_SECRET: z.string().optional(),
+```
+
+These become members of the inferred `Env` type, so `env.APPLE_CLIENT_ID` /
+`env.APPLE_CLIENT_SECRET` resolve and `testEnv({ APPLE_CLIENT_ID, APPLE_CLIENT_SECRET })`
+is a valid `Partial<Env>`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -167,9 +190,16 @@ describe("createAuth social providers", () => {
     const sp = auth.options.socialProviders as Record<string, { clientId: string; appBundleIdentifier?: string }>;
     expect(Object.keys(sp).sort()).toEqual(["apple", "google"]);
     expect(sp.apple.appBundleIdentifier).toBe("com.withfina.app");
-    expect(auth.options.account?.accountLinking?.enabled).toBe(true);
-    // trustedProviders must NOT be set (that would skip the provider-verified check)
-    expect(auth.options.account?.accountLinking?.trustedProviders).toBeUndefined();
+    // Loose-cast: better-auth's Auth.options is the literal we passed, which
+    // doesn't carry a `trustedProviders` key (we deliberately omit it), so a
+    // typed `?.trustedProviders` access wouldn't compile.
+    const linking = (
+      auth.options.account as
+        | { accountLinking?: { enabled?: boolean; trustedProviders?: unknown } }
+        | undefined
+    )?.accountLinking;
+    expect(linking?.enabled).toBe(true);
+    expect(linking?.trustedProviders).toBeUndefined();
   });
 
   it("registers neither provider when creds are unset", () => {
@@ -232,8 +262,8 @@ Expected: PASS (the existing email/password + session flows are unchanged).
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/api/src/auth.ts apps/api/tests/auth.social-providers.test.ts
-git commit -m "feat(api): register Apple social provider + safe account linking"
+git add apps/api/src/env.ts apps/api/src/auth.ts apps/api/tests/auth.social-providers.test.ts
+git commit -m "feat(api): Apple OAuth env + provider + safe account linking"
 ```
 
 ---
@@ -314,7 +344,7 @@ Expected: `clean` (only the known pre-existing errors elsewhere, if any).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/mobile/package.json apps/mobile/pnpm-lock.yaml apps/mobile/app.json apps/mobile/src/design/AuthButtons.tsx pnpm-lock.yaml
+git add apps/mobile/package.json apps/mobile/app.json apps/mobile/src/design/AuthButtons.tsx pnpm-lock.yaml
 git commit -m "feat(mobile): apple-auth + crypto deps; SocialButton busy/disabled"
 ```
 
@@ -363,6 +393,9 @@ export async function signInWithGoogle(): Promise<void> {
       callbackURL: Linking.createURL("/"),
     });
     if ((res as { error?: unknown })?.error) return report((res as { error: unknown }).error);
+    // @better-auth/expo silently returns (no error, no session) when the user
+    // dismisses the browser — only navigate when a session actually resulted.
+    if (!(res as { data?: unknown })?.data) return;
     router.replace("/(tabs)");
   } catch (e) {
     report(e);
@@ -391,15 +424,28 @@ export async function signInWithApple(): Promise<void> {
       nonce: hashedNonce,
     });
     if (!cred.identityToken) return report(new Error("No Apple identity token"));
-    // Apple gives name only on first consent — forward it so the user has a name.
-    const name = cred.fullName
-      ? [cred.fullName.givenName, cred.fullName.familyName].filter(Boolean).join(" ")
-      : undefined;
+    // Apple returns the name only on first consent. Better Auth's
+    // socialSignInBodySchema has NO top-level `name`; the display name goes at
+    // idToken.user.name = { firstName, lastName } (the server reads
+    // idToken.user). So forward it there — no cast needed.
+    const hasName = Boolean(cred.fullName?.givenName || cred.fullName?.familyName);
     const res = await signIn.social({
       provider: "apple",
-      idToken: { token: cred.identityToken, nonce: hashedNonce },
-      ...(name ? { name } : {}),
-    } as Parameters<typeof signIn.social>[0]);
+      idToken: {
+        token: cred.identityToken,
+        nonce: hashedNonce,
+        ...(hasName
+          ? {
+              user: {
+                name: {
+                  firstName: cred.fullName?.givenName ?? undefined,
+                  lastName: cred.fullName?.familyName ?? undefined,
+                },
+              },
+            }
+          : {}),
+      },
+    });
     if ((res as { error?: unknown })?.error) return report((res as { error: unknown }).error);
     router.replace("/(tabs)");
   } catch (e) {
@@ -530,14 +576,19 @@ In `apps/web/src/components/AuthForm.tsx`:
 ```ts
 import { SocialButton } from "./SocialButton";
 import { classifySocialAuthError } from "@fina/shared";
-import { env } from "../env";
 ```
+(`env` is already imported in AuthForm — do NOT re-import it.)
 
-(b) Inside the component, add a handler that redirects to the provider. `safeFrom` (line 25) is the validated post-auth path:
+(b) Inside the component, add a handler that redirects to the provider.
+`safeFrom` (line 25) is the validated post-auth path. The `callbackURL` MUST be
+an **absolute web-origin** URL (the API is a different origin; a relative path
+resolves against the API). There is no `NEXT_PUBLIC_WEB_URL` env key — use
+`window.location.origin` (AuthForm is a client component, `"use client"` line 1;
+the app already does this in `forgot-password/page.tsx:25`):
 ```ts
   async function social(provider: "google" | "apple") {
     setErr(null);
-    const callbackURL = `${env.NEXT_PUBLIC_WEB_URL}${safeFrom ?? "/home"}`;
+    const callbackURL = `${window.location.origin}${safeFrom ?? "/home"}`;
     const res = await signIn.social({ provider, callbackURL });
     if (res?.error) {
       const code = classifySocialAuthError(res.error);
@@ -546,7 +597,6 @@ import { env } from "../env";
     // On success Better Auth performs a full-page redirect to the provider.
   }
 ```
-(If `env` has no `NEXT_PUBLIC_WEB_URL`, use the existing web origin constant the app already uses for absolute links; confirm the env key during implementation — `apps/web/src/env.ts`. The key requirement: an ABSOLUTE web-origin URL, not a bare `/home`, because the API is a different origin.)
 
 (c) Replace the Google stub block (current lines 295-322 — the `<div className={styles.divider}>or</div>` is line 295; the stub `<button className={styles.social}>…Continue with Google…</button>` is 297-322). Keep the divider, replace the stub button with:
 ```tsx
@@ -588,7 +638,13 @@ Expected: all PASS.
 
 - [ ] **Step 3: Operator env note (no code)**
 
-Confirm the doc list of required env (already in the spec §Env) is accurate against `apps/api/src/env.ts` keys: `GOOGLE_CLIENT_ID/SECRET`, `APPLE_CLIENT_ID/SECRET/KEY_ID/TEAM_ID`. The redirect URIs are `{BETTER_AUTH_URL}/api/auth/callback/{google,apple}`. (Apple also needs `APPLE_KEY_ID`+`APPLE_TEAM_ID` to derive the client secret JWT only if you generate it dynamically; here the operator supplies a pre-built `APPLE_CLIENT_SECRET` string.)
+After Step 0, `apps/api/src/env.ts` reads exactly these OAuth keys:
+`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `APPLE_CLIENT_ID`,
+`APPLE_CLIENT_SECRET`. The redirect URIs are
+`{BETTER_AUTH_URL}/api/auth/callback/{google,apple}`. `APPLE_KEY_ID` +
+`APPLE_TEAM_ID` are **not** code env vars — the operator uses them in the Apple
+Developer console to mint the static `APPLE_CLIENT_SECRET` JWT (≤6mo). The
+operator setup list lives in the spec §Env.
 
 ---
 
