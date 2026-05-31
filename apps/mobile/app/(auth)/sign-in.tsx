@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import { signIn } from "../../src/auth/client";
@@ -6,12 +6,18 @@ import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
 import { colors, type } from "../../src/design/tokens";
+import { signInWithGoogle, signInWithApple, appleAvailable } from "../../src/auth/social";
 
 export default function SignInScreen() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  const [showApple, setShowApple] = useState(false);
+  useEffect(() => {
+    appleAvailable().then(setShowApple);
+  }, []);
 
   const canSubmit = email.includes("@") && password.length >= 8;
 
@@ -98,11 +104,13 @@ export default function SignInScreen() {
         <View style={styles.dividerLine} />
       </View>
 
-      <SocialButton provider="google" label="Continue with Google" />
-      <View style={{ height: 10 }} />
-      <SocialButton provider="apple" label="Continue with Apple" />
-      <View style={{ height: 10 }} />
-      <SocialButton provider="magic" label="Email me a magic link" />
+      <SocialButton provider="google" label="Continue with Google" onPress={signInWithGoogle} />
+      {showApple && (
+        <>
+          <View style={{ height: 10 }} />
+          <SocialButton provider="apple" label="Continue with Apple" onPress={signInWithApple} />
+        </>
+      )}
       <Text style={styles.footText}>
           New to Fina?{" "}
           <Text
