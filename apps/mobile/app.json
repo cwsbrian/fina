@@ -47,6 +47,7 @@
       ],
       "@react-native-community/datetimepicker",
       "expo-web-browser",
+      "expo-apple-authentication",
       [
         "react-native-iap",
         { "paymentProvider": "both" }
