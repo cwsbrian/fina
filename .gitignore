@@ -10,21 +10,36 @@ coverage/
 .env
 .env.local
 .env.*.local
+/.env.api.production
+/.env.production
 !.env.example
 !apps/api/.env.test
 .env.bak*
 *.log
 .DS_Store
+.vscode/
+.idea/
+
+# Expo / React Native generated native projects.
+# Keep apps/mobile/app.json tracked; ignore only root-generated config.
+/app.json
+/android/
+/ios/
+/apps/mobile/android/
+/apps/mobile/ios/
 ios/Pods/
 android/build/
 android/app/build/
-.vscode/
-.idea/
+
+# Local scratch folders
+/tmp/
 
 # Mobile build artifacts (never commit — produced by eas build / local builds)
 *.apk
 *.aab
 *.ipa
+*.keystore
+*.jks
 
 # Next.js
 .next
@@ -39,6 +54,7 @@ playwright-report/
 # Git worktrees
 .worktrees/
 .claude/worktrees/
+.claude/settings.local.json
 
 # Local planning / debug scratch (tool-generated)
 .planning/
@@ -48,3 +64,5 @@ playwright-report/
 *service-account*.json
 gen-lang-client-*.json
 *-iap-validator*.json
+*.pem
+*.key
