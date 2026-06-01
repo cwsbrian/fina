@@ -316,6 +316,11 @@
   background: var(--color-hairline);
 }
 
+.socialStack {
+  display: grid;
+  gap: 10px;
+}
+
 .social {
   width: 100%;
   height: 48px;

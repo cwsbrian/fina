@@ -315,8 +315,10 @@ export function AuthForm({ mode }: { mode: Mode }) {
 
           <div className={styles.divider}>or</div>
 
-          <SocialButton provider="google" label="Continue with Google" onClick={() => social("google")} />
-          <SocialButton provider="apple" label="Continue with Apple" onClick={() => social("apple")} />
+          <div className={styles.socialStack}>
+            <SocialButton provider="google" label="Continue with Google" onClick={() => social("google")} />
+            <SocialButton provider="apple" label="Continue with Apple" onClick={() => social("apple")} />
+          </div>
 
           {mode === "signUp" && (
             <p className={styles.legal}>
