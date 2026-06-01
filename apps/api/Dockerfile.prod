@@ -41,13 +41,19 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \
 
 # ----- build -----
 FROM deps AS build
-COPY tsconfig.base.json nx.json ./
+ENV NX_DAEMON=false \
+    NODE_OPTIONS=--max-old-space-size=3072
+COPY tsconfig.base.json nx.json eslint.config.js ./
 COPY libs/shared ./libs/shared
 COPY apps/api ./apps/api
+# Nx plugin inference reads project configuration across the workspace while
+# building the graph, even when only the API target is requested.
+COPY apps/web/project.json apps/web/next.config.js apps/web/tsconfig.json ./apps/web/
+COPY apps/mobile/project.json apps/mobile/app.json apps/mobile/metro.config.js apps/mobile/tsconfig.json apps/mobile/tsconfig.app.json apps/mobile/tsconfig.spec.json ./apps/mobile/
 # Prisma generate writes the client into node_modules/.prisma — must run
 # before nx build so esbuild can resolve `@prisma/client`.
 RUN pnpm --filter @fina/api exec prisma generate
-RUN pnpm exec nx build api --configuration=production --skip-nx-cache
+RUN pnpm exec nx build api --configuration=production --skip-nx-cache --skipTypeCheck
 
 # ----- runtime -----
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
@@ -76,7 +82,6 @@ RUN pnpm install --prod --no-frozen-lockfile \
   && rm -rf /root/.local/share/pnpm
 
 # Non-root. The official node image ships uid 1000 `node`.
-RUN chown -R node:node /app
 USER node
 
 EXPOSE 4000
