@@ -216,35 +216,35 @@ describe("reconcilePlaidItemsForUser", () => {
 });
 
 describe("reconcileOrphanPlaidItems", () => {
-  it("backfills null-owner items when the workspace has exactly one owner", async () => {
+  it("disconnects null-owner items even when the workspace has exactly one owner", async () => {
     const u = await userWithTrial("owner2@example.com", null);
     const ws = await workspaceForOwner(u.id);
     const legacy = await item({ workspaceId: ws.id, connectedBy: null, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "legacy" });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-legacy" } });
 
     const result = await reconcileOrphanPlaidItems(env);
 
-    expect(result.kept).toEqual([legacy.id]);
-    expect(result.disconnected).toEqual([]);
-    expect(plaidMock.itemRemove).toHaveLength(0);
+    expect(result.kept).toEqual([]);
+    expect(result.disconnected).toEqual([legacy.id]);
     await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: legacy.id } })).resolves.toMatchObject({
-      connectedBy: u.id,
-      status: "active",
+      connectedBy: null,
+      status: "disconnected",
     });
   });
 
-  it("leaves null-owner items without an owner connected but unowned", async () => {
+  it("disconnects null-owner items without an owner", async () => {
     const u = await userWithTrial("owner3@example.com", null);
     const ws = await workspaceForOwner(u.id);
     await prisma.membership.deleteMany({ where: { workspaceId: ws.id } });
     const ambiguous = await item({ workspaceId: ws.id, connectedBy: null, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "ambiguous" });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-ambiguous" } });
 
     const result = await reconcileOrphanPlaidItems(env);
 
-    expect(result.disconnected).toEqual([]);
-    expect(plaidMock.itemRemove).toHaveLength(0);
+    expect(result.disconnected).toEqual([ambiguous.id]);
     await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: ambiguous.id } })).resolves.toMatchObject({
       connectedBy: null,
-      status: "active",
+      status: "disconnected",
     });
   });
 });

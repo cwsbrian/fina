@@ -275,9 +275,9 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().error).toBe("upgrade_required");
-    expect(plaidMock.itemPublicTokenExchange.length).toBe(0);
-    expect(plaidMock.accountsGet.length).toBe(0);
-    expect(plaidMock.itemRemove.length).toBe(0);
+    expect(plaidMock.itemPublicTokenExchange.length).toBe(1);
+    expect(plaidMock.accountsGet.length).toBe(1);
+    expect(plaidMock.itemRemove.length).toBe(1);
     expect(await prisma.plaidItem.findUnique({ where: { itemId: "item_free_cleanup" } })).toBeNull();
     await app.close();
   });
@@ -335,9 +335,9 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
 
     expect(res.statusCode).toBe(402);
     expect(res.json().error).toBe("plaid_item_limit_reached");
-    expect(plaidMock.itemPublicTokenExchange.length).toBe(0);
-    expect(plaidMock.accountsGet.length).toBe(0);
-    expect(plaidMock.itemRemove.length).toBe(0);
+    expect(plaidMock.itemPublicTokenExchange.length).toBe(1);
+    expect(plaidMock.accountsGet.length).toBe(1);
+    expect(plaidMock.itemRemove.length).toBe(1);
     expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
     expect(await prisma.plaidItem.findUnique({ where: { itemId: "item_after_link" } })).toBeNull();
     await app.close();
@@ -373,8 +373,44 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     const owner = await signUpAndGetCookie(app, { email: "lite-cleanup@x.com", name: "LC" });
     await makeLiteUser(owner.userId);
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: "item_cleanup_existing" });
-    pushExchangeAndAccounts("item_cleanup_pending", "access_cleanup_pending", "acct_cleanup_pending");
+    plaidMock.itemPublicTokenExchange.push({
+      data: { access_token: "access_cleanup_pending", item_id: "item_cleanup_pending", request_id: "req" },
+    });
+    plaidMock.accountsGet.push({
+      then(resolve: (value: { data: unknown }) => void, reject: (reason?: unknown) => void) {
+        void (async () => {
+          await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: "item_cleanup_racer" });
+          resolve({
+            data: {
+              accounts: [
+                { account_id: "acct_cleanup_pending", name: "Checking", official_name: null, mask: "0001", type: "depository", subtype: "checking", balances: { current: 100, available: 100, limit: null, iso_currency_code: "CAD" } },
+              ],
+              item: { item_id: "item_cleanup_pending", institution_id: "ins_1" },
+              request_id: "req",
+            },
+          });
+        })().catch(reject);
+      },
+    } as Promise<{
+      data: {
+        accounts: Array<{
+          account_id: string;
+          name: string;
+          official_name: null;
+          mask: string;
+          type: string;
+          subtype: string;
+          balances: {
+            current: number;
+            available: number;
+            limit: null;
+            iso_currency_code: string;
+          };
+        }>;
+        item: { item_id: string; institution_id: string };
+        request_id: string;
+      };
+    }>);
     plaidMock.itemRemove.push(plaidApiError({ error_code: "INSTITUTION_DOWN", http_status: 503 }));
 
     const res = await app.inject({

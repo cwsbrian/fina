@@ -155,37 +155,27 @@ export async function reconcilePlaidItemsForUser(env: Env, userId: string): Prom
   return result;
 }
 
-export async function reconcileOrphanPlaidItems(_env: Env): Promise<ReconcileResult> {
+export async function reconcileOrphanPlaidItems(env: Env): Promise<ReconcileResult> {
   const rows = await prisma.plaidItem.findMany({
     where: {
       connectedBy: null,
-      status: { in: billableStatuses },
+      status: { not: "disconnected" },
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
       workspaceId: true,
-      workspace: {
-        select: {
-          memberships: {
-            where: { role: "owner" },
-            select: { userId: true },
-          },
-        },
-      },
     },
   });
 
   const result: ReconcileResult = { kept: [], disconnected: [], failed: [] };
   for (const row of rows) {
-    const owners = row.workspace.memberships;
-    if (owners.length === 1) {
-      await prisma.plaidItem.update({
-        where: { id: row.id },
-        data: { connectedBy: owners[0]!.userId },
-      });
-      result.kept.push(row.id);
-      continue;
+    try {
+      await removeItemForBilling(env, row.workspaceId, row.id);
+      result.disconnected.push(row.id);
+    } catch (error) {
+      result.failed.push({ id: row.id, error });
+      logError({ plaidItemId: row.id, err: sanitizePlaidError(error) }, "orphan plaid reconciliation disconnect failed");
     }
   }
   return result;

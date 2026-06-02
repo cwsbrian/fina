@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { resetPlaidMock } from "./helpers/plaid-mock.js";
 
 const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
@@ -32,11 +33,29 @@ import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
 
-async function seedItem(): Promise<{ wsId: string; itemId: string; eventId: string }> {
+async function seedUser(opts: { email: string; trialEndsAt: Date | null }): Promise<string> {
+  const user = await prisma.user.create({
+    data: {
+      id: randomUUID(),
+      email: opts.email,
+      name: opts.email,
+      trialEndsAt: opts.trialEndsAt,
+      trialConsumed: opts.trialEndsAt === null,
+    },
+  });
+  return user.id;
+}
+
+async function seedItem(opts: { connectedBy?: string | null } = {}): Promise<{ wsId: string; itemId: string; eventId: string }> {
+  const connectedBy =
+    opts.connectedBy === undefined
+      ? await seedUser({ email: `webhook-${randomUUID()}@example.com`, trialEndsAt: new Date("2026-07-01T00:00:00Z") })
+      : opts.connectedBy;
   const ws = await prisma.workspace.create({ data: { name: "W" } });
   const item = await prisma.plaidItem.create({
     data: {
       workspaceId: ws.id,
+      connectedBy,
       accessTokenCiphertext: Buffer.from([1]),
       accessTokenIv: Buffer.from([2]),
       itemId: `pi_${Math.random()}`,
@@ -113,6 +132,31 @@ describe("dispatchWebhookSync", () => {
     const row = await prisma.plaidWebhookEvent.findUniqueOrThrow({ where: { id: eventId } });
     expect(row.processedAt).not.toBeNull();
     expect(row.processError).toContain("plaid 500");
+  });
+
+  it("marks no-owner webhook processed without syncing", async () => {
+    const { wsId, itemId, eventId } = await seedItem({ connectedBy: null });
+
+    await dispatchWebhookSync(env, wsId, itemId, eventId);
+
+    expect(syncTransactions).not.toHaveBeenCalled();
+    expect(categorizeNewTransactions).not.toHaveBeenCalled();
+    const row = await prisma.plaidWebhookEvent.findUniqueOrThrow({ where: { id: eventId } });
+    expect(row.processedAt).not.toBeNull();
+    expect(row.processError).toBe("no_owner");
+  });
+
+  it("marks tier-gated webhook processed without syncing", async () => {
+    const userId = await seedUser({ email: "webhook-free@example.com", trialEndsAt: null });
+    const { wsId, itemId, eventId } = await seedItem({ connectedBy: userId });
+
+    await dispatchWebhookSync(env, wsId, itemId, eventId);
+
+    expect(syncTransactions).not.toHaveBeenCalled();
+    expect(categorizeNewTransactions).not.toHaveBeenCalled();
+    const row = await prisma.plaidWebhookEvent.findUniqueOrThrow({ where: { id: eventId } });
+    expect(row.processedAt).not.toBeNull();
+    expect(row.processError).toBe("tier_gated:no_plaid_entitlement");
   });
 
   it("still categorizes newTxIds from a lock_held result if any were committed", async () => {

@@ -1,18 +1,23 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { Tier } from "@fina/shared";
 import { usePlaidLink } from "react-plaid-link";
 import { apiFetch } from "../../../../../lib/api";
 import styles from "../../settings.module.css";
 
 export function ConnectBankButton({
   workspaceId,
-  isPro,
+  tier,
+  plaidItemLimit,
+  bankCount,
   isOwner,
   onConnected,
 }: {
   workspaceId: string;
-  isPro: boolean;
+  tier: Tier;
+  plaidItemLimit: number;
+  bankCount: number;
   isOwner: boolean;
   onConnected: () => void;
 }) {
@@ -33,8 +38,10 @@ export function ConnectBankButton({
       const code = (e as { code?: string }).code ?? "error";
       setErr(
         code === "upgrade_required"
-          ? "Pro tier required to connect a bank."
-          : `Could not start: ${code}`,
+          ? "A paid plan is required to connect a bank."
+          : code === "plaid_item_limit_reached"
+            ? "Your plan's bank connection limit has been reached."
+            : `Could not start: ${code}`,
       );
     } finally {
       setBusy(false);
@@ -84,19 +91,46 @@ export function ConnectBankButton({
     );
   }
 
-  if (!isPro) {
+  if (plaidItemLimit <= 0) {
     return (
       <div>
         <div className={styles.rowMeta} style={{ marginBottom: 12 }}>
-          Connecting a bank requires the Pro tier.
+          Choose a paid plan to connect a bank.
         </div>
         <a
           href="/settings/plan"
           className={`${styles.btn} ${styles.btnPrimary}`}
           style={{ textDecoration: "none", display: "inline-flex" }}
         >
-          Upgrade to Pro
+          Upgrade to Lite
         </a>
+      </div>
+    );
+  }
+
+  if (bankCount >= plaidItemLimit) {
+    return (
+      <div>
+        <div className={styles.rowMeta} style={{ marginBottom: 12 }}>
+          Your plan includes {plaidItemLimit} connected bank{plaidItemLimit === 1 ? "" : "s"}.
+        </div>
+        {tier === "lite" ? (
+          <a
+            href="/settings/plan"
+            className={`${styles.btn} ${styles.btnPrimary}`}
+            style={{ textDecoration: "none", display: "inline-flex" }}
+          >
+            Upgrade to Pro
+          </a>
+        ) : (
+          <button
+            type="button"
+            className={`${styles.btn} ${styles.btnPrimary}`}
+            disabled
+          >
+            Bank limit reached
+          </button>
+        )}
       </div>
     );
   }

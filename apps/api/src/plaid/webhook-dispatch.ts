@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import { syncTransactions } from "./sync.js";
 import { categorizeNewTransactions } from "../categorize/service.js";
 import { logError } from "../logger.js";
+import { checkBackgroundSyncGate } from "../cron/tier-gate.js";
 
 /**
  * Detached worker called by the webhook handler. The handler has already
@@ -25,6 +26,27 @@ export async function dispatchWebhookSync(
   webhookEventId: string,
 ): Promise<void> {
   try {
+    const item = await prisma.plaidItem.findUnique({
+      where: { id: plaidItemId },
+      select: { connectedBy: true },
+    });
+    if (!item?.connectedBy) {
+      await prisma.plaidWebhookEvent.update({
+        where: { id: webhookEventId },
+        data: { processedAt: new Date(), processError: "no_owner" },
+      });
+      return;
+    }
+
+    const gate = await checkBackgroundSyncGate(item.connectedBy);
+    if (!gate.ok) {
+      await prisma.plaidWebhookEvent.update({
+        where: { id: webhookEventId },
+        data: { processedAt: new Date(), processError: `tier_gated:${gate.reason}` },
+      });
+      return;
+    }
+
     const r = await syncTransactions(env, workspaceId, plaidItemId);
 
     if (r.newTxIds.length > 0) {
@@ -46,7 +68,7 @@ export async function dispatchWebhookSync(
 
     await prisma.plaidWebhookEvent.update({
       where: { id: webhookEventId },
-      data: { processedAt: new Date() },
+      data: { processedAt: new Date(), processError: null },
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message.slice(0, 500) : String(e);

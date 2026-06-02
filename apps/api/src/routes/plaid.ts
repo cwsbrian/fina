@@ -154,6 +154,9 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       verifiedWsId = ctx.membership.workspaceId;
       verifiedUserId = ctx.session.userId;
 
+      const initialLimitErr = await checkPlaidItemLimit(ctx.session.userId);
+      if (initialLimitErr) return reply.code(402).send(initialLimitErr);
+
       // ---- Step 1: Plaid exchange + accounts/get ----
       const exch = await plaidClient(app.fina.env).itemPublicTokenExchange({
         public_token: parsed.data.publicToken,

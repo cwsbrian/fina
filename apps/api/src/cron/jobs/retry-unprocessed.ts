@@ -50,7 +50,7 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
         continue;
       }
     }
-    // connectedBy null → pre-dates tracking; allow sync, no gate possible.
+    // connectedBy null → dispatchWebhookSync stamps no_owner and does not sync.
 
     // dispatchWebhookSync handles its own try/catch + processedAt semantics:
     //  - normal sync:  processedAt set

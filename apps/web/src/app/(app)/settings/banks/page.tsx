@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { Member, PlaidItemDTO } from "@fina/shared";
+import { TIER_LIMITS, type Member, type PlaidItemDTO } from "@fina/shared";
 import { apiFetch, useMe, useActiveWorkspaceId } from "../../../../lib/api";
 import styles from "../settings.module.css";
 import { ConnectBankButton } from "./_components/connect-bank-button";
@@ -57,12 +57,14 @@ export default function BanksPage() {
     return <div className={styles.container}>Loading…</div>;
   }
 
-  const isPro = me.tier === "pro";
   // Server enforces owner-only on every Plaid mutation; the UI just hides
   // the affordance so non-owners don't trigger 403s.
   const isOwner =
     members.find((m) => m.userId === me.user.id)?.role === "owner";
   const bankCount = items?.length ?? 0;
+  const plaidItemLimit = TIER_LIMITS[me.tier].plaidItems;
+  const remainingBanks = Math.max(plaidItemLimit - bankCount, 0);
+  const hasPaidPlaidEntitlement = plaidItemLimit > 0;
 
   return (
     <div className={styles.container}>
@@ -98,9 +100,11 @@ export default function BanksPage() {
             <div className={styles.sectionTitle}>Connect a bank</div>
             <div className={styles.sectionSub}>
               {isOwner
-                ? isPro
-                  ? "Plaid securely links your account. Read-only. Fina can't move money."
-                  : "Connecting a bank requires Pro."
+                ? hasPaidPlaidEntitlement
+                  ? remainingBanks > 0
+                    ? `Your plan includes ${plaidItemLimit} connected bank${plaidItemLimit === 1 ? "" : "s"}. Plaid is read-only; Fina can't move money.`
+                    : `Your plan includes ${plaidItemLimit} connected bank${plaidItemLimit === 1 ? "" : "s"}. Disconnect one before adding another.`
+                  : "Choose a paid plan to connect a bank."
                 : "Only the workspace owner can connect or manage banks."}
             </div>
           </div>
@@ -108,7 +112,9 @@ export default function BanksPage() {
         <div className={styles.card}>
           <ConnectBankButton
             workspaceId={wsId}
-            isPro={isPro}
+            tier={me.tier}
+            plaidItemLimit={plaidItemLimit}
+            bankCount={bankCount}
             isOwner={isOwner}
             onConnected={load}
           />
