@@ -1,19 +1,16 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { Member } from "@fina/shared";
+import type { Member, PlaidItemDTO } from "@fina/shared";
 import { apiFetch, useMe, useActiveWorkspaceId } from "../../../../lib/api";
 import styles from "../settings.module.css";
 import { ConnectBankButton } from "./_components/connect-bank-button";
-import {
-  ConnectedBanksList,
-  type PlaidItemView,
-} from "./_components/connected-banks-list";
+import { ConnectedBanksList } from "./_components/connected-banks-list";
 
 export default function BanksPage() {
   const wsId = useActiveWorkspaceId();
   const { me, err: meErr } = useMe();
-  const [items, setItems] = useState<PlaidItemView[] | null>(null);
+  const [items, setItems] = useState<PlaidItemDTO[] | null>(null);
   const [members, setMembers] = useState<Member[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -22,7 +19,7 @@ export default function BanksPage() {
     setErr(null);
     try {
       const [itemsRes, membersRes] = await Promise.all([
-        apiFetch<{ plaidItems: PlaidItemView[] }>(
+        apiFetch<{ plaidItems: PlaidItemDTO[] }>(
           `/workspaces/${wsId}/plaid-items`,
         ),
         apiFetch<{ members: Member[] }>(`/workspaces/${wsId}/members`),

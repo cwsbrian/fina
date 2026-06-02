@@ -10,4 +10,6 @@ export type PlaidItemDTO = {
   /** ISO 8601 timestamp; null if never synced. */
   lastSyncAt: string | null;
   accountCount: number;
+  connectedByUserId: string | null;
+  connectedByName: string | null;
 };

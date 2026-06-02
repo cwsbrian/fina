@@ -125,6 +125,35 @@ describe("GET /workspaces/:id/plaid-items", () => {
     await app.close();
   });
 
+  it("plaid-items list returns connectedBy owner display fields", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, {
+      email: "plaid-owner@x.com",
+      name: "Plaid Owner",
+    });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    await seedPlaidItem({
+      workspaceId: wsId,
+      connectedBy: owner.userId,
+      itemId: "item_owner_fields",
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/plaid-items`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().plaidItems).toEqual([
+      expect.objectContaining({
+        connectedByUserId: owner.userId,
+        connectedByName: "Plaid Owner",
+      }),
+    ]);
+    await app.close();
+  });
+
   it("404 for non-member workspace", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "x@x.com", name: "X" });

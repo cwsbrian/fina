@@ -6,9 +6,6 @@ import { apiFetch } from "../../../../../lib/api";
 import { WebIcon } from "../../../../../components/WebIcon";
 import styles from "../../settings.module.css";
 
-/** Re-exported under the legacy name so existing callers keep working. */
-export type PlaidItemView = PlaidItemDTO;
-
 function statusPill(status: PlaidItemStatus): {
   className: string;
   label: string;
@@ -54,7 +51,7 @@ export function ConnectedBanksList({
   isOwner,
   onChange,
 }: {
-  items: PlaidItemView[];
+  items: PlaidItemDTO[];
   workspaceId: string;
   isOwner: boolean;
   onChange: () => void;
@@ -154,6 +151,11 @@ export function ConnectedBanksList({
                     {pill.label}
                   </span>
                 </div>
+                {it.connectedByName && (
+                  <div className={styles.rowMeta}>
+                    Connected by {it.connectedByName}
+                  </div>
+                )}
                 <div className={styles.rowMeta}>
                   {it.accountCount} account{it.accountCount === 1 ? "" : "s"}
                   {" · "}

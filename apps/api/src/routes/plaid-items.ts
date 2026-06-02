@@ -24,6 +24,7 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
           status: true,
           errorCode: true,
           lastSyncAt: true,
+          user: { select: { id: true, name: true, email: true } },
           _count: { select: { bankAccounts: true } },
         },
       });
@@ -35,6 +36,8 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
           errorCode: i.errorCode,
           lastSyncAt: i.lastSyncAt?.toISOString() ?? null,
           accountCount: i._count.bankAccounts,
+          connectedByUserId: i.user?.id ?? null,
+          connectedByName: i.user?.name ?? i.user?.email ?? null,
         })),
       };
     } catch (e) {
