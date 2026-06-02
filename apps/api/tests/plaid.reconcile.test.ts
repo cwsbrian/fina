@@ -1,0 +1,250 @@
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { plaidMock, resetPlaidMock } from "./helpers/plaid-mock.js";
+
+const { plaidMockFactory: hoistedPlaidMockFactory } = await vi.hoisted(
+  async () => await import("./helpers/plaid-mock.js"),
+);
+vi.mock("plaid", hoistedPlaidMockFactory);
+
+import { prisma } from "../src/db.js";
+import {
+  reconcilePlaidItemsForUser,
+  reconcileOrphanPlaidItems,
+  retryPendingPlaidBillingCleanups,
+} from "../src/plaid/reconcile.js";
+import { storeAccessToken } from "../src/plaid/items.js";
+import { truncateAll, disconnect } from "./helpers/db.js";
+import { testEnv } from "./helpers/test-env.js";
+
+const env = testEnv();
+
+async function userWithTrial(email: string, trialEndsAt: Date | null) {
+  return prisma.user.create({
+    data: { id: randomUUID(), email, name: email, trialEndsAt },
+  });
+}
+
+async function workspaceForOwner(userId: string) {
+  return prisma.workspace.create({
+    data: {
+      name: "Test workspace",
+      memberships: { create: { userId, role: "owner" } },
+    },
+  });
+}
+
+async function item(opts: { workspaceId: string; connectedBy: string | null; createdAt: Date; itemId: string }) {
+  const id = await storeAccessToken(env, prisma, {
+    workspaceId: opts.workspaceId,
+    connectedBy: opts.connectedBy,
+    itemId: opts.itemId,
+    institutionId: "ins",
+    institutionName: opts.itemId,
+    accessToken: `access-${opts.itemId}`,
+  });
+  const row = await prisma.plaidItem.update({
+    where: { id },
+    data: { createdAt: opts.createdAt },
+  });
+  await prisma.bankAccount.create({
+    data: {
+      workspaceId: opts.workspaceId,
+      plaidItemId: row.id,
+      plaidAccountId: `${opts.itemId}_acct`,
+      name: opts.itemId,
+      type: "depository",
+      currency: "CAD",
+    },
+  });
+  return row;
+}
+
+beforeEach(async () => {
+  resetPlaidMock();
+  await truncateAll();
+});
+
+afterAll(async () => {
+  await disconnect();
+});
+
+describe("reconcilePlaidItemsForUser", () => {
+  it("lite keeps earliest one and disconnects later user-owned items", async () => {
+    const u = await userWithTrial("lite@example.com", null);
+    await prisma.subscription.create({
+      data: {
+        userId: u.id,
+        tier: "lite",
+        source: "stripe",
+        sourceSubscriptionId: "sub_lite",
+        status: "active",
+        currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    const ws = await workspaceForOwner(u.id);
+    const first = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "first" });
+    const second = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "second" });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-second" } });
+
+    const result = await reconcilePlaidItemsForUser(env, u.id);
+
+    expect(result.kept).toEqual([first.id]);
+    expect(result.disconnected).toEqual([second.id]);
+    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: first.id } })).resolves.toMatchObject({ status: "active" });
+    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: second.id } })).resolves.toMatchObject({ status: "disconnected" });
+  });
+
+  it("does not count another member's item against the user", async () => {
+    const owner = await userWithTrial("owner@example.com", null);
+    const other = await userWithTrial("other@example.com", null);
+    await prisma.subscription.create({
+      data: {
+        userId: owner.id,
+        tier: "lite",
+        source: "stripe",
+        sourceSubscriptionId: "sub_owner",
+        status: "active",
+        currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    const ws = await workspaceForOwner(owner.id);
+    await prisma.membership.create({ data: { workspaceId: ws.id, userId: other.id, role: "editor" } });
+    const owned = await item({ workspaceId: ws.id, connectedBy: owner.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "owned" });
+    const others = await item({ workspaceId: ws.id, connectedBy: other.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "others" });
+
+    const result = await reconcilePlaidItemsForUser(env, owner.id);
+
+    expect(result.kept).toEqual([owned.id]);
+    expect(result.disconnected).toEqual([]);
+    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: others.id } })).resolves.toMatchObject({ status: "active" });
+  });
+
+  it("disconnects items when connectedBy has no workspace membership", async () => {
+    const u = await userWithTrial("left@example.com", null);
+    const ws = await workspaceForOwner(u.id);
+    await prisma.membership.deleteMany({ where: { userId: u.id, workspaceId: ws.id } });
+    const stale = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "stale" });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-stale" } });
+
+    const result = await reconcilePlaidItemsForUser(env, u.id);
+
+    expect(result.disconnected).toEqual([stale.id]);
+  });
+
+  it("pro keeps earliest five and disconnects the sixth", async () => {
+    const u = await userWithTrial("pro@example.com", null);
+    await prisma.subscription.create({
+      data: {
+        userId: u.id,
+        tier: "pro",
+        source: "stripe",
+        sourceSubscriptionId: "sub_pro",
+        status: "active",
+        currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    const ws = await workspaceForOwner(u.id);
+    const rows = await Promise.all(
+      Array.from({ length: 6 }, (_, i) =>
+        item({
+          workspaceId: ws.id,
+          connectedBy: u.id,
+          createdAt: new Date(`2026-01-0${i + 1}T00:00:00Z`),
+          itemId: `pro_${i}`,
+        }),
+      ),
+    );
+    plaidMock.itemRemove.push({ data: { request_id: "remove-sixth" } });
+
+    const result = await reconcilePlaidItemsForUser(env, u.id);
+
+    expect(result.kept).toEqual(rows.slice(0, 5).map((r) => r.id));
+    expect(result.disconnected).toEqual([rows[5]!.id]);
+  });
+
+  it("canceled/free user disconnects all owned billable items", async () => {
+    const u = await userWithTrial("free@example.com", null);
+    await prisma.subscription.create({
+      data: {
+        userId: u.id,
+        tier: "pro",
+        source: "stripe",
+        sourceSubscriptionId: "sub_canceled",
+        status: "canceled",
+        currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    const ws = await workspaceForOwner(u.id);
+    const first = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "free_a" });
+    const second = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "free_b" });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-a" } }, { data: { request_id: "remove-b" } });
+
+    const result = await reconcilePlaidItemsForUser(env, u.id);
+
+    expect(result.kept).toEqual([]);
+    expect(result.disconnected.sort()).toEqual([first.id, second.id].sort());
+  });
+
+  it("counts active, error, and relink_required as billable but ignores disconnected", async () => {
+    const u = await userWithTrial("status@example.com", null);
+    await prisma.subscription.create({
+      data: {
+        userId: u.id,
+        tier: "lite",
+        source: "stripe",
+        sourceSubscriptionId: "sub_status",
+        status: "active",
+        currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+      },
+    });
+    const ws = await workspaceForOwner(u.id);
+    const active = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "status_active" });
+    const error = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "status_error" });
+    const relink = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-03T00:00:00Z"), itemId: "status_relink" });
+    const disconnected = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-04T00:00:00Z"), itemId: "status_disconnected" });
+    await prisma.plaidItem.update({ where: { id: error.id }, data: { status: "error" } });
+    await prisma.plaidItem.update({ where: { id: relink.id }, data: { status: "relink_required" } });
+    await prisma.plaidItem.update({ where: { id: disconnected.id }, data: { status: "disconnected" } });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-error" } }, { data: { request_id: "remove-relink" } });
+
+    const result = await reconcilePlaidItemsForUser(env, u.id);
+
+    expect(result.kept).toEqual([active.id]);
+    expect(result.disconnected.sort()).toEqual([error.id, relink.id].sort());
+  });
+});
+
+describe("reconcileOrphanPlaidItems", () => {
+  it("disconnects null-owner items", async () => {
+    const u = await userWithTrial("owner2@example.com", null);
+    const ws = await workspaceForOwner(u.id);
+    const orphan = await item({ workspaceId: ws.id, connectedBy: null, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "orphan" });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-orphan" } });
+
+    const result = await reconcileOrphanPlaidItems(env);
+
+    expect(result.disconnected).toEqual([orphan.id]);
+  });
+});
+
+describe("retryPendingPlaidBillingCleanups", () => {
+  it("retries disconnected items marked billing_cleanup_pending", async () => {
+    const u = await userWithTrial("pending@example.com", null);
+    const ws = await workspaceForOwner(u.id);
+    const pending = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "pending" });
+    await prisma.plaidItem.update({
+      where: { id: pending.id },
+      data: { status: "disconnected", errorCode: "billing_cleanup_pending" },
+    });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-pending" } });
+
+    const result = await retryPendingPlaidBillingCleanups(env);
+
+    expect(result.disconnected).toEqual([pending.id]);
+    const itemAfter = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pending.id } });
+    const accountAfter = await prisma.bankAccount.findFirstOrThrow({ where: { plaidItemId: pending.id } });
+    expect(itemAfter).toMatchObject({ status: "disconnected", errorCode: null });
+    expect(accountAfter.archivedAt).not.toBeNull();
+  });
+});

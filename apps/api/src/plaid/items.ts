@@ -140,9 +140,8 @@ export async function removeItemStrict(
  * associated bank_accounts and transactions — data is kept for historical
  * reference and potential re-subscription.
  *
- * No advisory lock: this runs from a cron job (daily-refresh Step 0) where
- * the item is not being synced concurrently (tier-gated users are skipped in
- * the sync loop, and the sync loop runs AFTER Step 0).
+ * Uses the same Plaid item row lock as sync so a billing cleanup cannot race
+ * an in-flight sync that would otherwise mark the item active again.
  *
  * Partial-failure retry: if the Plaid call succeeds but the DB update fails,
  * the item stays 'active'. Tomorrow's Step 0 retries, Plaid returns
@@ -155,18 +154,29 @@ export async function removeItemForBilling(
 ): Promise<void> {
   const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
 
-  try {
-    await plaidClient(env).itemRemove({ access_token: accessToken });
-  } catch (e) {
-    if (isPlaidErrorCode(e, "ITEM_NOT_FOUND")) {
-      // Already removed on Plaid's side — proceed with local status update.
-    } else {
-      throw e; // caller logs and continues to next item
-    }
-  }
+  await prisma.$transaction(
+    async (tx) => {
+      await lockPlaidItem(tx, plaidItemId);
 
-  await prisma.plaidItem.update({
-    where: { id: plaidItemId },
-    data: { status: "disconnected", errorCode: null },
-  });
+      try {
+        await plaidClient(env).itemRemove({ access_token: accessToken });
+      } catch (e) {
+        if (isPlaidErrorCode(e, "ITEM_NOT_FOUND")) {
+          // Already removed on Plaid's side — proceed with local cleanup.
+        } else {
+          throw e; // caller logs and continues to next item
+        }
+      }
+
+      await tx.bankAccount.updateMany({
+        where: { plaidItemId },
+        data: { archivedAt: new Date() },
+      });
+      await tx.plaidItem.update({
+        where: { id: plaidItemId },
+        data: { status: "disconnected", errorCode: null },
+      });
+    },
+    { maxWait: 5_000, timeout: 35_000 },
+  );
 }

@@ -25,6 +25,7 @@ const env = testEnv();
 // other plaid.* test files and avoids per-describe duplication if more
 // describes are added later.
 beforeEach(async () => {
+  vi.restoreAllMocks();
   await truncateAll();
   resetPlaidMock();
 });
@@ -212,6 +213,32 @@ describe("removeItemForBilling", () => {
     // Transactions preserved.
     const txCount = await prisma.transaction.count({ where: { accountId } });
     expect(txCount).toBe(1);
+  });
+
+  it("archives linked accounts while preserving transactions", async () => {
+    const { wsId, itemRowId, accountId } = await seedItemWithTransactions();
+    plaidMock.itemRemove.push({ data: { request_id: "req" } });
+
+    await removeItemForBilling(env, wsId, itemRowId);
+
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
+    const account = await prisma.bankAccount.findUniqueOrThrow({ where: { id: accountId } });
+    expect(item.status).toBe("disconnected");
+    expect(account.archivedAt).not.toBeNull();
+    await expect(prisma.transaction.count({ where: { accountId } })).resolves.toBe(1);
+  });
+
+  it("does not update local billing status while a sync lock is held", async () => {
+    const { wsId, itemRowId } = await seedItemWithTransactions();
+    plaidMock.itemRemove.push({ data: { request_id: "req" } });
+    vi.spyOn(await import("../src/plaid/lock.js"), "lockPlaidItem").mockRejectedValueOnce(
+      new Error("plaid_item is locked by another sync/disconnect"),
+    );
+
+    await expect(removeItemForBilling(env, wsId, itemRowId)).rejects.toThrow(/locked by another sync\/disconnect/i);
+
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
+    expect(item.status).toBe("active");
   });
 
   it("ITEM_NOT_FOUND: graceful — Plaid already removed, still sets disconnected", async () => {
