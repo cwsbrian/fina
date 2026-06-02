@@ -265,6 +265,8 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
       data: { trialEndsAt: new Date(Date.now() - 1000), trialConsumed: true },
     });
     const wsId = await getOwnerWorkspaceId(u.userId);
+    pushExchangeAndAccounts("item_free_cleanup", "access_free_cleanup", "acct_free_cleanup");
+    plaidMock.itemRemove.push({ data: { request_id: "remove-free-cleanup" } });
     const res = await app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid/exchange`,
@@ -273,8 +275,10 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     });
     expect(res.statusCode).toBe(402);
     expect(res.json().error).toBe("upgrade_required");
-    // Crucial: never call Plaid for free-tier callers.
     expect(plaidMock.itemPublicTokenExchange.length).toBe(0);
+    expect(plaidMock.accountsGet.length).toBe(0);
+    expect(plaidMock.itemRemove.length).toBe(0);
+    expect(await prisma.plaidItem.findUnique({ where: { itemId: "item_free_cleanup" } })).toBeNull();
     await app.close();
   });
 
@@ -396,6 +400,37 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     expect(cleanup.accessTokenCiphertext.length).toBeGreaterThan(0);
     expect(cleanup.accessTokenIv.length).toBeGreaterThan(0);
     expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
+    await app.close();
+  });
+
+  it("removes Plaid item when account creation hits duplicate plaidAccountId", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "acct-conflict@x.com", name: "AC" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        plaidAccountId: "acct_conflict",
+        name: "Existing Plaid Account",
+        type: "depository",
+        currency: "CAD",
+      },
+    });
+    pushExchangeAndAccounts("item_account_conflict", "access_account_conflict", "acct_conflict");
+    plaidMock.itemRemove.push({ data: { request_id: "remove-account-conflict" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p-account-conflict", institutionId: "ins_1", institutionName: "Conflict Bank" }),
+    });
+
+    expect(res.statusCode).toBe(422);
+    expect(res.json().error).toBe("already_connected");
+    expect(plaidMock.itemRemove.length).toBe(0);
+    expect(await prisma.plaidItem.findUnique({ where: { itemId: "item_account_conflict" } })).toBeNull();
+    expect(await prisma.bankAccount.count({ where: { plaidAccountId: "acct_conflict" } })).toBe(1);
     await app.close();
   });
 

@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { Env } from "../env.js";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
@@ -24,6 +25,15 @@ const HostedTokenBody = z.object({
 });
 
 type PlaidItemLimitClient = Pick<Prisma.TransactionClient, "plaidItem">;
+type ExchangedItemCleanup = {
+  workspaceId: string;
+  connectedBy: string;
+  itemId: string;
+  institutionId: string;
+  institutionName: string;
+  accessToken: string;
+  webhookUrl: string | null;
+};
 
 async function checkPlaidItemLimit(
   userId: string,
@@ -37,6 +47,39 @@ async function checkPlaidItemLimit(
   });
   if (count >= t.plaidItemLimit) return { error: "plaid_item_limit_reached" };
   return null;
+}
+
+function p2002TargetIncludes(
+  e: Prisma.PrismaClientKnownRequestError,
+  field: string,
+): boolean {
+  const target = e.meta?.target;
+  if (Array.isArray(target)) return target.includes(field);
+  return typeof target === "string" && target.includes(field);
+}
+
+async function persistPendingCleanup(
+  env: Env,
+  input: ExchangedItemCleanup,
+): Promise<void> {
+  const cleanupItemRowId = await storeAccessToken(env, prisma, input);
+  await prisma.plaidItem.update({
+    where: { id: cleanupItemRowId },
+    data: { status: "disconnected", errorCode: "billing_cleanup_pending" },
+  });
+}
+
+async function removeExchangedItemOrPersistCleanup(
+  env: Env,
+  input: ExchangedItemCleanup,
+  logMessage: string,
+): Promise<void> {
+  try {
+    await plaidClient(env).itemRemove({ access_token: input.accessToken });
+  } catch (cleanupErr) {
+    logWarn({ err: cleanupErr }, logMessage);
+    await persistPendingCleanup(env, input);
+  }
 }
 
 export async function plaidRoutes(app: FastifyInstance): Promise<void> {
@@ -100,26 +143,36 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
     let plaidItemId: string;
     let accountCount: number;
     let verifiedWsId: string; // hoisted so Step 3 uses the ctx-verified value, not a raw header re-read
-    let exchAccessToken: string | undefined; // hoisted so in-lock catch can call itemRemove
+    let verifiedUserId: string | undefined;
+    let exchAccessToken: string | undefined; // hoisted so failed post-exchange writes can clean up upstream
+    let exchItemId: string | undefined;
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
       verifiedWsId = ctx.membership.workspaceId;
-      const tier = await effectiveTier(ctx.session.userId);
-      if (tier.plaidItemLimit === 0) {
-        return reply.code(402).send({ error: "upgrade_required" });
-      }
+      verifiedUserId = ctx.session.userId;
 
       // ---- Step 1: Plaid exchange + accounts/get ----
       const exch = await plaidClient(app.fina.env).itemPublicTokenExchange({
         public_token: parsed.data.publicToken,
       });
       exchAccessToken = exch.data.access_token as string;
+      exchItemId = exch.data.item_id as string;
       const accountsRes = await plaidClient(app.fina.env).accountsGet({
         access_token: exch.data.access_token,
       });
+
+      const cleanupInput: ExchangedItemCleanup = {
+        workspaceId: ctx.membership.workspaceId,
+        connectedBy: ctx.session.userId,
+        itemId: exch.data.item_id,
+        institutionId: parsed.data.institutionId,
+        institutionName: parsed.data.institutionName,
+        accessToken: exch.data.access_token,
+        webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
+      };
 
       // ---- Step 2: Outer currency check (before acquiring lock) ----
       // Cached read of workspace.currency before lock.
@@ -151,24 +204,6 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         withUserLock(ctx.session.userId, async (userTx) => {
           const finalLimitErr = await checkPlaidItemLimit(ctx.session.userId, userTx);
           if (finalLimitErr) {
-            try {
-              await plaidClient(app.fina.env).itemRemove({ access_token: exch.data.access_token });
-            } catch (cleanupErr) {
-              logWarn({ err: cleanupErr }, "plaid.itemRemove failed during final limit cleanup");
-              const cleanupItemRowId = await storeAccessToken(app.fina.env, userTx, {
-                workspaceId: ctx.membership.workspaceId,
-                connectedBy: ctx.session.userId,
-                itemId: exch.data.item_id,
-                institutionId: parsed.data.institutionId,
-                institutionName: parsed.data.institutionName,
-                accessToken: exch.data.access_token,
-                webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
-              });
-              await userTx.plaidItem.update({
-                where: { id: cleanupItemRowId },
-                data: { status: "disconnected", errorCode: "billing_cleanup_pending" },
-              });
-            }
             return { rejected: true as const, error: finalLimitErr.error };
           }
 
@@ -225,6 +260,11 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         })
       );
       if (result.rejected) {
+        await removeExchangedItemOrPersistCleanup(
+          app.fina.env,
+          cleanupInput,
+          "plaid.itemRemove failed during final limit cleanup",
+        );
         return reply.code(402).send({ error: result.error });
       }
 
@@ -248,7 +288,43 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       }
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+        if (
+          !p2002TargetIncludes(e, "itemId") &&
+          exchAccessToken &&
+          exchItemId &&
+          verifiedWsId &&
+          verifiedUserId
+        ) {
+          await removeExchangedItemOrPersistCleanup(
+            app.fina.env,
+            {
+              workspaceId: verifiedWsId,
+              connectedBy: verifiedUserId,
+              itemId: exchItemId,
+              institutionId: parsed.data.institutionId,
+              institutionName: parsed.data.institutionName,
+              accessToken: exchAccessToken,
+              webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
+            },
+            "plaid.itemRemove failed during exchange write-conflict cleanup",
+          );
+        }
         return reply.code(422).send({ error: "already_connected" });
+      }
+      if (exchAccessToken && exchItemId && verifiedWsId && verifiedUserId) {
+        await removeExchangedItemOrPersistCleanup(
+          app.fina.env,
+          {
+            workspaceId: verifiedWsId,
+            connectedBy: verifiedUserId,
+            itemId: exchItemId,
+            institutionId: parsed.data.institutionId,
+            institutionName: parsed.data.institutionName,
+            accessToken: exchAccessToken,
+            webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
+          },
+          "plaid.itemRemove failed during exchange rollback cleanup",
+        );
       }
       const m = mapPlaidError(e);
       return reply.code(m.statusCode).send({ error: m.code });
@@ -320,8 +396,6 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const limitErr = await checkPlaidItemLimit(ctx.session.userId);
-      if (limitErr) return reply.code(402).send(limitErr);
 
       const res = await plaidClient(app.fina.env).linkTokenGet({
         link_token: parsed.data.linkToken,

@@ -846,6 +846,19 @@ describe("Plaid connection limits", () => {
       where: { id: owner.userId },
       data: { trialEndsAt: new Date(Date.now() - 1_000), trialConsumed: true },
     });
+    plaidMock.itemPublicTokenExchange.push({
+      data: { access_token: "access_free_cleanup_routes", item_id: "item_free_cleanup_routes", request_id: "req" },
+    });
+    plaidMock.accountsGet.push({
+      data: {
+        accounts: [
+          { account_id: "acct_free_cleanup_routes", name: "Checking", official_name: null, mask: "0001", type: "depository", subtype: "checking", balances: { current: 100, available: 100, limit: null, iso_currency_code: "CAD" } },
+        ],
+        item: { item_id: "item_free_cleanup_routes", institution_id: "ins_1" },
+        request_id: "req",
+      },
+    });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-free-cleanup-routes" } });
 
     const res = await app.inject({
       method: "POST",
@@ -856,6 +869,10 @@ describe("Plaid connection limits", () => {
 
     expect(res.statusCode).toBe(402);
     expect(res.json().error).toBe("upgrade_required");
+    expect(plaidMock.itemPublicTokenExchange.length).toBe(0);
+    expect(plaidMock.accountsGet.length).toBe(0);
+    expect(plaidMock.itemRemove.length).toBe(0);
+    expect(await prisma.plaidItem.findUnique({ where: { itemId: "item_free_cleanup_routes" } })).toBeNull();
     await app.close();
   });
 
