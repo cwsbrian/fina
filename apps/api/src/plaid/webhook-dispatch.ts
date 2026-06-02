@@ -28,12 +28,31 @@ export async function dispatchWebhookSync(
   try {
     const item = await prisma.plaidItem.findUnique({
       where: { id: plaidItemId },
-      select: { connectedBy: true },
+      select: {
+        connectedBy: true,
+        workspace: {
+          select: {
+            memberships: {
+              select: { userId: true },
+            },
+          },
+        },
+      },
     });
     if (!item?.connectedBy) {
       await prisma.plaidWebhookEvent.update({
         where: { id: webhookEventId },
         data: { processedAt: new Date(), processError: "no_owner" },
+      });
+      return;
+    }
+    const hasWorkspaceMembership = item.workspace.memberships.some(
+      (membership) => membership.userId === item.connectedBy,
+    );
+    if (!hasWorkspaceMembership) {
+      await prisma.plaidWebhookEvent.update({
+        where: { id: webhookEventId },
+        data: { processedAt: new Date(), processError: "no_membership" },
       });
       return;
     }

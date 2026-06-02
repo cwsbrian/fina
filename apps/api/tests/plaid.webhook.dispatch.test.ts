@@ -52,6 +52,11 @@ async function seedItem(opts: { connectedBy?: string | null } = {}): Promise<{ w
       ? await seedUser({ email: `webhook-${randomUUID()}@example.com`, trialEndsAt: new Date("2026-07-01T00:00:00Z") })
       : opts.connectedBy;
   const ws = await prisma.workspace.create({ data: { name: "W" } });
+  if (connectedBy) {
+    await prisma.membership.create({
+      data: { workspaceId: ws.id, userId: connectedBy, role: "owner" },
+    });
+  }
   const item = await prisma.plaidItem.create({
     data: {
       workspaceId: ws.id,
@@ -144,6 +149,23 @@ describe("dispatchWebhookSync", () => {
     const row = await prisma.plaidWebhookEvent.findUniqueOrThrow({ where: { id: eventId } });
     expect(row.processedAt).not.toBeNull();
     expect(row.processError).toBe("no_owner");
+  });
+
+  it("marks no-membership webhook processed without syncing", async () => {
+    const userId = await seedUser({
+      email: "webhook-stale-member@example.com",
+      trialEndsAt: new Date("2026-07-01T00:00:00Z"),
+    });
+    const { wsId, itemId, eventId } = await seedItem({ connectedBy: userId });
+    await prisma.membership.deleteMany({ where: { workspaceId: wsId, userId } });
+
+    await dispatchWebhookSync(env, wsId, itemId, eventId);
+
+    expect(syncTransactions).not.toHaveBeenCalled();
+    expect(categorizeNewTransactions).not.toHaveBeenCalled();
+    const row = await prisma.plaidWebhookEvent.findUniqueOrThrow({ where: { id: eventId } });
+    expect(row.processedAt).not.toBeNull();
+    expect(row.processError).toBe("no_membership");
   });
 
   it("marks tier-gated webhook processed without syncing", async () => {

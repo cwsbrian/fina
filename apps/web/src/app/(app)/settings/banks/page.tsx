@@ -63,7 +63,7 @@ export default function BanksPage() {
     members.find((m) => m.userId === me.user.id)?.role === "owner";
   const bankCount = items?.length ?? 0;
   const ownedBankCount = (items ?? []).filter(
-    (item) => item.connectedByUserId === me.user.id,
+    (item) => item.connectedByUserId === me.user.id && item.status !== "disconnected",
   ).length;
   const plaidItemLimit = TIER_LIMITS[me.tier].plaidItems;
   const remainingBanks = Math.max(plaidItemLimit - ownedBankCount, 0);
