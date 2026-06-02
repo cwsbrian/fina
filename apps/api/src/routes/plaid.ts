@@ -10,6 +10,7 @@ import { storeAccessToken } from "../plaid/items.js";
 import { syncTransactions } from "../plaid/sync.js";
 import { categorizeNewTransactions } from "../categorize/service.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
+import { withUserLock } from "../locks/user.js";
 import { logWarn, logError } from "../logger.js";
 
 const ExchangeBody = z.object({
@@ -22,15 +23,17 @@ const HostedTokenBody = z.object({
   linkToken: z.string().min(1),
 });
 
+type PlaidItemLimitClient = Pick<Prisma.TransactionClient, "plaidItem">;
+
 async function checkPlaidItemLimit(
   userId: string,
-  workspaceId: string,
+  client: PlaidItemLimitClient = prisma,
 ): Promise<{ error: string } | null> {
   const t = await effectiveTier(userId);
   if (t.plaidItemLimit === 0) return { error: "upgrade_required" };
 
-  const count = await prisma.plaidItem.count({
-    where: { workspaceId, status: { not: "disconnected" } },
+  const count = await client.plaidItem.count({
+    where: { connectedBy: userId, status: { not: "disconnected" } },
   });
   if (count >= t.plaidItemLimit) return { error: "plaid_item_limit_reached" };
   return null;
@@ -55,7 +58,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const limitErr = await checkPlaidItemLimit(ctx.session.userId, params.id);
+      const limitErr = await checkPlaidItemLimit(ctx.session.userId);
       if (limitErr) return reply.code(402).send(limitErr);
       const res = await plaidClient(app.fina.env).linkTokenCreate({
         user: { client_user_id: ctx.session.userId },
@@ -104,8 +107,10 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
       verifiedWsId = ctx.membership.workspaceId;
-      const limitErr = await checkPlaidItemLimit(ctx.session.userId, verifiedWsId);
-      if (limitErr) return reply.code(402).send(limitErr);
+      const tier = await effectiveTier(ctx.session.userId);
+      if (tier.plaidItemLimit === 0) {
+        return reply.code(402).send({ error: "upgrade_required" });
+      }
 
       // ---- Step 1: Plaid exchange + accounts/get ----
       const exch = await plaidClient(app.fina.env).itemPublicTokenExchange({
@@ -142,58 +147,86 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       }
 
       // ---- Step 3: Item + accounts in one workspace-locked tx ----
-      const result = await withWorkspaceLock(ctx.membership.workspaceId, async (tx) => {
-        // In-lock recheck: defend against concurrent PATCH winning between
-        // the outer check and lock acquisition.
-        const wsLocked = await tx.workspace.findUniqueOrThrow({
-          where: { id: ctx.membership.workspaceId },
-          select: { currency: true },
-        });
-        const mismatch2 = accountsRes.data.accounts.find(
-          (a) => (a.balances?.iso_currency_code ?? null) !== wsLocked.currency,
-        );
-        if (mismatch2) {
-          const err = new Error("currency_mismatch_inlock") as Error & {
-            code: "currency_mismatch_inlock";
-            bankCurrency: string;
-            workspaceCurrency: string;
-          };
-          err.code = "currency_mismatch_inlock";
-          err.bankCurrency = mismatch2.balances?.iso_currency_code ?? "unknown";
-          err.workspaceCurrency = wsLocked.currency;
-          throw err;
-        }
+      const result = await withWorkspaceLock(ctx.membership.workspaceId, async () =>
+        withUserLock(ctx.session.userId, async (userTx) => {
+          const finalLimitErr = await checkPlaidItemLimit(ctx.session.userId, userTx);
+          if (finalLimitErr) {
+            try {
+              await plaidClient(app.fina.env).itemRemove({ access_token: exch.data.access_token });
+            } catch (cleanupErr) {
+              logWarn({ err: cleanupErr }, "plaid.itemRemove failed during final limit cleanup");
+              const cleanupItemRowId = await storeAccessToken(app.fina.env, userTx, {
+                workspaceId: ctx.membership.workspaceId,
+                connectedBy: ctx.session.userId,
+                itemId: exch.data.item_id,
+                institutionId: parsed.data.institutionId,
+                institutionName: parsed.data.institutionName,
+                accessToken: exch.data.access_token,
+                webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
+              });
+              await userTx.plaidItem.update({
+                where: { id: cleanupItemRowId },
+                data: { status: "disconnected", errorCode: "billing_cleanup_pending" },
+              });
+            }
+            return { rejected: true as const, error: finalLimitErr.error };
+          }
 
-        const itemRowId = await storeAccessToken(app.fina.env, tx, {
-          workspaceId: ctx.membership.workspaceId,
-          connectedBy: ctx.session.userId,
-          itemId: exch.data.item_id,
-          institutionId: parsed.data.institutionId,
-          institutionName: parsed.data.institutionName,
-          accessToken: exch.data.access_token,
-          webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
-        });
-        for (const a of accountsRes.data.accounts) {
-          await tx.bankAccount.create({
-            data: {
-              workspaceId: ctx.membership.workspaceId,
-              plaidItemId: itemRowId,
-              plaidAccountId: a.account_id,
-              name: a.name,
-              officialName: a.official_name ?? null,
-              mask: a.mask ?? null,
-              type: a.type,
-              subtype: a.subtype ?? null,
-              currency: a.balances?.iso_currency_code ?? "CAD",
-              balanceCurrent: a.balances?.current ?? null,
-              balanceAvailable: a.balances?.available ?? null,
-              balanceLimit: a.balances?.limit ?? null,
-              lastBalanceSyncAt: new Date(),
-            },
+          // In-lock recheck: defend against concurrent PATCH winning between
+          // the outer check and lock acquisition.
+          const wsLocked = await userTx.workspace.findUniqueOrThrow({
+            where: { id: ctx.membership.workspaceId },
+            select: { currency: true },
           });
-        }
-        return { itemRowId, accountCount: accountsRes.data.accounts.length };
-      });
+          const mismatch2 = accountsRes.data.accounts.find(
+            (a) => (a.balances?.iso_currency_code ?? null) !== wsLocked.currency,
+          );
+          if (mismatch2) {
+            const err = new Error("currency_mismatch_inlock") as Error & {
+              code: "currency_mismatch_inlock";
+              bankCurrency: string;
+              workspaceCurrency: string;
+            };
+            err.code = "currency_mismatch_inlock";
+            err.bankCurrency = mismatch2.balances?.iso_currency_code ?? "unknown";
+            err.workspaceCurrency = wsLocked.currency;
+            throw err;
+          }
+
+          const itemRowId = await storeAccessToken(app.fina.env, userTx, {
+            workspaceId: ctx.membership.workspaceId,
+            connectedBy: ctx.session.userId,
+            itemId: exch.data.item_id,
+            institutionId: parsed.data.institutionId,
+            institutionName: parsed.data.institutionName,
+            accessToken: exch.data.access_token,
+            webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
+          });
+          for (const a of accountsRes.data.accounts) {
+            await userTx.bankAccount.create({
+              data: {
+                workspaceId: ctx.membership.workspaceId,
+                plaidItemId: itemRowId,
+                plaidAccountId: a.account_id,
+                name: a.name,
+                officialName: a.official_name ?? null,
+                mask: a.mask ?? null,
+                type: a.type,
+                subtype: a.subtype ?? null,
+                currency: a.balances?.iso_currency_code ?? "CAD",
+                balanceCurrent: a.balances?.current ?? null,
+                balanceAvailable: a.balances?.available ?? null,
+                balanceLimit: a.balances?.limit ?? null,
+                lastBalanceSyncAt: new Date(),
+              },
+            });
+          }
+          return { rejected: false as const, itemRowId, accountCount: accountsRes.data.accounts.length };
+        })
+      );
+      if (result.rejected) {
+        return reply.code(402).send({ error: result.error });
+      }
 
       plaidItemId = result.itemRowId;
       accountCount = result.accountCount;
@@ -287,7 +320,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const limitErr = await checkPlaidItemLimit(ctx.session.userId, ctx.membership.workspaceId);
+      const limitErr = await checkPlaidItemLimit(ctx.session.userId);
       if (limitErr) return reply.code(402).send(limitErr);
 
       const res = await plaidClient(app.fina.env).linkTokenGet({

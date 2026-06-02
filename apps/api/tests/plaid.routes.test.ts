@@ -22,6 +22,43 @@ import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
 
+async function makeLiteUser(userId: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { trialEndsAt: null, trialConsumed: true },
+  });
+  await prisma.subscription.create({
+    data: {
+      userId,
+      tier: "lite",
+      source: "stripe",
+      sourceSubscriptionId: `sub_lite_${userId}`,
+      status: "active",
+      currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+    },
+  });
+}
+
+async function seedPlaidItem(opts: {
+  workspaceId: string;
+  connectedBy?: string | null;
+  itemId: string;
+  status?: "active" | "disconnected";
+}): Promise<void> {
+  await prisma.plaidItem.create({
+    data: {
+      workspaceId: opts.workspaceId,
+      connectedBy: opts.connectedBy,
+      accessTokenCiphertext: Buffer.from([1]),
+      accessTokenIv: Buffer.from(new Array(12).fill(2)),
+      itemId: opts.itemId,
+      institutionId: "ins_1",
+      institutionName: "Bank",
+      status: opts.status ?? "active",
+    },
+  });
+}
+
 async function connectAItem(app: ReturnType<typeof buildApp> extends Promise<infer T> ? T : never, owner: { cookie: string }, wsId: string, suffix = ""): Promise<string> {
   plaidMock.itemPublicTokenExchange.push({
     data: { access_token: `access${suffix}`, item_id: `item${suffix}`, request_id: "req" },
@@ -151,6 +188,54 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
     });
 
     expect(plaidMock.linkTokenCreateCalls[0][0]).not.toHaveProperty("webhook");
+    await app.close();
+  });
+
+  it("counts user-owned items across workspaces", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "lt-cross@x.com", name: "LC" });
+    await makeLiteUser(owner.userId);
+    const wsA = await getOwnerWorkspaceId(owner.userId);
+    await seedPlaidItem({ workspaceId: wsA, connectedBy: owner.userId, itemId: "item_lite_ws_a" });
+    const wsB = await prisma.workspace.create({
+      data: {
+        name: "Second",
+        memberships: { create: { userId: owner.userId, role: "owner" } },
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsB.id}/plaid/link-token`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsB.id },
+    });
+
+    expect(res.statusCode).toBe(402);
+    expect(res.json()).toEqual({ error: "plaid_item_limit_reached" });
+    expect(plaidMock.linkTokenCreate.length).toBe(0);
+    await app.close();
+  });
+
+  it("ignores another member's item in the same workspace", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "lt-owner@x.com", name: "LO" });
+    await makeLiteUser(owner.userId);
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const other = await signUpAndGetCookie(app, { email: "lt-other@x.com", name: "LM" });
+    await prisma.membership.create({
+      data: { userId: other.userId, workspaceId: wsId, role: "viewer" },
+    });
+    await seedPlaidItem({ workspaceId: wsId, connectedBy: other.userId, itemId: "item_other_member" });
+    plaidMock.linkTokenCreate.push({ data: { link_token: "lt_user_ok", expiration: "2099-01-01" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().linkToken).toBe("lt_user_ok");
     await app.close();
   });
 });
@@ -797,18 +882,21 @@ describe("Plaid connection limits", () => {
     const wsId = await getOwnerWorkspaceId(owner.userId);
     // Seed 5 active items directly (bypassing exchange) to hit the limit.
     for (let i = 0; i < 5; i++) {
-      await prisma.plaidItem.create({
-        data: {
-          workspaceId: wsId,
-          accessTokenCiphertext: Buffer.from([1]),
-          accessTokenIv: Buffer.from(new Array(12).fill(2)),
-          itemId: `item_limit_${i}`,
-          institutionId: "ins_1",
-          institutionName: "Bank",
-          status: "active",
-        },
-      });
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_limit_${i}` });
     }
+    plaidMock.itemPublicTokenExchange.push({
+      data: { access_token: "access_limit_6", item_id: "item_limit_6", request_id: "req" },
+    });
+    plaidMock.accountsGet.push({
+      data: {
+        accounts: [
+          { account_id: "acct_limit_6", name: "Checking", official_name: null, mask: "0001", type: "depository", subtype: "checking", balances: { current: 100, available: 100, limit: null, iso_currency_code: "CAD" } },
+        ],
+        item: { item_id: "item_limit_6", institution_id: "ins_1" },
+        request_id: "req",
+      },
+    });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-limit" } });
 
     const res = await app.inject({
       method: "POST",
@@ -819,6 +907,7 @@ describe("Plaid connection limits", () => {
 
     expect(res.statusCode).toBe(402);
     expect(res.json().error).toBe("plaid_item_limit_reached");
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(5);
     await app.close();
   });
 
@@ -827,17 +916,7 @@ describe("Plaid connection limits", () => {
     const owner = await signUpAndGetCookie(app, { email: "atlimit2@x.com", name: "AtLimit2" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
     for (let i = 0; i < 5; i++) {
-      await prisma.plaidItem.create({
-        data: {
-          workspaceId: wsId,
-          accessTokenCiphertext: Buffer.from([1]),
-          accessTokenIv: Buffer.from(new Array(12).fill(2)),
-          itemId: `item_lt_${i}`,
-          institutionId: "ins_1",
-          institutionName: "Bank",
-          status: "active",
-        },
-      });
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_lt_${i}` });
     }
 
     const res = await app.inject({
@@ -857,30 +936,10 @@ describe("Plaid connection limits", () => {
     const wsId = await getOwnerWorkspaceId(owner.userId);
     // 3 active + 2 disconnected = 3 effective, below limit of 5.
     for (let i = 0; i < 3; i++) {
-      await prisma.plaidItem.create({
-        data: {
-          workspaceId: wsId,
-          accessTokenCiphertext: Buffer.from([1]),
-          accessTokenIv: Buffer.from(new Array(12).fill(2)),
-          itemId: `item_active_${i}`,
-          institutionId: "ins_1",
-          institutionName: "Bank",
-          status: "active",
-        },
-      });
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_active_${i}` });
     }
     for (let i = 0; i < 2; i++) {
-      await prisma.plaidItem.create({
-        data: {
-          workspaceId: wsId,
-          accessTokenCiphertext: Buffer.from([1]),
-          accessTokenIv: Buffer.from(new Array(12).fill(2)),
-          itemId: `item_disc_${i}`,
-          institutionId: "ins_1",
-          institutionName: "Bank",
-          status: "disconnected",
-        },
-      });
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_disc_${i}`, status: "disconnected" });
     }
 
     // Exchange should succeed (only 3 active, limit is 5).

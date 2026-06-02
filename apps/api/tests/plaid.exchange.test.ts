@@ -23,6 +23,42 @@ import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
 
+async function makeLiteUser(userId: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { trialEndsAt: null, trialConsumed: true },
+  });
+  await prisma.subscription.create({
+    data: {
+      userId,
+      tier: "lite",
+      source: "stripe",
+      sourceSubscriptionId: `sub_lite_${userId}`,
+      status: "active",
+      currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+    },
+  });
+}
+
+async function seedPlaidItem(opts: {
+  workspaceId: string;
+  connectedBy: string;
+  itemId: string;
+}): Promise<void> {
+  await prisma.plaidItem.create({
+    data: {
+      workspaceId: opts.workspaceId,
+      connectedBy: opts.connectedBy,
+      accessTokenCiphertext: Buffer.from([1]),
+      accessTokenIv: Buffer.from(new Array(12).fill(2)),
+      itemId: opts.itemId,
+      institutionId: "ins_1",
+      institutionName: "Bank",
+      status: "active",
+    },
+  });
+}
+
 // File-level lifecycle: every test in this file needs the same fresh
 // DB + mock state, and we only want to disconnect Prisma once at the end.
 // Defining these inside each describe duplicates work and risks one block's
@@ -108,14 +144,14 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
 });
 
 describe("POST /workspaces/:id/plaid/exchange", () => {
-  function pushExchangeAndAccounts(itemId = "item_test") {
+  function pushExchangeAndAccounts(itemId = "item_test", accessToken = "access_test", accountId = "acct_1") {
     plaidMock.itemPublicTokenExchange.push({
-      data: { access_token: "access_test", item_id: itemId, request_id: "req" },
+      data: { access_token: accessToken, item_id: itemId, request_id: "req" },
     });
     plaidMock.accountsGet.push({
       data: {
         accounts: [
-          { account_id: "acct_1", name: "Checking", official_name: null, mask: "0001", type: "depository", subtype: "checking", balances: { current: 100, available: 100, limit: null, iso_currency_code: "CAD" } },
+          { account_id: accountId, name: "Checking", official_name: null, mask: "0001", type: "depository", subtype: "checking", balances: { current: 100, available: 100, limit: null, iso_currency_code: "CAD" } },
         ],
         item: { item_id: itemId, institution_id: "ins_1" },
         request_id: "req",
@@ -274,6 +310,92 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("workspace_mismatch");
+    await app.close();
+  });
+
+  it("rechecks user-wide limit after link token was issued", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "lite-recheck@x.com", name: "LR" });
+    await makeLiteUser(owner.userId);
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: "item_existing_lite" });
+    pushExchangeAndAccounts("item_after_link", "access_after_link", "acct_after_link");
+    plaidMock.itemRemove.push({ data: { request_id: "remove-after-link" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p-after-link", institutionId: "ins_1", institutionName: "TB" }),
+    });
+
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("plaid_item_limit_reached");
+    expect(plaidMock.itemPublicTokenExchange.length).toBe(0);
+    expect(plaidMock.accountsGet.length).toBe(0);
+    expect(plaidMock.itemRemove.length).toBe(0);
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
+    expect(await prisma.plaidItem.findUnique({ where: { itemId: "item_after_link" } })).toBeNull();
+    await app.close();
+  });
+
+  it("concurrent exchanges for same Lite user create at most one item", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "lite-race@x.com", name: "Race" });
+    await makeLiteUser(owner.userId);
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    pushExchangeAndAccounts("item_race_1", "access_race_1", "acct_race_1");
+    pushExchangeAndAccounts("item_race_2", "access_race_2", "acct_race_2");
+    plaidMock.itemRemove.push({ data: { request_id: "remove-race-loser" } });
+    plaidMock.transactionsSync.push({ data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false } });
+
+    const request = (publicToken: string) => app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken, institutionId: "ins_1", institutionName: "TB" }),
+    });
+    const responses = await Promise.all([request("p-race-1"), request("p-race-2")]);
+    const statuses = responses.map((r) => r.statusCode).sort();
+
+    expect(statuses).toEqual([200, 402]);
+    expect(responses.find((r) => r.statusCode === 402)?.json().error).toBe("plaid_item_limit_reached");
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
+    await app.close();
+  });
+
+  it("stores pending cleanup row when final limit cleanup fails", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "lite-cleanup@x.com", name: "LC" });
+    await makeLiteUser(owner.userId);
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: "item_cleanup_existing" });
+    pushExchangeAndAccounts("item_cleanup_pending", "access_cleanup_pending", "acct_cleanup_pending");
+    plaidMock.itemRemove.push(plaidApiError({ error_code: "INSTITUTION_DOWN", http_status: 503 }));
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/exchange`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ publicToken: "p-cleanup", institutionId: "ins_1", institutionName: "Cleanup Bank" }),
+    });
+
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("plaid_item_limit_reached");
+    const cleanup = await prisma.plaidItem.findUniqueOrThrow({
+      where: { itemId: "item_cleanup_pending" },
+    });
+    expect(cleanup).toMatchObject({
+      workspaceId: wsId,
+      connectedBy: owner.userId,
+      status: "disconnected",
+      errorCode: "billing_cleanup_pending",
+      institutionId: "ins_1",
+      institutionName: "Cleanup Bank",
+    });
+    expect(cleanup.accessTokenCiphertext.length).toBeGreaterThan(0);
+    expect(cleanup.accessTokenIv.length).toBeGreaterThan(0);
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
     await app.close();
   });
 
