@@ -16,6 +16,7 @@ vi.mock("@google/genai", hoistedGeminiMockFactory);
 
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
+import { storeAccessToken } from "../src/plaid/items.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
@@ -241,7 +242,7 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
 });
 
 describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
-  it("owner Pro user — happy path returns counts", async () => {
+  it("owner with Plaid entitlement — happy path returns counts", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o@x.com", name: "O" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -267,7 +268,58 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
     await app.close();
   });
 
-  it("403 for viewer member (Pro-mutating routes are owner-only)", async () => {
+  it("lite owner can manually sync their active owned item", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "lite-sync@x.com", name: "LS" });
+    await makeLiteUser(owner.userId);
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const plaidItemId = await connectAItem(app, owner, wsId, "_lite_sync");
+
+    plaidMock.transactionsSync.push({
+      data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid-items/${plaidItemId}/sync`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ added: 0, modified: 0, removed: 0 });
+    await app.close();
+  });
+
+  it("owner cannot sync another user's connected item", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "shared-owner@x.com", name: "SO" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const other = await signUpAndGetCookie(app, { email: "shared-other@x.com", name: "SM" });
+    await prisma.membership.create({ data: { userId: other.userId, workspaceId: wsId, role: "viewer" } });
+    const otherPlaidItemId = await storeAccessToken(env, prisma, {
+      workspaceId: wsId,
+      connectedBy: other.userId,
+      itemId: "item_other_member_sync",
+      institutionId: "ins_1",
+      institutionName: "Other Bank",
+      accessToken: "access_other_member_sync",
+    });
+
+    plaidMock.transactionsSync.push({
+      data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid-items/${otherPlaidItemId}/sync`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().error).toBe("not_found");
+    expect(plaidMock.transactionsSync).toHaveLength(1);
+    await app.close();
+  });
+
+  it("403 for viewer member (Plaid-mutating routes are owner-only)", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o2@x.com", name: "O" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -301,9 +353,9 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
   });
 
   it("402 upgrade_required when the owner's trial has expired (free tier)", async () => {
-    // Sync IS Pro-gated (unlike disconnect — see DELETE describe). A user
-    // whose trial expired can read existing transactions but can't pull
-    // new ones until they upgrade.
+    // Sync requires a Plaid entitlement (unlike disconnect — see DELETE
+    // describe). A user whose trial expired can read existing transactions
+    // but can't pull new ones until they upgrade.
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "fr@x.com", name: "F" });
     const wsId = await getOwnerWorkspaceId(owner.userId);

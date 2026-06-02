@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
-import { requireProTier } from "../auth/tier.js";
+import { effectiveTier } from "../auth/tier.js";
 import { syncTransactions } from "../plaid/sync.js";
 import { removeItemStrict } from "../plaid/items.js";
 import { categorizeNewTransactions } from "../categorize/service.js";
@@ -50,7 +50,22 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      await requireProTier(ctx.session.userId);
+      const item = await prisma.plaidItem.findFirst({
+        where: {
+          id: params.itemId,
+          workspaceId: ctx.membership.workspaceId,
+          connectedBy: ctx.session.userId,
+          status: { not: "disconnected" },
+        },
+        select: { id: true },
+      });
+      if (!item) return reply.code(404).send({ error: "not_found" });
+
+      const tier = await effectiveTier(ctx.session.userId);
+      if (tier.plaidItemLimit <= 0) {
+        return reply.code(402).send({ error: "upgrade_required" });
+      }
+
       const r = await syncTransactions(app.fina.env, ctx.membership.workspaceId, params.itemId);
       // Await categorize so the response reflects the final categorized state.
       if ("newTxIds" in r && r.newTxIds.length > 0) {

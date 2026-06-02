@@ -17,33 +17,47 @@ afterAll(() => {
 });
 
 describe("checkBackgroundSyncGate", () => {
-  it("active trial → { ok: true }", async () => {
+  it("active trial with Plaid entitlement → { ok: true }", async () => {
     vi.mocked(effectiveTier).mockResolvedValueOnce({
       tier: "pro",
       source: "trial",
       trialActive: true,
       trialEndsAt: new Date(Date.now() + 86_400_000),
+      plaidItemLimit: 5,
     });
     expect(await checkBackgroundSyncGate("u1")).toEqual({ ok: true });
   });
 
-  it("expired trial → { ok: false, reason: 'trial_expired' }", async () => {
+  it("lite subscription can background sync", async () => {
     vi.mocked(effectiveTier).mockResolvedValueOnce({
-      tier: "free",
-      source: "default",
+      tier: "lite",
+      source: "paid",
       trialActive: false,
-      trialEndsAt: new Date(Date.now() - 1000),  // in the past
+      trialEndsAt: null,
+      plaidItemLimit: 1,
     });
-    expect(await checkBackgroundSyncGate("u2")).toEqual({ ok: false, reason: "trial_expired" });
+    expect(await checkBackgroundSyncGate("u-lite")).toEqual({ ok: true });
   });
 
-  it("no trial ever → { ok: false, reason: 'no_subscription' }", async () => {
+  it("free user cannot background sync", async () => {
     vi.mocked(effectiveTier).mockResolvedValueOnce({
       tier: "free",
       source: "default",
       trialActive: false,
       trialEndsAt: null,
+      plaidItemLimit: 0,
     });
-    expect(await checkBackgroundSyncGate("u3")).toEqual({ ok: false, reason: "no_subscription" });
+    expect(await checkBackgroundSyncGate("u-free")).toEqual({ ok: false, reason: "no_plaid_entitlement" });
+  });
+
+  it("expired trial without Plaid entitlement → { ok: false, reason: 'no_plaid_entitlement' }", async () => {
+    vi.mocked(effectiveTier).mockResolvedValueOnce({
+      tier: "free",
+      source: "default",
+      trialActive: false,
+      trialEndsAt: new Date(Date.now() - 1000),  // in the past
+      plaidItemLimit: 0,
+    });
+    expect(await checkBackgroundSyncGate("u2")).toEqual({ ok: false, reason: "no_plaid_entitlement" });
   });
 });
