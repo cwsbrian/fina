@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
-import { getAnalysis } from "../analysis/service.js";
+import { getAnalysis, getLatestAnalysis } from "../analysis/service.js";
 
 function parseYM(q: { year?: string; month?: string }): { year: number; month: number } | null {
   const now = new Date();
@@ -23,11 +23,11 @@ export async function analysisRoutes(app: FastifyInstance): Promise<void> {
         }
         const ym = parseYM(req.query);
         if (!ym) return reply.code(400).send({ error: "invalid_year_month" });
-        const result = await getAnalysis(
-          ctx.membership.workspaceId,
-          ym.year,
-          ym.month,
-        );
+        const hasExplicitPeriod =
+          req.query.year !== undefined || req.query.month !== undefined;
+        const result = hasExplicitPeriod
+          ? await getAnalysis(ctx.membership.workspaceId, ym.year, ym.month)
+          : await getLatestAnalysis(ctx.membership.workspaceId, ym.year, ym.month);
         return reply.send(result);
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

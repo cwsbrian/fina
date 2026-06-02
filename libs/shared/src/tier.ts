@@ -15,7 +15,7 @@ export function tierAtLeast(actual: Tier, required: Tier): boolean {
 export const TIER_LIMITS: Record<Tier, { plaidItems: number }> = {
   free: { plaidItems: 0 },
   lite: { plaidItems: 1 },
-  pro: { plaidItems: 5 },
+  pro: { plaidItems: 10 },
 };
 
 /** Features gated to Pro tier (chat input, advisor mode, etc.). Lite gets

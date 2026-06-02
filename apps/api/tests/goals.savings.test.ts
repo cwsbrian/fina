@@ -130,7 +130,8 @@ async function spendInCategory(opts: {
   });
 }
 
-// "Today" anchor — 2026-06-15. June=current month → skipped; May, Apr, Mar etc. are eligible.
+// "Today" anchor — 2026-06-15. June=current month and should count
+// month-to-date with prorated caps so goal progress moves daily.
 const TODAY = new Date("2026-06-15T12:00:00.000Z");
 
 describe("computeGoalSavings", () => {
@@ -179,7 +180,7 @@ describe("computeGoalSavings", () => {
     expect(r).toBe(0);
   });
 
-  it("simple May savings: cap 100, spend 70 → 30 (last competitor absorbs)", async () => {
+  it("simple May savings: cap 100, spend 70 → 30", async () => {
     const wsId = await createWorkspace();
     const catId = await createCategory(wsId);
     const goalId = await createGoal({ workspaceId: wsId, createdAt: new Date("2026-05-01T12:00:00Z") });
@@ -193,6 +194,31 @@ describe("computeGoalSavings", () => {
     vi.setSystemTime(TODAY);
     const r = await computeGoalSavings(wsId, goalId);
     expect(r).toBe(30);
+  });
+
+  it("reusing the same asOf gives stable result when data is unchanged", async () => {
+    const wsId = await createWorkspace();
+    const catId = await createCategory(wsId);
+    const asOf = new Date("2026-06-20T12:00:00.000Z");
+    const goalId = await createGoal({
+      workspaceId: wsId,
+      createdAt: new Date("2026-06-01T12:00:00Z"),
+    });
+    await createGoalAllocation({ goalId, categoryId: catId, monthlyAmount: 100 });
+    await createBudgetPlan({
+      workspaceId: wsId,
+      periodStart: firstOfMonth(2026, 6),
+      capsByCategoryId: { [catId]: 120 },
+    });
+    await spendInCategory({
+      workspaceId: wsId,
+      categoryId: catId,
+      amount: 40,
+      occurredAt: new Date("2026-06-10T12:00:00Z"),
+    });
+    const first = await computeGoalSavings(wsId, goalId, { asOf });
+    const second = await computeGoalSavings(wsId, goalId, { asOf });
+    expect(second).toBe(first);
   });
 
   it("multi-month accumulation: 3 prior months × $30/mo → 90", async () => {
@@ -233,10 +259,12 @@ describe("computeGoalSavings", () => {
     });
     vi.setSystemTime(TODAY);
     const r = await computeGoalSavings(wsId, goalId);
-    expect(r).toBe(30);
+    // May contributes 30. June has no snapshot, so the default template
+    // contributes month-to-date: 100 * 14/30 = 46.67.
+    expect(r).toBeCloseTo(76.67, 2);
   });
 
-  it("first-month proration: createdAt May 16 → ratio 16.5/31, cap 53.23", async () => {
+  it("first-month proration: createdAt May 16 → ratio 16.5/31, capped by goal plan 50", async () => {
     const wsId = await createWorkspace();
     const catId = await createCategory(wsId);
     // createdAt May 16 12:00 UTC. createdDay UTC-truncates to May 16 00:00.
@@ -253,14 +281,15 @@ describe("computeGoalSavings", () => {
     });
     // No spending — savings = full prorated cap.
     // Production: 100 * 16.5/31 = 53.2258... → Math.round * 100 / 100 = 53.23.
-    // `toBeCloseTo(N, 2)` instead of `toBe(N)` tolerates rounding-policy refactors
-    // (e.g., banker's rounding, Math.floor) within ±0.005.
+    // Since the goal plan is 50, only 50 is claimable even though prorated
+    // category cap is 53.23 this month.
+    // toBeCloseTo used to tolerate rounding-policy refactors.
     vi.setSystemTime(TODAY);
     const r = await computeGoalSavings(wsId, goalId);
-    expect(r).toBeCloseTo(53.23, 2);
+    expect(r).toBe(50);
   });
 
-  it("createdAt in current month (June 1) → only June in months range → skipped → 0", async () => {
+  it("createdAt in current month (June 1) → credits month-to-date prorated savings", async () => {
     const wsId = await createWorkspace();
     const catId = await createCategory(wsId);
     const goalId = await createGoal({ workspaceId: wsId, createdAt: new Date("2026-06-01T12:00:00Z") });
@@ -270,10 +299,11 @@ describe("computeGoalSavings", () => {
       periodStart: firstOfMonth(2026, 6),
       capsByCategoryId: { [catId]: 100 },
     });
-    // No spending in June
+    // No spending in June. Today is Jun 15 noon, so the eligible cap is
+    // 14 elapsed days out of 30: 100 * 14/30 = 46.67.
     vi.setSystemTime(TODAY);
     const r = await computeGoalSavings(wsId, goalId);
-    expect(r).toBe(0);
+    expect(r).toBeCloseTo(46.67, 2);
   });
 
   it("spend exceeds cap → savings 0 (Math.max(0, ...))", async () => {
@@ -295,7 +325,7 @@ describe("computeGoalSavings", () => {
     expect(r).toBe(0);
   });
 
-  it("two competitors: older (Apr 1) claims min(savings, plan), newer (Apr 2) absorbs rest", async () => {
+  it("two competitors: older (Apr 1) claims up to plan, newer (Apr 2) gets what remains", async () => {
     const wsId = await createWorkspace();
     const catId = await createCategory(wsId);
     // Both goals created in April so May is NOT a first month for either —
@@ -321,7 +351,7 @@ describe("computeGoalSavings", () => {
     expect(await computeGoalSavings(wsId, goalB)).toBe(10);  // remaining 30-20 → B absorbs 10
   });
 
-  it("last competitor absorbs overflow beyond plan: B last takes 50 > B.plan=30", async () => {
+  it("overflow is not assigned when combined plans are too small", async () => {
     const wsId = await createWorkspace();
     const catId = await createCategory(wsId);
     // Both goals created in April so May is NOT a first month → ratio=1 for both.
@@ -340,7 +370,7 @@ describe("computeGoalSavings", () => {
     });
     vi.setSystemTime(TODAY);
     expect(await computeGoalSavings(wsId, goalA)).toBe(30);  // A takes plan
-    expect(await computeGoalSavings(wsId, goalB)).toBe(50);  // B last absorbs 80-30 = 50, > B.plan=30
+    expect(await computeGoalSavings(wsId, goalB)).toBe(30);  // B capped at own plan (30)
   });
 
   it("1 goal + 2 categories in 1 month: cat-X (cap50/spent20=savings30) + cat-Y (cap50/spent30=savings20) → 50", async () => {
@@ -369,7 +399,7 @@ describe("computeGoalSavings", () => {
     expect(r).toBe(50);
   });
 
-  it("rounding stress: non-integer spend → 33.33; competitor split A=20, B last=46.67", async () => {
+  it("rounding stress: non-integer spend → 33.33; split A=20, B=30 (remaining ignored after plan cap)", async () => {
     const wsId = await createWorkspace();
     const catId = await createCategory(wsId);
     // Both goals created in April so May is NOT a first month → ratio=1 for both.
@@ -387,9 +417,28 @@ describe("computeGoalSavings", () => {
       occurredAt: new Date("2026-05-15T12:00:00Z"),
     });
     vi.setSystemTime(TODAY);
-    // savings = 100 - 33.33 = 66.67. A takes min(66.67, 20) = 20. Remaining 46.67. B last absorbs 46.67.
-    // `toBeCloseTo(N, 2)` for B because IEEE 754 of (100 - 33.33 - 20) yields 46.67000000000002.
+    // savings = 100 - 33.33 = 66.67. A takes min(66.67, 20) = 20. Remaining 46.67.
+    // B is capped at its own plan (30), so it gets 30 and the remaining 16.67 stays unassigned.
     expect(await computeGoalSavings(wsId, goalA)).toBe(20);  // integer — toBe safe
-    expect(await computeGoalSavings(wsId, goalB)).toBeCloseTo(46.67, 2);
+    expect(await computeGoalSavings(wsId, goalB)).toBe(30);
+  });
+
+  it("single competitor cannot exceed own plan even if category cap is larger", async () => {
+    const wsId = await createWorkspace();
+    const catId = await createCategory(wsId);
+    const goalId = await createGoal({ workspaceId: wsId, createdAt: new Date("2026-05-01T12:00:00Z") });
+    await createGoalAllocation({ goalId, categoryId: catId, monthlyAmount: 10 });
+    await createBudgetPlan({
+      workspaceId: wsId,
+      periodStart: firstOfMonth(2026, 5),
+      capsByCategoryId: { [catId]: 100 },
+    });
+    await spendInCategory({
+      workspaceId: wsId, categoryId: catId, amount: 10,
+      occurredAt: new Date("2026-05-15T12:00:00Z"),
+    });
+    vi.setSystemTime(TODAY);
+    const r = await computeGoalSavings(wsId, goalId);
+    expect(r).toBe(10);
   });
 });

@@ -946,7 +946,7 @@ describe("Plaid connection limits", () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "pro@x.com", name: "Pro" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    // No items connected — 0/5, well below limit.
+    // No items connected — 0/10, well below limit.
 
     plaidMock.linkTokenCreate.push({ data: { link_token: "lt_ok", expiration: "2099-01-01" } });
     const res = await app.inject({
@@ -959,12 +959,31 @@ describe("Plaid connection limits", () => {
     await app.close();
   });
 
-  it("Pro user at limit (5 items) → POST /exchange → 402 plaid_item_limit_reached", async () => {
+  it("Pro user at the old 5-item cap → POST /link-token → 200", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "oldlimit@x.com", name: "OldLimit" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    for (let i = 0; i < 5; i++) {
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_old_limit_${i}` });
+    }
+
+    plaidMock.linkTokenCreate.push({ data: { link_token: "lt_old_ok", expiration: "2099-01-01" } });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("Pro user at limit (10 items) → POST /exchange → 402 plaid_item_limit_reached", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "atlimit@x.com", name: "AtLimit" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    // Seed 5 active items directly (bypassing exchange) to hit the limit.
-    for (let i = 0; i < 5; i++) {
+    // Seed 10 active items directly (bypassing exchange) to hit the limit.
+    for (let i = 0; i < 10; i++) {
       await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_limit_${i}` });
     }
     plaidMock.itemPublicTokenExchange.push({
@@ -990,15 +1009,15 @@ describe("Plaid connection limits", () => {
 
     expect(res.statusCode).toBe(402);
     expect(res.json().error).toBe("plaid_item_limit_reached");
-    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(5);
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(10);
     await app.close();
   });
 
-  it("Pro user at limit (5 items) → POST /link-token → 402 plaid_item_limit_reached", async () => {
+  it("Pro user at limit (10 items) → POST /link-token → 402 plaid_item_limit_reached", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "atlimit2@x.com", name: "AtLimit2" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    for (let i = 0; i < 5; i++) {
+    for (let i = 0; i < 10; i++) {
       await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_lt_${i}` });
     }
 
@@ -1017,7 +1036,7 @@ describe("Plaid connection limits", () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "disc@x.com", name: "Disc" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    // 3 active + 2 disconnected = 3 effective, below limit of 5.
+    // 3 active + 2 disconnected = 3 effective, below limit of 10.
     for (let i = 0; i < 3; i++) {
       await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_active_${i}` });
     }

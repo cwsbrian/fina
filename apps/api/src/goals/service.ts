@@ -3,6 +3,7 @@ import type { GoalDTO, CreateGoalInput, PatchGoalInput } from "@fina/shared";
 import { prisma } from "../db.js";
 import { requireProTier } from "../auth/tier.js";
 import { computeGoalSavings } from "./savings.js";
+import { serverNow } from "../dev-clock.js";
 
 const goalInclude = {
   allocations: {
@@ -56,6 +57,7 @@ function dateOnly(s: string): Date {
  *  later optimization, not done here. */
 export async function listGoalsWithSavings(
   workspaceId: string,
+  asOf = serverNow(),
 ): Promise<GoalDTO[]> {
   const rows = await prisma.goal.findMany({
     where: { workspaceId, archivedAt: null },
@@ -63,7 +65,9 @@ export async function listGoalsWithSavings(
     include: goalInclude,
   });
   return Promise.all(
-    rows.map(async (g) => toDTO(g, await computeGoalSavings(workspaceId, g.id))),
+    rows.map(async (g) =>
+      toDTO(g, await computeGoalSavings(workspaceId, g.id, { asOf })),
+    ),
   );
 }
 
@@ -71,13 +75,14 @@ export async function listGoalsWithSavings(
 export async function getGoalWithSavings(
   workspaceId: string,
   goalId: string,
+  asOf = serverNow(),
 ): Promise<GoalDTO | null> {
   const row = await prisma.goal.findFirst({
     where: { id: goalId, workspaceId },
     include: goalInclude,
   });
   if (!row) return null;
-  return toDTO(row, await computeGoalSavings(workspaceId, row.id));
+  return toDTO(row, await computeGoalSavings(workspaceId, row.id, { asOf }));
 }
 
 /** Non-archived goals whose title CONTAINS `title` (case-insensitive),

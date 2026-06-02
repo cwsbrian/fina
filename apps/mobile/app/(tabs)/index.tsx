@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -30,6 +30,13 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { ActionItemCard } from "../../src/home/ActionItemCard";
+import {
+  analysisGlanceTitle,
+  shouldShowAnalysisGlance,
+  type HomeAnalysisGlance,
+  parseYearMonthFromAnalysisLabel,
+} from "../../src/home/analysis-glance";
+import { analysisRequestPath } from "../../src/analysis/request";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 
@@ -141,11 +148,7 @@ export default function Home() {
   const [recentTxs, setRecentTxs] = useState<TransactionDTO[] | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [goals, setGoals] = useState<GoalSummary[]>([]);
-  const [analysis, setAnalysis] = useState<{
-    income: number;
-    net: number;
-    prevNet: number | null;
-  } | null>(null);
+  const [analysis, setAnalysis] = useState<HomeAnalysisGlance | null>(null);
   const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
   const [unreadFina, setUnreadFina] = useState(0);
   const [latestUnreadThreadId, setLatestUnreadThreadId] = useState<string | null>(null);
@@ -153,28 +156,35 @@ export default function Home() {
   const [hasGoal, setHasGoal] = useState<boolean | null>(null);
   const [hasChattedState, setHasChattedState] = useState(false);
 
+  const loadRunId = useRef(0);
   const load = useCallback(async () => {
+    const runId = ++loadRunId.current;
     setErr(null);
     try {
       const wsId = await bootstrapActiveWorkspace();
       const meData = await apiFetch<Me>("/me");
+      if (runId !== loadRunId.current) return;
       setMe(meData);
+      const now = new Date();
       if (!wsId) return;
 
       await Promise.all([
         apiFetch<BudgetCurrent>(`/workspaces/${wsId}/budget-plans/current`)
-          .then((r) =>
+          .then((r) => {
+            if (runId !== loadRunId.current) return;
             setBudgetCurrent({
               plan: r.plan,
               totalSpent: r.totalSpent,
               spendByCategory: Array.isArray(r.spendByCategory) ? r.spendByCategory : [],
-            }),
-          )
-          .catch(() =>
-            setBudgetCurrent({ plan: null, totalSpent: "0.00", spendByCategory: [] }),
-          ),
+            });
+          })
+          .catch(() => {
+            if (runId !== loadRunId.current) return;
+            setBudgetCurrent({ plan: null, totalSpent: "0.00", spendByCategory: [] });
+          }),
         apiFetch<{ threads: ChatThreadWithPreview[] }>("/chat/threads")
           .then((r) => {
+            if (runId !== loadRunId.current) return;
             // Latest workspace-less thread = the one the Brief card opens.
             // Threads are returned newest-first by lastMessageAt.
             const unbound = r.threads.find((t) => t.workspaceId === null) ?? null;
@@ -196,59 +206,111 @@ export default function Home() {
             );
           })
           .catch(() => {
+            if (runId !== loadRunId.current) return;
             setLatestUnboundThread(null);
             setUnreadFina(0);
             setLatestUnreadThreadId(null);
             setHasChattedState(false);
           }),
         apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
-          .then((r) => setPlaidItems(r.plaidItems))
-          .catch(() => setPlaidItems([])),
+          .then((r) => {
+            if (runId !== loadRunId.current) return;
+            setPlaidItems(r.plaidItems);
+          })
+          .catch(() => {
+            if (runId !== loadRunId.current) return;
+            setPlaidItems([]);
+          }),
         apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
-          .then((r) => setPendingInvites(r.invites.length))
-          .catch(() => setPendingInvites(0)),
+          .then((r) => {
+            if (runId !== loadRunId.current) return;
+            setPendingInvites(r.invites.length);
+          })
+          .catch(() => {
+            if (runId !== loadRunId.current) return;
+            setPendingInvites(0);
+          }),
         apiFetch<{ goals: GoalSummary[] }>(`/workspaces/${wsId}/goals`)
           .then((r) => {
-            // Surface up to 3 active (non-archived) goals on Home.
-            const active = r.goals
-              .filter((g) => !(g as { archivedAt?: string | null }).archivedAt)
-              .slice(0, 3);
+            if (runId !== loadRunId.current) return;
+            // Surface all active goals for the overall progress card.
+            const active = r.goals.filter(
+              (g) => !(g as { archivedAt?: string | null }).archivedAt,
+            );
             setGoals(active);
             setHasGoal(r.goals.length > 0);
           })
           .catch(() => {
+            if (runId !== loadRunId.current) return;
             setGoals([]);
             setHasGoal(false);
           }),
         apiFetch<{ transactions: unknown[] }>(
           `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
         )
-          .then((r) => setNeedsReviewCount(r.transactions.length))
-          .catch(() => setNeedsReviewCount(0)),
+          .then((r) => {
+            if (runId !== loadRunId.current) return;
+            setNeedsReviewCount(r.transactions.length);
+          })
+          .catch(() => {
+            if (runId !== loadRunId.current) return;
+            setNeedsReviewCount(0);
+          }),
         apiFetch<{ transactions: TransactionDTO[] }>(
           `/workspaces/${wsId}/transactions?limit=3`,
         )
-          .then((r) => setRecentTxs(r.transactions))
-          .catch(() => setRecentTxs([])),
+          .then((r) => {
+            if (runId !== loadRunId.current) return;
+            setRecentTxs(r.transactions);
+          })
+          .catch(() => {
+            if (runId !== loadRunId.current) return;
+            setRecentTxs([]);
+          }),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${wsId}/categories`)
-          .then((r) =>
-            setCategories(Object.fromEntries(r.categories.map((c) => [c.id, c]))),
-          )
-          .catch(() => setCategories({})),
+          .then((r) => {
+            if (runId !== loadRunId.current) return;
+            setCategories(Object.fromEntries(r.categories.map((c) => [c.id, c])));
+          })
+          .catch(() => {
+            if (runId !== loadRunId.current) return;
+            setCategories({});
+          }),
         apiFetch<{
-          current: { income: number; spend: number; net: number };
+          current: {
+            year: number;
+            month: number;
+            label: string;
+            income: number;
+            spend: number;
+            net: number;
+          };
           previous: { net: number } | null;
-        }>(`/workspaces/${wsId}/analysis`)
-          .then((r) =>
+        }>(
+          analysisRequestPath(wsId, {
+            year: now.getFullYear(),
+            month: now.getMonth() + 1,
+          }),
+        )
+          .then((r) => {
+            if (runId !== loadRunId.current) return;
             setAnalysis({
+              year: r.current.year,
+              month: r.current.month,
+              label: r.current.label,
               income: r.current.income,
+              spend: r.current.spend,
               net: r.current.net,
               prevNet: r.previous?.net ?? null,
-            }),
-          )
-          .catch(() => setAnalysis(null)),
+            });
+          })
+          .catch(() => {
+            if (runId !== loadRunId.current) return;
+            setAnalysis(null);
+          }),
       ]);
     } catch (e) {
+      if (runId !== loadRunId.current) return;
       setErr(e instanceof Error ? e.message : String(e));
     }
   }, []);
@@ -321,6 +383,12 @@ export default function Home() {
   const effectiveTier: Tier = me?.trial?.active ? "pro" : (me?.tier ?? "free");
   const canConnectBanks = tierAtLeast(effectiveTier, "lite");
   const canUseGoals = tierAtLeast(effectiveTier, "pro");
+  const goalsSavedTotal = goals.reduce((sum, goal) => sum + Number(goal.savedAmount), 0);
+  const goalsTargetTotal = goals.reduce((sum, goal) => sum + Number(goal.targetAmount), 0);
+  const goalsOverallPct =
+    goalsTargetTotal > 0
+      ? Math.min(100, (goalsSavedTotal / goalsTargetTotal) * 100)
+      : 0;
   // Has the user chatted at least once? See setHasChattedState above.
   const hasChatted = hasChattedState;
 
@@ -617,51 +685,52 @@ export default function Home() {
                   <Text style={styles.eyebrow}>Goals</Text>
                   <Text style={styles.eyebrowAction}>See all →</Text>
                 </View>
-                <View style={styles.goalList}>
-                  {goals.map((g) => {
-                    const saved = Number(g.savedAmount);
-                    const target = Number(g.targetAmount);
-                    const gpct = target > 0 ? Math.min(100, (saved / target) * 100) : 0;
-                    const due = new Date(`${g.dueDate}T12:00:00Z`);
-                    const daysLeft = Math.max(
-                      0,
-                      Math.ceil((due.getTime() - Date.now()) / 86_400_000),
-                    );
-                    return (
-                      <View key={g.id} style={styles.goalRow}>
-                        <View style={styles.goalGlyph}>
-                          <Ionicons name="flag-outline" size={16} color={colors.primary} />
-                        </View>
-                        <View style={{ flex: 1, minWidth: 0 }}>
-                          <View style={styles.goalTitleLine}>
-                            <Text style={styles.goalTitle} numberOfLines={1}>{g.title}</Text>
-                            <Text style={styles.goalAmount}>
-                              {formatMoney(g.savedAmount, CURRENCY).display} / {formatMoney(g.targetAmount, CURRENCY).display}
-                            </Text>
-                          </View>
-                          <View style={styles.goalBarTrack}>
-                            <View style={[styles.goalBarFill, { width: `${gpct}%` }]} />
-                          </View>
-                          <Text style={styles.goalMeta}>
-                            {gpct.toFixed(0)}% saved · {daysLeft} day{daysLeft === 1 ? "" : "s"} left
-                          </Text>
-                        </View>
-                      </View>
-                    );
-                  })}
+                <View style={styles.goalOverallCard}>
+                  <View style={styles.goalOverallTop}>
+                    <View style={styles.goalGlyph}>
+                      <Ionicons name="flag-outline" size={16} color={colors.primary} />
+                    </View>
+                    <Text style={styles.goalOverallCount}>
+                      {goals.length} active goal{goals.length === 1 ? "" : "s"}
+                    </Text>
+                  </View>
+                  <Text style={styles.goalOverallValue}>
+                    {formatMoney(goalsSavedTotal.toFixed(2), CURRENCY).display}
+                  </Text>
+                  <Text style={styles.goalOverallMeta}>
+                    saved toward {formatMoney(goalsTargetTotal.toFixed(2), CURRENCY).display}
+                  </Text>
+                  <View style={styles.goalBarTrack}>
+                    <View style={[styles.goalBarFill, { width: `${goalsOverallPct}%` }]} />
+                  </View>
+                  <Text style={styles.goalMeta}>
+                    {goalsOverallPct.toFixed(0)}% overall progress
+                  </Text>
                 </View>
               </Pressable>
             )}
 
             {/* 5. Glance — Income + Net (from /analysis endpoint).
                 Hide on fresh accounts with no transactions this month. */}
-            {analysis && (analysis.income !== 0 || analysis.net !== 0) && (
+            {shouldShowAnalysisGlance(analysis) && (
               <Pressable
                 style={({ pressed }) => [{ marginTop: space.lg }, pressed && { opacity: 0.85 }]}
-                onPress={() => router.push("/analysis" as never)}
+                onPress={() => {
+                  const fallback = analysis.label ? parseYearMonthFromAnalysisLabel(analysis.label) : null;
+                  const hrefYear = analysis.year ?? fallback?.year;
+                  const hrefMonth = analysis.month ?? fallback?.month;
+                  const href =
+                    hrefYear && hrefMonth
+                      ? ({
+                          pathname: "/analysis",
+                          params: { year: String(hrefYear), month: String(hrefMonth) },
+                        } as const)
+                      : ({ pathname: "/analysis" } as const);
+                  router.push(href as never);
+                }}
               >
                 <View style={styles.eyebrowRow}>
-                  <Text style={styles.eyebrow}>This month</Text>
+                  <Text style={styles.eyebrow}>{analysisGlanceTitle(analysis)}</Text>
                   <Text style={styles.eyebrowAction}>See analysis →</Text>
                 </View>
                 <View style={styles.glanceGrid}>
@@ -1046,15 +1115,16 @@ const styles = StyleSheet.create({
   briefCtaText: { ...type$.captionStrong, color: colors.primary },
 
   // ── Goals summary ─────────────────────────────────────
-  goalList: { gap: space.sm },
-  goalRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: space.sm,
-    paddingVertical: 10,
-    paddingHorizontal: 12,
+  goalOverallCard: {
+    padding: space.base,
     backgroundColor: colors.surfaceSoft,
     borderRadius: 12,
+  },
+  goalOverallTop: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: space.sm,
   },
   goalGlyph: {
     width: 32,
@@ -1064,33 +1134,31 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  goalTitleLine: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-  },
-  goalTitle: {
-    ...type$.bodyMd,
-    color: colors.ink,
-    fontWeight: "600",
-    flex: 1,
-  },
-  goalAmount: {
-    ...type$.caption,
+  goalOverallCount: {
+    ...type$.captionStrong,
     color: colors.muted,
-    fontVariant: ["tabular-nums"],
+  },
+  goalOverallValue: {
+    ...type$.titleLg,
+    color: colors.ink,
+    fontWeight: "700",
+    marginTop: space.sm,
+  },
+  goalOverallMeta: {
+    ...type$.bodySm,
+    color: colors.muted,
+    marginTop: 2,
   },
   goalBarTrack: {
-    height: 4,
-    borderRadius: 2,
+    height: 8,
+    borderRadius: 999,
     backgroundColor: colors.surfaceStrong,
-    marginTop: 6,
+    marginTop: space.sm,
     overflow: "hidden",
   },
   goalBarFill: {
-    height: 4,
-    borderRadius: 2,
+    height: 8,
+    borderRadius: 999,
     backgroundColor: colors.primary,
   },
   goalMeta: {

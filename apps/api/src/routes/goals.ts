@@ -6,6 +6,7 @@ import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { generateAndStoreGoalStrategy } from "../goals/generate-strategy.js";
 import { computeGoalSavings } from "../goals/savings.js";
 import { effectiveTier } from "../auth/tier.js";
+import { logger } from "../logger.js";
 import {
   listGoalsWithSavings,
   getGoalWithSavings,
@@ -81,6 +82,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
+      const asOf = new Date();
       if (includeArchived) {
         const rows = await prisma.goal.findMany({
           where: { workspaceId: ctx.membership.workspaceId },
@@ -89,12 +91,24 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         });
         const goals = await Promise.all(
           rows.map(async (g) =>
-            dto(g, await computeGoalSavings(ctx.membership.workspaceId, g.id)),
+            dto(g, await computeGoalSavings(ctx.membership.workspaceId, g.id, { asOf })),
           ),
         );
         return { goals };
       }
-      const goals = await listGoalsWithSavings(ctx.membership.workspaceId);
+      const goals = await listGoalsWithSavings(ctx.membership.workspaceId, asOf);
+      if (process.env.DEBUG_GOAL_SAVINGS === "1") {
+        logger.info(
+          {
+            action: "listGoalsWithSavings.response",
+            workspaceId: ctx.membership.workspaceId,
+            includeArchived,
+            asOf: asOf.toISOString(),
+            count: goals.length,
+          },
+          "Goal endpoint debug",
+        );
+      }
       return { goals };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
@@ -107,14 +121,28 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       try {
         const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });
-        if (req.params.id !== ctx.membership.workspaceId) {
-          return reply.code(400).send({ error: "workspace_mismatch" });
-        }
-        const goal = await getGoalWithSavings(
+      if (req.params.id !== ctx.membership.workspaceId) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const asOf = new Date();
+      const goal = await getGoalWithSavings(
           ctx.membership.workspaceId,
           req.params.goalId,
+          asOf,
         );
         if (!goal) return reply.code(404).send({ error: "not_found" });
+        if (process.env.DEBUG_GOAL_SAVINGS === "1") {
+          logger.info(
+            {
+              action: "getGoalWithSavings.response",
+              workspaceId: ctx.membership.workspaceId,
+              goalId: req.params.goalId,
+              asOf: asOf.toISOString(),
+              savedAmount: goal.savedAmount,
+            },
+            "Goal endpoint debug",
+          );
+        }
         return { goal };
       } catch (e) {
         if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
@@ -181,6 +209,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
+        const asOf = new Date();
         const tier = await effectiveTier(ctx.session.userId);
         if (tier.tier !== "pro") {
           return reply.code(402).send({ error: "upgrade_required" });
@@ -193,7 +222,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         // Wait for generation to complete (small + bounded) so the
         // caller can refresh once and see the new plan.
         await generateAndStoreGoalStrategy(app.fina.env, row.id);
-        const goal = await getGoalWithSavings(ctx.membership.workspaceId, row.id);
+        const goal = await getGoalWithSavings(ctx.membership.workspaceId, row.id, asOf);
         if (!goal) return reply.code(404).send({ error: "not_found" });
         return reply.code(200).send({ goal });
       } catch (e) {

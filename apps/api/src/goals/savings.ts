@@ -3,6 +3,15 @@ import {
   DEFAULT_PERIOD,
   firstOfMonth,
 } from "../budget-plans/service.js";
+import { serverNow } from "../dev-clock.js";
+import { logger } from "../logger.js";
+
+const DEBUG_GOAL_SAVINGS = process.env.DEBUG_GOAL_SAVINGS === "1";
+
+function debugGoalLog(context: Record<string, unknown>): void {
+  if (!DEBUG_GOAL_SAVINGS) return;
+  logger.info(context, "Goal savings debug");
+}
 
 function monthsBetweenInclusive(
   start: Date,
@@ -39,7 +48,21 @@ async function categorySpendInDateRange(
   workspaceId: string,
   from: Date,
   to: Date,
+  opts?: { asOf?: Date },
 ): Promise<Map<string, number>> {
+  debugGoalLog({
+    action: "categorySpendInDateRange",
+    workspaceId,
+    periodStart: from.toISOString(),
+    periodEnd: to.toISOString(),
+    asOf: opts?.asOf?.toString() ?? null,
+  });
+  // Keep read-window deterministic across retries of the same request.
+  // We intentionally avoid `createdAt/updatedAt` filters here because those
+  // timestamps can be in a different update domain than spend visibility.
+  if (opts?.asOf && Number.isNaN(new Date(opts.asOf).getTime())) {
+    throw new Error("Invalid asOf date passed to categorySpendInDateRange");
+  }
   const rows = await prisma.transactionAllocation.findMany({
     where: {
       amount: { gt: 0 },
@@ -47,6 +70,7 @@ async function categorySpendInDateRange(
       transaction: {
         workspaceId,
         removedAt: null,
+        pending: false,
         occurredAt: { gte: from, lt: to },
         amount: { gt: 0 },
       },
@@ -80,18 +104,31 @@ function readCapsFromAllocations(raw: unknown): Map<string, number> {
  *
  * Multiple goals may target the same category. Allocation order is by
  * `Goal.createdAt` ascending — older goals "claim" first up to their
- * planned monthly cut. The LAST goal in line for a category absorbs
- * any remaining overflow (so a single goal with plan $50 still credits
- * the full $70 you actually saved that month).
+ * planned monthly cut. Any remaining savings after all plans are fully
+ * claimed are unassigned.
  *
  * The displayed savedAmount is the cumulative sum across all months
- * since goal creation. Current month counts in real-time — it can move
- * up or down as new transactions land.
+ * since goal creation. Current month counts month-to-date with prorated
+ * caps — it can move up or down as new transactions land.
  */
 export async function computeGoalSavings(
   workspaceId: string,
   goalId: string,
+  opts?: { asOf?: Date },
 ): Promise<number> {
+  const asOf = opts?.asOf
+    ? new Date(opts.asOf)
+    : serverNow();
+  if (Number.isNaN(asOf.getTime())) {
+    throw new Error("Invalid asOf date passed to computeGoalSavings");
+  }
+  debugGoalLog({
+    action: "computeGoalSavings.start",
+    workspaceId,
+    goalId,
+    asOf: asOf.toISOString(),
+    serverNow: serverNow().toISOString(),
+  });
   const [thisGoal, allAllocations, defaultPlan] = await Promise.all([
     prisma.goal.findUnique({
       where: { id: goalId },
@@ -117,9 +154,20 @@ export async function computeGoalSavings(
   ]);
   if (!thisGoal || thisGoal.workspaceId !== workspaceId) return 0;
 
+  const defaultCap = readCapsFromAllocations(
+    defaultPlan?.categoryAllocations as unknown,
+  );
+
+  debugGoalLog({
+    action: "computeGoalSavings.base",
+    goalCreatedAt: thisGoal.createdAt.toISOString(),
+    allocationCount: allAllocations.length,
+    myCategoryCount: allAllocations.filter((a) => a.goalId === goalId).length,
+    defaultCapCount: defaultCap.size,
+  });
+
   // Build the per-category competitor list, ordered by goal createdAt
-  // ascending. Older goals "claim" first; the last in line absorbs
-  // overflow.
+  // ascending. Older goals "claim" first.
   type Competitor = { goalId: string; plan: number; createdAt: Date };
   const competitorsByCatId = new Map<string, Competitor[]>();
   for (const a of allAllocations) {
@@ -130,7 +178,12 @@ export async function computeGoalSavings(
     competitorsByCatId.set(a.categoryId, arr);
   }
   for (const arr of competitorsByCatId.values()) {
-    arr.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+    // Deterministic tie-breaker avoids nondeterministic allocation when
+    // multiple goals share the same createdAt (DB order is not guaranteed).
+    arr.sort(
+      (a, b) =>
+        a.createdAt.getTime() - b.createdAt.getTime() || a.goalId.localeCompare(b.goalId),
+    );
   }
 
   // The categories THIS goal targets.
@@ -139,11 +192,12 @@ export async function computeGoalSavings(
   );
   if (myCategoryIds.size === 0) return 0;
 
-  const defaultCap = readCapsFromAllocations(
-    defaultPlan?.categoryAllocations as unknown,
+  // Use day precision for goal progress so repeated refreshes during the
+  // same day stay stable (no sub-day flicker), while still advancing
+  // automatically as the day rolls over.
+  const today = new Date(
+    Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate()),
   );
-
-  const today = new Date();
   const months = monthsBetweenInclusive(thisGoal.createdAt, today);
 
   // Normalize the goal's createdAt to a UTC date (drop time-of-day) so
@@ -158,32 +212,37 @@ export async function computeGoalSavings(
 
   let total = 0;
   for (const { year, month } of months) {
-    // Skip the current calendar month entirely — savings only finalize
-    // once the month is complete. Avoids the "I haven't even finished
-    // the month yet but it already says I saved $X" surprise.
-    if (isSameMonth(year, month, today)) continue;
-
-    const monthStart = firstOfMonth(year, month);
-    const monthEnd = firstOfMonth(
-      month === 12 ? year + 1 : year,
-      month === 12 ? 1 : month + 1,
+    // Month plans use the UTC month start, while proration math always uses
+    // explicit midnight UTC boundaries for deterministic day counts.
+    const planMonthStart = firstOfMonth(year, month);
+    const monthStart = new Date(Date.UTC(year, month - 1, 1));
+    const monthEnd = new Date(
+      Date.UTC(
+        month === 12 ? year + 1 : year,
+        month === 12 ? 0 : month,
+        1,
+      ),
     );
+    const isCurrentMonth = isSameMonth(year, month, today);
+    const periodEnd = isCurrentMonth ? today : monthEnd;
 
     // First month is prorated: budget caps and tx spend both clipped
-    // to [createdAt, monthEnd) so pre-goal spending doesn't count and
+    // to [createdAt, periodEnd) so pre-goal spending doesn't count and
     // the cap is only the share of the month the goal existed.
     const isFirstMonth = isSameMonth(year, month, createdDay);
     const periodStart =
       isFirstMonth && createdDay > monthStart ? createdDay : monthStart;
+    if (periodEnd <= periodStart) continue;
     const totalDaysInMonth =
       (monthEnd.getTime() - monthStart.getTime()) / 86_400_000;
     const activeDays =
-      (monthEnd.getTime() - periodStart.getTime()) / 86_400_000;
-    const ratio = isFirstMonth ? activeDays / totalDaysInMonth : 1;
+      (periodEnd.getTime() - periodStart.getTime()) / 86_400_000;
+    const ratio =
+      isFirstMonth || isCurrentMonth ? activeDays / totalDaysInMonth : 1;
 
     const snap = await prisma.budgetPlan.findUnique({
       where: {
-        workspaceId_periodStart: { workspaceId, periodStart: monthStart },
+        workspaceId_periodStart: { workspaceId, periodStart: planMonthStart },
       },
       select: { categoryAllocations: true },
     });
@@ -191,10 +250,25 @@ export async function computeGoalSavings(
       ? readCapsFromAllocations(snap.categoryAllocations as unknown)
       : defaultCap;
 
+    debugGoalLog({
+      action: "computeGoalSavings.monthlyContext",
+      goalId,
+      year,
+      month,
+      isCurrentMonth,
+      isFirstMonth,
+      periodStart: periodStart.toISOString(),
+      periodEnd: periodEnd.toISOString(),
+      ratio,
+      hasPeriodCap: monthCap.size > 0,
+      hasSnap: !!snap,
+    });
+
     const spendByCat = await categorySpendInDateRange(
       workspaceId,
       periodStart,
-      monthEnd,
+      periodEnd,
+      { asOf },
     );
 
     for (const catId of myCategoryIds) {
@@ -204,23 +278,48 @@ export async function computeGoalSavings(
       const savings = Math.max(0, cap - spent);
       if (savings <= 0) continue;
 
+      debugGoalLog({
+        action: "computeGoalSavings.category",
+        goalId,
+        year,
+        month,
+        categoryId: catId,
+        cap,
+        spent,
+        savings,
+      });
+
       const competitors = competitorsByCatId.get(catId) ?? [];
       if (competitors.length === 0) continue;
 
       let remaining = savings;
-      const lastIdx = competitors.length - 1;
-      for (let i = 0; i < competitors.length; i++) {
-        const c = competitors[i]!;
-        const isLast = i === lastIdx;
-        const take = isLast ? remaining : Math.min(remaining, c.plan);
+      for (const c of competitors) {
+        const take = Math.min(remaining, c.plan);
         if (c.goalId === goalId) {
           total += take;
-          break;
         }
         remaining -= take;
+        debugGoalLog({
+          action: "computeGoalSavings.allocation",
+          goalId,
+          year,
+          month,
+          categoryId: catId,
+          receiverGoal: c.goalId,
+          plan: c.plan,
+          take,
+          remaining,
+        });
         if (remaining <= 0) break;
       }
     }
   }
-  return Math.round(total * 100) / 100;
+  const rounded = Math.round(total * 100) / 100;
+  debugGoalLog({
+    action: "computeGoalSavings.end",
+    goalId,
+    total,
+    rounded,
+  });
+  return rounded;
 }

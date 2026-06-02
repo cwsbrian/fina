@@ -26,9 +26,6 @@ function report(e: unknown) {
 export async function signInWithGoogle(): Promise<void> {
   try {
     const callbackURL = Linking.createURL("/");
-    console.log("[auth] google sign-in pressed", {
-      callbackURL,
-    });
     const res = await signIn.social({
       provider: "google",
       callbackURL,

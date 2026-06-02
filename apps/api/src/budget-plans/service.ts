@@ -5,7 +5,7 @@ import { serverNow } from "../dev-clock.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
-export const DEFAULT_PERIOD = new Date("1900-01-01T12:00:00.000Z");
+export const DEFAULT_PERIOD = new Date("1900-01-01T00:00:00.000Z");
 
 export type CategoryAllocation = { categoryId: string; amount: number };
 
@@ -44,10 +44,8 @@ function row(r: {
 }
 
 export function firstOfMonth(year: number, month1to12: number): Date {
-  // UTC noon, same convention as transactions.parseOccurredAt.
-  return new Date(
-    `${year}-${String(month1to12).padStart(2, "0")}-01T12:00:00.000Z`,
-  );
+  // Midnight UTC for date-only month keys and deterministic month bucketing.
+  return new Date(Date.UTC(year, month1to12 - 1, 1));
 }
 
 /** Upper bound for "spend so far this month" — capped at the (possibly
@@ -62,7 +60,7 @@ function spendUpperBound(to: Date): Date {
 }
 
 /** [from, to) midnight-UTC bounds for a calendar month. Use this (NOT
- *  firstOfMonth, which is UTC-noon) when filtering @db.Date columns
+ *  ad-hoc manual offsets) when filtering @db.Date columns
  *  (scheduledDate, nextOccurrenceDate) so items dated the 1st land in the
  *  correct month. Date.UTC rolls Dec→Jan over automatically. */
 function monthBoundsUtc(year: number, month1to12: number): { from: Date; to: Date } {
@@ -639,9 +637,9 @@ export async function recentDiscretionaryDailyByCategory(
  *  returns a flat categoryId -> amount map.
  *
  *  NOTE: RecurringExpense.nextOccurrenceDate is stored as @db.Date and comes
- *  back from Prisma as midnight UTC (T00:00:00Z). firstOfMonth uses noon UTC
- *  (T12:00:00Z), so we compute `to` as first-of-next-month at midnight to
- *  correctly exclude occurrences that land exactly on the month boundary. */
+ *  back from Prisma as midnight UTC (T00:00:00Z), so we compute `to` as
+ *  first-of-next-month at midnight to correctly exclude occurrences that land
+ *  exactly on the month boundary. */
 export async function monthlySubscriptionByCategory(
   workspaceId: string,
   year: number,

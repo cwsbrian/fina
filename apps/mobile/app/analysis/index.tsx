@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,7 +10,7 @@ import {
   useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Stack, router } from "expo-router";
+import { Stack, router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Circle, G, Line, Rect, Text as SvgText } from "react-native-svg";
 import type { CategoryDTO } from "@fina/shared";
@@ -21,6 +21,10 @@ import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 import { MonthPickerSheet } from "../../src/datetime/MonthPickerSheet";
+import {
+  analysisRequestPath,
+  type AnalysisPeriod,
+} from "../../src/analysis/request";
 
 type CategorySpend = {
   categoryId: string;
@@ -54,9 +58,25 @@ type AnalysisResp = {
   monthlyHistory: CashflowPoint[];
 };
 
+type PeriodQuery = {
+  year?: string | string[];
+  month?: string | string[];
+};
+
+function toInt(v: string | string[] | undefined): number | null {
+  if (Array.isArray(v)) v = v[0];
+  if (!v) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+type PeriodState = {
+  period: AnalysisPeriod | null;
+};
+
 function nowYM(): { year: number; month: number } {
   const d = new Date();
-  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
+  return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
 function prevYM(year: number, month: number): { year: number; month: number } {
@@ -98,26 +118,51 @@ function withUncategorized(month: MonthAnalysis | null): CategorySpend[] {
 }
 
 export default function AnalysisScreen() {
-  const [{ year, month }, setYM] = useState(() => nowYM());
+  const params = useLocalSearchParams<PeriodQuery>();
+  const initialPeriod = useMemo(() => {
+    const year = toInt(params.year);
+    const month = toInt(params.month);
+    if (!year || !month) return { period: nowYM() };
+    if (year < 1970 || year > 2100 || month < 1 || month > 12) {
+      return { period: nowYM() };
+    }
+    return { period: { year, month } };
+  }, [params.year, params.month]);
+
+  const [periodState, setPeriodState] = useState<PeriodState>({ period: null });
   const [data, setData] = useState<AnalysisResp | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const latestRequest = useRef(0);
+
+  const requestedPeriod =
+    periodState && typeof periodState === "object" && "period" in periodState
+      ? periodState.period
+      : null;
+
+  useEffect(() => {
+    setPeriodState(initialPeriod);
+  }, [initialPeriod]);
 
   const load = useCallback(async () => {
+    const requestId = latestRequest.current + 1;
+    latestRequest.current = requestId;
     try {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
       const r = await apiFetch<AnalysisResp>(
-        `/workspaces/${wsId}/analysis?year=${year}&month=${month}`,
+        analysisRequestPath(wsId, requestedPeriod),
       );
+      if (requestId !== latestRequest.current) return;
       setData(r);
       setErr(null);
     } catch (e) {
+      if (requestId !== latestRequest.current) return;
       setErr((e as { code?: string }).code ?? "load_error");
     }
-  }, [year, month]);
+  }, [requestedPeriod]);
 
   useEffect(() => {
     setData(null);
@@ -159,14 +204,22 @@ export default function AnalysisScreen() {
         ) : (
           <>
             <MonthStepper
-              year={year}
-              month={month}
-              onPrev={() => setYM(prevYM(year, month))}
+              year={data.current.year}
+              month={data.current.month}
+              label={data.current.label}
+              onPrev={() =>
+                setPeriodState({ period: prevYM(data.current.year, data.current.month) })
+              }
               onNext={() => {
-                const n = nextYM(year, month);
-                if (!isFutureMonth(n.year, n.month)) setYM(n);
+                const n = nextYM(data.current.year, data.current.month);
+                if (!isFutureMonth(n.year, n.month)) setPeriodState({ period: n });
               }}
-              canGoNext={!isFutureMonth(nextYM(year, month).year, nextYM(year, month).month)}
+              canGoNext={
+                !isFutureMonth(
+                  nextYM(data.current.year, data.current.month).year,
+                  nextYM(data.current.year, data.current.month).month,
+                )
+              }
             />
             <CashflowCard analysis={data.current} history={data.monthlyHistory} />
             <SectionLabel>Where it went</SectionLabel>
@@ -180,19 +233,19 @@ export default function AnalysisScreen() {
             <CompareList
               current={withUncategorized(data.current)}
               previous={withUncategorized(data.previous)}
-              year={year}
-              month={month}
+              year={data.current.year}
+              month={data.current.month}
             />
           </>
         )}
       </ScrollView>
       <MonthPickerSheet
         visible={pickerOpen}
-        year={year}
-        month={month}
+        year={data?.current.year ?? requestedPeriod?.year ?? nowYM().year}
+        month={data?.current.month ?? requestedPeriod?.month ?? nowYM().month}
         onClose={() => setPickerOpen(false)}
         onConfirm={(y, m) => {
-          setYM({ year: y, month: m });
+          setPeriodState({ period: { year: y, month: m } });
           setPickerOpen(false);
         }}
       />
@@ -227,20 +280,18 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 function MonthStepper({
   year,
   month,
+  label,
   onPrev,
   onNext,
   canGoNext,
 }: {
   year: number;
   month: number;
+  label: string;
   onPrev: () => void;
   onNext: () => void;
   canGoNext: boolean;
 }) {
-  const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString(
-    undefined,
-    { month: "long", year: "numeric" },
-  );
   return (
     <View style={styles.stepper}>
       <Pressable

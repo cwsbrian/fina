@@ -1,5 +1,4 @@
 import { prisma } from "../db.js";
-import { firstOfMonth } from "../budget-plans/service.js";
 
 export type CategorySpend = {
   categoryId: string;
@@ -49,11 +48,8 @@ const MONTH_LONG = [
 ];
 
 function monthRange(year: number, month1to12: number): { from: Date; to: Date } {
-  const from = firstOfMonth(year, month1to12);
-  const to = firstOfMonth(
-    month1to12 === 12 ? year + 1 : year,
-    month1to12 === 12 ? 1 : month1to12 + 1,
-  );
+  const from = new Date(Date.UTC(year, month1to12 - 1, 1));
+  const to = new Date(Date.UTC(year, month1to12, 1));
   return { from, to };
 }
 
@@ -210,4 +206,22 @@ export async function getAnalysis(
     previous: previousHasData ? previous : null,
     monthlyHistory,
   };
+}
+
+export async function getLatestAnalysis(
+  workspaceId: string,
+  fallbackYear: number,
+  fallbackMonth: number,
+): Promise<AnalysisResult> {
+  const latest = await prisma.transaction.findFirst({
+    where: { workspaceId, removedAt: null },
+    orderBy: { occurredAt: "desc" },
+    select: { occurredAt: true },
+  });
+  if (!latest) return getAnalysis(workspaceId, fallbackYear, fallbackMonth);
+  return getAnalysis(
+    workspaceId,
+    latest.occurredAt.getUTCFullYear(),
+    latest.occurredAt.getUTCMonth() + 1,
+  );
 }

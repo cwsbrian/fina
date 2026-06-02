@@ -9,6 +9,27 @@ import { type MeDTO as Me } from "@fina/shared";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
+function planDetails(tier: LocalProduct["tier"]): { subtitle: string; bullets: string[] } {
+  if (tier === "pro") {
+    return {
+      subtitle: "For multiple accounts and active planning.",
+      bullets: [
+        "Up to 10 connected Plaid items",
+        "Fina chat, daily brief, and proactive insights",
+        "Goals and saving strategy",
+      ],
+    };
+  }
+  return {
+    subtitle: "For one connected bank and simple tracking.",
+    bullets: [
+      "1 connected Plaid item",
+      "Transactions, categories, and review queue",
+      "Budget and spending overview",
+    ],
+  };
+}
+
 export default function PlanPicker() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
@@ -90,37 +111,48 @@ export default function PlanPicker() {
             </Pressable>
           </View>
         ) : (
-          products.map((p) => (
-            <Pressable
-              key={p.productId}
-              onPress={() => onSubscribe(p)}
-              disabled={busy !== null}
-              style={{
-                padding: 20,
-                borderRadius: 12,
-                backgroundColor: colors.canvas,
-                borderWidth: 1,
-                borderColor: colors.hairline,
-              }}
-            >
-              <Text
-                style={{ fontSize: 18, fontWeight: "700", color: colors.ink }}
+          products.map((p) => {
+            const details = planDetails(p.tier);
+            return (
+              <Pressable
+                key={p.productId}
+                onPress={() => onSubscribe(p)}
+                disabled={busy !== null}
+                style={{
+                  padding: 20,
+                  borderRadius: 12,
+                  backgroundColor: colors.canvas,
+                  borderWidth: 1,
+                  borderColor: colors.hairline,
+                }}
               >
-                {p.localizedTitle}
-              </Text>
-              <Text style={{ marginTop: 4, color: colors.muted }}>
-                {p.tier === "pro" ? "Unlimited" : "Lite"}
-              </Text>
-              <Text
-                style={{ marginTop: 12, fontSize: 22, fontWeight: "700", color: colors.ink }}
-              >
-                {p.localizedPrice}
-              </Text>
-              {busy === p.productId && (
-                <ActivityIndicator style={{ marginTop: 8 }} />
-              )}
-            </Pressable>
-          ))
+                <Text
+                  style={{ fontSize: 18, fontWeight: "700", color: colors.ink }}
+                >
+                  {p.localizedTitle}
+                </Text>
+                <Text style={{ marginTop: 4, color: colors.muted }}>
+                  {details.subtitle}
+                </Text>
+                <View style={{ gap: 8, marginTop: 14 }}>
+                  {details.bullets.map((line) => (
+                    <View key={line} style={{ flexDirection: "row", gap: 8 }}>
+                      <Text style={{ color: colors.primary, fontWeight: "700" }}>•</Text>
+                      <Text style={{ flex: 1, color: colors.body }}>{line}</Text>
+                    </View>
+                  ))}
+                </View>
+                <Text
+                  style={{ marginTop: 14, fontSize: 22, fontWeight: "700", color: colors.ink }}
+                >
+                  {p.localizedPrice}
+                </Text>
+                {busy === p.productId && (
+                  <ActivityIndicator style={{ marginTop: 8 }} />
+                )}
+              </Pressable>
+            );
+          })
         )}
       </ScrollView>
     );

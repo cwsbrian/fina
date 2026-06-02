@@ -315,6 +315,68 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(res.json().error).toBe("cannot_split_pending");
   });
 
+  it("PATCH categoryId on pending Plaid applies selected and same-merchant review rows immediately", async () => {
+    const { cookie, wsId } = await setupEditor("ep-pending-cat@t.co");
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Plaid", type: "depository" },
+    });
+    const oldCat = await prisma.category.create({ data: { workspaceId: wsId, name: "Old Review Cat" } });
+    const newCat = await prisma.category.create({ data: { workspaceId: wsId, name: "New Review Cat" } });
+    const selected = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidTransactionId: "p_ep_pending_cat",
+        amount: "10", merchantRaw: "APPLE.COM/BILL", merchantNormalized: "apple",
+        occurredAt: new Date(), pending: true, source: "plaid", rawData: {},
+        allocations: { create: { amount: "10", categoryId: oldCat.id, source: "ai", needsConfirmation: true } },
+      },
+    });
+    const sibling = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidTransactionId: "p_ep_pending_cat_sibling",
+        amount: "6", merchantRaw: "Apple Services", merchantNormalized: "apple",
+        occurredAt: new Date(), pending: true, source: "plaid", rawData: {},
+        allocations: { create: { amount: "6", categoryId: oldCat.id, source: "ai", needsConfirmation: true } },
+      },
+    });
+    const otherMerchant = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidTransactionId: "p_ep_pending_cat_other",
+        amount: "7", merchantRaw: "Netflix", merchantNormalized: "netflix",
+        occurredAt: new Date(), pending: true, source: "plaid", rawData: {},
+        allocations: { create: { amount: "7", categoryId: oldCat.id, source: "ai", needsConfirmation: true } },
+      },
+    });
+
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${selected.id}`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ categoryId: newCat.id }),
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().transaction.allocations[0].categoryId).toBe(newCat.id);
+    expect(res.json().affectedTransactionIds.sort()).toEqual([selected.id, sibling.id].sort());
+
+    const siblingAlloc = await prisma.transactionAllocation.findFirstOrThrow({
+      where: { transactionId: sibling.id },
+    });
+    expect(siblingAlloc.categoryId).toBe(newCat.id);
+    expect(siblingAlloc.source).toBe("manual");
+    expect(siblingAlloc.needsConfirmation).toBe(false);
+
+    const otherAlloc = await prisma.transactionAllocation.findFirstOrThrow({
+      where: { transactionId: otherMerchant.id },
+    });
+    expect(otherAlloc.categoryId).toBe(oldCat.id);
+
+    const mapping = await prisma.merchantMapping.findUniqueOrThrow({
+      where: { workspaceId_merchantNormalized: { workspaceId: wsId, merchantNormalized: "apple" } },
+    });
+    expect(mapping.categoryId).toBe(newCat.id);
+    expect(mapping.source).toBe("manual");
+  });
+
   it("PATCH with no body returns 200 (empty input)", async () => {
     const { cookie, wsId } = await setupEditor("ep-nobody@t.co");
     const txId = await seedManual(cookie, wsId);

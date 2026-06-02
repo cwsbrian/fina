@@ -57,6 +57,7 @@ export type EditTxResult = {
       source: "manual" | "mapping" | "ai" | null;
     }>;
   };
+  affectedTransactionIds: string[];
 };
 
 export type EditTxErrorCode =
@@ -180,9 +181,11 @@ export async function editTransactionService(
 
     if (row.removedAt !== null) throw new EditTxError("already_removed");
 
-    // 4c. cannot_split_pending gate.
-    const willWriteAllocations = flags.categoryIdProvided || flags.allocationsProvided;
-    if (willWriteAllocations && row.pending === true && row.plaidTransactionId !== null) {
+    // 4c. cannot_split_pending gate. Full split replacement stays blocked
+    // for pending Plaid rows, but the single-category shortcut is safe:
+    // it preserves the transaction amount and only replaces the one visible
+    // allocation category.
+    if (flags.allocationsProvided && row.pending === true && row.plaidTransactionId !== null) {
       throw new EditTxError("cannot_split_pending");
     }
 
@@ -205,6 +208,8 @@ export async function editTransactionService(
     if (trimmedMerchant !== undefined) {
       data.merchantRaw = trimmedMerchant;
       data.merchantNormalized = normalizeMerchant(trimmedMerchant);
+    } else if (flags.categoryIdProvided && row.merchantNormalized === null) {
+      data.merchantNormalized = normalizeMerchant(row.merchantRaw);
     }
     if (parsedOccurredAt !== undefined) data.occurredAt = parsedOccurredAt;
     if (noteProvided) data.note = normalizedNote;
@@ -263,12 +268,85 @@ export async function editTransactionService(
       });
     }
 
+    const affectedTransactionIds = [txId];
+    const merchantNormalized =
+      (typeof data.merchantNormalized === "string"
+        ? data.merchantNormalized
+        : row.merchantNormalized ?? normalizeMerchant(row.merchantRaw)
+      ).trim();
+
+    if (flags.categoryIdProvided && input.categoryId && merchantNormalized.length > 0) {
+      await tx.merchantMapping.upsert({
+        where: {
+          workspaceId_merchantNormalized: {
+            workspaceId: ctx.workspaceId,
+            merchantNormalized,
+          },
+        },
+        create: {
+          workspaceId: ctx.workspaceId,
+          merchantNormalized,
+          categoryId: input.categoryId,
+          source: "manual",
+          confidence: 1.0,
+        },
+        update: {
+          categoryId: input.categoryId,
+          source: "manual",
+          confidence: 1.0,
+        },
+      });
+
+      const reviewSiblings = await tx.transaction.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          id: { not: txId },
+          merchantNormalized,
+          removedAt: null,
+          allocations: {
+            some: {
+              needsConfirmation: true,
+              categoryId: { not: null },
+              OR: [
+                { dismissedUntil: null },
+                { dismissedUntil: { lt: new Date() } },
+              ],
+            },
+          },
+        },
+        select: {
+          id: true,
+          allocations: { select: { id: true }, orderBy: { createdAt: "asc" } },
+        },
+      });
+
+      for (const sibling of reviewSiblings) {
+        if (sibling.allocations.length !== 1) continue;
+        const alloc = sibling.allocations[0]!;
+        const updated = await tx.transactionAllocation.updateMany({
+          where: { id: alloc.id },
+          data: {
+            categoryId: input.categoryId,
+            source: "manual",
+            needsConfirmation: false,
+            dismissedUntil: null,
+          },
+        });
+        if (updated.count > 0) {
+          affectedTransactionIds.push(sibling.id);
+        }
+      }
+    }
+
     // 5. Read back with allocations for response.
     const finalRow = await tx.transaction.findUniqueOrThrow({
       where: { id: txId },
       select: TX_SELECT,
     });
-    return { transaction: shape(finalRow, workspace.currency) };
+    return {
+      transaction: shape(finalRow, workspace.currency),
+      affectedTransactionIds,
+    };
   });
 
   // Per-allocation auto-promote trigger (best-effort, post-commit).

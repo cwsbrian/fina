@@ -23,7 +23,7 @@ describe("checkBackgroundSyncGate", () => {
       source: "trial",
       trialActive: true,
       trialEndsAt: new Date(Date.now() + 86_400_000),
-      plaidItemLimit: 5,
+      plaidItemLimit: 10,
     });
     expect(await checkBackgroundSyncGate("u1")).toEqual({ ok: true });
   });

@@ -67,9 +67,9 @@ describe("requireProTier / effectiveTier", () => {
 });
 
 describe("computeEffectiveTier — plaidItemLimit", () => {
-  it("active trial → plaidItemLimit: 5", () => {
+  it("active trial → plaidItemLimit: 10", () => {
     const t = computeEffectiveTier({ trialEndsAt: new Date(Date.now() + 86_400_000) });
-    expect(t.plaidItemLimit).toBe(5);
+    expect(t.plaidItemLimit).toBe(10);
   });
 
   it("expired trial → plaidItemLimit: 0", () => {
@@ -91,12 +91,12 @@ describe("computeEffectiveTier — plaidItemLimit", () => {
     expect(t.plaidItemLimit).toBe(1);
   });
 
-  it("paid pro subscription -> plaidItemLimit: 5", () => {
+  it("paid pro subscription -> plaidItemLimit: 10", () => {
     const t = computeEffectiveTier(
       { trialEndsAt: null },
       [{ tier: "pro" }],
     );
     expect(t.tier).toBe("pro");
-    expect(t.plaidItemLimit).toBe(5);
+    expect(t.plaidItemLimit).toBe(10);
   });
 });

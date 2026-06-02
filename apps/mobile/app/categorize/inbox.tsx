@@ -99,7 +99,6 @@ export default function CategorizeInbox() {
 
   const empty = data.txs.length === 0;
   const cancelLabel = data.mode === "auto" ? "Dismiss" : "Skip";
-  const cancelHelper = data.mode === "auto" ? "Won't show again" : "Will show again next time";
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -178,10 +177,11 @@ export default function CategorizeInbox() {
         selectedId={pickerSelectedId}
         categoryType={pickerType}
         onClose={() => setPickerTxId(null)}
-        onChange={() => {
+        onChange={(affectedTransactionIds) => {
           setPickerTxId(null);
           if (data && pickerTxId) {
-            setData({ ...data, txs: data.txs.filter((t) => t.id !== pickerTxId) });
+            const affected = new Set(affectedTransactionIds ?? [pickerTxId]);
+            setData({ ...data, txs: data.txs.filter((t) => !affected.has(t.id)) });
           }
         }}
       />

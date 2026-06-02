@@ -4,7 +4,7 @@ import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { editTransactionService, EditTxError } from "../src/transactions/edit.js";
+import { editTransactionService } from "../src/transactions/edit.js";
 import { createManualTransactionService } from "../src/transactions/create-manual.js";
 import { testEnv } from "./helpers/test-env.js";
 
@@ -322,6 +322,32 @@ describe("editTransactionService", () => {
         { allocationsProvided: true, manualOnlyFieldProvided: false, categoryIdProvided: false },
       ),
     ).rejects.toMatchObject({ code: "cannot_split_pending" });
+  });
+
+  it("pending Plaid tx accepts categoryId shortcut and writes one manual allocation", async () => {
+    const { wsId } = await setupEditor("ea-pending-category@t.co");
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Plaid", type: "depository" },
+    });
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidTransactionId: "p_pending_category",
+        amount: "10", merchantRaw: "X", merchantNormalized: "x",
+        occurredAt: new Date(), pending: true, source: "plaid", rawData: {},
+      },
+    });
+    const cat = await prisma.category.create({ data: { workspaceId: wsId, name: "Cat-pending-category" } });
+
+    const r = await editTransactionService(
+      { workspaceId: wsId },
+      tx.id,
+      { categoryId: cat.id },
+      { categoryIdProvided: true, manualOnlyFieldProvided: false, allocationsProvided: false },
+    );
+
+    expect(r.transaction.allocations).toHaveLength(1);
+    expect(r.transaction.allocations[0]!.categoryId).toBe(cat.id);
+    expect(r.transaction.allocations[0]!.source).toBe("manual");
   });
 
   it("Plaid posted tx accepts allocations-only PATCH", async () => {

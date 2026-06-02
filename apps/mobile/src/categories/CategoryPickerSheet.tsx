@@ -42,7 +42,7 @@ type Props = {
   onClose: () => void;
   /** Patch mode (txId set): fires after a successful PATCH so the
    *  parent can refresh. The sheet dismisses itself. */
-  onChange?: () => void;
+  onChange?: (affectedTransactionIds?: string[]) => void;
   /** Select mode (no txId): fires with the chosen category (or null
    *  for Uncategorized). The sheet dismisses itself. */
   onSelect?: (cat: CategoryDTO | null) => void;
@@ -180,12 +180,15 @@ export function CategoryPickerSheet({
     try {
       const wsId = await getActiveWorkspaceId();
       if (!wsId) throw new Error("no_workspace");
-      await apiFetch(`/workspaces/${wsId}/transactions/${txId}`, {
+      const result = await apiFetch<{ affectedTransactionIds?: string[] }>(
+        `/workspaces/${wsId}/transactions/${txId}`,
+        {
         method: "PATCH",
         body: JSON.stringify({ categoryId: cat?.id ?? null }),
-      });
+        },
+      );
       ref.current?.close();
-      onChange?.();
+      onChange?.(result.affectedTransactionIds ?? [txId]);
     } catch (e) {
       setSaving(null);
       Alert.alert(
