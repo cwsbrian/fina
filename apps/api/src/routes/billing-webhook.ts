@@ -66,6 +66,13 @@ async function resolveUserIdByCustomer(customerId: string): Promise<string | nul
   return user?.id ?? null;
 }
 
+async function reconcilePlaidItemsForWebhook(app: FastifyInstance, userId: string): Promise<void> {
+  const result = await reconcilePlaidItemsForUser(app.fina.env, userId);
+  if (result.failed.length > 0) {
+    throw new Error(`plaid reconciliation failed for ${result.failed.length} item(s)`);
+  }
+}
+
 async function handleEvent(app: FastifyInstance, event: Stripe.Event): Promise<void> {
   switch (event.type) {
     case "checkout.session.completed": {
@@ -85,7 +92,7 @@ async function handleEvent(app: FastifyInstance, event: Stripe.Event): Promise<v
       if (sess.subscription) {
         const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
         const synced = await syncSubscriptionFromStripe(app.fina.env, subId, userId, app.log);
-        if (synced) await reconcilePlaidItemsForUser(app.fina.env, userId);
+        if (synced) await reconcilePlaidItemsForWebhook(app, userId);
       }
       return;
     }
@@ -100,7 +107,7 @@ async function handleEvent(app: FastifyInstance, event: Stripe.Event): Promise<v
         return;
       }
       const synced = await syncSubscriptionFromStripe(app.fina.env, sub.id, userId, app.log);
-      if (synced) await reconcilePlaidItemsForUser(app.fina.env, userId);
+      if (synced) await reconcilePlaidItemsForWebhook(app, userId);
       return;
     }
     case "invoice.payment_failed":

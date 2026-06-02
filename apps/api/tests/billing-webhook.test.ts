@@ -289,5 +289,36 @@ describe("POST /webhooks/stripe — event dispatch", () => {
     expect(res.statusCode).toBe(200);
     const stored = await prisma.subscription.count();
     expect(stored).toBe(0);
+    expect(reconcilePlaidItemsForUser).not.toHaveBeenCalled();
+  });
+
+  it("reconciliation cleanup failure returns 500 and does not record webhook event", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "w6@example.com", name: "W Six" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { stripeCustomerId: "cus_w6" },
+    });
+    stripe.fns.subsRetrieve.mockResolvedValue(fakeStripeSub({ id: "sub_w6", customer: "cus_w6" }));
+    vi.mocked(reconcilePlaidItemsForUser).mockResolvedValueOnce({
+      kept: [],
+      disconnected: [],
+      failed: [{ id: "plaid-failed", error: new Error("cleanup failed") }],
+    });
+
+    const { rawBody, signature } = signedEvent({
+      id: "evt_w6",
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_w6", customer: "cus_w6" } },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/stripe",
+      headers: { "content-type": "application/json", "stripe-signature": signature },
+      payload: rawBody,
+    });
+
+    expect(res.statusCode).toBe(500);
+    await expect(prisma.webhookEvent.count({ where: { id: "evt_w6" } })).resolves.toBe(0);
   });
 });

@@ -18,6 +18,7 @@ const CRON_NAME = "daily-refresh";
 
 export async function runDailyRefresh(env: Env): Promise<void> {
   // ── Step 0: refresh provider billing state, then reconcile by user ──────
+  const safeUserIds = new Set<string>();
   const unsafeUserIds = new Set<string>();
   const owners = await prisma.plaidItem.findMany({
     where: {
@@ -44,6 +45,7 @@ export async function runDailyRefresh(env: Env): Promise<void> {
     try {
       const result = await reconcilePlaidItemsForUser(env, userId);
       if (result.failed.length > 0) unsafeUserIds.add(userId);
+      else safeUserIds.add(userId);
     } catch (e) {
       unsafeUserIds.add(userId);
       logError(
@@ -59,16 +61,16 @@ export async function runDailyRefresh(env: Env): Promise<void> {
   // ── existing active-items sync loop (fresh query — Step 0's disconnected
   //    items are excluded by status:'active' filter below) ─────────────────
 
-  const items = await prisma.plaidItem.findMany({
-    where: {
-      status: "active",
-      connectedBy: {
-        not: null,
-        ...(unsafeUserIds.size > 0 ? { notIn: Array.from(unsafeUserIds) } : {}),
+  const safeUserIdList = Array.from(safeUserIds).filter((userId) => !unsafeUserIds.has(userId));
+  const items = safeUserIdList.length === 0
+    ? []
+    : await prisma.plaidItem.findMany({
+      where: {
+        status: "active",
+        connectedBy: { in: safeUserIdList },
       },
-    },
-    select: { id: true, workspaceId: true, connectedBy: true },
-  });
+      select: { id: true, workspaceId: true, connectedBy: true },
+    });
 
   const t0 = Date.now();
   let synced = 0, gated = 0, failed = 0, lockHeld = 0;

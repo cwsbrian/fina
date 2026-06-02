@@ -11,6 +11,7 @@ import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
 import { requireAppleIapEnv, requireGoogleIapEnv } from "../iap/env-guard.js";
 import { AppleClient } from "../iap/apple-client.js";
 import { GoogleClient } from "../iap/google-client.js";
+import { filterEnvironmentRows } from "../billing/precedence.js";
 
 export type ReconcileResult = {
   kept: string[];
@@ -26,6 +27,10 @@ const refreshableIapStatuses: SubscriptionStatus[] = [
   "paused",
   "incomplete",
 ];
+
+function runtimeBillingEnv(): "sandbox" | "production" {
+  return process.env.APPLE_ENV === "production" ? "production" : "sandbox";
+}
 
 export async function refreshBillingStateForUser(env: Env, userId: string): Promise<void> {
   const user = await prisma.user.findUniqueOrThrow({
@@ -55,13 +60,15 @@ export async function refreshBillingStateForUser(env: Env, userId: string): Prom
       id: true,
       source: true,
       sourceSubscriptionId: true,
+      environment: true,
     },
   });
+  const refreshableIapRows = filterEnvironmentRows(iapRows, runtimeBillingEnv());
 
   let appleClient: AppleClient | null = null;
   let googleClient: GoogleClient | null = null;
 
-  for (const row of iapRows) {
+  for (const row of refreshableIapRows) {
     if (row.source === "iap_apple") {
       appleClient ??= new AppleClient(requireAppleIapEnv(process.env));
       const status = await appleClient.getSubscriptionStatus(row.sourceSubscriptionId);
@@ -148,24 +155,37 @@ export async function reconcilePlaidItemsForUser(env: Env, userId: string): Prom
   return result;
 }
 
-export async function reconcileOrphanPlaidItems(env: Env): Promise<ReconcileResult> {
+export async function reconcileOrphanPlaidItems(_env: Env): Promise<ReconcileResult> {
   const rows = await prisma.plaidItem.findMany({
     where: {
       connectedBy: null,
       status: { in: billableStatuses },
     },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: { id: true, workspaceId: true },
+    select: {
+      id: true,
+      workspaceId: true,
+      workspace: {
+        select: {
+          memberships: {
+            where: { role: "owner" },
+            select: { userId: true },
+          },
+        },
+      },
+    },
   });
 
   const result: ReconcileResult = { kept: [], disconnected: [], failed: [] };
   for (const row of rows) {
-    try {
-      await removeItemForBilling(env, row.workspaceId, row.id);
-      result.disconnected.push(row.id);
-    } catch (error) {
-      result.failed.push({ id: row.id, error });
-      logError({ plaidItemId: row.id, err: sanitizePlaidError(error) }, "orphan plaid reconciliation disconnect failed");
+    const owners = row.workspace.memberships;
+    if (owners.length === 1) {
+      await prisma.plaidItem.update({
+        where: { id: row.id },
+        data: { connectedBy: owners[0]!.userId },
+      });
+      result.kept.push(row.id);
+      continue;
     }
   }
   return result;

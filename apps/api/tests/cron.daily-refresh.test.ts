@@ -231,6 +231,7 @@ async function seedTxWithCategory(opts: {
 
 beforeEach(async () => {
   seedCounter = 0;
+  process.env.APPLE_ENV = "sandbox";
   await truncateAll();
   resetPlaidMock();
   vi.mocked(syncTransactions).mockReset();
@@ -345,7 +346,7 @@ describe("runDailyRefresh", () => {
     await runDailyRefresh(env);
 
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
-    expect(removeItemForBilling).toHaveBeenCalledTimes(1);
+    expect(removeItemForBilling).not.toHaveBeenCalled();
     expect(syncTransactions).not.toHaveBeenCalled();
   });
 
@@ -445,6 +446,44 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
 
     expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
     expect(syncTransactions).not.toHaveBeenCalled();
+  });
+
+  it("production refresh skips stale Sandbox IAP rows and still syncs valid Stripe-entitled user", async () => {
+    process.env.APPLE_ENV = "production";
+    await seedUserWithActiveItems({
+      userId: "u-prod-stale-sandbox",
+      email: "prod-stale-sandbox@test.fina",
+      count: 1,
+    });
+    await prisma.subscription.createMany({
+      data: [
+        {
+          userId: "u-prod-stale-sandbox",
+          tier: "pro",
+          source: "stripe",
+          sourceSubscriptionId: "sub_prod_valid",
+          status: "active",
+          currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+          environment: "Production",
+        },
+        {
+          userId: "u-prod-stale-sandbox",
+          tier: "pro",
+          source: "iap_apple",
+          sourceSubscriptionId: "OT-stale-sandbox",
+          status: "active",
+          currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+          environment: "Sandbox",
+        },
+      ],
+    });
+    providerMocks.appleClient.getSubscriptionStatus.mockRejectedValue(new Error("sandbox row should not refresh in prod"));
+    vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
+
+    await runDailyRefresh(env);
+
+    expect(providerMocks.appleClient.getSubscriptionStatus).not.toHaveBeenCalled();
+    expect(syncTransactions).toHaveBeenCalledTimes(1);
   });
 
   it("refreshes Apple IAP status before Plaid reconciliation", async () => {

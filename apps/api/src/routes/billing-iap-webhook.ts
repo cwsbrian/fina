@@ -12,6 +12,13 @@ import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 
 const MAX_UNKNOWN_RETRIES = 5;
 
+async function reconcilePlaidItemsForWebhook(app: FastifyInstance, userId: string): Promise<void> {
+  const result = await reconcilePlaidItemsForUser(app.fina.env, userId);
+  if (result.failed.length > 0) {
+    throw new Error(`plaid reconciliation failed for ${result.failed.length} item(s)`);
+  }
+}
+
 export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<void> {
   // Override the JSON parser to give us the raw buffer, then parse manually.
   // Scoped to this plugin's encapsulation context — does NOT affect other routes.
@@ -80,7 +87,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
             where: { id: sub.id },
             data: { status: "canceled" },
           });
-          await reconcilePlaidItemsForUser(app.fina.env, sub.userId);
+          await reconcilePlaidItemsForWebhook(app, sub.userId);
         }
         await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "family_sharing_revoked" } });
         return { ok: true };
@@ -139,7 +146,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         userId,
         context: "assn",
       }, { appleClient, googleClient });
-      await reconcilePlaidItemsForUser(app.fina.env, userId);
+      await reconcilePlaidItemsForWebhook(app, userId);
 
       await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: notification.notificationType } });
       return reply.code(200).send({ ok: true });
@@ -227,7 +234,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         userId,
         context: "rtdn",
       }, { appleClient, googleClient });
-      await reconcilePlaidItemsForUser(app.fina.env, userId);
+      await reconcilePlaidItemsForWebhook(app, userId);
 
       await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: `notif_${note.payload.notificationType}` } });
       return reply.code(200).send({ ok: true });

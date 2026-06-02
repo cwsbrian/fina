@@ -73,6 +73,36 @@ describe("POST /webhooks/iap/apple", () => {
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), "u1");
   });
 
+  it("reconciliation cleanup failure returns 500 and does not record webhook event", async () => {
+    await prisma.subscription.create({ data: {
+      userId: "u1", tier: "pro", source: "iap_apple",
+      sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
+      status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
+    } });
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
+      notificationUUID: "uuid-reconcile-fail", notificationType: "DID_RENEW",
+      signedTransactionJws: "tx-jws", raw: {},
+    });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 60 * 86400_000),
+      productId: "pro_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+    vi.mocked(reconcilePlaidItemsForUser).mockResolvedValueOnce({
+      kept: [],
+      disconnected: [],
+      failed: [{ id: "plaid-failed", error: new Error("cleanup failed") }],
+    });
+
+    const res = await app.inject({
+      method: "POST", url: "/webhooks/iap/apple",
+      payload: { signedPayload: "fake-jws" },
+    });
+
+    expect(res.statusCode).toBe(500);
+    await expect(prisma.webhookEvent.count({ where: { id: "apple:uuid-reconcile-fail" } })).resolves.toBe(0);
+  });
+
   it("step 4.2 fallback: webhook before checkout — finds user via binding", async () => {
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
       notificationUUID: "uuid-2", notificationType: "SUBSCRIBED",
