@@ -51,6 +51,45 @@ async function makeItemWithAccount(
   return { plaidItemId: item.id, itemId: item.itemId, accountId: acct.id, plaidAccountId };
 }
 
+async function makeItemWithFingerprint(opts: {
+  workspaceId: string;
+  plaidAccountId: string;
+  status?: "active" | "disconnected";
+  institutionId?: string;
+  mask?: string;
+  type?: string;
+  subtype?: string;
+  currency?: string;
+  archivedAt?: Date | null;
+}): Promise<{ itemId: string; accountId: string; plaidItemId: string; plaidAccountId: string }> {
+  const { ciphertext, iv } = encrypt(env, `access-${opts.plaidAccountId}`, opts.workspaceId);
+  const item = await prisma.plaidItem.create({
+    data: {
+      workspaceId: opts.workspaceId,
+      itemId: `plaid_item_${opts.plaidAccountId}_${Math.random().toString(36).slice(2, 10)}`,
+      institutionId: opts.institutionId ?? "ins_reconnect",
+      institutionName: "Reconnect Bank",
+      status: opts.status ?? "active",
+      accessTokenCiphertext: ciphertext,
+      accessTokenIv: iv,
+    },
+  });
+  const acct = await prisma.bankAccount.create({
+    data: {
+      workspaceId: opts.workspaceId,
+      plaidItemId: item.id,
+      plaidAccountId: opts.plaidAccountId,
+      name: "Checking",
+      mask: opts.mask ?? "1234",
+      type: opts.type ?? "depository",
+      subtype: opts.subtype ?? "checking",
+      currency: opts.currency ?? "CAD",
+      archivedAt: opts.archivedAt ?? null,
+    },
+  });
+  return { plaidItemId: item.id, itemId: item.itemId, accountId: acct.id, plaidAccountId: opts.plaidAccountId };
+}
+
 function tx(opts: {
   transaction_id: string;
   account_id: string;
@@ -119,6 +158,157 @@ describe("syncTransactions", () => {
     expect(t.plaidTransactionId).toBe("t1");
     expect(t.amount.toString()).toBe("12.34");
     expect(t.accountId).toBe(accountId);
+    await app.close();
+  });
+
+  it("reconnect dedupe updates strong historical match instead of inserting duplicate", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "reconnect-dedupe@x.com", name: "R" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const oldItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "old_acct",
+      status: "disconnected",
+      archivedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    const oldTx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: oldItem.accountId,
+        plaidItemId: oldItem.plaidItemId,
+        plaidTransactionId: "old_tx",
+        amount: "12.34",
+        merchantRaw: "Starbucks 123",
+        occurredAt: new Date("2026-05-10T12:00:00.000Z"),
+        pending: false,
+        source: "plaid",
+        rawData: {},
+      },
+    });
+    const newItem = await makeItemWithFingerprint({ workspaceId: wsId, plaidAccountId: "new_acct" });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          tx({ transaction_id: "new_tx", account_id: "new_acct", amount: 12.34, date: "2026-05-10", merchant: "Starbucks 123" }),
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: "reconnected",
+        has_more: false,
+      },
+    });
+
+    const r = await syncTransactions(env, wsId, newItem.plaidItemId);
+
+    expect(r).toMatchObject({ added: 1, modified: 0, removed: 0, newTxIds: [] });
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(1);
+    const after = await prisma.transaction.findUniqueOrThrow({ where: { id: oldTx.id } });
+    expect(after.plaidTransactionId).toBe("new_tx");
+    expect(after.accountId).toBe(newItem.accountId);
+    expect(after.plaidItemId).toBe(newItem.plaidItemId);
+    expect(after.merchantRaw).toBe("Starbucks 123");
+    expect(after.removedAt).toBeNull();
+    await app.close();
+  });
+
+  it("reconnect dedupe inserts when account fingerprint has multiple matches", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "reconnect-ambiguous@x.com", name: "A" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const first = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "old_acct_one",
+      status: "disconnected",
+      archivedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "old_acct_two",
+      status: "disconnected",
+      archivedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: first.accountId,
+        plaidItemId: first.plaidItemId,
+        plaidTransactionId: "old_tx",
+        amount: "12.34",
+        merchantRaw: "Starbucks 123",
+        occurredAt: new Date("2026-05-10T12:00:00.000Z"),
+        pending: false,
+        source: "plaid",
+        rawData: {},
+      },
+    });
+    const newItem = await makeItemWithFingerprint({ workspaceId: wsId, plaidAccountId: "new_acct_ambiguous" });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          tx({ transaction_id: "new_tx", account_id: "new_acct_ambiguous", amount: 12.34, date: "2026-05-10", merchant: "Starbucks 123" }),
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: "ambiguous",
+        has_more: false,
+      },
+    });
+
+    const r = await syncTransactions(env, wsId, newItem.plaidItemId);
+
+    expect(r).toMatchObject({ added: 1, modified: 0, removed: 0 });
+    expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(2);
+    const inserted = await prisma.transaction.findFirstOrThrow({ where: { plaidTransactionId: "new_tx" } });
+    expect(inserted.accountId).toBe(newItem.accountId);
+    await app.close();
+  });
+
+  it("reconnect dedupe inserts when merchant differs", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "reconnect-merchant@x.com", name: "M" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const oldItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "old_acct_merchant",
+      status: "disconnected",
+      archivedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: oldItem.accountId,
+        plaidItemId: oldItem.plaidItemId,
+        plaidTransactionId: "old_tx",
+        amount: "12.34",
+        merchantRaw: "Starbucks 123",
+        occurredAt: new Date("2026-05-10T12:00:00.000Z"),
+        pending: false,
+        source: "plaid",
+        rawData: {},
+      },
+    });
+    const newItem = await makeItemWithFingerprint({ workspaceId: wsId, plaidAccountId: "new_acct_merchant" });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          tx({ transaction_id: "new_tx", account_id: "new_acct_merchant", amount: 12.34, date: "2026-05-10", merchant: "Tim Hortons 123" }),
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: "merchant",
+        has_more: false,
+      },
+    });
+
+    const r = await syncTransactions(env, wsId, newItem.plaidItemId);
+
+    expect(r).toMatchObject({ added: 1, modified: 0, removed: 0 });
+    expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(2);
+    const inserted = await prisma.transaction.findFirstOrThrow({ where: { plaidTransactionId: "new_tx" } });
+    expect(inserted.merchantRaw).toBe("Tim Hortons 123");
+    expect(inserted.accountId).toBe(newItem.accountId);
     await app.close();
   });
 

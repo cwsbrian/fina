@@ -8,6 +8,7 @@ import { HttpError } from "../auth/context.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { clearScheduleMatch } from "../schedules/cleanup.js";
 import { logWarn } from "../logger.js";
+import { normalizeMerchant } from "../categorize/normalize.js";
 
 // `skipped` carries the partial counters from any pages that DID commit
 // before the lock was lost (final-tx race) — the page-level commits are
@@ -224,6 +225,39 @@ async function accountIdForPlaidAccount(
   return acct.id;
 }
 
+async function disconnectedAccountMatch(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  currentAccount: {
+    id: string;
+    mask: string | null;
+    type: string;
+    subtype: string | null;
+    currency: string;
+    plaidItem: { institutionId: string } | null;
+  },
+): Promise<string | null> {
+  if (!currentAccount.plaidItem || !currentAccount.mask) return null;
+  const matches = await tx.bankAccount.findMany({
+    where: {
+      workspaceId,
+      archivedAt: { not: null },
+      mask: currentAccount.mask,
+      type: currentAccount.type,
+      subtype: currentAccount.subtype,
+      currency: currentAccount.currency,
+      plaidItem: { is: { institutionId: currentAccount.plaidItem.institutionId, status: "disconnected" } },
+    },
+    select: { id: true },
+    take: 2,
+  });
+  return matches.length === 1 ? matches[0]!.id : null;
+}
+
+function plaidMerchantRaw(t: PlaidTxLike): string {
+  return t.merchant_name ?? t.name ?? "Unknown";
+}
+
 export async function upsertAdded(
   tx: Prisma.TransactionClient,
   t: PlaidTxLike,
@@ -263,7 +297,7 @@ export async function upsertAdded(
           occurredAt: plaidOccurredAt(t),
           postedAt: plaidPostedAt(t),
           amount: newAmount,
-          merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
+          merchantRaw: plaidMerchantRaw(t),
           rawData: t as unknown as Prisma.InputJsonValue,
           removedAt: null, // promote restores any earlier soft-removal
         },
@@ -310,7 +344,7 @@ export async function upsertAdded(
       where: { id: existing.id },
       data: {
         amount: newAmount,
-        merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
+        merchantRaw: plaidMerchantRaw(t),
         occurredAt: plaidOccurredAt(t),
         postedAt: plaidPostedAt(t),
         pending: t.pending,
@@ -320,6 +354,55 @@ export async function upsertAdded(
     });
     return { kind: "updated", localId: existing.id };
   }
+  const currentAccount = await tx.bankAccount.findUniqueOrThrow({
+    where: { id: accountId },
+    select: {
+      id: true,
+      mask: true,
+      type: true,
+      subtype: true,
+      currency: true,
+      plaidItem: { select: { institutionId: true } },
+    },
+  });
+  const oldAccountId = await disconnectedAccountMatch(tx, workspaceId, currentAccount);
+  if (oldAccountId) {
+    const rawMerchant = plaidMerchantRaw(t);
+    const merchantNormalized = normalizeMerchant(rawMerchant);
+    const candidates = await tx.transaction.findMany({
+      where: {
+        workspaceId,
+        accountId: oldAccountId,
+        source: "plaid",
+        plaidTransactionId: { not: null },
+        plaidItem: { is: { status: "disconnected" } },
+        occurredAt: plaidOccurredAt(t),
+        amount: new Prisma.Decimal(t.amount),
+      },
+      select: { id: true, merchantRaw: true, merchantNormalized: true },
+    });
+    const strongMatches = candidates.filter((candidate) => {
+      const existingMerchant = candidate.merchantNormalized ?? normalizeMerchant(candidate.merchantRaw);
+      return existingMerchant === merchantNormalized;
+    });
+    if (strongMatches.length === 1) {
+      await tx.transaction.update({
+        where: { id: strongMatches[0]!.id },
+        data: {
+          accountId,
+          plaidItemId,
+          plaidTransactionId: t.transaction_id,
+          plaidPendingTransactionId: t.pending_transaction_id ?? null,
+          pending: t.pending,
+          merchantRaw: rawMerchant,
+          merchantNormalized,
+          rawData: t as unknown as Prisma.InputJsonValue,
+          removedAt: null,
+        },
+      });
+      return { kind: "updated", localId: strongMatches[0]!.id };
+    }
+  }
   const created = await tx.transaction.create({
     data: {
       workspaceId,
@@ -328,7 +411,7 @@ export async function upsertAdded(
       plaidTransactionId: t.transaction_id,
       plaidPendingTransactionId: t.pending_transaction_id ?? null,
       amount: t.amount,
-      merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
+      merchantRaw: plaidMerchantRaw(t),
       occurredAt: plaidOccurredAt(t),
       postedAt: plaidPostedAt(t),
       pending: t.pending,
@@ -363,7 +446,7 @@ export async function upsertModified(
   const oldAmount = existing.amount;
   const newAmount = new Prisma.Decimal(t.amount);
   const amountChanged = !oldAmount.equals(newAmount);
-  const newMerchantRaw = t.merchant_name ?? t.name ?? "Unknown";
+  const newMerchantRaw = plaidMerchantRaw(t);
   const merchantChanged = existing.merchantRaw !== newMerchantRaw;
   const N = existing.allocations.length;
 
