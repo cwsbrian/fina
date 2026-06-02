@@ -1,6 +1,6 @@
 import { prisma } from "../../db.js";
 import type { Env } from "../../env.js";
-import { logInfo, logWarn, logError } from "../../logger.js";
+import { logInfo, logError } from "../../logger.js";
 import { syncTransactions } from "../../plaid/sync.js";
 import { categorizeNewTransactions } from "../../categorize/service.js";
 import { sanitizePlaidError } from "../../plaid/client.js";
@@ -18,6 +18,7 @@ const CRON_NAME = "daily-refresh";
 
 export async function runDailyRefresh(env: Env): Promise<void> {
   // ── Step 0: refresh provider billing state, then reconcile by user ──────
+  const unsafeUserIds = new Set<string>();
   const owners = await prisma.plaidItem.findMany({
     where: {
       status: { not: "disconnected" },
@@ -30,15 +31,21 @@ export async function runDailyRefresh(env: Env): Promise<void> {
   for (const owner of owners) {
     const userId = owner.connectedBy;
     if (!userId) continue;
-    await refreshBillingStateForUser(env, userId).catch((e) => {
+    try {
+      await refreshBillingStateForUser(env, userId);
+    } catch (e) {
+      unsafeUserIds.add(userId);
       logError(
         { cron: CRON_NAME, userId, err: e },
         "daily-refresh: provider billing refresh failed",
       );
-    });
+      continue;
+    }
     try {
-      await reconcilePlaidItemsForUser(env, userId);
+      const result = await reconcilePlaidItemsForUser(env, userId);
+      if (result.failed.length > 0) unsafeUserIds.add(userId);
     } catch (e) {
+      unsafeUserIds.add(userId);
       logError(
         { cron: CRON_NAME, userId, err: sanitizePlaidError(e) },
         "daily-refresh: plaid reconciliation failed",
@@ -53,7 +60,13 @@ export async function runDailyRefresh(env: Env): Promise<void> {
   //    items are excluded by status:'active' filter below) ─────────────────
 
   const items = await prisma.plaidItem.findMany({
-    where: { status: "active" },
+    where: {
+      status: "active",
+      connectedBy: {
+        not: null,
+        ...(unsafeUserIds.size > 0 ? { notIn: Array.from(unsafeUserIds) } : {}),
+      },
+    },
     select: { id: true, workspaceId: true, connectedBy: true },
   });
 
@@ -61,15 +74,9 @@ export async function runDailyRefresh(env: Env): Promise<void> {
   let synced = 0, gated = 0, failed = 0, lockHeld = 0;
 
   for (const item of items) {
-    if (item.connectedBy) {
-      const gate = await checkBackgroundSyncGate(item.connectedBy);
-      if (!gate.ok) { gated++; continue; }
-    } else {
-      logWarn(
-        { cron: CRON_NAME, plaidItemId: item.id },
-        "daily-refresh: connectedBy null, skipping tier gate",
-      );
-    }
+    if (!item.connectedBy) continue;
+    const gate = await checkBackgroundSyncGate(item.connectedBy);
+    if (!gate.ok) { gated++; continue; }
 
     try {
       const r = await syncTransactions(env, item.workspaceId, item.id);

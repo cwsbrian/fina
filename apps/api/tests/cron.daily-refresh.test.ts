@@ -76,7 +76,6 @@ import { categorizeNewTransactions } from "../src/categorize/service.js";
 import { checkBackgroundSyncGate } from "../src/cron/tier-gate.js";
 import { runDailyRefresh } from "../src/cron/jobs/daily-refresh.js";
 import { resetPlaidMock } from "./helpers/plaid-mock.js";
-import * as loggerMod from "../src/logger.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
@@ -339,20 +338,15 @@ describe("runDailyRefresh", () => {
     expect(categorizeNewTransactions).not.toHaveBeenCalled();
   });
 
-  it("null connectedBy: skips tier gate, still syncs, warns", async () => {
+  it("null connectedBy: does not sync orphan items after orphan reconciliation path", async () => {
     await seedActiveItem(null); // connectedBy = null
     vi.mocked(syncTransactions).mockResolvedValue(syncOk);
-    const warnSpy = vi.spyOn(loggerMod, "logWarn").mockImplementation(() => {});
 
     await runDailyRefresh(env);
 
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
-    expect(syncTransactions).toHaveBeenCalledTimes(1);
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ cron: "daily-refresh" }),
-      expect.stringContaining("connectedBy null"),
-    );
-    warnSpy.mockRestore();
+    expect(removeItemForBilling).toHaveBeenCalledTimes(1);
+    expect(syncTransactions).not.toHaveBeenCalled();
   });
 
   it("lock_held result: increments lockHeld counter (no throw)", async () => {
@@ -401,7 +395,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     expect(order.indexOf("stripe-list")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 
-  it("provider refresh failure does not disconnect Plaid items by itself", async () => {
+  it("provider refresh failure does not reconcile, disconnect, or sync that user's active item", async () => {
     await seedUserWithActiveItems({
       userId: "u-provider-fail",
       email: "provider-fail@test.fina",
@@ -425,6 +419,32 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     await runDailyRefresh(env);
 
     expect(removeItemForBilling).not.toHaveBeenCalled();
+    expect(syncTransactions).not.toHaveBeenCalled();
+  });
+
+  it("reconciliation cleanup failure prevents that user's active items from syncing in the same run", async () => {
+    const { items } = await seedUserWithActiveItems({
+      userId: "u-cleanup-fail",
+      email: "cleanup-fail@test.fina",
+      count: 2,
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: "u-cleanup-fail",
+        tier: "lite",
+        source: "stripe",
+        sourceSubscriptionId: "sub_cleanup_fail",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+      },
+    });
+    vi.mocked(removeItemForBilling).mockRejectedValueOnce(new Error("plaid cleanup failed"));
+    vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
+
+    await runDailyRefresh(env);
+
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(syncTransactions).not.toHaveBeenCalled();
   });
 
   it("refreshes Apple IAP status before Plaid reconciliation", async () => {
