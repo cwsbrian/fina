@@ -81,4 +81,22 @@ describe("computeEffectiveTier — plaidItemLimit", () => {
     const t = computeEffectiveTier({ trialEndsAt: null });
     expect(t.plaidItemLimit).toBe(0);
   });
+
+  it("paid lite subscription -> plaidItemLimit: 1", () => {
+    const t = computeEffectiveTier(
+      { trialEndsAt: null },
+      [{ tier: "lite" }],
+    );
+    expect(t.tier).toBe("lite");
+    expect(t.plaidItemLimit).toBe(1);
+  });
+
+  it("paid pro subscription -> plaidItemLimit: 5", () => {
+    const t = computeEffectiveTier(
+      { trialEndsAt: null },
+      [{ tier: "pro" }],
+    );
+    expect(t.tier).toBe("pro");
+    expect(t.plaidItemLimit).toBe(5);
+  });
 });

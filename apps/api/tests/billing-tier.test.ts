@@ -70,6 +70,7 @@ describe("EffectiveTier with subscriptions", () => {
     const t = await effectiveTier(user.id);
     expect(t.tier).toBe("lite");
     expect(t.source).toBe("paid");
+    expect(t.plaidItemLimit).toBe(1);
   });
 
   it("returns pro+paid for active pro sub (no trial)", async () => {

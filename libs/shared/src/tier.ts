@@ -14,7 +14,7 @@ export function tierAtLeast(actual: Tier, required: Tier): boolean {
  * `tier === "pro"` (see `isProFeature`). */
 export const TIER_LIMITS: Record<Tier, { plaidItems: number }> = {
   free: { plaidItems: 0 },
-  lite: { plaidItems: 2 },
+  lite: { plaidItems: 1 },
   pro: { plaidItems: 5 },
 };
 
