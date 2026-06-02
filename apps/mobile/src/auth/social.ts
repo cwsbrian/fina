@@ -25,9 +25,13 @@ function report(e: unknown) {
 
 export async function signInWithGoogle(): Promise<void> {
   try {
+    const callbackURL = Linking.createURL("/");
+    console.log("[auth] google sign-in pressed", {
+      callbackURL,
+    });
     const res = await signIn.social({
       provider: "google",
-      callbackURL: Linking.createURL("/"),
+      callbackURL,
     });
     if (res.error) return report(res.error);
     // @better-auth/expo silently returns (no error, no session) when the user
