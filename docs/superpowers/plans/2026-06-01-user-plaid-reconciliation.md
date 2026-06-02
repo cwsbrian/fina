@@ -36,7 +36,7 @@
 - Modify `apps/api/src/cron/jobs/daily-refresh.ts`: replace Step 0 cleanup with provider refresh + user reconciliation + orphan pass.
 - Modify `apps/api/src/stripe/sync-sub.ts` and `apps/api/src/routes/billing-webhook.ts`: trigger reconciliation after Stripe subscription sync.
 - Modify `apps/api/src/routes/billing.ts`: `/billing/sync` triggers reconciliation after provider pull.
-- Modify `apps/api/src/iap/sync-sub.ts` and `apps/api/src/routes/billing-iap-webhook.ts`: trigger reconciliation after IAP row changes and direct webhook updates.
+- Modify `apps/api/src/iap/sync-sub.ts`, `apps/api/src/routes/billing-iap.ts`, and `apps/api/src/routes/billing-iap-webhook.ts`: trigger reconciliation after IAP checkout/restore/webhook row changes and direct webhook updates.
 - Modify `apps/api/src/plaid/sync.ts`: add conservative reconnect dedupe helper after tests prove the case.
 - Modify tests under `apps/api/tests/`: targeted tests for every changed behavior.
 
@@ -145,7 +145,26 @@ it("archives linked accounts while preserving transactions", async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing reconciliation tests**
+- [ ] **Step 2: Write failing billing-disconnect lock test**
+
+In `apps/api/tests/plaid.items.test.ts`, add this case under `removeItemForBilling`:
+
+```ts
+it("does not update local billing status while a sync lock is held", async () => {
+  const { wsId, itemRowId } = await seedItemWithTransactions();
+  plaidMock.itemRemove.push({ data: { request_id: "req" } });
+  vi.spyOn(await import("../src/plaid/lock.js"), "lockPlaidItem").mockRejectedValueOnce(
+    new Error("plaid_item is locked by another sync/disconnect"),
+  );
+
+  await expect(removeItemForBilling(env, wsId, itemRowId)).rejects.toThrow(/locked by another sync\/disconnect/i);
+
+  const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
+  expect(item.status).toBe("active");
+});
+```
+
+- [ ] **Step 3: Write failing reconciliation tests**
 
 Create `apps/api/tests/plaid.reconcile.test.ts`:
 
@@ -285,7 +304,95 @@ describe("reconcileOrphanPlaidItems", () => {
 });
 ```
 
-- [ ] **Step 3: Run failing tests**
+- [ ] **Step 4: Write failing reconciliation edge-case tests**
+
+In `apps/api/tests/plaid.reconcile.test.ts`, add:
+
+```ts
+it("pro keeps earliest five and disconnects the sixth", async () => {
+  const u = await userWithTrial("pro@example.com", null);
+  await prisma.subscription.create({
+    data: {
+      userId: u.id,
+      tier: "pro",
+      source: "stripe",
+      sourceSubscriptionId: "sub_pro",
+      status: "active",
+      currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+    },
+  });
+  const ws = await workspaceForOwner(u.id);
+  const rows = await Promise.all(
+    Array.from({ length: 6 }, (_, i) =>
+      item({
+        workspaceId: ws.id,
+        connectedBy: u.id,
+        createdAt: new Date(`2026-01-0${i + 1}T00:00:00Z`),
+        itemId: `pro_${i}`,
+      }),
+    ),
+  );
+  plaidMock.itemRemove.push({ data: { request_id: "remove-sixth" } });
+
+  const result = await reconcilePlaidItemsForUser(env, u.id);
+
+  expect(result.kept).toEqual(rows.slice(0, 5).map((r) => r.id));
+  expect(result.disconnected).toEqual([rows[5]!.id]);
+});
+
+it("canceled/free user disconnects all owned billable items", async () => {
+  const u = await userWithTrial("free@example.com", null);
+  await prisma.subscription.create({
+    data: {
+      userId: u.id,
+      tier: "pro",
+      source: "stripe",
+      sourceSubscriptionId: "sub_canceled",
+      status: "canceled",
+      currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+    },
+  });
+  const ws = await workspaceForOwner(u.id);
+  const first = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "free_a" });
+  const second = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "free_b" });
+  plaidMock.itemRemove.push({ data: { request_id: "remove-a" } }, { data: { request_id: "remove-b" } });
+
+  const result = await reconcilePlaidItemsForUser(env, u.id);
+
+  expect(result.kept).toEqual([]);
+  expect(result.disconnected.sort()).toEqual([first.id, second.id].sort());
+});
+
+it("counts active, error, and relink_required as billable but ignores disconnected", async () => {
+  const u = await userWithTrial("status@example.com", null);
+  await prisma.subscription.create({
+    data: {
+      userId: u.id,
+      tier: "lite",
+      source: "stripe",
+      sourceSubscriptionId: "sub_status",
+      status: "active",
+      currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+    },
+  });
+  const ws = await workspaceForOwner(u.id);
+  const active = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "status_active" });
+  const error = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "status_error" });
+  const relink = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-03T00:00:00Z"), itemId: "status_relink" });
+  const disconnected = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-04T00:00:00Z"), itemId: "status_disconnected" });
+  await prisma.plaidItem.update({ where: { id: error.id }, data: { status: "error" } });
+  await prisma.plaidItem.update({ where: { id: relink.id }, data: { status: "relink_required" } });
+  await prisma.plaidItem.update({ where: { id: disconnected.id }, data: { status: "disconnected" } });
+  plaidMock.itemRemove.push({ data: { request_id: "remove-error" } }, { data: { request_id: "remove-relink" } });
+
+  const result = await reconcilePlaidItemsForUser(env, u.id);
+
+  expect(result.kept).toEqual([active.id]);
+  expect(result.disconnected.sort()).toEqual([error.id, relink.id].sort());
+});
+```
+
+- [ ] **Step 5: Run failing tests**
 
 Run:
 
@@ -295,7 +402,7 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest ru
 
 Expected: missing module/function failures and the archive assertion fails.
 
-- [ ] **Step 4: Implement user lock helper**
+- [ ] **Step 6: Implement user lock helper**
 
 Create `apps/api/src/locks/user.ts`:
 
@@ -315,12 +422,15 @@ export async function withUserLock<T>(
 }
 ```
 
-- [ ] **Step 5: Archive accounts in billing disconnect**
+- [ ] **Step 7: Archive accounts in billing disconnect with Plaid row lock**
 
-Modify `apps/api/src/plaid/items.ts` in `removeItemForBilling`:
+Modify `apps/api/src/plaid/items.ts`: import the shared lock helper, then replace the final local status update in `removeItemForBilling` with a locked transaction:
 
 ```ts
+import { lockPlaidItem } from "./lock.js";
+
 await prisma.$transaction(async (tx) => {
+  await lockPlaidItem(tx, plaidItemId);
   await tx.bankAccount.updateMany({
     where: { plaidItemId },
     data: { archivedAt: new Date() },
@@ -332,7 +442,9 @@ await prisma.$transaction(async (tx) => {
 });
 ```
 
-- [ ] **Step 6: Implement reconciliation service**
+The function must let `SyncLockHeld` bubble to reconciliation callers; `reconcilePlaidItemsForUser` already records it in `failed` so a later cron/webhook retry can disconnect without racing a live sync.
+
+- [ ] **Step 8: Implement reconciliation service**
 
 Create `apps/api/src/plaid/reconcile.ts`:
 
@@ -423,9 +535,29 @@ export async function reconcileOrphanPlaidItems(env: Env): Promise<ReconcileResu
   }
   return result;
 }
+
+export async function retryPendingPlaidBillingCleanups(env: Env): Promise<ReconcileResult> {
+  const rows = await prisma.plaidItem.findMany({
+    where: { status: "disconnected", errorCode: "billing_cleanup_pending" },
+    select: { id: true, workspaceId: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const result: ReconcileResult = { kept: [], disconnected: [], failed: [] };
+  for (const row of rows) {
+    try {
+      await removeItemForBilling(env, row.workspaceId, row.id);
+      await prisma.plaidItem.update({ where: { id: row.id }, data: { errorCode: null } });
+      result.disconnected.push(row.id);
+    } catch (error) {
+      result.failed.push({ id: row.id, error });
+      logError({ plaidItemId: row.id, err: sanitizePlaidError(error) }, "pending plaid cleanup retry failed");
+    }
+  }
+  return result;
+}
 ```
 
-- [ ] **Step 7: Run tests**
+- [ ] **Step 9: Run tests**
 
 Run:
 
@@ -435,7 +567,7 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest ru
 
 Expected: both files pass.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
 git add apps/api/src/locks/user.ts apps/api/src/plaid/reconcile.ts apps/api/src/plaid/items.ts apps/api/tests/plaid.items.test.ts apps/api/tests/plaid.reconcile.test.ts
@@ -537,14 +669,25 @@ Import `withUserLock`:
 import { withUserLock } from "../locks/user.js";
 ```
 
-Move the exchange Item/account create block under a user lock. Keep the Plaid `itemPublicTokenExchange` and `accountsGet` calls before the lock, then do the final limit check and database writes inside the lock:
+Move the exchange Item/account create block under a user lock. Keep the Plaid `itemPublicTokenExchange` and `accountsGet` calls before the lock. Immediately after exchange, create a non-optional local token:
+
+```ts
+const exchangedAccessToken = exch.data.access_token as string;
+exchAccessToken = exchangedAccessToken;
+```
+
+Then do the final limit check and database writes inside the lock:
 
 ```ts
 const result = await withUserLock(ctx.session.userId, async (userTx) => {
   const t = await effectiveTier(ctx.session.userId);
   if (t.plaidItemLimit === 0) {
-    await plaidClient(app.fina.env).itemRemove({ access_token: exchAccessToken });
-    throw new HttpError(402, "upgrade_required", "Upgrade required");
+    try {
+      await plaidClient(app.fina.env).itemRemove({ access_token: exchangedAccessToken });
+    } catch (e) {
+      await persistPendingBillingCleanup(userTx, exchangedAccessToken, e);
+    }
+    return { rejected: "upgrade_required" as const };
   }
   const existingCount = await userTx.plaidItem.count({
     where: {
@@ -555,11 +698,12 @@ const result = await withUserLock(ctx.session.userId, async (userTx) => {
   const limitErr = existingCount >= t.plaidItemLimit ? { error: "plaid_item_limit_reached" } : null;
   if (limitErr) {
     try {
-      await plaidClient(app.fina.env).itemRemove({ access_token: exchAccessToken });
+      await plaidClient(app.fina.env).itemRemove({ access_token: exchangedAccessToken });
     } catch (e) {
+      await persistPendingBillingCleanup(userTx, exchangedAccessToken, e);
       logWarn({ err: e }, "plaid.itemRemove failed during limit cleanup");
     }
-    throw new HttpError(402, limitErr.error, "Plaid item limit reached");
+    return { rejected: limitErr.error as "plaid_item_limit_reached" };
   }
 
   await userTx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${ctx.membership.workspaceId}))`;
@@ -613,11 +757,50 @@ const result = await withUserLock(ctx.session.userId, async (userTx) => {
   }
   return { itemRowId, accountCount: accountsRes.data.accounts.length };
 });
+if ("rejected" in result) {
+  return reply.code(402).send({ error: result.rejected });
+}
 ```
 
 - [ ] **Step 5: Ensure cleanup on final limit failure**
 
-When exchange final check fails after receiving an `access_token`, call `itemRemove` with `exchAccessToken` before returning `402`. This avoids creating a Plaid-side orphan Item that could bill.
+When exchange final check fails after receiving an `access_token`, call `itemRemove` with `exchAccessToken` before returning `402`. On `itemRemove` failure, persist a local disconnected cleanup row so daily reconciliation can retry removal without granting an active connection:
+
+```ts
+async function persistPendingBillingCleanup(
+  tx: Prisma.TransactionClient,
+  accessToken: string,
+  err: unknown,
+): Promise<void> {
+  await storeAccessToken(app.fina.env, tx, {
+    workspaceId: ctx.membership.workspaceId,
+    connectedBy: ctx.session.userId,
+    itemId: exch.data.item_id,
+    institutionId: parsed.data.institutionId,
+    institutionName: parsed.data.institutionName,
+    accessToken,
+    webhookUrl: app.fina.env.PLAID_WEBHOOK_URL ?? null,
+  }).then((id) =>
+    tx.plaidItem.update({
+      where: { id },
+      data: { status: "disconnected", errorCode: "billing_cleanup_pending" },
+    }),
+  );
+  logWarn({ err }, "stored pending Plaid billing cleanup after itemRemove failure");
+}
+```
+
+Add a test in `apps/api/tests/plaid.exchange.test.ts`:
+
+```ts
+it("stores pending cleanup row when final limit cleanup fails", async () => {
+  // Lite user already owns one active item.
+  // Mock itemPublicTokenExchange/accountsGet success and itemRemove failure.
+  // POST /plaid/exchange returns 402 plaid_item_limit_reached.
+  // Expect one row with itemId from exchange, connectedBy userId,
+  // status disconnected, errorCode billing_cleanup_pending, and encrypted token present.
+});
+```
 
 - [ ] **Step 6: Run tests**
 
@@ -763,10 +946,12 @@ git commit -m "feat: allow plaid sync for lite owners"
 - Modify: `apps/api/src/routes/billing-webhook.ts`
 - Modify: `apps/api/src/routes/billing.ts`
 - Modify: `apps/api/src/iap/sync-sub.ts`
+- Modify: `apps/api/src/routes/billing-iap.ts`
 - Modify: `apps/api/src/routes/billing-iap-webhook.ts`
 - Modify: `apps/api/src/cron/jobs/daily-refresh.ts`
 - Test: `apps/api/tests/billing-webhook.test.ts`
 - Test: `apps/api/tests/billing-sync.test.ts`
+- Test: `apps/api/tests/iap/billing-iap.routes.test.ts`
 - Test: `apps/api/tests/iap/sync-sub.test.ts`
 - Test: `apps/api/tests/iap/billing-iap-webhook.test.ts`
 - Test: `apps/api/tests/cron.daily-refresh.test.ts`
@@ -792,6 +977,10 @@ expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.id);
 
 In `/billing/sync` tests, assert reconciliation after sync.
 
+In `apps/api/tests/iap/billing-iap.routes.test.ts`, assert successful `/billing/iap/checkout` calls `reconcilePlaidItemsForUser(app.fina.env, userId)` after sync.
+
+In `apps/api/tests/iap/billing-iap.routes.test.ts`, assert `/billing/iap/restore` calls `reconcilePlaidItemsForUser(app.fina.env, userId)` once after at least one purchase sync succeeds.
+
 In Apple family-sharing revocation test, assert reconciliation after direct `status = canceled`.
 
 In Google linked purchase-token replacement tests, assert reconciliation for the resolved user.
@@ -816,6 +1005,22 @@ it("provider refresh failure does not disconnect Plaid items by itself", async (
   // runDailyRefresh(env)
   // expect removeItemForBilling not called solely due to provider failure.
 });
+
+it("refreshes Apple IAP status before Plaid reconciliation", async () => {
+  // user has active iap_apple subscription row and one non-disconnected Plaid Item.
+  // Mock AppleClient.getSubscriptionStatus(originalTransactionId) to return canceled.
+  // Only APPLE_* env is configured; GOOGLE_* env is intentionally absent.
+  // runDailyRefresh(env)
+  // expect subscription.status canceled before reconcilePlaidItemsForUser is called.
+});
+
+it("refreshes Google IAP status before Plaid reconciliation", async () => {
+  // user has active iap_google subscription row and one non-disconnected Plaid Item.
+  // Mock GoogleClient.fetchAndNormalize(sourceSubscriptionId) to return mapped canceled.
+  // Only GOOGLE_* env is configured; APPLE_* env is intentionally absent.
+  // runDailyRefresh(env)
+  // expect subscription.status canceled before reconcilePlaidItemsForUser is called.
+});
 ```
 
 - [ ] **Step 3: Run failing tests**
@@ -823,7 +1028,7 @@ it("provider refresh failure does not disconnect Plaid items by itself", async (
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest run apps/api/tests/billing-webhook.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/sync-sub.test.ts apps/api/tests/iap/billing-iap-webhook.test.ts apps/api/tests/cron.daily-refresh.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest run apps/api/tests/billing-webhook.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts apps/api/tests/iap/sync-sub.test.ts apps/api/tests/iap/billing-iap-webhook.test.ts apps/api/tests/cron.daily-refresh.test.ts
 ```
 
 Expected: reconcile mock assertions fail and daily refresh still uses old workspace-owner cleanup.
@@ -856,7 +1061,7 @@ Keep `apps/api/src/iap/sync-sub.ts` pure; it only receives `Partial<IapConfig>` 
 import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 ```
 
-Then add this call immediately after every successful `syncSubscriptionFromIAP(...)` call in those route files:
+Then add this call immediately after every successful `syncSubscriptionFromIAP(...)` call in those route files. In `/billing/iap/restore`, call it once after the loop when at least one purchase sync succeeded:
 
 ```ts
 await reconcilePlaidItemsForUser(app.fina.env, userId);
@@ -896,10 +1101,11 @@ for (const row of owners) {
   );
   await reconcilePlaidItemsForUser(env, row.connectedBy);
 }
+await retryPendingPlaidBillingCleanups(env);
 await reconcileOrphanPlaidItems(env);
 ```
 
-Create `refreshBillingStateForUser` in `apps/api/src/plaid/reconcile.ts` or a new `apps/api/src/billing/refresh.ts`. For Stripe:
+Create `refreshBillingStateForUser` in `apps/api/src/plaid/reconcile.ts`. For Stripe:
 
 ```ts
 const user = await prisma.user.findUnique({ where: { id: userId }, select: { stripeCustomerId: true } });
@@ -912,14 +1118,65 @@ if (user?.stripeCustomerId) {
 }
 ```
 
-Do not add new IAP provider polling in this task. Daily refresh must refresh Stripe provider state, then reconcile IAP rows already written by IAP routes/webhooks. Add a log line named `daily-refresh iap provider refresh skipped` when an owner has only IAP subscriptions and no Stripe customer.
+For Apple and Google IAP, re-query provider state before reconciliation:
+
+```ts
+const iapRows = await prisma.subscription.findMany({
+  where: {
+    userId,
+    source: { in: ["iap_apple", "iap_google"] },
+    status: { in: ["trialing", "active", "past_due", "paused", "incomplete"] },
+  },
+  select: { id: true, source: true, sourceSubscriptionId: true },
+});
+if (iapRows.length > 0) {
+  for (const row of iapRows) {
+    if (row.source === "iap_apple") {
+      const cfg = requireAppleIapEnv(process.env);
+      const appleClient = new AppleClient(cfg);
+      const status = await appleClient.getSubscriptionStatus(row.sourceSubscriptionId);
+      await prisma.subscription.update({
+        where: { id: row.id },
+        data: {
+          status: status.mapped.status,
+          currentPeriodEnd: status.expiresDate,
+          cancelAtPeriodEnd: status.mapped.cancelAtPeriodEnd,
+          tier: tierForIapProductId(status.productId) ?? undefined,
+        },
+      });
+    }
+    if (row.source === "iap_google") {
+      const cfg = requireGoogleIapEnv(process.env);
+      const googleClient = new GoogleClient(cfg);
+      const status = await googleClient.fetchAndNormalize(row.sourceSubscriptionId);
+      await prisma.subscription.update({
+        where: { id: row.id },
+        data: {
+          status: status.mapped.status,
+          currentPeriodEnd: status.expiryTime,
+          cancelAtPeriodEnd: status.mapped.cancelAtPeriodEnd,
+          tier: tierForIapProductId(status.productId) ?? undefined,
+          environment: status.environment,
+        },
+      });
+      await googleClient.acknowledgeIfPending({
+        purchaseToken: row.sourceSubscriptionId,
+        productId: status.productId,
+        acknowledgementState: status.acknowledgementState,
+      });
+    }
+  }
+}
+```
+
+Provider refresh failures are logged and do not synthesize a canceled status; the existing local subscription row remains unchanged and the next daily run retries.
 
 - [ ] **Step 7: Run tests**
 
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest run apps/api/tests/billing-webhook.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/sync-sub.test.ts apps/api/tests/iap/billing-iap-webhook.test.ts apps/api/tests/cron.daily-refresh.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest run apps/api/tests/billing-webhook.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts apps/api/tests/iap/sync-sub.test.ts apps/api/tests/iap/billing-iap-webhook.test.ts apps/api/tests/cron.daily-refresh.test.ts
 ```
 
 Expected: tests pass.
@@ -927,7 +1184,7 @@ Expected: tests pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add apps/api/src/stripe/sync-sub.ts apps/api/src/routes/billing-webhook.ts apps/api/src/routes/billing.ts apps/api/src/iap/sync-sub.ts apps/api/src/routes/billing-iap-webhook.ts apps/api/src/cron/jobs/daily-refresh.ts apps/api/src/plaid/reconcile.ts apps/api/tests/billing-webhook.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/sync-sub.test.ts apps/api/tests/iap/billing-iap-webhook.test.ts apps/api/tests/cron.daily-refresh.test.ts
+git add apps/api/src/stripe/sync-sub.ts apps/api/src/routes/billing-webhook.ts apps/api/src/routes/billing.ts apps/api/src/iap/sync-sub.ts apps/api/src/routes/billing-iap.ts apps/api/src/routes/billing-iap-webhook.ts apps/api/src/cron/jobs/daily-refresh.ts apps/api/src/plaid/reconcile.ts apps/api/tests/billing-webhook.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts apps/api/tests/iap/sync-sub.test.ts apps/api/tests/iap/billing-iap-webhook.test.ts apps/api/tests/cron.daily-refresh.test.ts
 git commit -m "feat: reconcile plaid items after billing changes"
 ```
 
@@ -972,9 +1229,13 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest ru
 
 Expected: reconnect dedupe test inserts duplicates.
 
-- [ ] **Step 3: Implement account fingerprint lookup**
+- [ ] **Step 3: Implement account fingerprint and merchant helpers**
 
-In `apps/api/src/plaid/sync.ts`, add helper functions near `accountIdForPlaidAccount`:
+In `apps/api/src/plaid/sync.ts`, import the existing merchant normalizer and add helper functions near `accountIdForPlaidAccount`:
+
+```ts
+import { normalizeMerchant } from "../categorize/normalize.js";
+```
 
 ```ts
 async function disconnectedAccountMatch(
@@ -1005,6 +1266,10 @@ async function disconnectedAccountMatch(
   });
   return matches.length === 1 ? matches[0]!.id : null;
 }
+
+function plaidMerchantRaw(t: PlaidTxLike): string {
+  return t.merchant_name ?? t.name ?? "Unknown";
+}
 ```
 
 This helper intentionally matches only billing-disconnected accounts that still point at their original `plaidItem`; strict user-initiated deletion sets `plaidItemId = null` and is excluded from reconnect dedupe.
@@ -1031,7 +1296,9 @@ const oldAccountId = await disconnectedAccountMatch(tx, workspaceId, currentAcco
 When `oldAccountId` is non-null, look for one historical transaction:
 
 ```ts
-const strongMatches = await tx.transaction.findMany({
+const rawMerchant = plaidMerchantRaw(t);
+const merchantNormalized = normalizeMerchant(rawMerchant);
+const candidates = await tx.transaction.findMany({
   where: {
     workspaceId,
     accountId: oldAccountId,
@@ -1040,10 +1307,12 @@ const strongMatches = await tx.transaction.findMany({
     plaidItem: { is: { status: "disconnected" } },
     occurredAt: plaidOccurredAt(t),
     amount: new Prisma.Decimal(t.amount),
-    merchantRaw: t.merchant_name ?? t.name ?? "Unknown",
   },
-  select: { id: true },
-  take: 2,
+  select: { id: true, merchantRaw: true, merchantNormalized: true },
+});
+const strongMatches = candidates.filter((candidate) => {
+  const existingMerchant = candidate.merchantNormalized ?? normalizeMerchant(candidate.merchantRaw);
+  return existingMerchant === merchantNormalized;
 });
 if (strongMatches.length === 1) {
   await tx.transaction.update({
@@ -1054,6 +1323,8 @@ if (strongMatches.length === 1) {
       plaidTransactionId: t.transaction_id,
       plaidPendingTransactionId: t.pending_transaction_id ?? null,
       pending: t.pending,
+      merchantRaw: rawMerchant,
+      merchantNormalized,
       rawData: t as unknown as Prisma.InputJsonValue,
       removedAt: null,
     },
@@ -1062,7 +1333,7 @@ if (strongMatches.length === 1) {
 }
 ```
 
-This phase uses exact raw merchant matching because `apps/api/src/plaid/sync.ts` currently stores raw Plaid merchant text without a local normalizer.
+This keeps the match conservative: account fingerprint, date, amount, and normalized merchant must match; the raw fallback only covers legacy rows where `merchantNormalized` is still null.
 
 - [ ] **Step 5: Run tests**
 
@@ -1084,6 +1355,7 @@ git commit -m "feat: dedupe transactions after plaid reconnect"
 ## Task 7: Active/Disconnected Account Visibility And Banks Ownership
 
 **Files:**
+- Modify: `libs/shared/src/dto/plaid.ts`
 - Modify: `apps/api/src/routes/accounts.ts`
 - Modify: `apps/api/src/routes/plaid-items.ts`
 - Modify: `apps/web/src/app/(app)/settings/banks/_components/connected-banks-list.tsx`
@@ -1118,7 +1390,22 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest ru
 
 - [ ] **Step 3: Return ownership metadata**
 
-In `apps/api/src/routes/plaid-items.ts`, include user fields:
+First update the shared DTO in `libs/shared/src/dto/plaid.ts`:
+
+```ts
+export type PlaidItemDTO = {
+  id: string;
+  institutionName: string;
+  status: PlaidItemStatus;
+  errorCode: string | null;
+  lastSyncAt: string | null;
+  accountCount: number;
+  connectedByUserId: string | null;
+  connectedByName: string | null;
+};
+```
+
+Then in `apps/api/src/routes/plaid-items.ts`, include user fields:
 
 ```ts
 user: { select: { id: true, name: true, email: true } },
@@ -1140,6 +1427,8 @@ connectedByUserId: string | null;
 connectedByName: string | null;
 ```
 
+The Banks list already imports `PlaidItemDTO` from `@fina/shared`; keep using the shared DTO and do not add a duplicate local response type.
+
 In `connected-banks-list.tsx`, render under the institution name:
 
 ```tsx
@@ -1156,6 +1445,7 @@ Run:
 
 ```bash
 DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest run apps/api/tests/plaid.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest run apps/api/tests/accounts.routes.test.ts
 pnpm typecheck
 ```
 
@@ -1164,7 +1454,7 @@ Expected: tests and typecheck pass.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/api/src/routes/accounts.ts apps/api/src/routes/plaid-items.ts apps/web/src/app/(app)/settings/banks/_components/connected-banks-list.tsx apps/web/src/app/(app)/settings/banks/page.tsx apps/api/tests/plaid.routes.test.ts apps/api/tests/accounts.routes.test.ts
+git add libs/shared/src/dto/plaid.ts apps/api/src/routes/accounts.ts apps/api/src/routes/plaid-items.ts apps/web/src/app/(app)/settings/banks/_components/connected-banks-list.tsx apps/web/src/app/(app)/settings/banks/page.tsx apps/api/tests/plaid.routes.test.ts apps/api/tests/accounts.routes.test.ts
 git commit -m "feat: show plaid ownership and hide disconnected accounts"
 ```
 
@@ -1190,10 +1480,12 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec vitest ru
   apps/api/tests/cron.tier-gate.test.ts \
   apps/api/tests/billing-webhook.test.ts \
   apps/api/tests/billing-sync.test.ts \
+  apps/api/tests/iap/billing-iap.routes.test.ts \
   apps/api/tests/iap/sync-sub.test.ts \
   apps/api/tests/iap/billing-iap-webhook.test.ts \
   apps/api/tests/cron.daily-refresh.test.ts \
-  apps/api/tests/plaid.sync.test.ts
+  apps/api/tests/plaid.sync.test.ts \
+  apps/api/tests/accounts.routes.test.ts
 ```
 
 Expected: all listed tests pass.
@@ -1227,9 +1519,12 @@ Confirm in code:
 2. Link-token and exchange both enforce connectedBy user-wide count.
 3. Exchange final check and create are serialized by user.
 4. Stripe daily refresh uses status: "all".
-5. Billing disconnect archives bank accounts and keeps transactions.
-6. Lite users can sync their single kept Item.
-7. Other members' Items are not disconnected during a user's downgrade.
+5. Apple and Google IAP provider state is refreshed before Plaid reconciliation.
+6. Billing disconnect archives bank accounts, keeps transactions, and uses the Plaid row lock.
+7. Exchange cleanup failures persist a disconnected pending cleanup row for retry.
+8. Lite users can sync their single kept Item.
+9. Other members' Items are not disconnected during a user's downgrade.
+10. Plaid ownership fields live in `libs/shared/src/dto/plaid.ts`.
 ```
 
 - [ ] **Step 5: Confirm no uncommitted verification fixes remain**
