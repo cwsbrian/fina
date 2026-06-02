@@ -1,10 +1,16 @@
-import type { PlaidItemStatus } from "@prisma/client";
+import type { PlaidItemStatus, SubscriptionStatus } from "@prisma/client";
+import { tierForIapProductId } from "@fina/shared";
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { effectiveTier } from "../auth/tier.js";
 import { logError } from "../logger.js";
 import { sanitizePlaidError } from "./client.js";
 import { removeItemForBilling } from "./items.js";
+import { stripeClient } from "../stripe/client.js";
+import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
+import { requireAppleIapEnv, requireGoogleIapEnv } from "../iap/env-guard.js";
+import { AppleClient } from "../iap/apple-client.js";
+import { GoogleClient } from "../iap/google-client.js";
 
 export type ReconcileResult = {
   kept: string[];
@@ -13,6 +19,85 @@ export type ReconcileResult = {
 };
 
 const billableStatuses: PlaidItemStatus[] = ["active", "error", "relink_required"];
+const refreshableIapStatuses: SubscriptionStatus[] = [
+  "trialing",
+  "active",
+  "past_due",
+  "paused",
+  "incomplete",
+];
+
+export async function refreshBillingStateForUser(env: Env, userId: string): Promise<void> {
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: { stripeCustomerId: true },
+  });
+
+  if (user.stripeCustomerId) {
+    const stripe = stripeClient(env);
+    const subs = await stripe.subscriptions.list({
+      customer: user.stripeCustomerId,
+      status: "all",
+      limit: 10,
+    });
+    for (const sub of subs.data) {
+      await syncSubscriptionFromStripe(env, sub.id, userId);
+    }
+  }
+
+  const iapRows = await prisma.subscription.findMany({
+    where: {
+      userId,
+      source: { in: ["iap_apple", "iap_google"] },
+      status: { in: refreshableIapStatuses },
+    },
+    select: {
+      id: true,
+      source: true,
+      sourceSubscriptionId: true,
+    },
+  });
+
+  let appleClient: AppleClient | null = null;
+  let googleClient: GoogleClient | null = null;
+
+  for (const row of iapRows) {
+    if (row.source === "iap_apple") {
+      appleClient ??= new AppleClient(requireAppleIapEnv(process.env));
+      const status = await appleClient.getSubscriptionStatus(row.sourceSubscriptionId);
+      const tier = tierForIapProductId(status.productId);
+      await prisma.subscription.update({
+        where: { id: row.id },
+        data: {
+          ...(tier ? { tier } : {}),
+          status: status.mapped.status as SubscriptionStatus,
+          currentPeriodEnd: status.expiresDate,
+          cancelAtPeriodEnd: status.mapped.cancelAtPeriodEnd,
+        },
+      });
+      continue;
+    }
+
+    googleClient ??= new GoogleClient(requireGoogleIapEnv(process.env));
+    const purchase = await googleClient.fetchAndNormalize(row.sourceSubscriptionId);
+    const tier = tierForIapProductId(purchase.productId);
+    await prisma.subscription.update({
+      where: { id: row.id },
+      data: {
+        ...(tier ? { tier } : {}),
+        status: purchase.mapped.status as SubscriptionStatus,
+        currentPeriodEnd: purchase.expiryTime,
+        cancelAtPeriodEnd: purchase.mapped.cancelAtPeriodEnd,
+        environment: purchase.environment,
+      },
+    });
+    await googleClient.acknowledgeIfPending({
+      purchaseToken: row.sourceSubscriptionId,
+      productId: purchase.productId,
+      acknowledgementState: purchase.acknowledgementState,
+    });
+  }
+}
 
 export async function reconcilePlaidItemsForUser(env: Env, userId: string): Promise<ReconcileResult> {
   const tier = await effectiveTier(userId);

@@ -10,6 +10,7 @@ import { ensureStripeCustomer } from "../stripe/ensure-customer.js";
 import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
 import { computeEffectiveTier } from "../auth/tier.js";
 import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
+import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 
 // Stripe requires trial_end to be at least 48h in the future (codex R3).
 // Trials expiring sooner than this are treated as already-expired — the
@@ -183,7 +184,8 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
         }
         if (sess.subscription) {
           const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
-          await syncSubscriptionFromStripe(app.fina.env, subId, user.id, app.log);
+          const synced = await syncSubscriptionFromStripe(app.fina.env, subId, user.id, app.log);
+          if (synced) await reconcilePlaidItemsForUser(app.fina.env, user.id);
         }
       }
 
@@ -196,7 +198,8 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
           limit: 10,
         });
         for (const sub of subs.data) {
-          await syncSubscriptionFromStripe(app.fina.env, sub.id, user.id, app.log);
+          const synced = await syncSubscriptionFromStripe(app.fina.env, sub.id, user.id, app.log);
+          if (synced) await reconcilePlaidItemsForUser(app.fina.env, user.id);
         }
       }
 

@@ -12,11 +12,18 @@ vi.mock("../src/stripe/client.js", () => ({
   stripeClient: () => stripe.asStripe(),
   _clearStripeClientCache: () => {},
 }));
+vi.mock("../src/plaid/reconcile.js", () => ({
+  reconcilePlaidItemsForUser: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  reconcileOrphanPlaidItems: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  retryPendingPlaidBillingCleanups: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  refreshBillingStateForUser: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { buildApp } from "../src/server.js";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import Stripe from "stripe";
+import { reconcilePlaidItemsForUser } from "../src/plaid/reconcile.js";
 
 const env = {
   NODE_ENV: "test" as const,
@@ -166,6 +173,7 @@ describe("POST /webhooks/stripe — event dispatch", () => {
     });
     expect(sub.tier).toBe("pro");
     expect(sub.status).toBe("active");
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.userId);
   });
 
   it("subscription.updated before any .created still creates the row", async () => {
@@ -193,6 +201,7 @@ describe("POST /webhooks/stripe — event dispatch", () => {
       where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_w2" } },
     });
     expect(sub).not.toBeNull();
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.userId);
   });
 
   it("stale subscription.created retry after newer .updated keeps latest state", async () => {
@@ -255,6 +264,7 @@ describe("POST /webhooks/stripe — event dispatch", () => {
       where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_w4" } },
     });
     expect(sub.status).toBe("canceled");
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.userId);
   });
 
   it("unknown price ID → 200, no row created, error logged", async () => {

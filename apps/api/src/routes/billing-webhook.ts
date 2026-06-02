@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import Stripe from "stripe";
 import { prisma } from "../db.js";
 import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
+import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 
 export async function billingWebhookRoutes(app: FastifyInstance): Promise<void> {
   // Override the JSON parser to give us the raw buffer for signature
@@ -83,7 +84,8 @@ async function handleEvent(app: FastifyInstance, event: Stripe.Event): Promise<v
       }
       if (sess.subscription) {
         const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
-        await syncSubscriptionFromStripe(app.fina.env, subId, userId, app.log);
+        const synced = await syncSubscriptionFromStripe(app.fina.env, subId, userId, app.log);
+        if (synced) await reconcilePlaidItemsForUser(app.fina.env, userId);
       }
       return;
     }
@@ -97,7 +99,8 @@ async function handleEvent(app: FastifyInstance, event: Stripe.Event): Promise<v
         app.log.info({ eventId: event.id, customerId }, "no local user for customer; skipping");
         return;
       }
-      await syncSubscriptionFromStripe(app.fina.env, sub.id, userId, app.log);
+      const synced = await syncSubscriptionFromStripe(app.fina.env, sub.id, userId, app.log);
+      if (synced) await reconcilePlaidItemsForUser(app.fina.env, userId);
       return;
     }
     case "invoice.payment_failed":

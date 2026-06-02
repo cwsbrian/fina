@@ -6,6 +6,15 @@ import { signUpAndGetCookie } from "../helpers/auth.js";
 import { testEnv } from "../helpers/test-env.js";
 import { deriveAppleToken } from "../../src/iap/binding.js";
 
+vi.mock("../../src/plaid/reconcile.js", () => ({
+  reconcilePlaidItemsForUser: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  reconcileOrphanPlaidItems: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  retryPendingPlaidBillingCleanups: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  refreshBillingStateForUser: vi.fn().mockResolvedValue(undefined),
+}));
+
+import { reconcilePlaidItemsForUser } from "../../src/plaid/reconcile.js";
+
 // Set IAP env vars so requireIapEnv(process.env) inside the route handlers passes.
 // These are sandbox-safe fake values — same shape used in env-guard.test.ts.
 process.env.APPLE_BUNDLE_ID = "com.fina.app";
@@ -109,6 +118,7 @@ describe("POST /billing/iap/checkout", () => {
     const body = res.json();
     expect(body.tier).toBe("pro");
     expect(body.subscription.source).toBe("iap_apple");
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
   });
 
   it("403 user_mismatch when appAccountToken doesn't match caller", async () => {
@@ -172,5 +182,7 @@ describe("POST /billing/iap/restore", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().tier).toBe("lite");
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledTimes(1);
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
   });
 });

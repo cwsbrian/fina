@@ -8,11 +8,18 @@ vi.mock("../src/stripe/client.js", () => ({
   stripeClient: () => stripe.asStripe(),
   _clearStripeClientCache: () => {},
 }));
+vi.mock("../src/plaid/reconcile.js", () => ({
+  reconcilePlaidItemsForUser: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  reconcileOrphanPlaidItems: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  retryPendingPlaidBillingCleanups: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  refreshBillingStateForUser: vi.fn().mockResolvedValue(undefined),
+}));
 
 import { buildApp } from "../src/server.js";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { signUpAndGetCookie } from "./helpers/auth.js";
+import { reconcilePlaidItemsForUser } from "../src/plaid/reconcile.js";
 
 const env = {
   NODE_ENV: "test" as const,
@@ -84,6 +91,7 @@ describe("POST /billing/sync", () => {
     expect(sub.tier).toBe("pro");
     expect(sub.status).toBe("active");
     expect(res.json().subscription).toMatchObject({ tier: "pro", status: "active", source: "stripe" });
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.userId);
   });
 
   it("rejects sessionId that does not belong to the caller", async () => {
@@ -139,6 +147,7 @@ describe("POST /billing/sync", () => {
       where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_s3" } },
     });
     expect(sub.tier).toBe("pro");
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.userId);
   });
 
   it("no-op for user with neither sessionId nor stripeCustomerId", async () => {
@@ -153,6 +162,7 @@ describe("POST /billing/sync", () => {
     expect(res.statusCode).toBe(200);
     expect(stripe.fns.sessionsRetrieve).not.toHaveBeenCalled();
     expect(stripe.fns.subsList).not.toHaveBeenCalled();
+    expect(reconcilePlaidItemsForUser).not.toHaveBeenCalled();
     expect(res.json().subscription).toBeNull();
   });
 

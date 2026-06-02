@@ -18,6 +18,43 @@ vi.mock("../src/plaid/items.js", () => ({
 }));
 import { removeItemForBilling } from "../src/plaid/items.js";
 
+const providerMocks = vi.hoisted(() => {
+  const stripe = {
+    subscriptions: {
+      list: vi.fn().mockResolvedValue({ data: [] }),
+      retrieve: vi.fn(),
+    },
+    subscriptionSchedules: {
+      retrieve: vi.fn(),
+    },
+  };
+  const appleClient = {
+    getSubscriptionStatus: vi.fn(),
+  };
+  const googleClient = {
+    fetchAndNormalize: vi.fn(),
+    acknowledgeIfPending: vi.fn().mockResolvedValue(true),
+  };
+  return {
+    stripe,
+    appleClient,
+    googleClient,
+    AppleClient: vi.fn(() => appleClient),
+    GoogleClient: vi.fn(() => googleClient),
+  };
+});
+
+vi.mock("../src/stripe/client.js", () => ({
+  stripeClient: () => providerMocks.stripe,
+  _clearStripeClientCache: () => {},
+}));
+vi.mock("../src/iap/apple-client.js", () => ({
+  AppleClient: providerMocks.AppleClient,
+}));
+vi.mock("../src/iap/google-client.js", () => ({
+  GoogleClient: providerMocks.GoogleClient,
+}));
+
 vi.mock("../src/push/anomaly.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/push/anomaly.js")>();
   return { ...actual, checkLargeChargeAndPush: vi.fn().mockResolvedValue(undefined) };
@@ -43,6 +80,19 @@ import * as loggerMod from "../src/logger.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
+process.env.APPLE_BUNDLE_ID = "com.fina.app";
+process.env.APPLE_ASC_ISSUER_ID = "00000000-0000-0000-0000-000000000000";
+process.env.APPLE_ASC_KEY_ID = "K1";
+process.env.APPLE_ASC_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n";
+process.env.APPLE_ENV = "sandbox";
+process.env.GOOGLE_PACKAGE_NAME = "app.fina";
+process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({
+  client_email: "iap@fina.iam.gserviceaccount.com",
+  private_key: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
+});
+process.env.GOOGLE_PUBSUB_VERIFY_AUDIENCE = "https://api.fina.app/webhooks/iap/google";
+process.env.GOOGLE_PUBSUB_VERIFY_EMAIL = "iap-pubsub@fina.iam.gserviceaccount.com";
+process.env.GOOGLE_PUBSUB_SUBSCRIPTION_NAME = "projects/fina/subscriptions/iap-rtdn";
 
 const syncOk = { added: 1, modified: 0, removed: 0, newTxIds: ["tx-1"] };
 const syncLockHeld = { skipped: "lock_held" as const, added: 0, modified: 0, removed: 0, newTxIds: [] };
@@ -65,6 +115,11 @@ async function seedActiveItem(connectedBy: string | null = "user-a") {
   }
 
   const ws = await prisma.workspace.create({ data: { name: "W" } });
+  if (resolvedConnectedBy) {
+    await prisma.membership.create({
+      data: { workspaceId: ws.id, userId: resolvedConnectedBy, role: "owner" },
+    });
+  }
   const item = await prisma.plaidItem.create({
     data: {
       workspaceId: ws.id,
@@ -77,7 +132,54 @@ async function seedActiveItem(connectedBy: string | null = "user-a") {
       status: "active",
     },
   });
-  return { wsId: ws.id, itemId: item.id };
+  return { wsId: ws.id, itemId: item.id, userId: resolvedConnectedBy };
+}
+
+async function seedUserWithActiveItems(opts: {
+  userId: string;
+  email: string;
+  count: number;
+  stripeCustomerId?: string;
+}) {
+  await prisma.user.create({
+    data: {
+      id: opts.userId,
+      email: opts.email,
+      emailVerified: true,
+      name: opts.email,
+      stripeCustomerId: opts.stripeCustomerId,
+    },
+  });
+  const ws = await prisma.workspace.create({ data: { name: `WS ${opts.email}` } });
+  await prisma.membership.create({ data: { workspaceId: ws.id, userId: opts.userId, role: "owner" } });
+  const items = [];
+  for (let i = 0; i < opts.count; i++) {
+    items.push(await prisma.plaidItem.create({
+      data: {
+        workspaceId: ws.id,
+        connectedBy: opts.userId,
+        accessTokenCiphertext: Buffer.from([1]),
+        accessTokenIv: Buffer.from([2]),
+        itemId: `pi_${opts.userId}_${i}`,
+        institutionId: "ins_1",
+        institutionName: "Bank",
+        status: "active",
+        createdAt: new Date(Date.UTC(2026, 0, i + 1)),
+      },
+    }));
+  }
+  return { wsId: ws.id, items };
+}
+
+function fakeStripeSub(opts: { id: string; customer: string; priceId?: string; status?: string }) {
+  return {
+    id: opts.id,
+    customer: opts.customer,
+    status: opts.status ?? "active",
+    cancel_at_period_end: false,
+    current_period_end: Math.floor((Date.now() + 30 * 86400_000) / 1000),
+    items: { data: [{ price: { id: opts.priceId ?? env.STRIPE_PRICE_PRO_MONTHLY } }] },
+  } as any;
 }
 
 async function seedTxWithCategory(opts: {
@@ -140,6 +242,16 @@ beforeEach(async () => {
   vi.mocked(checkBackgroundSyncGate).mockResolvedValue({ ok: true });
   vi.mocked(removeItemForBilling).mockReset();
   vi.mocked(removeItemForBilling).mockResolvedValue(undefined);
+  providerMocks.stripe.subscriptions.list.mockReset();
+  providerMocks.stripe.subscriptions.list.mockResolvedValue({ data: [] });
+  providerMocks.stripe.subscriptions.retrieve.mockReset();
+  providerMocks.stripe.subscriptionSchedules.retrieve.mockReset();
+  providerMocks.appleClient.getSubscriptionStatus.mockReset();
+  providerMocks.googleClient.fetchAndNormalize.mockReset();
+  providerMocks.googleClient.acknowledgeIfPending.mockReset();
+  providerMocks.googleClient.acknowledgeIfPending.mockResolvedValue(true);
+  providerMocks.AppleClient.mockClear();
+  providerMocks.GoogleClient.mockClear();
   vi.mocked(anomalyMod.checkLargeChargeAndPush).mockReset();
   vi.mocked(anomalyMod.checkLargeChargeAndPush).mockResolvedValue(undefined);
   vi.mocked(addedMod.notifyTransactionAdded).mockReset();
@@ -253,48 +365,61 @@ describe("runDailyRefresh", () => {
   });
 });
 
-describe("runDailyRefresh — Step 0 trial expiry cleanup", () => {
-  async function seedWorkspaceWithOwner(trialEndsAt: Date | null) {
-    const { randomUUID } = await import("crypto");
-    const userId = randomUUID();
-    await prisma.user.create({
-      data: {
-        id: userId,
-        name: "Test Owner",
-        email: `owner-${userId.slice(0, 8)}@x.com`,
-        emailVerified: true,
-        trialEndsAt,
-      },
+describe("runDailyRefresh — provider refresh and reconciliation", () => {
+  it("lists Stripe subscriptions before Plaid reconciliation", async () => {
+    const order: string[] = [];
+    const { items } = await seedUserWithActiveItems({
+      userId: "u-stripe-refresh",
+      email: "stripe-refresh@test.fina",
+      count: 2,
+      stripeCustomerId: "cus_refresh",
     });
-    const ws = await prisma.workspace.create({ data: { name: "WS" } });
-    await prisma.membership.create({
-      data: { userId, workspaceId: ws.id, role: "owner" },
+    providerMocks.stripe.subscriptions.list.mockImplementation(async () => {
+      order.push("stripe-list");
+      return { data: [{ id: "sub_refresh" }] };
     });
-    const item = await prisma.plaidItem.create({
-      data: {
-        workspaceId: ws.id,
-        accessTokenCiphertext: Buffer.from([1]),
-        accessTokenIv: Buffer.from(new Array(12).fill(2)),
-        itemId: `pi_step0_${Math.random()}`,
-        institutionId: "ins_1",
-        institutionName: "Bank",
-        status: "active",
-      },
+    providerMocks.stripe.subscriptions.retrieve.mockResolvedValue(
+      fakeStripeSub({
+        id: "sub_refresh",
+        customer: "cus_refresh",
+        priceId: env.STRIPE_PRICE_LITE_MONTHLY,
+      }),
+    );
+    vi.mocked(removeItemForBilling).mockImplementation(async () => {
+      order.push("plaid-reconcile");
     });
-    return { wsId: ws.id, itemId: item.id };
-  }
-
-  it("expired-trial owner's active item → removeItemForBilling called", async () => {
-    const { itemId } = await seedWorkspaceWithOwner(new Date(Date.now() - 86_400_000));
+    vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
     await runDailyRefresh(env);
 
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), itemId);
+    expect(providerMocks.stripe.subscriptions.list).toHaveBeenCalledWith({
+      customer: "cus_refresh",
+      status: "all",
+      limit: 10,
+    });
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(order.indexOf("stripe-list")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 
-  it("active-trial owner's item → NOT removed", async () => {
-    await seedWorkspaceWithOwner(new Date(Date.now() + 86_400_000));
-    // Mock sync so the item's sync attempt doesn't error noisily in this test.
+  it("provider refresh failure does not disconnect Plaid items by itself", async () => {
+    await seedUserWithActiveItems({
+      userId: "u-provider-fail",
+      email: "provider-fail@test.fina",
+      count: 1,
+      stripeCustomerId: "cus_fail",
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: "u-provider-fail",
+        tier: "pro",
+        source: "stripe",
+        sourceSubscriptionId: "sub_local_pro",
+        sourceCustomerId: "cus_fail",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+      },
+    });
+    providerMocks.stripe.subscriptions.list.mockRejectedValueOnce(new Error("stripe unavailable"));
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
     await runDailyRefresh(env);
@@ -302,21 +427,97 @@ describe("runDailyRefresh — Step 0 trial expiry cleanup", () => {
     expect(removeItemForBilling).not.toHaveBeenCalled();
   });
 
-  it("removeItemForBilling throws → other items still synced (non-fatal)", async () => {
-    vi.mocked(removeItemForBilling).mockRejectedValueOnce(new Error("plaid down"));
-    const { itemId: expiredItemId } = await seedWorkspaceWithOwner(new Date(Date.now() - 86_400_000));
-
-    // Also seed an active-trial item that should still sync.
-    const { itemId: activeItemId } = await seedWorkspaceWithOwner(new Date(Date.now() + 86_400_000));
+  it("refreshes Apple IAP status before Plaid reconciliation", async () => {
+    const order: string[] = [];
+    const { items } = await seedUserWithActiveItems({
+      userId: "u-apple-refresh",
+      email: "apple-refresh@test.fina",
+      count: 2,
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: "u-apple-refresh",
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-apple-refresh",
+        sourceCustomerId: "apple-account",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
+    providerMocks.appleClient.getSubscriptionStatus.mockImplementation(async () => {
+      order.push("apple-refresh");
+      return {
+        expiresDate: new Date(Date.now() + 30 * 86400_000),
+        productId: "lite_monthly",
+        mapped: { status: "active", cancelAtPeriodEnd: false },
+      };
+    });
+    vi.mocked(removeItemForBilling).mockImplementation(async () => {
+      order.push("plaid-reconcile");
+    });
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
     await runDailyRefresh(env);
 
-    // removeItemForBilling was attempted for the expired item.
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), expiredItemId);
-    // syncTransactions was still called for the active item.
-    expect(syncTransactions).toHaveBeenCalled();
-    void activeItemId;
+    expect(providerMocks.appleClient.getSubscriptionStatus).toHaveBeenCalledWith("OT-apple-refresh");
+    const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-apple-refresh" } });
+    expect(sub.tier).toBe("lite");
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(order.indexOf("apple-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
+  });
+
+  it("refreshes Google IAP status before Plaid reconciliation", async () => {
+    const order: string[] = [];
+    const { items } = await seedUserWithActiveItems({
+      userId: "u-google-refresh",
+      email: "google-refresh@test.fina",
+      count: 2,
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: "u-google-refresh",
+        tier: "pro",
+        source: "iap_google",
+        sourceSubscriptionId: "pt-google-refresh",
+        sourceCustomerId: "google-account",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Production",
+      },
+    });
+    providerMocks.googleClient.fetchAndNormalize.mockImplementation(async () => {
+      order.push("google-refresh");
+      return {
+        obfuscatedExternalAccountId: "google-account",
+        acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
+        subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
+        productId: "lite_monthly",
+        expiryTime: new Date(Date.now() + 30 * 86400_000),
+        linkedPurchaseToken: null,
+        environment: "Production",
+        mapped: { status: "active", cancelAtPeriodEnd: false },
+        raw: {},
+      };
+    });
+    vi.mocked(removeItemForBilling).mockImplementation(async () => {
+      order.push("plaid-reconcile");
+    });
+    vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
+
+    await runDailyRefresh(env);
+
+    expect(providerMocks.googleClient.fetchAndNormalize).toHaveBeenCalledWith("pt-google-refresh");
+    expect(providerMocks.googleClient.acknowledgeIfPending).toHaveBeenCalledWith({
+      purchaseToken: "pt-google-refresh",
+      productId: "lite_monthly",
+      acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
+    });
+    const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-google-refresh" } });
+    expect(sub.tier).toBe("lite");
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(order.indexOf("google-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 });
 

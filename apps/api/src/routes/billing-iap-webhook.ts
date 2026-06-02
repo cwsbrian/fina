@@ -8,6 +8,7 @@ import { syncSubscriptionFromIAP } from "../iap/sync-sub.js";
 import { hashBindingToken } from "../iap/binding.js";
 import { AppleClient } from "../iap/apple-client.js";
 import { GoogleClient } from "../iap/google-client.js";
+import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 
 const MAX_UNKNOWN_RETRIES = 5;
 
@@ -70,10 +71,17 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         notification.subtype === "PRODUCT_NOT_FOR_SALE"
       ) {
         const verifiedTx = await appleClient.verifyAndDecodeTransaction(notification.signedTransactionJws, { context: "assn" });
-        await prisma.subscription.updateMany({
+        const sub = await prisma.subscription.findFirst({
           where: { source: "iap_apple", sourceSubscriptionId: verifiedTx.originalTransactionId },
-          data: { status: "canceled" },
+          select: { id: true, userId: true },
         });
+        if (sub) {
+          await prisma.subscription.update({
+            where: { id: sub.id },
+            data: { status: "canceled" },
+          });
+          await reconcilePlaidItemsForUser(app.fina.env, sub.userId);
+        }
         await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "family_sharing_revoked" } });
         return { ok: true };
       }
@@ -131,6 +139,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         userId,
         context: "assn",
       }, { appleClient, googleClient });
+      await reconcilePlaidItemsForUser(app.fina.env, userId);
 
       await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: notification.notificationType } });
       return reply.code(200).send({ ok: true });
@@ -218,6 +227,7 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         userId,
         context: "rtdn",
       }, { appleClient, googleClient });
+      await reconcilePlaidItemsForUser(app.fina.env, userId);
 
       await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: `notif_${note.payload.notificationType}` } });
       return reply.code(200).send({ ok: true });

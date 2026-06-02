@@ -5,51 +5,50 @@ import { syncTransactions } from "../../plaid/sync.js";
 import { categorizeNewTransactions } from "../../categorize/service.js";
 import { sanitizePlaidError } from "../../plaid/client.js";
 import { checkBackgroundSyncGate } from "../tier-gate.js";
-import { removeItemForBilling } from "../../plaid/items.js";
+import {
+  reconcileOrphanPlaidItems,
+  reconcilePlaidItemsForUser,
+  refreshBillingStateForUser,
+  retryPendingPlaidBillingCleanups,
+} from "../../plaid/reconcile.js";
 import { checkLargeChargeAndPush } from "../../push/anomaly.js";
 import { notifyTransactionAdded } from "../../push/transaction-added.js";
 
 const CRON_NAME = "daily-refresh";
 
 export async function runDailyRefresh(env: Env): Promise<void> {
-  // ── Step 0: remove active items for expired-trial workspace owners ──────
-  // Plaid charges ~$0.25/item/month even with no API calls. Removing on expiry
-  // stops billing immediately. Data (transactions, accounts) is preserved.
-  const expiredItems = await prisma.plaidItem.findMany({
+  // ── Step 0: refresh provider billing state, then reconcile by user ──────
+  const owners = await prisma.plaidItem.findMany({
     where: {
-      status: "active",
-      workspace: {
-        memberships: {
-          some: {
-            role: "owner",
-            user: { trialEndsAt: { lt: new Date() } },
-          },
-        },
-      },
+      status: { not: "disconnected" },
+      connectedBy: { not: null },
     },
-    select: { id: true, workspaceId: true },
+    distinct: ["connectedBy"],
+    select: { connectedBy: true },
   });
 
-  let billingRemoved = 0;
-  for (const item of expiredItems) {
+  for (const owner of owners) {
+    const userId = owner.connectedBy;
+    if (!userId) continue;
+    await refreshBillingStateForUser(env, userId).catch((e) => {
+      logError(
+        { cron: CRON_NAME, userId, err: e },
+        "daily-refresh: provider billing refresh failed",
+      );
+    });
     try {
-      await removeItemForBilling(env, item.workspaceId, item.id);
-      billingRemoved++;
+      await reconcilePlaidItemsForUser(env, userId);
     } catch (e) {
       logError(
-        { cron: CRON_NAME, plaidItemId: item.id, err: sanitizePlaidError(e) },
-        "daily-refresh: billing-remove failed",
+        { cron: CRON_NAME, userId, err: sanitizePlaidError(e) },
+        "daily-refresh: plaid reconciliation failed",
       );
-      // Non-fatal: cron retries tomorrow. Plaid will return ITEM_NOT_FOUND
-      // if the token was already removed, and removeItemForBilling handles that.
     }
   }
-  if (expiredItems.length > 0) {
-    logInfo(
-      { cron: CRON_NAME },
-      `daily-refresh: trial expiry cleanup — found=${expiredItems.length} removed=${billingRemoved}`,
-    );
-  }
+
+  await retryPendingPlaidBillingCleanups(env);
+  await reconcileOrphanPlaidItems(env);
+
   // ── existing active-items sync loop (fresh query — Step 0's disconnected
   //    items are excluded by status:'active' filter below) ─────────────────
 

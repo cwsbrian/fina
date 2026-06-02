@@ -9,6 +9,7 @@ import { deriveAppleToken, deriveGoogleToken } from "../iap/binding.js";
 import { AppleClient } from "../iap/apple-client.js";
 import { GoogleClient } from "../iap/google-client.js";
 import { buildMeBody } from "./billing.js";
+import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 
 export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
   // Per-platform memoized cache. Splitting Apple and Google means a dev
@@ -94,6 +95,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         }, { googleClient });
       }
 
+      await reconcilePlaidItemsForUser(app.fina.env, userId);
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
@@ -118,6 +120,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
           ? { appleClient: resolveApple().client }
           : { googleClient: resolveGoogle().client };
 
+      let syncedAny = false;
       for (const item of parsed.data.purchases) {
         try {
           if (platform === "ios") {
@@ -139,11 +142,13 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
               context: "restore",
             }, deps);
           }
+          syncedAny = true;
         } catch (e) {
           // Spec §5.3 restore: "Skip (log + continue) on individual failures".
           app.log.warn({ err: e, productId: item.productId }, "iap_restore_item_failed");
         }
       }
+      if (syncedAny) await reconcilePlaidItemsForUser(app.fina.env, userId);
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
