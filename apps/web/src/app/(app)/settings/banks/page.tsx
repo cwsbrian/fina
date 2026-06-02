@@ -62,8 +62,11 @@ export default function BanksPage() {
   const isOwner =
     members.find((m) => m.userId === me.user.id)?.role === "owner";
   const bankCount = items?.length ?? 0;
+  const ownedBankCount = (items ?? []).filter(
+    (item) => item.connectedByUserId === me.user.id,
+  ).length;
   const plaidItemLimit = TIER_LIMITS[me.tier].plaidItems;
-  const remainingBanks = Math.max(plaidItemLimit - bankCount, 0);
+  const remainingBanks = Math.max(plaidItemLimit - ownedBankCount, 0);
   const hasPaidPlaidEntitlement = plaidItemLimit > 0;
 
   return (
@@ -114,7 +117,7 @@ export default function BanksPage() {
             workspaceId={wsId}
             tier={me.tier}
             plaidItemLimit={plaidItemLimit}
-            bankCount={bankCount}
+            bankCount={ownedBankCount}
             isOwner={isOwner}
             onConnected={load}
           />
