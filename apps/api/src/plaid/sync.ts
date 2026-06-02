@@ -258,6 +258,23 @@ function plaidMerchantRaw(t: PlaidTxLike): string {
   return t.merchant_name ?? t.name ?? "Unknown";
 }
 
+function plaidReconnectMerchantRaw(t: PlaidTxLike): string | null {
+  const merchantName = t.merchant_name?.trim();
+  if (merchantName) return merchantName;
+  const name = t.name?.trim();
+  return name || null;
+}
+
+function candidateReconnectMerchantNormalized(candidate: {
+  merchantRaw: string;
+  merchantNormalized: string | null;
+}): string | null {
+  const raw = candidate.merchantRaw.trim();
+  if (!raw || raw.toLowerCase() === "unknown") return null;
+  const normalized = candidate.merchantNormalized?.trim();
+  return normalized ? normalized : normalizeMerchant(candidate.merchantRaw);
+}
+
 export async function upsertAdded(
   tx: Prisma.TransactionClient,
   t: PlaidTxLike,
@@ -367,40 +384,48 @@ export async function upsertAdded(
   });
   const oldAccountId = await disconnectedAccountMatch(tx, workspaceId, currentAccount);
   if (oldAccountId) {
-    const rawMerchant = plaidMerchantRaw(t);
-    const merchantNormalized = normalizeMerchant(rawMerchant);
-    const candidates = await tx.transaction.findMany({
-      where: {
-        workspaceId,
-        accountId: oldAccountId,
-        source: "plaid",
-        plaidTransactionId: { not: null },
-        plaidItem: { is: { status: "disconnected" } },
-        occurredAt: plaidOccurredAt(t),
-        amount: new Prisma.Decimal(t.amount),
-      },
-      select: { id: true, merchantRaw: true, merchantNormalized: true },
-    });
-    const strongMatches = candidates.filter((candidate) => {
-      const existingMerchant = candidate.merchantNormalized ?? normalizeMerchant(candidate.merchantRaw);
-      return existingMerchant === merchantNormalized;
-    });
-    if (strongMatches.length === 1) {
-      await tx.transaction.update({
-        where: { id: strongMatches[0]!.id },
-        data: {
-          accountId,
-          plaidItemId,
-          plaidTransactionId: t.transaction_id,
-          plaidPendingTransactionId: t.pending_transaction_id ?? null,
-          pending: t.pending,
-          merchantRaw: rawMerchant,
-          merchantNormalized,
-          rawData: t as unknown as Prisma.InputJsonValue,
-          removedAt: null,
+    const reconnectMerchantRaw = plaidReconnectMerchantRaw(t);
+    const merchantNormalized = reconnectMerchantRaw ? normalizeMerchant(reconnectMerchantRaw) : "";
+    if (merchantNormalized.trim()) {
+      const newAmount = new Prisma.Decimal(t.amount);
+      const occurredAt = plaidOccurredAt(t);
+      const postedAt = plaidPostedAt(t);
+      const candidates = await tx.transaction.findMany({
+        where: {
+          workspaceId,
+          accountId: oldAccountId,
+          source: "plaid",
+          plaidTransactionId: { not: null },
+          plaidItem: { is: { status: "disconnected" } },
+          occurredAt,
+          amount: newAmount,
         },
+        select: { id: true, merchantRaw: true, merchantNormalized: true },
       });
-      return { kind: "updated", localId: strongMatches[0]!.id };
+      const strongMatches = candidates.filter((candidate) => {
+        const existingMerchant = candidateReconnectMerchantNormalized(candidate);
+        return existingMerchant === merchantNormalized;
+      });
+      if (strongMatches.length === 1) {
+        await tx.transaction.update({
+          where: { id: strongMatches[0]!.id },
+          data: {
+            accountId,
+            plaidItemId,
+            plaidTransactionId: t.transaction_id,
+            plaidPendingTransactionId: t.pending_transaction_id ?? null,
+            amount: newAmount,
+            occurredAt,
+            postedAt,
+            pending: t.pending,
+            merchantRaw: plaidMerchantRaw(t),
+            merchantNormalized,
+            rawData: t as unknown as Prisma.InputJsonValue,
+            removedAt: null,
+          },
+        });
+        return { kind: "updated", localId: strongMatches[0]!.id };
+      }
     }
   }
   const created = await tx.transaction.create({
