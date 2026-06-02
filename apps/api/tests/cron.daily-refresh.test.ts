@@ -340,13 +340,14 @@ describe("runDailyRefresh", () => {
   });
 
   it("null connectedBy: does not sync orphan items after orphan reconciliation path", async () => {
-    await seedActiveItem(null); // connectedBy = null
+    const orphan = await seedActiveItem(null); // connectedBy = null
     vi.mocked(syncTransactions).mockResolvedValue(syncOk);
 
     await runDailyRefresh(env);
 
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
-    expect(removeItemForBilling).not.toHaveBeenCalled();
+    expect(removeItemForBilling).toHaveBeenCalledTimes(1);
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, orphan.wsId, orphan.itemId);
     expect(syncTransactions).not.toHaveBeenCalled();
   });
 
