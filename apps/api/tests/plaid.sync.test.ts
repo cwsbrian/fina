@@ -122,6 +122,59 @@ describe("syncTransactions", () => {
     await app.close();
   });
 
+  it("disconnected before sync — does not call Plaid or resurrect the item", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "sync-disc-before@x.com", name: "D" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+    await prisma.plaidItem.update({
+      where: { id: plaidItemId },
+      data: { status: "disconnected" },
+    });
+
+    plaidMock.transactionsSync.push({
+      data: { added: [], modified: [], removed: [], next_cursor: "unused", has_more: false },
+    });
+
+    await expect(syncTransactions(env, wsId, plaidItemId)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "not_found",
+    });
+    expect(plaidMock.transactionsSync).toHaveLength(1);
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } });
+    expect(item.status).toBe("disconnected");
+    expect(item.lastSyncAt).toBeNull();
+    expect(item.lastCursor).toBeNull();
+    await app.close();
+  });
+
+  it("disconnect during sync — final status update does not resurrect the item", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "sync-disc-race@x.com", name: "R" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const { plaidItemId } = await makeItemWithAccount(wsId);
+
+    plaidMock.transactionsSync.push((async () => {
+      await prisma.plaidItem.update({
+        where: { id: plaidItemId },
+        data: { status: "disconnected" },
+      });
+      return {
+        data: { added: [], modified: [], removed: [], next_cursor: "race_cursor", has_more: false },
+      };
+    })());
+
+    await expect(syncTransactions(env, wsId, plaidItemId)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "not_found",
+    });
+    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } });
+    expect(item.status).toBe("disconnected");
+    expect(item.lastSyncAt).toBeNull();
+    expect(item.lastCursor).toBeNull();
+    await app.close();
+  });
+
   it("multi-page — cursor advances per page; all 3 buckets accumulated across pages", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "o2@x.com", name: "O" });
@@ -467,11 +520,10 @@ describe("syncTransactions", () => {
 
       const r = await syncTransactions(env, wsId, plaidItemId);
       expect(r).toMatchObject({ skipped: "lock_held", added: 0, modified: 0, removed: 0 });
-      // syncTransactions calls Plaid BEFORE attempting the per-page row lock,
-      // so the mock response IS consumed (then discarded when the per-page tx
-      // aborts on SyncLockHeld). Verify by asserting nothing landed in the DB:
-      // no transactions, and lastCursor on the plaid_item is unchanged.
-      expect(plaidMock.transactionsSync.length).toBe(0); // popped by the call
+      // The preflight row lock prevents us from calling Plaid when another
+      // sync/disconnect already owns the item. Verify the response stays
+      // queued, nothing lands in the DB, and the cursor is unchanged.
+      expect(plaidMock.transactionsSync.length).toBe(1);
       expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(0);
       const itemRow = await prisma.plaidItem.findUniqueOrThrow({ where: { id: plaidItemId } });
       expect(itemRow.lastCursor).toBeNull();

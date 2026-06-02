@@ -64,20 +64,37 @@ type PlaidPageData = {
 
 const MAX_MUTATION_RESTARTS = 3;
 
-export async function syncTransactions(env: Env, workspaceId: string, plaidItemId: string): Promise<SyncResult> {
-  // Read item once outside any tx so we have the original cursor even if the
-  // first per-page lock attempt fails. No lock here — we don't need one to
-  // simply read encrypted bytes + cursor for our own loop bookkeeping.
-  const item = await prisma.plaidItem.findUnique({
+async function requireSyncablePlaidItem(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  plaidItemId: string,
+): Promise<{ lastCursor: string | null }> {
+  await lockPlaidItem(tx, plaidItemId);
+  const item = await tx.plaidItem.findUnique({
     where: { id: plaidItemId },
-    select: { workspaceId: true, lastCursor: true },
+    select: { workspaceId: true, status: true, lastCursor: true },
   });
-  if (!item || item.workspaceId !== workspaceId) {
+  if (!item || item.workspaceId !== workspaceId || item.status === "disconnected") {
     throw new HttpError(404, "not_found", "plaid_item not found in workspace");
+  }
+  return { lastCursor: item.lastCursor ?? null };
+}
+
+export async function syncTransactions(env: Env, workspaceId: string, plaidItemId: string): Promise<SyncResult> {
+  let preflight: { lastCursor: string | null };
+  try {
+    preflight = await prisma.$transaction((tx) =>
+      requireSyncablePlaidItem(tx, workspaceId, plaidItemId),
+    );
+  } catch (e) {
+    if (e instanceof SyncLockHeld) {
+      return { skipped: "lock_held", added: 0, modified: 0, removed: 0, newTxIds: [] };
+    }
+    throw e;
   }
 
   const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
-  const originalCursor = item.lastCursor ?? null;
+  const originalCursor = preflight.lastCursor;
   let cursor: string | null = originalCursor;
   let added = 0, modified = 0, removed = 0;
   const newTxIds: string[] = [];
@@ -125,7 +142,7 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
       // partial-unique index makes the upserts idempotent.
       try {
         await withWorkspaceLock(workspaceId, async (tx) => {
-          await lockPlaidItem(tx, plaidItemId); // FOR UPDATE NOWAIT — throws SyncLockHeld if held
+          await requireSyncablePlaidItem(tx, workspaceId, plaidItemId);
           for (const t of pageData.added) {
             const result = await upsertAdded(tx, t, plaidItemId, workspaceId);
             if (result.kind === "inserted") newTxIds.push(result.localId);
@@ -154,9 +171,9 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
     // Same row lock as per-page so disconnect can't slip in here either.
     try {
       await prisma.$transaction(async (tx) => {
-        await lockPlaidItem(tx, plaidItemId);
-        await tx.plaidItem.update({
-          where: { id: plaidItemId },
+        await requireSyncablePlaidItem(tx, workspaceId, plaidItemId);
+        await tx.plaidItem.updateMany({
+          where: { id: plaidItemId, status: { not: "disconnected" } },
           data: { lastCursor: cursor, lastSyncAt: new Date(), status: "active", errorCode: null },
         });
       });
@@ -171,16 +188,16 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
   } catch (e) {
     // Persist status in a SEPARATE short tx so it survives the rethrow.
     if (isPlaidErrorCode(e, "ITEM_LOGIN_REQUIRED")) {
-      await prisma.plaidItem.update({
-        where: { id: plaidItemId },
+      await prisma.plaidItem.updateMany({
+        where: { id: plaidItemId, status: { not: "disconnected" } },
         data: { status: "relink_required", errorCode: "ITEM_LOGIN_REQUIRED" },
       });
       throw mapPlaidError(e); // 409 plaid_login_required
     }
     if (isPlaidApiError(e)) {
       const s = sanitizePlaidError(e);
-      await prisma.plaidItem.update({
-        where: { id: plaidItemId },
+      await prisma.plaidItem.updateMany({
+        where: { id: plaidItemId, status: { not: "disconnected" } },
         data: { status: "error", errorCode: s.error_code ?? "unknown" },
       });
       throw mapPlaidError(e); // 502 plaid_unavailable
