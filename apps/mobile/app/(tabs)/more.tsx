@@ -39,6 +39,7 @@ import {
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { openManageBilling } from "../../src/iap/manage";
+import { getAccountSettingsActions } from "../../src/settings/account-actions";
 
 type PlaidItemSummary = {
   status: string;
@@ -157,6 +158,13 @@ export default function More() {
 
   const comingSoon = (label: string) => () =>
     Alert.alert("Coming soon", `${label} screen is on the way.`);
+
+  const accountActionHandlers = {
+    "edit-profile": () => router.push("/profile/edit" as never),
+    "reset-password": () => router.push("/profile/reset-password" as never),
+    "export-data": comingSoon("Export"),
+    "sign-out": onSignOut,
+  };
 
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
   const revertsTo = me ? trialRevertsTo(me) : null;
@@ -454,33 +462,15 @@ export default function More() {
         {/* Account */}
         <GroupLabel>Account</GroupLabel>
         <Group>
-          <SettingsRow
-            icon="person-outline"
-            title="Edit profile"
-            onPress={() => router.push("/profile/edit" as never)}
-          />
-          <SettingsRow
-            icon="lock-closed-outline"
-            title="Reset password"
-            onPress={() => router.push("/profile/reset-password" as never)}
-          />
-          <SettingsRow
-            icon="download-outline"
-            title="Export data"
-            onPress={comingSoon("Export")}
-          />
-          <SettingsRow
-            icon="log-out-outline"
-            title="Sign out"
-            onPress={onSignOut}
-          />
-          <SettingsRow
-            icon="trash-outline"
-            title="Delete account"
-            danger
-            onPress={comingSoon("Delete account")}
-            last
-          />
+          {getAccountSettingsActions().map((action, index, actions) => (
+            <SettingsRow
+              key={action.key}
+              icon={action.icon}
+              title={action.title}
+              onPress={accountActionHandlers[action.key]}
+              last={index === actions.length - 1}
+            />
+          ))}
         </Group>
 
         {__DEV__ && (
