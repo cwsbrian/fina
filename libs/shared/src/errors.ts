@@ -6,6 +6,9 @@
 // When the API adds a new code, add it here FIRST, then update routes.
 
 export const API_ERROR_CODES = [
+  // Client/network
+  "network_unreachable",
+
   // Auth / session
   "unauthenticated",
   "no_user",

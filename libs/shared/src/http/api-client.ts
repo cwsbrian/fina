@@ -40,17 +40,27 @@ export function makeApiFetch(opts: ApiClientOpts): ApiFetch {
     // when content-type is set to 'application/json'".
     const hasBody = init.body !== undefined && init.body !== null;
 
-    const res = await fetch(`${opts.baseUrl}${path}`, {
-      ...init,
-      ...(opts.withCredentials ? { credentials: "include" as const } : {}),
-      cache: "no-store",
-      headers: {
-        ...(hasBody ? { "content-type": "application/json" } : {}),
-        ...(wsId ? { [WORKSPACE_HEADER]: wsId } : {}),
-        ...(cookie ? { cookie } : {}),
-        ...init.headers,
-      },
-    });
+    let res: Response;
+    try {
+      res = await fetch(`${opts.baseUrl}${path}`, {
+        ...init,
+        ...(opts.withCredentials ? { credentials: "include" as const } : {}),
+        cache: "no-store",
+        headers: {
+          ...(hasBody ? { "content-type": "application/json" } : {}),
+          ...(wsId ? { [WORKSPACE_HEADER]: wsId } : {}),
+          ...(cookie ? { cookie } : {}),
+          ...init.headers,
+        },
+      });
+    } catch {
+      const err: ApiError = {
+        status: 0,
+        code: "network_unreachable",
+        message: "Backend is unreachable",
+      };
+      throw err;
+    }
 
     if (!res.ok) {
       let body: { error?: string; message?: string } = {};

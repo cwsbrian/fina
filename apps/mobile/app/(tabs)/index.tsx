@@ -18,6 +18,7 @@ import {
   trialRevertsTo,
   formatShortDate,
   tierAtLeast,
+  isApiError,
   type MeDTO as Me,
   type CategoryDTO,
   type TransactionDTO,
@@ -27,6 +28,8 @@ import {
 } from "@fina/shared";
 import { useSession } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
+import { isBackendUnavailableError } from "../../src/api/backend-status";
+import { MaintenanceScreen } from "../../src/api/MaintenanceScreen";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { ActionItemCard } from "../../src/home/ActionItemCard";
@@ -142,6 +145,7 @@ export default function Home() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [backendUnavailable, setBackendUnavailable] = useState(false);
   const [budgetCurrent, setBudgetCurrent] = useState<BudgetCurrent | null>(null);
   const [latestUnboundThread, setLatestUnboundThread] = useState<ChatThreadWithPreview | null>(null);
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
@@ -160,6 +164,7 @@ export default function Home() {
   const load = useCallback(async () => {
     const runId = ++loadRunId.current;
     setErr(null);
+    setBackendUnavailable(false);
     try {
       const wsId = await bootstrapActiveWorkspace();
       const meData = await apiFetch<Me>("/me");
@@ -311,6 +316,17 @@ export default function Home() {
       ]);
     } catch (e) {
       if (runId !== loadRunId.current) return;
+      if (isBackendUnavailableError(e)) {
+        setBackendUnavailable(true);
+        return;
+      }
+      if (
+        isApiError(e) &&
+        (e.code === "unauthenticated" || e.code === "no_user" || e.status === 401)
+      ) {
+        router.replace("/(auth)/sign-in");
+        return;
+      }
       setErr(e instanceof Error ? e.message : String(e));
     }
   }, []);
@@ -332,6 +348,10 @@ export default function Home() {
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
   const header = useCollapsingHeader(HEADER_HEIGHT);
+
+  if (backendUnavailable) {
+    return <MaintenanceScreen onRetry={load} />;
+  }
 
   // ── Hero math ──────────────────────────────────────────────
   const now = new Date();
@@ -619,6 +639,7 @@ export default function Home() {
                     icon={it.icon}
                     title={it.title}
                     {...(it.subtitle ? { subtitle: it.subtitle } : {})}
+                    variant={it.key === "categorize" ? "solid" : "default"}
                     onPress={() => router.push(it.href as never)}
                   />
                 ))}
