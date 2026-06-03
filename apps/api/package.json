@@ -8,7 +8,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "prod:reset-internal-test": "tsx src/scripts/reset-production-for-internal-test.ts"
   },
   "prisma": {
     "schema": "prisma/schema.prisma",
