@@ -9,6 +9,7 @@
     "db:migrate": "prisma migrate dev",
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
+    "prod:list-plaid-items": "tsx src/scripts/list-production-plaid-items.ts",
     "prod:reset-internal-test": "tsx src/scripts/reset-production-for-internal-test.ts"
   },
   "prisma": {
