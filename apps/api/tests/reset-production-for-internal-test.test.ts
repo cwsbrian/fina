@@ -86,5 +86,18 @@ describe("createTesterUser", () => {
     await expect(
       prisma.bankAccount.count({ where: { workspaceId: created.workspaceId } }),
     ).resolves.toBeGreaterThan(0);
+    await expect(
+      prisma.transaction.count({ where: { workspaceId: created.workspaceId } }),
+    ).resolves.toBeGreaterThanOrEqual(12);
+    await expect(
+      prisma.transaction.count({
+        where: {
+          workspaceId: created.workspaceId,
+          source: "manual",
+          plaidItemId: null,
+          allocations: { some: { needsConfirmation: true } },
+        },
+      }),
+    ).resolves.toBeGreaterThan(0);
   });
 });
