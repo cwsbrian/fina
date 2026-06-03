@@ -1,12 +1,12 @@
 import { pathToFileURL } from "node:url";
 import { randomUUID } from "node:crypto";
 import { hashPassword } from "better-auth/crypto";
+import { Configuration, PlaidApi, PlaidEnvironments } from "plaid";
 
 import type { Env } from "../env.js";
 import { loadEnv } from "../env.js";
 import { prisma } from "../db.js";
-import { plaidClient, isPlaidErrorCode, sanitizePlaidError } from "../plaid/client.js";
-import { readAccessToken } from "../plaid/items.js";
+import { decrypt } from "../crypto/aes-gcm.js";
 import { startTrialAndBootstrapWorkspace } from "../workspaces/bootstrap.js";
 
 export const CONFIRM_PROD_RESET_TOKEN = "WIPE_WITHFINA_PRODUCTION";
@@ -194,9 +194,9 @@ async function removeProductionPlaidItems(env: Env): Promise<number> {
   });
 
   for (const item of items) {
-    const { accessToken } = await readAccessToken(env, item.workspaceId, item.id);
+    const { accessToken } = await readScriptAccessToken(env, item.workspaceId, item.id);
     try {
-      await plaidClient(env).itemRemove({ access_token: accessToken });
+      await scriptPlaidClient(env).itemRemove({ access_token: accessToken });
       console.log(`Removed Plaid item ${item.itemId}`);
     } catch (e) {
       if (isPlaidErrorCode(e, "ITEM_NOT_FOUND")) {
@@ -219,6 +219,70 @@ async function removeProductionPlaidItems(env: Env): Promise<number> {
 
 async function wipeProductionDatabase(): Promise<void> {
   await prisma.$executeRawUnsafe(buildProductionTruncateSql());
+}
+
+function scriptPlaidClient(env: Env): PlaidApi {
+  return new PlaidApi(
+    new Configuration({
+      basePath: PlaidEnvironments[env.PLAID_ENV]!,
+      baseOptions: {
+        headers: {
+          "PLAID-CLIENT-ID": env.PLAID_CLIENT_ID,
+          "PLAID-SECRET": env.PLAID_SECRET,
+          "Plaid-Version": "2020-09-14",
+        },
+      },
+    }),
+  );
+}
+
+function sanitizePlaidError(e: unknown): {
+  error_code: string | null;
+  error_type: string | null;
+  error_message: string | null;
+  request_id: string | null;
+  http_status: number | null;
+} {
+  const any = e as Record<string, unknown>;
+  const data = (any?.response as Record<string, unknown> | undefined)?.data as
+    | Record<string, unknown>
+    | undefined;
+  const status = (any?.response as Record<string, unknown> | undefined)?.status as number | undefined;
+  return {
+    error_code: (data?.error_code as string) ?? null,
+    error_type: (data?.error_type as string) ?? null,
+    error_message: (data?.error_message as string) ?? null,
+    request_id: (data?.request_id as string) ?? null,
+    http_status: status ?? null,
+  };
+}
+
+function isPlaidErrorCode(e: unknown, code: string): boolean {
+  return sanitizePlaidError(e).error_code === code;
+}
+
+async function readScriptAccessToken(
+  env: Env,
+  workspaceId: string,
+  plaidItemId: string,
+): Promise<{ accessToken: string; itemRow: { id: string; itemId: string } }> {
+  const row = await prisma.plaidItem.findUnique({
+    where: { id: plaidItemId },
+    select: {
+      id: true,
+      workspaceId: true,
+      itemId: true,
+      accessTokenCiphertext: true,
+      accessTokenIv: true,
+    },
+  });
+  if (!row || row.workspaceId !== workspaceId) {
+    throw new Error(`Plaid item ${plaidItemId} not found in workspace ${workspaceId}`);
+  }
+  return {
+    accessToken: decrypt(env, row.accessTokenCiphertext, row.accessTokenIv, workspaceId),
+    itemRow: { id: row.id, itemId: row.itemId },
+  };
 }
 
 function daysAgoAtNoon(daysAgo: number): Date {
