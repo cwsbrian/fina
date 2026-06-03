@@ -75,6 +75,11 @@ RUN corepack enable && corepack prepare pnpm@9 --activate
 
 COPY --from=build /app/dist/apps/api ./
 COPY --from=build /app/apps/api/prisma ./prisma
+# Operational scripts are run with package.json scripts via `tsx src/scripts/*`.
+# The API server itself runs from dist/main.js, but production maintenance
+# commands need the TypeScript source tree present in the runtime image.
+COPY --from=build /app/apps/api/src ./src
+RUN chmod -R a+rX ./src
 
 RUN pnpm install --prod --no-frozen-lockfile \
   && pnpm exec prisma generate --schema=./prisma/schema.prisma \
