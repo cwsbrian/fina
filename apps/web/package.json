@@ -10,8 +10,10 @@
   },
   "dependencies": {
     "@fina/shared": "workspace:*",
+    "@gsap/react": "^2.1.2",
     "@next/third-parties": "^16.2.6",
     "better-auth": "^1.6.9",
+    "gsap": "^3.15.0",
     "next": "14.2.35",
     "qrcode.react": "^4.2.0",
     "react": "18.3.1",

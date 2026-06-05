@@ -7,8 +7,6 @@ import { z } from "zod";
 //
 // Server-side env (no NEXT_PUBLIC_ prefix — these never reach the browser):
 //   RESEND_API_KEY  — required for the email send to actually fire.
-//                     If unset, the request still returns 200 so the UI
-//                     gives the user feedback (logs a server warning).
 //   WAITLIST_TO     — operator inbox; defaults to cwsbrian@gmail.com.
 //   WAITLIST_FROM   — sender. Defaults to onboarding@resend.dev which
 //                     works without domain verification but can only
@@ -46,12 +44,10 @@ export async function POST(req: Request): Promise<NextResponse> {
     process.env.WAITLIST_FROM ?? emailFromShared ?? "Fina <onboarding@resend.dev>";
 
   if (!apiKey) {
-    // Dev fallback — still ack the user so the form gives feedback.
-    // eslint-disable-next-line no-console
     console.warn(
-      `[waitlist] RESEND_API_KEY unset — would have notified ${to} about ${parsed.email}`,
+      `[waitlist] RESEND_API_KEY unset — cannot notify ${to} about ${parsed.email}`,
     );
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ error: "email_not_configured" }, { status: 503 });
   }
 
   try {
@@ -71,18 +67,14 @@ export async function POST(req: Request): Promise<NextResponse> {
     });
     if (!res.ok) {
       const detail = await res.text().catch(() => "");
-      // eslint-disable-next-line no-console
       console.error(
         `[waitlist] Resend rejected (${res.status}) for ${parsed.email}: ${detail.slice(0, 200)}`,
       );
-      // Don't leak provider details to the client — but the user's
-      // signup intent is recorded in logs above.
-      return NextResponse.json({ ok: true });
+      return NextResponse.json({ error: "email_send_failed" }, { status: 502 });
     }
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.error(`[waitlist] Resend fetch failed for ${parsed.email}:`, e);
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ error: "email_send_failed" }, { status: 502 });
   }
 
   return NextResponse.json({ ok: true });

@@ -10,13 +10,13 @@ const inter = Inter({
 });
 
 export const metadata = {
-  title: "Fina · Your financial companion for everyday money",
+  title: "Fina — Your money, finally in conversation",
   description:
-    "You look at your account only when it matters. Join the waitlist for early access.",
+    "Fina helps you understand spending, plan the month, and make everyday money decisions through a chat-first companion that knows your real context.",
   icons: {
-    icon: "/images/icon-logo-light.png",
-    shortcut: "/images/icon-logo-light.png",
-    apple: "/images/icon-logo-light.png",
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/apple-icon.png",
   },
 };
 
