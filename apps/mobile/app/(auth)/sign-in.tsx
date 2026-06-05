@@ -53,13 +53,14 @@ export default function SignInScreen() {
     <AuthScaffold centered hideBack>
       <View style={styles.brand}>
         <Image
-          source={require("../../assets/logo-dark.png")}
+          source={require("../../assets/fina-login-icon.png")}
           style={styles.logo}
           accessibilityLabel="Fina"
           resizeMode="contain"
         />
       </View>
       <View style={styles.head}>
+        <Text style={styles.title}>Welcome to Fina</Text>
         <Text style={styles.sub}>Pick up right where you left off.</Text>
       </View>
 
@@ -125,10 +126,11 @@ export default function SignInScreen() {
 }
 
 const styles = StyleSheet.create({
-  brand: { alignItems: "flex-start", marginBottom: 12 },
-  logo: { height: 56, aspectRatio: 2172 / 724 },
+  brand: { alignItems: "center", marginBottom: 12 },
+  logo: { width: 76, height: 76 },
   head: { marginTop: 12 },
-  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "left" },
+  title: { ...type.authTitle, color: colors.ink, textAlign: "center" },
+  sub: { ...type.bodyMd, color: colors.body, marginTop: 8, textAlign: "center" },
   form: { gap: 10, marginTop: 28 },
   helperRow: {
     flexDirection: "row",
@@ -160,6 +162,6 @@ const styles = StyleSheet.create({
     color: colors.down,
     textAlign: "left",
   },
-  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "left" },
+  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
   footLink: { color: colors.primary, fontWeight: "600" },
 });

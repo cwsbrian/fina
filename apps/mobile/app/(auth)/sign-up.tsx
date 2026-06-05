@@ -198,7 +198,7 @@ const styles = StyleSheet.create({
     marginTop: 18,
     ...type.caption,
     color: colors.muted,
-    textAlign: "left",
+    textAlign: "center",
   },
   legalLink: { color: colors.ink, fontWeight: "600" },
   error: {
@@ -207,6 +207,6 @@ const styles = StyleSheet.create({
     color: colors.down,
     textAlign: "left",
   },
-  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "left" },
+  footText: { ...type.bodySm, color: colors.muted, marginTop: 14, textAlign: "center" },
   footLink: { color: colors.primary, fontWeight: "600" },
 });

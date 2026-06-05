@@ -5,11 +5,11 @@
     "scheme": "fina",
     "version": "0.0.4",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/fina-app-icon.png",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
-      "image": "./assets/splash.png",
+      "image": "./assets/fina-login-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#071F1D"
     },
@@ -27,12 +27,12 @@
       "package": "com.withfina.app",
       "versionCode": 4,
       "adaptiveIcon": {
-        "foregroundImage": "./assets/adaptive-icon.png",
+        "foregroundImage": "./assets/fina-adaptive-icon.png",
         "backgroundColor": "#071F1D"
       }
     },
     "web": {
-      "favicon": "./assets/favicon.png",
+      "favicon": "./assets/fina-favicon.png",
       "bundler": "metro"
     },
     "plugins": [
@@ -41,7 +41,7 @@
       [
         "expo-notifications",
         {
-          "icon": "./assets/icon.png",
+          "icon": "./assets/fina-notification-icon.png",
           "color": "#000000"
         }
       ],

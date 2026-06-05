@@ -1,29 +1,42 @@
-import { StyleSheet, Text, TextStyle } from "react-native";
+import { Image, ImageStyle, StyleProp, StyleSheet } from "react-native";
 import { colors } from "./tokens";
 
 type Props = {
   size?: number;
   color?: string;
-  style?: TextStyle;
+  style?: StyleProp<ImageStyle>;
 };
 
 export function Wordmark({ size = 44, color = colors.primary, style }: Props) {
+  const light =
+    color.toLowerCase() === "#fff" ||
+    color.toLowerCase() === "#ffffff" ||
+    color === colors.onDark ||
+    color === colors.onPrimary;
+
   return (
-    <Text
+    <Image
+      source={
+        light
+          ? require("../../assets/fina-wordmark-light.png")
+          : require("../../assets/fina-wordmark.png")
+      }
       style={[
         styles.base,
-        { fontSize: size, color, letterSpacing: -(size * 0.034) },
+        {
+          height: size,
+          width: size * (1202 / 302),
+        },
         style,
       ]}
-    >
-      Fina
-    </Text>
+      accessibilityLabel="Fina"
+      resizeMode="contain"
+    />
   );
 }
 
 const styles = StyleSheet.create({
   base: {
-    fontWeight: "500",
-    lineHeight: undefined,
+    alignSelf: "flex-start",
   },
 });
