@@ -24,7 +24,7 @@ function planDetails(tier: LocalProduct["tier"]): { subtitle: string; bullets: s
     subtitle: "For heavier use and more connected accounts.",
     bullets: [
       "Up to 20 connected bank accounts",
-      "Higher weekly AI usage",
+      "More room for AI chat",
       "Everything included in Pro",
     ],
   };
@@ -113,6 +113,7 @@ export default function PlanPicker() {
         ) : (
           products.map((p) => {
             const details = planDetails(p.tier);
+            const recommended = p.tier === "pro";
             return (
               <Pressable
                 key={p.productId}
@@ -122,10 +123,15 @@ export default function PlanPicker() {
                   padding: 20,
                   borderRadius: 12,
                   backgroundColor: colors.canvas,
-                  borderWidth: 1,
-                  borderColor: colors.hairline,
+                  borderWidth: recommended ? 2 : 1,
+                  borderColor: recommended ? colors.primary : colors.hairline,
                 }}
               >
+                {recommended && (
+                  <View style={styles.recommendedBadge}>
+                    <Text style={styles.recommendedText}>Recommended</Text>
+                  </View>
+                )}
                 <Text
                   style={{ fontSize: 18, fontWeight: "700", color: colors.ink }}
                 >
@@ -173,13 +179,26 @@ export default function PlanPicker() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   head: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
     paddingHorizontal: space.sm,
     paddingVertical: space.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
   title: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+  recommendedBadge: {
+    alignSelf: "flex-start",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(62, 179, 139, 0.12)",
+    marginBottom: 10,
+  },
+  recommendedText: {
+    ...type$.caption,
+    color: colors.primary,
+    fontWeight: "700",
+  },
 });

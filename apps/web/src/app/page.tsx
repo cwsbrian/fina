@@ -702,7 +702,7 @@ export default function Landing() {
               <li>Keep your data after trial</li>
             </ul>
           </div>
-          <div className="price-card" data-gsap="reveal" data-gsap-scrub="price-card">
+          <div className="price-card featured" data-gsap="reveal" data-gsap-scrub="price-card">
             <div className="tier">Pro</div>
             <div className="amt">
               $7<span>/mo CAD</span>
@@ -713,10 +713,10 @@ export default function Landing() {
               <li>Spending recap cards</li>
               <li>Basic budget tracking</li>
               <li>Upcoming recurring spend</li>
-              <li>$1 CAD weekly AI usage</li>
+              <li>Standard AI usage</li>
             </ul>
           </div>
-          <div className="price-card featured" data-gsap="reveal" data-gsap-scrub="price-card">
+          <div className="price-card" data-gsap="reveal" data-gsap-scrub="price-card">
             <div className="tier">Max</div>
             <div className="amt">
               $15<span>/mo CAD</span>
@@ -727,7 +727,7 @@ export default function Landing() {
               <li>Forecasting and goals</li>
               <li>Advanced spending analysis</li>
               <li>Shared household context</li>
-              <li>$3 CAD weekly AI usage</li>
+              <li>Expanded AI usage</li>
             </ul>
           </div>
         </div>

@@ -38,12 +38,12 @@ describe("trialRevertsTo", () => {
 });
 
 describe("TIER_LIMITS", () => {
-  it("keeps Pro paid-feature access with 5 bank accounts and $1 CAD weekly LLM", () => {
+  it("keeps Pro paid-feature access with standard internal AI allowance", () => {
     expect(TIER_LIMITS.pro).toEqual({ plaidItems: 5, weeklyLlmBudgetCad: 1 });
     expect(isPaidFeatureTier("pro")).toBe(true);
   });
 
-  it("keeps Max internally capped at 20 bank accounts and $3 CAD weekly LLM", () => {
+  it("keeps Max paid-feature access with expanded internal AI allowance", () => {
     expect(TIER_LIMITS.max).toEqual({ plaidItems: 20, weeklyLlmBudgetCad: 3 });
     expect(isPaidFeatureTier("max")).toBe(true);
   });

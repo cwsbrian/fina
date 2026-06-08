@@ -342,6 +342,9 @@ export default function PlanPage() {
                 <th style={{ textAlign: "left", padding: 12 }}>Free</th>
                 <th style={{ textAlign: "left", padding: 12 }}>
                   Pro · {PRICING.pro.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                  <span className={`${styles.pill} ${styles.pillActive}`} style={{ marginLeft: 8 }}>
+                    Recommended
+                  </span>
                 </th>
                 <th style={{ textAlign: "left", padding: 12 }}>
                   Max · {PRICING.max.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
@@ -362,10 +365,10 @@ export default function PlanPage() {
                 <td style={{ padding: 12 }}>Full two-way</td>
               </tr>
               <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
-                <td style={{ padding: 12 }}>Weekly AI usage cap</td>
+                <td style={{ padding: 12 }}>AI usage</td>
                 <td style={{ padding: 12 }}>—</td>
-                <td style={{ padding: 12 }}>${TIER_LIMITS.pro.weeklyLlmBudgetCad} CAD</td>
-                <td style={{ padding: 12 }}>${TIER_LIMITS.max.weeklyLlmBudgetCad} CAD</td>
+                <td style={{ padding: 12 }}>Standard</td>
+                <td style={{ padding: 12 }}>Expanded</td>
               </tr>
               <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
                 <td style={{ padding: 12 }}>Workspace sharing</td>
