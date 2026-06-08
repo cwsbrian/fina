@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { isPaidFeatureTier } from "@fina/shared";
 import { requireWorkspaceContext, HttpError } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import { consumeIntentService } from "../intents/service.js";
@@ -20,7 +21,7 @@ export async function intentsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
       const tier = await effectiveTier(ctx.session.userId);
-      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+      if (!isPaidFeatureTier(tier.tier)) return reply.code(402).send({ error: "upgrade_required" });
 
       const result = await consumeIntentService(
         {

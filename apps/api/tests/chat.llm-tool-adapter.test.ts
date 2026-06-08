@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { toGeminiFunctionDeclarations } from "../src/chat/gemini-adapter.js";
+import { toLlmFunctionDeclarations } from "../src/chat/llm-tool-adapter.js";
 import type { ToolDef } from "../src/chat/tools/types.js";
 
 const withArgs: ToolDef = {
@@ -20,9 +20,9 @@ const zeroArg: ToolDef = {
   run: async () => ({}),
 };
 
-describe("toGeminiFunctionDeclarations", () => {
+describe("toLlmFunctionDeclarations", () => {
   it("emits parametersJsonSchema (not parameters) for non-empty schema", () => {
-    const [decl] = toGeminiFunctionDeclarations([withArgs]);
+    const [decl] = toLlmFunctionDeclarations([withArgs]);
     expect(decl.name).toBe("foo");
     expect(decl.description).toBe("Does foo.");
     expect((decl as { parameters?: unknown }).parameters).toBeUndefined();
@@ -30,7 +30,7 @@ describe("toGeminiFunctionDeclarations", () => {
   });
 
   it("propagates .describe() text into the JSON Schema description", () => {
-    const [decl] = toGeminiFunctionDeclarations([withArgs]);
+    const [decl] = toLlmFunctionDeclarations([withArgs]);
     const schema = decl.parametersJsonSchema as {
       properties: { bar: { description: string }; baz: { description: string } };
     };
@@ -39,13 +39,13 @@ describe("toGeminiFunctionDeclarations", () => {
   });
 
   it("omits parametersJsonSchema entirely for zero-arg tools", () => {
-    const [decl] = toGeminiFunctionDeclarations([zeroArg]);
+    const [decl] = toLlmFunctionDeclarations([zeroArg]);
     expect(decl.parametersJsonSchema).toBeUndefined();
     expect((decl as { parameters?: unknown }).parameters).toBeUndefined();
   });
 
   it("returns an array in input order", () => {
-    const decls = toGeminiFunctionDeclarations([zeroArg, withArgs]);
+    const decls = toLlmFunctionDeclarations([zeroArg, withArgs]);
     expect(decls.map((d) => d.name)).toEqual(["ping", "foo"]);
   });
 });

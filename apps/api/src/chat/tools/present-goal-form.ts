@@ -4,6 +4,7 @@ import {
   GOAL_MAX_AMOUNT,
   minDueDateOneMonthUTC,
   isDueDateAtLeastOneMonth,
+  isPaidFeatureTier,
   type PresentationBlock,
 } from "@fina/shared";
 import { prisma } from "../../db.js";
@@ -34,18 +35,18 @@ function floorDateStr(): string {
 export const presentGoalForm: ToolDef<Args, { block: PresentationBlock }> = {
   name: "presentGoalForm",
   description:
-    "Display an inline form for creating OR editing a savings goal. Use for BOTH intents. Pass goal_id to edit an existing goal (the form pre-fills from it; any defaults you pass override). Pre-fill title / target_amount / due_date from the user's message where you can. Goals are a Pro feature — for a non-Pro user this returns a short upgrade message instead of a form. Savings accrue automatically; do NOT collect a 'saved' amount.",
+    "Display an inline form for creating OR editing a savings goal. Use for BOTH intents. Pass goal_id to edit an existing goal (the form pre-fills from it; any defaults you pass override). Pre-fill title / target_amount / due_date from the user's message where you can. Goals are a paid feature — for a Free user this returns a short upgrade message instead of a form. Savings accrue automatically; do NOT collect a 'saved' amount.",
   args: Args,
   async run(ctx, args) {
-    // Pro gate up-front so a non-Pro user never fills a form that would
+    // Paid-tier gate up-front so a Free user never fills a form that would
     // fail on submit.
     const tier = await effectiveTier(ctx.userId);
-    if (tier.tier !== "pro") {
+    if (!isPaidFeatureTier(tier.tier)) {
       return {
         block: {
           type: "text",
           markdown:
-            "목표는 Pro 기능이에요 — 목표를 만들거나 수정하려면 Pro로 업그레이드해 주세요. / Goals are a Pro feature — upgrade to Pro to create or edit goals.",
+            "목표는 유료 플랜 기능이에요 — 목표를 만들거나 수정하려면 Pro 또는 Max로 업그레이드해 주세요. / Goals are a paid feature — upgrade to Pro or Max to create or edit goals.",
         },
       };
     }

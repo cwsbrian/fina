@@ -13,7 +13,7 @@ const env = testEnv();
 // Partial mock: replace generateAndStoreGoalStrategy with vi.fn(), keep
 // other exports as-is. vi.clearAllMocks in afterEach clears call history
 // but PRESERVES this mock implementation (restoreAllMocks would restore
-// the real Gemini-calling impl and break subsequent tests).
+// the real LLM-calling impl and break subsequent tests).
 vi.mock("../src/goals/generate-strategy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/goals/generate-strategy.js")>();
   return {

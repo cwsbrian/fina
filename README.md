@@ -96,13 +96,13 @@ larger explorations, ER diagrams, or managing multiple environments side-by-side
 2. In **Developers → API keys**, copy the test-mode Secret key into
    `STRIPE_SECRET_KEY` (`sk_test_...`).
 3. **Products** → New product (do both):
-   - "Fina Lite" — recurring **$7.00 CAD / month** → copy price ID into
-     `STRIPE_PRICE_LITE_MONTHLY`.
-   - "Fina Pro" — recurring **$15.00 CAD / month** → copy price ID into
+   - "Fina Pro" — recurring **$7.00 CAD / month** → copy price ID into
      `STRIPE_PRICE_PRO_MONTHLY`.
+   - "Fina Max" — recurring **$15.00 CAD / month** → copy price ID into
+     `STRIPE_PRICE_MAX_MONTHLY`.
 4. **Settings → Billing → Customer portal** → **Activate**. Enable: cancel
    subscription, update payment method, view invoices, allow switching
-   between Lite and Pro.
+   between Pro and Max.
 5. Forward webhooks to your local API (in a separate terminal):
    ```bash
    stripe listen --forward-to localhost:4000/webhooks/stripe
@@ -120,6 +120,6 @@ larger explorations, ER diagrams, or managing multiple environments side-by-side
 - ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready.
 - ✅ Plan 2 complete: workspace sharing on web — invites table (hashed bearer tokens, partial-unique-index invariants for one-owner-per-workspace and one-pending-invite-per-email), 9 endpoints, web UI for accept page, /settings/workspace, header switcher. Mobile gets X-Workspace-Id plumbing only.
 - ✅ Plan 1B-foundation complete: Plaid integration on web (sandbox) — 4 new schema entities (plaid_items, bank_accounts, transactions, categories), AES-256-GCM token encryption with workspaceId AAD, cursor-based /transactions/sync with per-item row-level lock (`SELECT ... FOR UPDATE NOWAIT`), mutation-during-pagination restart, pending→posted promotion via plaidTransactionId lookup, strict locked disconnect (409 `sync_in_progress` if a refresh races), Pro tier gate on connect/exchange/sync (disconnect is the deliberate exception so trial-expired users can revoke Plaid access), owner-only UI for Connect/Refresh/Disconnect. **API: 146 tests passing.**
-- ✅ Plan 1B-categorize complete: auto transaction categorization (backend) — MerchantMapping table + categorizationSource enum, 11 English category seed (case-insensitive partial unique), loop-until-stable merchant normalizer, Gemini 2.5 Flash Lite via @google/genai with structured JSON output, mapping-first + LLM-fallback service with race-safe guards, syncTransactions returns newTxIds (exchange detaches, manual sync awaits), categories CRUD + manual categorize with merchant_mapping upsert + back-fill. **API: 199 tests passing.**
+- ✅ Plan 1B-categorize complete: auto transaction categorization (backend) — MerchantMapping table + categorizationSource enum, 11 English category seed (case-insensitive partial unique), loop-until-stable merchant normalizer, DeepSeek V4 Flash with structured JSON output, mapping-first + LLM-fallback service with race-safe guards, syncTransactions returns newTxIds (exchange detaches, manual sync awaits), categories CRUD + manual categorize with merchant_mapping upsert + back-fill. **API: 199 tests passing.**
 - ✅ Plan 1B-webhooks complete: Plaid webhook handler — POST /plaid/webhook with ES256 JWT verify (jose, JWK cache respecting expired_at, iat 5min window), plaid_webhook_events audit table (no body-hash dedup; sync's cursor + row-level lock handles duplicates), detached sync+categorize dispatch, lock_held leaves processedAt NULL for cron retry, PlaidItem.webhookUrl with linkTokenCreate registration + startup backfill for items connected before this feature, PLAID_WEBHOOK_URL optional env var. **API: 226 tests passing.**
 - 🚧 Next options: Plan 1B-cron (daily refresh + webhook event TTL cleanup + lock_held retry), Plan 1B-mobile (transactions UI). See spec §11.

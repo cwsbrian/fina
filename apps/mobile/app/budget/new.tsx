@@ -109,7 +109,7 @@ export default function NewBudget() {
     })();
   }, []);
 
-  const isPro = (me?.tier === "pro" || me?.trial.active) ?? false;
+  const isPro = (me?.tier === "pro" || me?.tier === "max" || me?.trial.active) ?? false;
 
   const onSuggest = useCallback(async () => {
     const totalNum = Number(total);

@@ -23,7 +23,7 @@ describe("IAP schema migration", () => {
     const u = await prisma.user.create({ data: { id: "u1", email: "u1@test" } });
     const s = await prisma.subscription.create({
       data: {
-        userId: u.id, tier: "lite", source: "stripe", sourceSubscriptionId: "sub_1",
+        userId: u.id, tier: "pro", source: "stripe", sourceSubscriptionId: "sub_1",
         status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
       },
     });

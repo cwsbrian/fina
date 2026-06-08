@@ -11,13 +11,14 @@ const base = {
   WEB_APP_URL: "http://localhost:3000",
   STRIPE_SECRET_KEY: "sk_test_dummy",
   STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
   STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
+  STRIPE_PRICE_MAX_MONTHLY: "price_max_test",
+  LLM_BUDGET_USD_TO_CAD_RATE: 1.4,
   PLAID_CLIENT_ID: "test_client_id",
   PLAID_SECRET: "test_secret",
   PLAID_ENV: "sandbox",
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test_gemini_key",
+  DEEPSEEK_API_KEY: "test_deepseek_key",
   TRUST_PROXY: "false",
 };
 

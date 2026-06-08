@@ -21,7 +21,7 @@ describe("IAPCheckoutBody", () => {
   it("rejects empty receipt", () => {
     const r = IAPCheckoutBody.safeParse({
       platform: "android",
-      productId: "lite_monthly",
+      productId: "pro_monthly",
       receipt: "",
     });
     expect(r.success).toBe(false);
@@ -31,7 +31,7 @@ describe("IAPCheckoutBody", () => {
 describe("IAPRestoreBody", () => {
   it("accepts 1-20 purchases", () => {
     const purchases = Array.from({ length: 20 }, (_, i) => ({
-      productId: "lite_monthly" as const,
+      productId: "pro_monthly" as const,
       receipt: `r${i}`,
     }));
     const r = IAPRestoreBody.safeParse({ platform: "ios", purchases });
@@ -43,7 +43,7 @@ describe("IAPRestoreBody", () => {
   });
   it("rejects more than 20 purchases", () => {
     const purchases = Array.from({ length: 21 }, () => ({
-      productId: "pro_monthly" as const,
+      productId: "max_monthly" as const,
       receipt: "r",
     }));
     const r = IAPRestoreBody.safeParse({ platform: "ios", purchases });

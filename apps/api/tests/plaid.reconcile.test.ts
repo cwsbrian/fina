@@ -70,14 +70,14 @@ afterAll(async () => {
 });
 
 describe("reconcilePlaidItemsForUser", () => {
-  it("lite keeps earliest one and disconnects later user-owned items", async () => {
-    const u = await userWithTrial("lite@example.com", null);
+  it("pro keeps user-owned items below the 5-item cap", async () => {
+    const u = await userWithTrial("pro@example.com", null);
     await prisma.subscription.create({
       data: {
         userId: u.id,
-        tier: "lite",
+        tier: "pro",
         source: "stripe",
-        sourceSubscriptionId: "sub_lite",
+        sourceSubscriptionId: "sub_pro_under_cap",
         status: "active",
         currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
       },
@@ -85,14 +85,13 @@ describe("reconcilePlaidItemsForUser", () => {
     const ws = await workspaceForOwner(u.id);
     const first = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "first" });
     const second = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "second" });
-    plaidMock.itemRemove.push({ data: { request_id: "remove-second" } });
 
     const result = await reconcilePlaidItemsForUser(env, u.id);
 
-    expect(result.kept).toEqual([first.id]);
-    expect(result.disconnected).toEqual([second.id]);
+    expect(result.kept).toEqual([first.id, second.id]);
+    expect(result.disconnected).toEqual([]);
     await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: first.id } })).resolves.toMatchObject({ status: "active" });
-    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: second.id } })).resolves.toMatchObject({ status: "disconnected" });
+    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: second.id } })).resolves.toMatchObject({ status: "active" });
   });
 
   it("does not count another member's item against the user", async () => {
@@ -101,7 +100,7 @@ describe("reconcilePlaidItemsForUser", () => {
     await prisma.subscription.create({
       data: {
         userId: owner.id,
-        tier: "lite",
+        tier: "pro",
         source: "stripe",
         sourceSubscriptionId: "sub_owner",
         status: "active",
@@ -133,13 +132,13 @@ describe("reconcilePlaidItemsForUser", () => {
   });
 
   it("pro keeps earliest five and disconnects the sixth", async () => {
-    const u = await userWithTrial("pro@example.com", null);
+    const u = await userWithTrial("pro-limit@example.com", null);
     await prisma.subscription.create({
       data: {
         userId: u.id,
         tier: "pro",
         source: "stripe",
-        sourceSubscriptionId: "sub_pro",
+        sourceSubscriptionId: "sub_pro_limit",
         status: "active",
         currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
       },
@@ -168,7 +167,7 @@ describe("reconcilePlaidItemsForUser", () => {
     await prisma.subscription.create({
       data: {
         userId: u.id,
-        tier: "pro",
+        tier: "max",
         source: "stripe",
         sourceSubscriptionId: "sub_canceled",
         status: "canceled",
@@ -191,7 +190,7 @@ describe("reconcilePlaidItemsForUser", () => {
     await prisma.subscription.create({
       data: {
         userId: u.id,
-        tier: "lite",
+        tier: "pro",
         source: "stripe",
         sourceSubscriptionId: "sub_status",
         status: "active",
@@ -206,12 +205,11 @@ describe("reconcilePlaidItemsForUser", () => {
     await prisma.plaidItem.update({ where: { id: error.id }, data: { status: "error" } });
     await prisma.plaidItem.update({ where: { id: relink.id }, data: { status: "relink_required" } });
     await prisma.plaidItem.update({ where: { id: disconnected.id }, data: { status: "disconnected" } });
-    plaidMock.itemRemove.push({ data: { request_id: "remove-error" } }, { data: { request_id: "remove-relink" } });
 
     const result = await reconcilePlaidItemsForUser(env, u.id);
 
-    expect(result.kept).toEqual([active.id]);
-    expect(result.disconnected.sort()).toEqual([error.id, relink.id].sort());
+    expect(result.kept.sort()).toEqual([active.id, error.id, relink.id].sort());
+    expect(result.disconnected).toEqual([]);
   });
 });
 

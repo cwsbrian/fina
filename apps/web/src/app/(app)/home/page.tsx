@@ -378,7 +378,7 @@ export default function HomePage() {
             </span>
             <div className={styles.quickLinkTitle}>Choose your plan</div>
             <div className={styles.quickLinkSub}>
-              Free, Lite, or Pro. Add a card before your trial ends to stay on
+              Free, Pro, or Max. Add a card before your trial ends to stay on
               Pro.
             </div>
             <span className={styles.quickLinkArrow}>

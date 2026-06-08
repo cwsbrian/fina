@@ -64,7 +64,7 @@ describe("presentGoalForm chat tool", () => {
     expect(r.block.defaults.target_amount).toBe("3000.00"); // override wins
   });
 
-  it("short-circuits a non-Pro user to a text 'Pro feature' block (no form)", async () => {
+  it("short-circuits a Free user to a paid-feature text block (no form)", async () => {
     const r = await presentGoalForm.run(freeCtx, {
       question: "q",
       defaults: { title: "X", target_amount: 100 },

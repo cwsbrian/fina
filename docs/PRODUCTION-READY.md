@@ -73,7 +73,7 @@
 |---|---|---|---|---|
 | 1 | **Plaid** | Dashboard → Production access 신청 + ID/Secret 받기 | `PLAID_CLIENT_ID`, `PLAID_SECRET` | **1~2주** |
 | 2 | **Resend** | Domains → `withfina.com` 추가 → Cloudflare DNS TXT/CNAME 추가 → verify | `RESEND_API_KEY` (re_…) | ~1h |
-| 3 | **Stripe** | Activate live mode → API keys + webhook secret 생성 → Lite/Pro price 생성 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_LITE_MONTHLY`, `STRIPE_PRICE_PRO_MONTHLY` | 즉시 |
+| 3 | **Stripe** | Activate live mode → API keys + webhook secret 생성 → Pro/Max price 생성 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PRO_MONTHLY`, `STRIPE_PRICE_MAX_MONTHLY` | 즉시 |
 | 4 | **Gemini** | Google AI Studio → API key (production quota 확인) | `GEMINI_API_KEY` | 즉시 |
 | 5 | **Cloudflare R2** | Dashboard → R2 → bucket `fina-backups` 생성 + API token | R2 access key id/secret, bucket name | 10분 |
 | 6 | **Expo / EAS** | `eas init` 이미 done → access token 발급 (push rate limit ↑) | `EXPO_ACCESS_TOKEN` | 10분 |
@@ -174,7 +174,7 @@ coolify.withfina.com   A  <IP>  proxy ON
 - [ ] sign-up → 이메일 OTP 도착 → 인증 → 자동 로그인
 - [ ] Plaid Link → 은행 연결 → 거래 sync
 - [ ] 카테고리 자동 분류 (Gemini)
-- [ ] Stripe checkout → Lite/Pro 결제 → tier 업그레이드 반영
+- [ ] Stripe checkout → Pro/Max 결제 → tier 업그레이드 반영
 - [ ] Push notification (모바일 빌드 + 디바이스 등록 후 daily brief)
 
 ### 4.2 비기능 검증

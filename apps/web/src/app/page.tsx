@@ -84,7 +84,7 @@ export default function Landing() {
           </div>
           <div className="stat">
             <div className="num">3 tiers</div>
-            <div className="lab">Free, Lite, and Pro</div>
+            <div className="lab">Free, Pro, and Max</div>
           </div>
           <div className="stat">
             <div className="num">Daily</div>
@@ -703,31 +703,31 @@ export default function Landing() {
             </ul>
           </div>
           <div className="price-card" data-gsap="reveal" data-gsap-scrub="price-card">
-            <div className="tier">Lite</div>
+            <div className="tier">Pro</div>
             <div className="amt">
               $7<span>/mo CAD</span>
             </div>
             <ul>
-              <li>One connected bank</li>
-              <li>Daily ritual</li>
+              <li>Up to 5 connected banks</li>
+              <li>Full Fina chat</li>
               <li>Spending recap cards</li>
               <li>Basic budget tracking</li>
               <li>Upcoming recurring spend</li>
-              <li>Limited AI assistance</li>
+              <li>$1 CAD weekly AI usage</li>
             </ul>
           </div>
           <div className="price-card featured" data-gsap="reveal" data-gsap-scrub="price-card">
-            <div className="tier">Pro</div>
+            <div className="tier">Max</div>
             <div className="amt">
               $15<span>/mo CAD</span>
             </div>
             <ul>
-              <li>Unlimited connected banks</li>
+              <li>Up to 20 connected banks</li>
               <li>Full two-way chat</li>
               <li>Forecasting and goals</li>
               <li>Advanced spending analysis</li>
               <li>Shared household context</li>
-              <li>Priority early features</li>
+              <li>$3 CAD weekly AI usage</li>
             </ul>
           </div>
         </div>

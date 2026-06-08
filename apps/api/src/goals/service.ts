@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import type { GoalDTO, CreateGoalInput, PatchGoalInput } from "@fina/shared";
 import { prisma } from "../db.js";
-import { requireProTier } from "../auth/tier.js";
+import { requirePaidTier } from "../auth/tier.js";
 import { computeGoalSavings } from "./savings.js";
 import { serverNow } from "../dev-clock.js";
 
@@ -105,7 +105,7 @@ export async function findGoalsByTitle(
   );
 }
 
-/** Create a goal. Pro-tier gated (throws HttpError(402) for non-Pro).
+/** Create a goal. Paid-tier gated (throws HttpError(402) for Free).
  *  Does NOT trigger strategy generation — the REST route owns that
  *  fire-and-forget call so chat-created goals don't auto-generate. */
 export async function createGoalService(
@@ -113,7 +113,7 @@ export async function createGoalService(
   userId: string,
   input: CreateGoalInput,
 ): Promise<GoalDTO> {
-  await requireProTier(userId);
+  await requirePaidTier(userId);
   const created = await prisma.goal.create({
     data: {
       workspaceId,
@@ -130,7 +130,7 @@ export async function createGoalService(
   return toDTO(created, await computeGoalSavings(workspaceId, created.id));
 }
 
-/** Patch a goal (incl. archived → archivedAt). Pro-tier gated. Returns
+/** Patch a goal (incl. archived → archivedAt). Paid-tier gated. Returns
  *  null when the goal does not exist in the workspace. */
 export async function patchGoalService(
   workspaceId: string,
@@ -138,7 +138,7 @@ export async function patchGoalService(
   goalId: string,
   input: PatchGoalInput,
 ): Promise<GoalDTO | null> {
-  await requireProTier(userId);
+  await requirePaidTier(userId);
   const row = await prisma.goal.findFirst({
     where: { id: goalId, workspaceId },
     select: { id: true },

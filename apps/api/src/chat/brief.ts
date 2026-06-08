@@ -1,8 +1,8 @@
-import { GoogleGenAI } from "@google/genai";
 import type { BriefContext, BriefType } from "./brief-context.js";
 import type { PresentationBlock } from "./blocks.js";
 import type { Env } from "../env.js";
 import { logLlmCall } from "../llm/budget.js";
+import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
 
 const RULES = `You are Fina, a warm, proactive personal-finance assistant. Write the brief in English.
 
@@ -40,7 +40,7 @@ export const USER_INSTRUCTION =
 
 export const EMPTY_BRIEF_FALLBACK = "Good morning ☀️ Have a great day!";
 
-/** Build the user-message JSON we feed Gemini. The financial state goes
+/** Build the user-message JSON we feed the LLM. The financial state goes
  *  into the user role so it doesn't bloat the cached system message. */
 function buildUserMessage(context: BriefContext, recentBriefTexts: string[]): string {
   return JSON.stringify({
@@ -58,22 +58,16 @@ export async function generateBrief(
   recentBriefTexts: string[],
   briefType: BriefType,
 ): Promise<PresentationBlock[]> {
-  const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
-  const model = env.CHAT_MODEL ?? "gemini-2.5-flash-lite";
+  const model = env.CHAT_MODEL ?? DEFAULT_LIGHT_LLM_MODEL;
 
-  const response = await client.models.generateContent({
+  const response = await generateLlmContent(env, {
     model,
     contents: [
       { role: "user", parts: [{ text: buildUserMessage(context, recentBriefTexts) }] },
     ],
-    config: {
-      systemInstruction: SYSTEM_PROMPT_PER_TYPE[briefType],
-      // No tools — brief is emit-only. (Omit the key entirely; the Gemini
-      // GenerateContentConfig type doesn't accept `undefined` under
-      // exactOptionalPropertyTypes.)
-      maxOutputTokens: 800,
-      temperature: 0.7,
-    },
+    systemInstruction: SYSTEM_PROMPT_PER_TYPE[briefType],
+    maxOutputTokens: 800,
+    temperature: 0.7,
   });
 
   // Brief is system-initiated — runs even if the user has hit their weekly
@@ -83,7 +77,14 @@ export async function generateBrief(
     source: "brief",
     model,
     inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+    ...(typeof response.usageMetadata?.promptCacheHitTokenCount === "number"
+      ? { inputCacheHitTokens: response.usageMetadata.promptCacheHitTokenCount }
+      : {}),
+    ...(typeof response.usageMetadata?.promptCacheMissTokenCount === "number"
+      ? { inputCacheMissTokens: response.usageMetadata.promptCacheMissTokenCount }
+      : {}),
     outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+    usdToCadRate: env.LLM_BUDGET_USD_TO_CAD_RATE,
   }).catch(() => {});
 
   const text = response.text;

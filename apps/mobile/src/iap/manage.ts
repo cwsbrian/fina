@@ -12,7 +12,7 @@ export async function openManageBilling(tier?: PaidTier): Promise<void> {
     return;
   }
   if (Platform.OS === "android" && tier) {
-    const productId = tier === "pro" ? "pro_monthly" : "lite_monthly";
+    const productId = tier === "max" ? "max_monthly" : "pro_monthly";
     await Linking.openURL(
       `https://play.google.com/store/account/subscriptions?package=app.fina&sku=${encodeURIComponent(productId)}`,
     );

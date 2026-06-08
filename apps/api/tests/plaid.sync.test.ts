@@ -701,7 +701,7 @@ describe("syncTransactions", () => {
     plaidMock.transactionsSync.push({
       data: { added: [tx({ transaction_id: "nc1", account_id: "acct_test", amount: 3, date: "2026-05-10" })], modified: [], removed: [], next_cursor: "c1", has_more: false },
     });
-    // No Gemini push — if categorize were called, it would throw "no scripted response".
+    // No LLM mock response — if categorize were called, it would throw "no scripted response".
     const r = await syncTransactions(env, wsId, plaidItemId);
     expect((r as { newTxIds: string[] }).newTxIds).toHaveLength(1);
     const t = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });

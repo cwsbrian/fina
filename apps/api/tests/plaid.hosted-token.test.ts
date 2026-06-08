@@ -24,7 +24,7 @@ import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
 
-async function makeLiteUser(userId: string): Promise<void> {
+async function makeProUser(userId: string): Promise<void> {
   await prisma.user.update({
     where: { id: userId },
     data: { trialEndsAt: null, trialConsumed: true },
@@ -32,9 +32,9 @@ async function makeLiteUser(userId: string): Promise<void> {
   await prisma.subscription.create({
     data: {
       userId,
-      tier: "lite",
+      tier: "pro",
       source: "stripe",
-      sourceSubscriptionId: `sub_lite_hosted_${userId}`,
+      sourceSubscriptionId: `sub_pro_hosted_${userId}`,
       status: "active",
       currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
     },
@@ -152,10 +152,10 @@ describe("POST /workspaces/:id/plaid/hosted-token", () => {
     await app.close();
   });
 
-  it("returns completed public token for Lite user at item limit", async () => {
+  it("returns completed public token for Pro user at item limit", async () => {
     const app = await buildApp(env);
-    const u = await signUpAndGetCookie(app, { email: "ht-lite-limit@x.com", name: "HL" });
-    await makeLiteUser(u.userId);
+    const u = await signUpAndGetCookie(app, { email: "ht-pro-limit@x.com", name: "HP" });
+    await makeProUser(u.userId);
     const wsId = await getOwnerWorkspaceId(u.userId);
     await prisma.plaidItem.create({
       data: {

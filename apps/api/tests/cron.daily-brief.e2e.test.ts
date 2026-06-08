@@ -2,19 +2,15 @@ import { describe, expect, it, beforeEach, afterAll, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
+import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 
-// Realistic Gemini mock that returns brief-shaped text.
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: vi.fn().mockImplementation(() => ({
-    models: {
-      generateContent: vi.fn().mockResolvedValue({
-        text: "좋은 아침이야 ☀️ 어제 Starbucks 한 건 분류 필요해. 오늘 시장 $100 잡혀있어. 잘 보내!",
-      }),
-    },
-  })),
-}));
-
-beforeEach(async () => { await truncateAll(); });
+beforeEach(async () => {
+  await truncateAll();
+  resetGeminiMock();
+  chatGeminiMock.responses.push({
+    text: "좋은 아침이야. 어제 Starbucks 한 건 분류 필요해. 오늘 시장 $100 잡혀있어. 잘 보내!",
+  });
+});
 afterAll(async () => { await disconnect(); });
 
 describe("daily-brief E2E smoke", () => {

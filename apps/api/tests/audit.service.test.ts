@@ -189,7 +189,7 @@ describe("audit hook — intent consume (actorType: user)", () => {
         workspaceId,
         userId,
         role: "owner",
-        env: { GEMINI_API_KEY: "test-key", CHAT_MODEL: "gemini-2.5-flash-lite" } as never,
+        env: { DEEPSEEK_API_KEY: "test-key", CHAT_MODEL: "deepseek-v4-flash" } as never,
       },
       intent.id,
     );
@@ -208,7 +208,7 @@ describe("audit hook — processChatTurn direct write (actorType: agent)", () =>
   let workspaceId: string;
   let userId: string;
   let threadId: string;
-  const env = { GEMINI_API_KEY: "x" } as never;
+  const env = { DEEPSEEK_API_KEY: "x" } as never;
 
   beforeEach(async () => {
     resetGeminiMock();

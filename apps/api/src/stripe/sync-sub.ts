@@ -51,7 +51,7 @@ export async function syncSubscriptionFromStripe(
   // phase AFTER the current one to surface what the user is switching
   // to and when. Cleared (null) when no schedule or schedule has no
   // next phase.
-  let pendingTier: "lite" | "pro" | null = null;
+  let pendingTier: "pro" | "max" | null = null;
   let pendingTierAt: Date | null = null;
   if (sub.schedule) {
     const scheduleId = typeof sub.schedule === "string" ? sub.schedule : sub.schedule.id;

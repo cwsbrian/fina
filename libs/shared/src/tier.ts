@@ -1,32 +1,33 @@
 import type { PaidTier } from "./pricing.js";
 
-export const TIERS = ["free", "lite", "pro"] as const;
+export const TIERS = ["free", "pro", "max"] as const;
 export type Tier = (typeof TIERS)[number];
 
-const TIER_RANK: Record<Tier, number> = { free: 0, lite: 1, pro: 2 };
+const TIER_RANK: Record<Tier, number> = { free: 0, pro: 1, max: 2 };
 
 export function tierAtLeast(actual: Tier, required: Tier): boolean {
   return TIER_RANK[actual] >= TIER_RANK[required];
 }
 
-/** Per-tier limits — the canonical source for both API enforcement and
- * frontend upsell copy. `plaidItems` is the cap; chat / AI is gated on
- * `tier === "pro"` (see `isProFeature`). */
-export const TIER_LIMITS: Record<Tier, { plaidItems: number }> = {
-  free: { plaidItems: 0 },
-  lite: { plaidItems: 1 },
-  pro: { plaidItems: 10 },
+/** Per-tier limits — the canonical source for API enforcement and frontend
+ * upsell copy. Max is marketed as expanded usage, with pragmatic internal caps. */
+export const TIER_LIMITS: Record<Tier, { plaidItems: number; weeklyLlmBudgetCad: number }> = {
+  free: { plaidItems: 0, weeklyLlmBudgetCad: 0 },
+  pro: { plaidItems: 5, weeklyLlmBudgetCad: 1 },
+  max: { plaidItems: 20, weeklyLlmBudgetCad: 3 },
 };
 
-/** Features gated to Pro tier (chat input, advisor mode, etc.). Lite gets
- * read-only daily ritual; Free is manual entry only. */
+/** Paid AI features are available to Pro and Max; this helper remains
+ * for older call sites that ask whether a feature is Pro-exclusive. */
 export function isProFeature(
   feature: "chat_input" | "advisor_chat" | "plan_generation" | "deep_audit",
 ): boolean {
-  // All Pro-only flags are unconditionally Pro today. The function exists so
-  // future Lite-extends-to behaviour lands in one place.
   void feature;
-  return true;
+  return false;
+}
+
+export function isPaidFeatureTier(tier: Tier): boolean {
+  return tier === "pro" || tier === "max";
 }
 
 export type EffectiveTier = {
@@ -37,13 +38,15 @@ export type EffectiveTier = {
   /** Mirror of `TIER_LIMITS[tier].plaidItems`. Included here so a single
    * `/me` response carries the cap without callers having to re-derive. */
   plaidItemLimit: number;
+  /** Weekly LLM spend cap in CAD for user-initiated AI chat. */
+  weeklyLlmBudgetCad: number;
 };
 
 /** Human-readable tier label for badges / settings copy. */
 export function tierLabel(tier: Tier, trialActive: boolean): string {
   if (trialActive) return "Pro trial";
+  if (tier === "max") return "Max";
   if (tier === "pro") return "Pro";
-  if (tier === "lite") return "Lite";
   return "Free";
 }
 
@@ -59,11 +62,10 @@ export function trialDaysLeft(endsAt: string | Date | null | undefined): number 
   return Math.ceil(ms / (24 * 60 * 60 * 1000));
 }
 
-/** The tier a user reverts to when their active Pro trial ends, IF they hold
- *  a standing paid subscription below Pro. Returns the sub's tier — or its
- *  scheduled pendingTier when a change is queued. Returns null when: not in a
- *  trial, no standing sub on file, or the post-trial tier is still Pro
- *  (nothing to warn about). Drives "Reverts to <Lite> on <date>" copy.
+/** The tier a user reverts to when their active Pro trial ends. Returns the
+ *  sub's tier — or its scheduled pendingTier when a change is queued. Returns
+ *  null when: not in a trial, no standing sub on file, or the post-trial tier
+ *  is still Pro-or-better (nothing to warn about).
  *  Param/return are PaidTier (exactly MeDTO.subscription's shape) — a standing
  *  sub is never `free`. */
 export function trialRevertsTo(me: {
@@ -73,5 +75,5 @@ export function trialRevertsTo(me: {
   if (!me.trial.active || !me.subscription) return null;
   const s = me.subscription;
   const next = s.pendingTier && s.pendingTier !== s.tier ? s.pendingTier : s.tier;
-  return next === "pro" ? null : next;
+  return next === "pro" || next === "max" ? null : next;
 }

@@ -23,7 +23,7 @@ import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
 
-async function makeLiteUser(userId: string): Promise<void> {
+async function makeProUser(userId: string): Promise<void> {
   await prisma.user.update({
     where: { id: userId },
     data: { trialEndsAt: null, trialConsumed: true },
@@ -31,9 +31,26 @@ async function makeLiteUser(userId: string): Promise<void> {
   await prisma.subscription.create({
     data: {
       userId,
-      tier: "lite",
+      tier: "pro",
       source: "stripe",
-      sourceSubscriptionId: `sub_lite_${userId}`,
+      sourceSubscriptionId: `sub_pro_${userId}`,
+      status: "active",
+      currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+    },
+  });
+}
+
+async function makeMaxUser(userId: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { trialEndsAt: null, trialConsumed: true },
+  });
+  await prisma.subscription.create({
+    data: {
+      userId,
+      tier: "max",
+      source: "stripe",
+      sourceSubscriptionId: `sub_max_${userId}`,
       status: "active",
       currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
     },
@@ -224,9 +241,15 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
   it("counts user-owned items across workspaces", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "lt-cross@x.com", name: "LC" });
-    await makeLiteUser(owner.userId);
+    await makeProUser(owner.userId);
     const wsA = await getOwnerWorkspaceId(owner.userId);
-    await seedPlaidItem({ workspaceId: wsA, connectedBy: owner.userId, itemId: "item_lite_ws_a" });
+    for (let i = 0; i < 5; i++) {
+      await seedPlaidItem({
+        workspaceId: wsA,
+        connectedBy: owner.userId,
+        itemId: `item_lite_ws_a_${i}`,
+      });
+    }
     const wsB = await prisma.workspace.create({
       data: {
         name: "Second",
@@ -249,7 +272,7 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
   it("ignores another member's item in the same workspace", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "lt-owner@x.com", name: "LO" });
-    await makeLiteUser(owner.userId);
+    await makeProUser(owner.userId);
     const wsId = await getOwnerWorkspaceId(owner.userId);
     const other = await signUpAndGetCookie(app, { email: "lt-other@x.com", name: "LM" });
     await prisma.membership.create({
@@ -285,7 +308,7 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
-    // Sync awaits categorize — provide a mock Gemini response so the route unblocks.
+    // Sync awaits categorize — provide a mock LLM response so the route unblocks.
     geminiMock.generateContent.push({ results: [] });
     const res = await app.inject({
       method: "POST",
@@ -297,12 +320,12 @@ describe("POST /workspaces/:id/plaid-items/:itemId/sync", () => {
     await app.close();
   });
 
-  it("lite owner can manually sync their active owned item", async () => {
+  it("pro owner can manually sync their active owned item", async () => {
     const app = await buildApp(env);
-    const owner = await signUpAndGetCookie(app, { email: "lite-sync@x.com", name: "LS" });
-    await makeLiteUser(owner.userId);
+    const owner = await signUpAndGetCookie(app, { email: "pro-sync@x.com", name: "PS" });
+    await makeProUser(owner.userId);
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    const plaidItemId = await connectAItem(app, owner, wsId, "_lite_sync");
+    const plaidItemId = await connectAItem(app, owner, wsId, "_pro_sync");
 
     plaidMock.transactionsSync.push({
       data: { added: [], modified: [], removed: [], next_cursor: "c1", has_more: false },
@@ -469,7 +492,7 @@ describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
         modified: [], removed: [], next_cursor: "cN", has_more: false,
       },
     });
-    // Sync awaits categorize — provide a mock Gemini response so the route unblocks.
+    // Sync awaits categorize — provide a mock LLM response so the route unblocks.
     geminiMock.generateContent.push({ results: [] });
     await app.inject({
       method: "POST",
@@ -946,7 +969,7 @@ describe("Plaid connection limits", () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "pro@x.com", name: "Pro" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    // No items connected — 0/10, well below limit.
+    // No items connected — 0/20, well below limit.
 
     plaidMock.linkTokenCreate.push({ data: { link_token: "lt_ok", expiration: "2099-01-01" } });
     const res = await app.inject({
@@ -959,7 +982,7 @@ describe("Plaid connection limits", () => {
     await app.close();
   });
 
-  it("Pro user at the old 5-item cap → POST /link-token → 200", async () => {
+  it("Pro user at limit (5 items) → POST /link-token → 402 plaid_item_limit_reached", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "oldlimit@x.com", name: "OldLimit" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -967,23 +990,24 @@ describe("Plaid connection limits", () => {
       await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_old_limit_${i}` });
     }
 
-    plaidMock.linkTokenCreate.push({ data: { link_token: "lt_old_ok", expiration: "2099-01-01" } });
     const res = await app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid/link-token`,
       headers: { cookie: owner.cookie, "x-workspace-id": wsId },
     });
 
-    expect(res.statusCode).toBe(200);
+    expect(res.statusCode).toBe(402);
+    expect(res.json().error).toBe("plaid_item_limit_reached");
     await app.close();
   });
 
-  it("Pro user at limit (10 items) → POST /exchange → 402 plaid_item_limit_reached", async () => {
+  it("Max user at limit (20 items) → POST /exchange → 402 plaid_item_limit_reached", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "atlimit@x.com", name: "AtLimit" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    // Seed 10 active items directly (bypassing exchange) to hit the limit.
-    for (let i = 0; i < 10; i++) {
+    await makeMaxUser(owner.userId);
+    // Seed 20 active items directly (bypassing exchange) to hit the limit.
+    for (let i = 0; i < 20; i++) {
       await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_limit_${i}` });
     }
     plaidMock.itemPublicTokenExchange.push({
@@ -1009,15 +1033,16 @@ describe("Plaid connection limits", () => {
 
     expect(res.statusCode).toBe(402);
     expect(res.json().error).toBe("plaid_item_limit_reached");
-    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(10);
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(20);
     await app.close();
   });
 
-  it("Pro user at limit (10 items) → POST /link-token → 402 plaid_item_limit_reached", async () => {
+  it("Max user at limit (20 items) → POST /link-token → 402 plaid_item_limit_reached", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "atlimit2@x.com", name: "AtLimit2" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    for (let i = 0; i < 10; i++) {
+    await makeMaxUser(owner.userId);
+    for (let i = 0; i < 20; i++) {
       await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_lt_${i}` });
     }
 
@@ -1036,7 +1061,7 @@ describe("Plaid connection limits", () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "disc@x.com", name: "Disc" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    // 3 active + 2 disconnected = 3 effective, below limit of 10.
+    // 3 active + 2 disconnected = 3 effective, below limit of 20.
     for (let i = 0; i < 3; i++) {
       await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_active_${i}` });
     }

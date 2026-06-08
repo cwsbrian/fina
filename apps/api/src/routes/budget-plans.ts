@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { isPaidFeatureTier } from "@fina/shared";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import {
@@ -14,6 +15,7 @@ import {
   monthlyScheduledTotal,
   recentMonthlyAvgSpend,
   type CategoryAllocation,
+  type SetBudgetInput,
 } from "../budget-plans/service.js";
 import { suggestBudgetSplit } from "../budget-plans/suggest-split.js";
 
@@ -36,6 +38,13 @@ const SetBudgetBody = z.object({
 const SuggestBody = z.object({
   totalAmount: z.number().positive().max(MAX_TOTAL),
 });
+
+function toSetBudgetInput(data: z.infer<typeof SetBudgetBody>): SetBudgetInput {
+  return {
+    totalAmount: data.totalAmount,
+    ...(data.categoryAllocations ? { categoryAllocations: data.categoryAllocations } : {}),
+  };
+}
 
 function currentYM(): { year: number; month: number } {
   // Use UTC for now — Plaid sync + transactions use UTC noon anchors.
@@ -80,17 +89,13 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
       if ((req.params as { id: string }).id !== ctx.membership.workspaceId) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const plan = await setDefaultBudget(ctx.membership.workspaceId, parsed.data);
+      const budgetInput = toSetBudgetInput(parsed.data);
+      const plan = await setDefaultBudget(ctx.membership.workspaceId, budgetInput);
       // When the user opted to push the new default into the current
       // month too, overwrite that month's snapshot with the same values.
       if (parsed.data.scope === "default_and_current") {
         const { year, month } = currentYM();
-        await setMonthBudget(ctx.membership.workspaceId, year, month, {
-          totalAmount: parsed.data.totalAmount,
-          ...(parsed.data.categoryAllocations
-            ? { categoryAllocations: parsed.data.categoryAllocations }
-            : {}),
-        });
+        await setMonthBudget(ctx.membership.workspaceId, year, month, budgetInput);
       }
       return reply.code(200).send({ plan });
     } catch (e) {
@@ -151,7 +156,7 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
           ctx.membership.workspaceId,
           ym.year,
           ym.month,
-          parsed.data,
+          toSetBudgetInput(parsed.data),
         );
         return reply.code(200).send({ plan });
       } catch (e) {
@@ -161,7 +166,7 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  /** Pro-only: ask Fina to split a given total across categories
+  /** Paid-tier: ask Fina to split a given total across categories
    *  based on the user's last-90-day spending mix. */
   app.post("/workspaces/:id/budget-plans/suggest-split", async (req, reply) => {
     const parsed = SuggestBody.safeParse(req.body);
@@ -172,7 +177,7 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
       const tier = await effectiveTier(ctx.session.userId);
-      if (tier.tier !== "pro") {
+      if (!isPaidFeatureTier(tier.tier)) {
         return reply.code(402).send({ error: "upgrade_required" });
       }
       const result = await suggestBudgetSplit(

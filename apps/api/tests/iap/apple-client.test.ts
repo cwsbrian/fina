@@ -19,7 +19,7 @@ const makeTx = (overrides: Partial<{
     bundleId: overrides.bundleId ?? "com.fina.app",
     environment: overrides.environment ?? "Sandbox",
     signedDate: overrides.signedDate ?? Date.now(),
-    productId: overrides.productId ?? "pro_monthly",
+    productId: overrides.productId ?? "max_monthly",
     originalTransactionId: overrides.originalTransactionId ?? "1000000000000001",
     transactionId: "1000000000000099",
   };
@@ -37,7 +37,7 @@ describe("AppleClient.verifyAndDecodeTransaction", () => {
     const c = new AppleClient(cfg);
     vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx());
     const out = await c.verifyAndDecodeTransaction("jws-string");
-    expect(out.productId).toBe("pro_monthly");
+    expect(out.productId).toBe("max_monthly");
     expect(out.originalTransactionId).toBe("1000000000000001");
   });
 

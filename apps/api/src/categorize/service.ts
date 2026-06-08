@@ -1,7 +1,7 @@
 import type { Env } from "../env.js";
 import { prisma } from "../db.js";
 import { normalizeMerchant } from "./normalize.js";
-import { callGeminiCategorize, type LLMTransaction } from "./llm.js";
+import { callLlmCategorize, type LLMTransaction } from "./llm.js";
 import { logError } from "../logger.js";
 import { findHistoryHints } from "./history-lookup.js";
 import { computeNeedsConfirmation } from "./needs-confirmation.js";
@@ -16,14 +16,14 @@ import { emitCategorizeCompleted } from "../telemetry/categorize.js";
  *  2. Look up merchant_mappings (JOIN active categories only). Mapped tx
  *     get categoryId + source='mapping' instantly.
  *  3. Remaining tx are batched (CATEGORIZE_BATCH_MAX per call) and sent to
- *     Gemini. Valid responses get categoryId + source='ai'.
+ *     the LLM. Valid responses get categoryId + source='ai'.
  *  4. Failures (LLM error, unknown category, unknown tx_id) leave the tx
  *     uncategorized. No retry in the same call.
  *
  * All writes guard by allocation-level `WHERE categoryId IS NULL AND source IS NULL`
  * to avoid overwriting a manual decision that races with our LLM call.
  *
- * Best-effort: this function does NOT throw on Gemini failures. Callers can
+ * Best-effort: this function does NOT throw on LLM failures. Callers can
  * treat it as fire-and-forget (exchange route) or await it (manual sync).
  */
 export async function categorizeNewTransactions(
@@ -203,7 +203,7 @@ export async function categorizeNewTransactions(
 
   // Step 3: LLM batch. Build workspace-scoped active category map.
   // Categories now carry a type (expense | income) — we split the vocab
-  // for the Gemini prompt and key the lookup map on (lower(name), type)
+  // for the LLM prompt and key the lookup map on (lower(name), type)
   // so that "Other" (which exists in both types) resolves correctly
   // based on transaction direction.
   const categoryRows = await prisma.category.findMany({
@@ -241,7 +241,7 @@ export async function categorizeNewTransactions(
 
     let results: Array<{ tx_id: string; category: string }> = [];
     try {
-      results = await callGeminiCategorize(
+      results = await callLlmCategorize(
         env,
         { expense: expenseNames, income: incomeNames },
         llmTxs,
@@ -249,10 +249,10 @@ export async function categorizeNewTransactions(
       );
     } catch (e) {
       // Log + continue. Tx in this batch stay uncategorized.
-      // NOTE: callGeminiCategorize may throw on network errors OR on
+      // NOTE: callLlmCategorize may throw on network errors OR on
       // JSON.parse failure (malformed structured response). Both are caught
       // here so the "best-effort, leave uncategorized" contract holds.
-      logError({ workspaceId, err: e }, "[categorize] Gemini batch failed");
+      logError({ workspaceId, err: e }, "[categorize] LLM batch failed");
       continue;
     }
 
@@ -264,7 +264,7 @@ export async function categorizeNewTransactions(
       // .toLowerCase() on those would throw and violate the best-effort contract.
       if (typeof r.category !== "string") continue;
       // Direction: positive amount = expense, negative = income (mirrors
-      // the system prompt's instruction to Gemini). Same-name "Other"
+      // the system prompt's instruction to the LLM). Same-name "Other"
       // resolves to the correct type based on amount sign.
       const expectedType: "expense" | "income" =
         Number(txMeta.amount) >= 0 ? "expense" : "income";
@@ -273,7 +273,7 @@ export async function categorizeNewTransactions(
       );
       if (!aiCatId) continue;
 
-      // Step 3: Gemini results — write to the single null-cat allocation per tx
+      // Step 3: LLM results — write to the single null-cat allocation per tx
       // via per-row guard. Skip tx that are already split or already categorized.
       const tx = await prisma.transaction.findFirst({
         where: { id: r.tx_id, workspaceId },

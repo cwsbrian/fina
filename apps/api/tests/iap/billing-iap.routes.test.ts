@@ -73,7 +73,7 @@ describe("POST /billing/iap/checkout", () => {
     await prisma.subscription.create({
       data: {
         userId,
-        tier: "lite",
+        tier: "pro",
         source: "stripe",
         sourceSubscriptionId: "sub_x",
         status: "active",
@@ -85,7 +85,7 @@ describe("POST /billing/iap/checkout", () => {
       method: "POST",
       url: "/billing/iap/checkout",
       headers: { cookie },
-      payload: { platform: "ios", productId: "pro_monthly", receipt: "jws" },
+      payload: { platform: "ios", productId: "max_monthly", receipt: "jws" },
     });
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe("already_subscribed_stripe");
@@ -98,25 +98,26 @@ describe("POST /billing/iap/checkout", () => {
       environment: "Sandbox",
       signedDate: Date.now(),
       appAccountToken: deriveAppleToken(userId),
-      productId: "pro_monthly",
+      productId: "max_monthly",
       originalTransactionId: "OT-1",
       transactionId: "T-1",
       raw: {},
     });
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "pro_monthly",
+      productId: "max_monthly",
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     const res = await app.inject({
       method: "POST",
       url: "/billing/iap/checkout",
       headers: { cookie },
-      payload: { platform: "ios", productId: "pro_monthly", receipt: "jws" },
+      payload: { platform: "ios", productId: "max_monthly", receipt: "jws" },
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.tier).toBe("pro");
+    expect(body.subscription.tier).toBe("max");
     expect(body.subscription.source).toBe("iap_apple");
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
   });
@@ -128,7 +129,7 @@ describe("POST /billing/iap/checkout", () => {
       environment: "Sandbox",
       signedDate: Date.now(),
       appAccountToken: deriveAppleToken("OTHER-USER"),
-      productId: "pro_monthly",
+      productId: "max_monthly",
       originalTransactionId: "OT-1",
       transactionId: "T-1",
       raw: {},
@@ -137,7 +138,7 @@ describe("POST /billing/iap/checkout", () => {
       method: "POST",
       url: "/billing/iap/checkout",
       headers: { cookie },
-      payload: { platform: "ios", productId: "pro_monthly", receipt: "jws" },
+      payload: { platform: "ios", productId: "max_monthly", receipt: "jws" },
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe("user_mismatch");
@@ -156,7 +157,7 @@ describe("POST /billing/iap/restore", () => {
           environment: "Sandbox",
           signedDate: Date.now(),
           appAccountToken: deriveAppleToken(userId),
-          productId: "lite_monthly",
+          productId: "pro_monthly",
           originalTransactionId: "OT-1",
           transactionId: "T-1",
           raw: {},
@@ -165,7 +166,7 @@ describe("POST /billing/iap/restore", () => {
     });
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "lite_monthly",
+      productId: "pro_monthly",
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     const res = await app.inject({
@@ -175,13 +176,13 @@ describe("POST /billing/iap/restore", () => {
       payload: {
         platform: "ios",
         purchases: [
-          { productId: "lite_monthly", receipt: "ok" },
-          { productId: "pro_monthly", receipt: "bad" },
+          { productId: "pro_monthly", receipt: "ok" },
+          { productId: "max_monthly", receipt: "bad" },
         ],
       },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().tier).toBe("lite");
+    expect(res.json().tier).toBe("pro");
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledTimes(1);
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
   });

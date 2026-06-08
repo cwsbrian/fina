@@ -15,7 +15,7 @@ const pad2 = (n: number) => String(n).padStart(2, "0");
  *  morningTime and have no Brief row for today; for each, generates a
  *  brief and emits it atomically with a chat message in their unbound
  *  thread. Per-user try/catch isolates LLM failures so one user's
- *  Gemini hiccup doesn't break the tick for others. */
+ *  LLM hiccup doesn't break the tick for others. */
 export async function runDailyBrief(env: Env): Promise<void> {
   // 1. Candidate users (DB filter — fast).
   const candidates = await prisma.user.findMany({

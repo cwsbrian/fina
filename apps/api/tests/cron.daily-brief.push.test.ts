@@ -3,18 +3,7 @@ import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 import { currentLocalHHmm, syncMorningTimeToNow } from "./helpers/cron-time.js";
-
-// Plain function — not vi.fn() — so vi.restoreAllMocks() in afterEach
-// (which clears vi.fn implementations) doesn't wipe the LLM stub between
-// tests. This is the same reason briefs would otherwise be empty in tests
-// 2 and 3 after test 1's spy chain restores.
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: class {
-    models = {
-      generateContent: async () => ({ text: "morning brief text" }),
-    };
-  },
-}));
+import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 
 // Mock expo-server-sdk — prototype method so vi.spyOn(Expo.prototype, ...) works.
 vi.mock("expo-server-sdk", () => ({
@@ -27,7 +16,11 @@ vi.mock("expo-server-sdk", () => ({
   },
 }));
 
-beforeEach(async () => { await truncateAll(); });
+beforeEach(async () => {
+  await truncateAll();
+  resetGeminiMock();
+  chatGeminiMock.responses.push({ text: "morning brief text" });
+});
 afterEach(() => { vi.restoreAllMocks(); });  // Vitest singleFork — prevent spy leakage across files.
 afterAll(async () => { await disconnect(); });
 

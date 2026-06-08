@@ -1,5 +1,11 @@
-import { ACTIVE_SUBSCRIPTION_STATUSES, TIER_LIMITS, type EffectiveTier, type Tier } from "@fina/shared";
-import { Prisma } from "@prisma/client";
+import {
+  ACTIVE_SUBSCRIPTION_STATUSES,
+  isPaidFeatureTier,
+  TIER_LIMITS,
+  type EffectiveTier,
+  type Tier,
+} from "@fina/shared";
+import type { SubscriptionStatus } from "@prisma/client";
 import { prisma } from "../db.js";
 import { HttpError } from "./context.js";
 import { filterEnvironmentRows } from "../billing/precedence.js";
@@ -25,20 +31,22 @@ export function computeEffectiveTier(
       trialActive: true,
       trialEndsAt: user.trialEndsAt,
       plaidItemLimit: TIER_LIMITS.pro.plaidItems,
+      weeklyLlmBudgetCad: TIER_LIMITS.pro.weeklyLlmBudgetCad,
     };
   }
   // Pick highest tier from active subs.
   const ranked = activeSubs
     .map((s) => s.tier as Tier)
-    .filter((t): t is "lite" | "pro" => t === "lite" || t === "pro");
+    .filter((t): t is "pro" | "max" => t === "pro" || t === "max");
   if (ranked.length > 0) {
-    const tier: "lite" | "pro" = ranked.includes("pro") ? "pro" : "lite";
+    const tier: "pro" | "max" = ranked.includes("max") ? "max" : "pro";
     return {
       tier,
       source: "paid",
       trialActive: false,
       trialEndsAt: user.trialEndsAt,
       plaidItemLimit: TIER_LIMITS[tier].plaidItems,
+      weeklyLlmBudgetCad: TIER_LIMITS[tier].weeklyLlmBudgetCad,
     };
   }
   return {
@@ -47,6 +55,7 @@ export function computeEffectiveTier(
     trialActive: false,
     trialEndsAt: user.trialEndsAt,
     plaidItemLimit: TIER_LIMITS.free.plaidItems,
+    weeklyLlmBudgetCad: TIER_LIMITS.free.weeklyLlmBudgetCad,
   };
 }
 
@@ -54,7 +63,7 @@ export async function effectiveTier(userId: string): Promise<EffectiveTier> {
   const [user, activeSubs] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: userId } }),
     prisma.subscription.findMany({
-      where: { userId, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as Prisma.$Enums.SubscriptionStatus[] } },
+      where: { userId, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as SubscriptionStatus[] } },
       select: { tier: true, environment: true },
     }),
   ]);
@@ -63,8 +72,12 @@ export async function effectiveTier(userId: string): Promise<EffectiveTier> {
 }
 
 export async function requireProTier(userId: string): Promise<void> {
+  await requirePaidTier(userId);
+}
+
+export async function requirePaidTier(userId: string): Promise<void> {
   const t = await effectiveTier(userId);
-  if (t.tier !== "pro") {
-    throw new HttpError(402, "upgrade_required", `Pro tier required (current: ${t.tier})`);
+  if (!isPaidFeatureTier(t.tier)) {
+    throw new HttpError(402, "upgrade_required", `Paid tier required (current: ${t.tier})`);
   }
 }

@@ -401,7 +401,7 @@ export default function Home() {
   const bankCount = plaidItems?.length ?? 0;
   // Effective tier: trial active grants Pro features regardless of base tier.
   const effectiveTier: Tier = me?.trial?.active ? "pro" : (me?.tier ?? "free");
-  const canConnectBanks = tierAtLeast(effectiveTier, "lite");
+  const canConnectBanks = tierAtLeast(effectiveTier, "pro");
   const canUseGoals = tierAtLeast(effectiveTier, "pro");
   const goalsSavedTotal = goals.reduce((sum, goal) => sum + Number(goal.savedAmount), 0);
   const goalsTargetTotal = goals.reduce((sum, goal) => sum + Number(goal.targetAmount), 0);
@@ -489,7 +489,7 @@ export default function Home() {
       href: "/budget",
     });
   }
-  // Connect a bank — gated to Lite+ (Free tier can't connect Plaid items).
+  // Connect a bank — gated to Pro+ (Free tier can't connect Plaid items).
   if (plaidItems !== null && bankCount === 0 && canConnectBanks) {
     actionItems.push({
       key: "ob-bank",

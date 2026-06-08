@@ -10,12 +10,13 @@ const BASE = {
   WEB_APP_URL: "http://localhost:3000",
   STRIPE_SECRET_KEY: "sk_test_dummy",
   STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
   STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
+  STRIPE_PRICE_MAX_MONTHLY: "price_max_test",
+  LLM_BUDGET_USD_TO_CAD_RATE: 1.4,
   PLAID_CLIENT_ID: "x",
   PLAID_SECRET: "x",
   ENCRYPTION_KEY: Buffer.alloc(32).toString("base64"),
-  GEMINI_API_KEY: "x",
+  DEEPSEEK_API_KEY: "x",
   TRUST_PROXY: "false",
 };
 

@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { toGeminiHistory } from "../src/chat/turn.js";
+import { toLlmHistory } from "../src/chat/turn.js";
 
 // Regression for the history-trim orphan tool row issue (codex pass 4).
 // When selectHistoryWindow cuts between a user message and its tool/assistant
-// continuation, the chronological slice can start with a tool row. toGeminiHistory
+// continuation, the chronological slice can start with a tool row. toLlmHistory
 // expands tool rows into (model functionCall + user functionResponse), so without
-// extra stripping Gemini would receive an orphan user-functionResponse with no
+// extra stripping an LLM would receive an orphan user-functionResponse with no
 // matching functionCall and reject the request.
 
-describe("toGeminiHistory leading-orphan stripping", () => {
+describe("toLlmHistory leading-orphan stripping", () => {
   it("drops leading model entries (assistant-first slice)", () => {
-    const out = toGeminiHistory([
+    const out = toLlmHistory([
       { role: "assistant", blocks: [{ type: "text", markdown: "orphan" }] },
       { role: "user", blocks: [{ type: "text", markdown: "real start" }] },
     ]);
@@ -19,7 +19,7 @@ describe("toGeminiHistory leading-orphan stripping", () => {
   });
 
   it("drops leading user functionResponse with no matching functionCall (tool-first slice)", () => {
-    const out = toGeminiHistory([
+    const out = toLlmHistory([
       { role: "tool", blocks: [{ type: "tool", toolName: "listCategories", args: {}, result: { output: { categories: [] } } }] },
       { role: "user", blocks: [{ type: "text", markdown: "real start" }] },
     ]);
@@ -28,7 +28,7 @@ describe("toGeminiHistory leading-orphan stripping", () => {
   });
 
   it("strips repeated orphan tool rows until a user-text appears", () => {
-    const out = toGeminiHistory([
+    const out = toLlmHistory([
       { role: "tool", blocks: [{ type: "tool", toolName: "a", args: {}, result: { output: {} } }] },
       { role: "tool", blocks: [{ type: "tool", toolName: "b", args: {}, result: { output: {} } }] },
       { role: "assistant", blocks: [{ type: "text", markdown: "interim" }] },
@@ -39,7 +39,7 @@ describe("toGeminiHistory leading-orphan stripping", () => {
   });
 
   it("preserves a coherent user → assistant → user dialogue", () => {
-    const out = toGeminiHistory([
+    const out = toLlmHistory([
       { role: "user", blocks: [{ type: "text", markdown: "hi" }] },
       { role: "assistant", blocks: [{ type: "text", markdown: "hello" }] },
       { role: "user", blocks: [{ type: "text", markdown: "bye" }] },
@@ -51,7 +51,7 @@ describe("toGeminiHistory leading-orphan stripping", () => {
   });
 
   it("expands tool row into functionCall+functionResponse when anchored by a prior user", () => {
-    const out = toGeminiHistory([
+    const out = toLlmHistory([
       { role: "user", blocks: [{ type: "text", markdown: "list cats" }] },
       { role: "tool", blocks: [{ type: "tool", toolName: "listCategories", args: {}, result: { output: { categories: [] } } }] },
       { role: "assistant", blocks: [{ type: "text", markdown: "you have 0" }] },
@@ -64,7 +64,7 @@ describe("toGeminiHistory leading-orphan stripping", () => {
   });
 
   it("returns empty array when nothing but orphan rows exist", () => {
-    const out = toGeminiHistory([
+    const out = toLlmHistory([
       { role: "tool", blocks: [{ type: "tool", toolName: "x", args: {}, result: { output: {} } }] },
       { role: "assistant", blocks: [{ type: "text", markdown: "stranded" }] },
     ]);

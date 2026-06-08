@@ -20,7 +20,7 @@ export default function PlanPage() {
   const router = useRouter();
   const [me, setMe] = useState<MeDTO | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "checkout-lite" | "checkout-pro" | "portal">(null);
+  const [busy, setBusy] = useState<null | "checkout-pro" | "checkout-max" | "portal">(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -64,7 +64,7 @@ export default function PlanPage() {
   if (!me) return <div className={styles.container}>Loading…</div>;
 
   const onUpgrade = async (tier: PaidTier) => {
-    setBusy(tier === "lite" ? "checkout-lite" : "checkout-pro");
+    setBusy(tier === "max" ? "checkout-max" : "checkout-pro");
     try {
       const { url } = await apiFetch<{ url: string }>("/billing/checkout", {
         method: "POST",
@@ -126,7 +126,7 @@ export default function PlanPage() {
       const revertsTo = trialRevertsTo(me);
       const upcomingTier =
         sub.pendingTier && sub.pendingTier !== sub.tier ? sub.pendingTier : sub.tier;
-      const upcomingLabel = upcomingTier === "pro" ? "Pro" : "Lite";
+      const upcomingLabel = tierLabel(upcomingTier, false);
       const upcomingPrice = PRICING[upcomingTier].displayPrice;
       const at = new Date(sub.currentPeriodEnd).toLocaleDateString();
       const hasSchedule = sub.pendingTier && sub.pendingTier !== sub.tier;
@@ -164,7 +164,7 @@ export default function PlanPage() {
             <div className={styles.planCurrentLabel} style={{ color: "var(--color-down)" }}>
               Payment failed
             </div>
-            <div className={styles.planCurrentName}>{sub.tier === "pro" ? "Pro" : "Lite"}</div>
+            <div className={styles.planCurrentName}>{tierLabel(sub.tier, false)}</div>
             <div className={styles.planCurrentStatus}>
               Update your card to keep your subscription active.
             </div>
@@ -187,7 +187,7 @@ export default function PlanPage() {
         <div className={styles.planCurrent}>
           <div>
             <div className={styles.planCurrentLabel}>Current plan</div>
-            <div className={styles.planCurrentName}>{sub.tier === "pro" ? "Pro" : "Lite"}</div>
+            <div className={styles.planCurrentName}>{tierLabel(sub.tier, false)}</div>
             <div className={styles.planCurrentStatus}>
               Ends on {new Date(sub.currentPeriodEnd).toLocaleDateString()}
             </div>
@@ -206,8 +206,8 @@ export default function PlanPage() {
       );
     }
     if (sub && sub.pendingTier && sub.pendingTier !== sub.tier) {
-      const currentLabel = sub.tier === "pro" ? "Pro" : "Lite";
-      const nextLabel = sub.pendingTier === "pro" ? "Pro" : "Lite";
+      const currentLabel = tierLabel(sub.tier, false);
+      const nextLabel = tierLabel(sub.pendingTier, false);
       const at = sub.pendingTierAt
         ? new Date(sub.pendingTierAt).toLocaleDateString()
         : new Date(sub.currentPeriodEnd).toLocaleDateString();
@@ -238,7 +238,7 @@ export default function PlanPage() {
         <div className={styles.planCurrent}>
           <div>
             <div className={styles.planCurrentLabel}>Current plan</div>
-            <div className={styles.planCurrentName}>{sub.tier === "pro" ? "Pro" : "Lite"}</div>
+            <div className={styles.planCurrentName}>{tierLabel(sub.tier, false)}</div>
             <div className={styles.planCurrentStatus}>
               Renews on {new Date(sub.currentPeriodEnd).toLocaleDateString()}
             </div>
@@ -278,7 +278,7 @@ export default function PlanPage() {
         </button>
       );
     }
-    // Tier change (Lite ↔ Pro) flows through Stripe Customer Portal so
+    // Tier change (Pro ↔ Max) flows through Stripe Customer Portal so
     // Stripe handles proration + immediate switch on an existing
     // subscription. Checkout (creating a new sub) is only correct when
     // the user has no active subscription yet.
@@ -292,8 +292,8 @@ export default function PlanPage() {
           </button>
         );
       }
-      const label = tier === "lite" ? "Lite" : "Pro";
-      const isDown = sub.tier === "pro" && tier === "lite";
+      const label = tierLabel(tier, false);
+      const isDown = sub.tier === "max" && tier === "pro";
       return (
         <button
           type="button"
@@ -312,9 +312,9 @@ export default function PlanPage() {
         onClick={() => onUpgrade(tier)}
         disabled={busy !== null}
       >
-        {busy === (tier === "lite" ? "checkout-lite" : "checkout-pro")
+        {busy === (tier === "max" ? "checkout-max" : "checkout-pro")
           ? "Opening…"
-          : `Upgrade to ${tier === "lite" ? "Lite" : "Pro"}`}
+          : `Upgrade to ${tierLabel(tier, false)}`}
       </button>
     );
   };
@@ -341,10 +341,10 @@ export default function PlanPage() {
                 <th style={{ textAlign: "left", padding: 12 }}></th>
                 <th style={{ textAlign: "left", padding: 12 }}>Free</th>
                 <th style={{ textAlign: "left", padding: 12 }}>
-                  Lite · {PRICING.lite.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                  Pro · {PRICING.pro.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
                 </th>
                 <th style={{ textAlign: "left", padding: 12 }}>
-                  Pro · {PRICING.pro.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                  Max · {PRICING.max.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
                 </th>
               </tr>
             </thead>
@@ -352,14 +352,20 @@ export default function PlanPage() {
               <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
                 <td style={{ padding: 12 }}>Bank connections</td>
                 <td style={{ padding: 12 }}>0 (manual / CSV)</td>
-                <td style={{ padding: 12 }}>{TIER_LIMITS.lite.plaidItems}</td>
                 <td style={{ padding: 12 }}>{TIER_LIMITS.pro.plaidItems}</td>
+                <td style={{ padding: 12 }}>{TIER_LIMITS.max.plaidItems}</td>
               </tr>
               <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
                 <td style={{ padding: 12 }}>AI advisor chat</td>
                 <td style={{ padding: 12 }}>—</td>
-                <td style={{ padding: 12 }}>Read-only ritual</td>
                 <td style={{ padding: 12 }}>Full two-way</td>
+                <td style={{ padding: 12 }}>Full two-way</td>
+              </tr>
+              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
+                <td style={{ padding: 12 }}>Weekly AI usage cap</td>
+                <td style={{ padding: 12 }}>—</td>
+                <td style={{ padding: 12 }}>${TIER_LIMITS.pro.weeklyLlmBudgetCad} CAD</td>
+                <td style={{ padding: 12 }}>${TIER_LIMITS.max.weeklyLlmBudgetCad} CAD</td>
               </tr>
               <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
                 <td style={{ padding: 12 }}>Workspace sharing</td>
@@ -370,8 +376,8 @@ export default function PlanPage() {
               <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
                 <td style={{ padding: 12 }}></td>
                 <td style={{ padding: 12 }}></td>
-                <td style={{ padding: 12 }}>{renderUpgradeButton("lite")}</td>
                 <td style={{ padding: 12 }}>{renderUpgradeButton("pro")}</td>
+                <td style={{ padding: 12 }}>{renderUpgradeButton("max")}</td>
               </tr>
             </tbody>
           </table>

@@ -48,7 +48,7 @@ describe("updateGoal + archiveGoal chat tools", () => {
     expect(r.goal.targetAmount).toBe("3000.00");
   });
 
-  it("updateGoal rejects a non-Pro user", async () => {
+  it("updateGoal rejects a Free user", async () => {
     const id = await seedGoal();
     await expect(updateGoal.run(freeCtx, { goal_id: id, target_amount: 3000 })).rejects.toMatchObject({ code: "upgrade_required" });
   });
@@ -65,7 +65,7 @@ describe("updateGoal + archiveGoal chat tools", () => {
     expect(list.block).toBeUndefined();
   });
 
-  it("archiveGoal rejects a non-Pro user", async () => {
+  it("archiveGoal rejects a Free user", async () => {
     const id = await seedGoal();
     await expect(archiveGoal.run(freeCtx, { goal_id: id })).rejects.toMatchObject({ code: "upgrade_required" });
   });

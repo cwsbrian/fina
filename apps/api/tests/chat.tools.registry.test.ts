@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { REGISTRY } from "../src/chat/tools/index.js";
-import { toGeminiFunctionDeclarations } from "../src/chat/gemini-adapter.js";
+import { toLlmFunctionDeclarations } from "../src/chat/llm-tool-adapter.js";
 
 const EXPECTED_NEW_TOOLS: ReadonlyArray<readonly [string, string]> = [
   ["listAccounts", "List bank accounts in the workspace with balances, account status, and Plaid connection status."],
@@ -38,8 +38,8 @@ describe("REGISTRY (plan 1e-next)", () => {
     }
   });
 
-  it("Gemini declarations emit parametersJsonSchema for new tools (all have args)", () => {
-    const decls = toGeminiFunctionDeclarations(REGISTRY);
+  it("LLM declarations emit parametersJsonSchema for new tools (all have args)", () => {
+    const decls = toLlmFunctionDeclarations(REGISTRY);
     for (const [name] of EXPECTED_NEW_TOOLS) {
       const decl = decls.find((d) => d.name === name);
       expect(decl, `missing declaration for ${name}`).toBeDefined();
@@ -82,8 +82,8 @@ describe("REGISTRY (plan 1e-search)", () => {
     }
   });
 
-  it("Gemini declaration emits parametersJsonSchema (has args)", () => {
-    const decls = toGeminiFunctionDeclarations(REGISTRY);
+  it("LLM declaration emits parametersJsonSchema (has args)", () => {
+    const decls = toLlmFunctionDeclarations(REGISTRY);
     for (const [name] of EXPECTED) {
       const decl = decls.find((d) => d.name === name);
       expect(decl, `missing declaration for ${name}`).toBeDefined();
@@ -129,8 +129,8 @@ describe("REGISTRY (plan 1e-write)", () => {
     }
   });
 
-  it("Gemini declarations emit parametersJsonSchema for both tools", () => {
-    const decls = toGeminiFunctionDeclarations(REGISTRY);
+  it("LLM declarations emit parametersJsonSchema for both tools", () => {
+    const decls = toLlmFunctionDeclarations(REGISTRY);
     for (const [name] of EXPECTED) {
       const decl = decls.find((d) => d.name === name);
       expect(decl, `missing declaration for ${name}`).toBeDefined();

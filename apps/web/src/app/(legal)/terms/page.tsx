@@ -58,7 +58,7 @@ export default function Terms() {
       <h2>4. Subscriptions and payment</h2>
       <ul>
         <li>Fina offers a free trial. Some features require a paid
-          subscription (Lite or Pro).</li>
+          subscription (Pro or Max).</li>
         <li>Web subscriptions are billed via Stripe. iOS and Android
           subscriptions are billed via Apple App Store and Google Play
           respectively.</li>

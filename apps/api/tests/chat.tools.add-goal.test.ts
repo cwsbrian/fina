@@ -7,7 +7,7 @@ import * as strategyMod from "../src/goals/generate-strategy.js";
 
 // Strategy generation is an LLM call — stub it so the test asserts it
 // was TRIGGERED (the fix for chat-created goals spinning forever on a
-// null strategy) without hitting Gemini.
+// null strategy) without hitting LLM.
 vi.mock("../src/goals/generate-strategy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/goals/generate-strategy.js")>();
   return { ...actual, generateAndStoreGoalStrategy: vi.fn().mockResolvedValue(undefined) };
@@ -16,6 +16,7 @@ vi.mock("../src/goals/generate-strategy.js", async (importOriginal) => {
 describe("addGoal chat tool", () => {
   let wsId: string;
   let proCtx: ToolContext;
+  let paidProCtx: ToolContext;
   let freeCtx: ToolContext;
 
   function isoPlusDays(n: number): string {
@@ -32,6 +33,22 @@ describe("addGoal chat tool", () => {
     });
     await prisma.membership.create({ data: { userId: pro.id, workspaceId: wsId, role: "owner" } });
     proCtx = { env: {} as never, workspaceId: wsId, userId: pro.id, role: "owner" };
+    const paidPro = await prisma.user.create({
+      data: { id: `${stamp}-paid-pro`, email: `${stamp}-paid-pro@t.co`, name: "Paid Pro", tz: "America/Toronto", trialEndsAt: new Date(Date.now() - 86_400_000), trialConsumed: true },
+    });
+    await prisma.membership.create({ data: { userId: paidPro.id, workspaceId: wsId, role: "editor" } });
+    await prisma.subscription.create({
+      data: {
+        userId: paidPro.id,
+        tier: "pro",
+        source: "stripe",
+        sourceSubscriptionId: `sub_${stamp}_paid_pro`,
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+        cancelAtPeriodEnd: false,
+      },
+    });
+    paidProCtx = { env: {} as never, workspaceId: wsId, userId: paidPro.id, role: "editor" };
     // Free: trial expired, no subscription.
     const free = await prisma.user.create({
       data: { id: `${stamp}-free`, email: `${stamp}-free@t.co`, name: "Free", tz: "America/Toronto", trialEndsAt: new Date(Date.now() - 86_400_000), trialConsumed: true },
@@ -57,6 +74,16 @@ describe("addGoal chat tool", () => {
     expect(inDb).not.toBeNull();
   });
 
+  it("creates a goal for a paid Pro user", async () => {
+    const r = await addGoal.run(paidProCtx, {
+      title: "Emergency fund",
+      target_amount: 1000,
+      due_date: isoPlusDays(60),
+    });
+    expect(r.goal.title).toBe("Emergency fund");
+    expect(r.goal.targetAmount).toBe("1000.00");
+  });
+
   it("triggers savings-plan generation so the detail screen doesn't spin forever", async () => {
     const r = await addGoal.run(proCtx, {
       title: "Laptop",
@@ -69,7 +96,7 @@ describe("addGoal chat tool", () => {
     );
   });
 
-  it("rejects a non-Pro user with upgrade_required", async () => {
+  it("rejects a Free user with upgrade_required", async () => {
     await expect(
       addGoal.run(freeCtx, { title: "X", target_amount: 100, due_date: isoPlusDays(60) }),
     ).rejects.toMatchObject({ code: "upgrade_required" });

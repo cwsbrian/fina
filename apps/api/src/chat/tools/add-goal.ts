@@ -26,7 +26,7 @@ type Args = z.infer<typeof Args>;
 export const addGoal: ToolDef<Args, { goal: GoalDTO }> = {
   name: "addGoal",
   description:
-    "Create a savings goal. Pro-tier only. target_amount is a number; due_date is YYYY-MM-DD and must be at least one month out. Savings accrue automatically from staying under budget — do NOT promise a manual deposit. Usually issued via presentGoalForm (the form collects/edits the fields), not called directly.",
+    "Create a savings goal. Paid-tier only. target_amount is a number; due_date is YYYY-MM-DD and must be at least one month out. Savings accrue automatically from staying under budget — do NOT promise a manual deposit. Usually issued via presentGoalForm (the form collects/edits the fields), not called directly.",
   args: Args,
   async run(ctx, args) {
     const goal = await createGoalService(ctx.workspaceId, ctx.userId, {
@@ -39,7 +39,7 @@ export const addGoal: ToolDef<Args, { goal: GoalDTO }> = {
     // /goals route. Without this, a chat-created goal keeps strategy=null
     // forever and the detail screen spins on "Fina is putting a plan
     // together". The detail screen refetches on focus and picks up the
-    // plan once Gemini returns (or a failure notice if it can't).
+    // plan once the LLM returns (or a failure notice if it can't).
     void generateAndStoreGoalStrategy(ctx.env, goal.id).catch(() => {});
     return { goal };
   },

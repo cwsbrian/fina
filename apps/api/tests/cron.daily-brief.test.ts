@@ -3,17 +3,13 @@ import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 import { currentLocalHHmm, syncMorningTimeToNow } from "./helpers/cron-time.js";
+import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 
-// Mock Gemini — minimal response.
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: vi.fn().mockImplementation(() => ({
-    models: {
-      generateContent: vi.fn().mockResolvedValue({ text: "test brief text" }),
-    },
-  })),
-}));
-
-beforeEach(async () => { await truncateAll(); });
+beforeEach(async () => {
+  await truncateAll();
+  resetGeminiMock();
+  chatGeminiMock.responses.push({ text: "test brief text" });
+});
 afterAll(async () => { await disconnect(); });
 
 async function makeUser(tz = "America/Toronto", morningTime = "08:00") {

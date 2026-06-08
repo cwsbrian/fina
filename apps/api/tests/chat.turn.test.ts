@@ -13,7 +13,7 @@ describe("processChatTurn", () => {
   let wsId: string;
   let threadId: string;
   let userId: string;
-  const env = { GEMINI_API_KEY: "x" } as never;
+  const env = { DEEPSEEK_API_KEY: "x", CHAT_MODEL: "deepseek-v4-flash" } as never;
 
   beforeEach(async () => {
     resetGeminiMock();
@@ -94,7 +94,7 @@ describe("processChatTurn", () => {
     expect(r.toolCalls).toHaveLength(0);
   });
 
-  it("Gemini SDK throws → exception propagates to caller", async () => {
+  it("LLM provider throws → exception propagates to caller", async () => {
     chatGeminiMock.responses.push(new Error("network kaput"));
     await expect(processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner")).rejects.toThrow(/network kaput/);
   });

@@ -33,11 +33,12 @@ const env = {
   PLAID_SECRET: "test",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test",
+  DEEPSEEK_API_KEY: "test",
+  LLM_BUDGET_USD_TO_CAD_RATE: 1.4,
   STRIPE_SECRET_KEY: "sk_test_dummy",
   STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
   STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
+  STRIPE_PRICE_MAX_MONTHLY: "price_max_test",
 };
 
 function fakeStripeSub(opts: {
@@ -49,7 +50,7 @@ function fakeStripeSub(opts: {
     status: opts.status ?? "active",
     cancel_at_period_end: opts.cancelAtPeriodEnd ?? false,
     current_period_end: Math.floor((Date.now() + 30 * 86400_000) / 1000),
-    items: { data: [{ price: { id: opts.priceId ?? env.STRIPE_PRICE_PRO_MONTHLY } }] },
+    items: { data: [{ price: { id: opts.priceId ?? env.STRIPE_PRICE_MAX_MONTHLY } }] },
   } as any;
 }
 
@@ -88,9 +89,9 @@ describe("POST /billing/sync", () => {
     const sub = await prisma.subscription.findUniqueOrThrow({
       where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_first" } },
     });
-    expect(sub.tier).toBe("pro");
+    expect(sub.tier).toBe("max");
     expect(sub.status).toBe("active");
-    expect(res.json().subscription).toMatchObject({ tier: "pro", status: "active", source: "stripe" });
+    expect(res.json().subscription).toMatchObject({ tier: "max", status: "active", source: "stripe" });
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.userId);
   });
 
@@ -146,7 +147,7 @@ describe("POST /billing/sync", () => {
     const sub = await prisma.subscription.findUniqueOrThrow({
       where: { source_sourceSubscriptionId: { source: "stripe", sourceSubscriptionId: "sub_s3" } },
     });
-    expect(sub.tier).toBe("pro");
+    expect(sub.tier).toBe("max");
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(env, user.userId);
   });
 

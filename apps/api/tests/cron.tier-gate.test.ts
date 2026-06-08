@@ -19,7 +19,7 @@ afterAll(() => {
 describe("checkBackgroundSyncGate", () => {
   it("active trial with Plaid entitlement → { ok: true }", async () => {
     vi.mocked(effectiveTier).mockResolvedValueOnce({
-      tier: "pro",
+      tier: "max",
       source: "trial",
       trialActive: true,
       trialEndsAt: new Date(Date.now() + 86_400_000),
@@ -28,15 +28,15 @@ describe("checkBackgroundSyncGate", () => {
     expect(await checkBackgroundSyncGate("u1")).toEqual({ ok: true });
   });
 
-  it("lite subscription can background sync", async () => {
+  it("pro subscription can background sync", async () => {
     vi.mocked(effectiveTier).mockResolvedValueOnce({
-      tier: "lite",
+      tier: "pro",
       source: "paid",
       trialActive: false,
       trialEndsAt: null,
       plaidItemLimit: 1,
     });
-    expect(await checkBackgroundSyncGate("u-lite")).toEqual({ ok: true });
+    expect(await checkBackgroundSyncGate("u-pro")).toEqual({ ok: true });
   });
 
   it("free user cannot background sync", async () => {

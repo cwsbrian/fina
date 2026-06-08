@@ -16,13 +16,15 @@ export function testEnv(overrides: Partial<Env> = {}): Env {
     PLAID_SECRET: "x",
     PLAID_ENV: "sandbox",
     ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-    GEMINI_API_KEY: "x",
+    DEEPSEEK_API_KEY: "x",
+    CHAT_MODEL: "deepseek-v4-flash",
+    LLM_BUDGET_USD_TO_CAD_RATE: 1.4,
     PRISMA_CONNECTION_LIMIT: 10,
     TRUST_PROXY: false,
     STRIPE_SECRET_KEY: "sk_test_dummy",
     STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-    STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
     STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
+    STRIPE_PRICE_MAX_MONTHLY: "price_max_test",
     ...overrides,
   };
 }

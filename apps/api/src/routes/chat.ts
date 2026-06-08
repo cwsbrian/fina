@@ -4,6 +4,7 @@ import {
   ListChatThreadsQuery,
   PatchChatThreadBody,
   ChatMessageBody,
+  isPaidFeatureTier,
 } from "@fina/shared";
 import { HttpError, requireSession } from "../auth/context.js";
 import { withRateLimit } from "../auth/rate-limit.js";
@@ -43,7 +44,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     try {
       const session = await requireSession(req, app);
       const tier = await effectiveTier(session.userId);
-      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+      if (!isPaidFeatureTier(tier.tier)) return reply.code(402).send({ error: "upgrade_required" });
 
       const thread = await threadsService.create({
         userId: session.userId,
@@ -216,7 +217,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     try {
       const session = await requireSession(req, app);
       const tier = await effectiveTier(session.userId);
-      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+      if (!isPaidFeatureTier(tier.tier)) return reply.code(402).send({ error: "upgrade_required" });
 
       const updated = await threadsService.patch({
         threadId: params.tid, userId: session.userId, title: parsed.data.title,
@@ -254,7 +255,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     try {
       const session = await requireSession(req, app);
       const tier = await effectiveTier(session.userId);
-      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+      if (!isPaidFeatureTier(tier.tier)) return reply.code(402).send({ error: "upgrade_required" });
 
       const archived = await threadsService.archive({
         threadId: params.tid, userId: session.userId,
@@ -278,7 +279,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
     try {
       const session = await requireSession(req, app);
       const tier = await effectiveTier(session.userId);
-      if (tier.tier !== "pro") return reply.code(402).send({ error: "upgrade_required" });
+      if (!isPaidFeatureTier(tier.tier)) return reply.code(402).send({ error: "upgrade_required" });
 
       // Weekly LLM spend cap (per user, rolling 7 days). Only gates the
       // user → Fina path; system-initiated features (brief, categorize)
@@ -387,15 +388,17 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         ];
         if (blocks.length === 0) {
           // Model returned no text AND no tool produced a block. Most
-          // likely cause is a Gemini safety/recitation filter or a
+          // likely cause is a model safety/recitation filter or a
           // misfire on the strict-scope prompt. Log for diagnosis so
           // we can tune prompt or model on repeated cases.
           logWarn(
             {
               threadId: thread.id,
               userId: session.userId,
-              userText: parsed.data.text.slice(0, 200),
-              toolCalls: turn.toolCalls.length,
+              err: {
+                userText: parsed.data.text.slice(0, 200),
+                toolCalls: turn.toolCalls.length,
+              },
             },
             "chat: assistant returned empty text + no blocks",
           );

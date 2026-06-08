@@ -23,7 +23,7 @@ import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
 
-async function makeLiteUser(userId: string): Promise<void> {
+async function makeProUser(userId: string): Promise<void> {
   await prisma.user.update({
     where: { id: userId },
     data: { trialEndsAt: null, trialConsumed: true },
@@ -31,9 +31,9 @@ async function makeLiteUser(userId: string): Promise<void> {
   await prisma.subscription.create({
     data: {
       userId,
-      tier: "lite",
+      tier: "pro",
       source: "stripe",
-      sourceSubscriptionId: `sub_lite_${userId}`,
+      sourceSubscriptionId: `sub_pro_${userId}`,
       status: "active",
       currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
     },
@@ -319,10 +319,12 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
 
   it("rechecks user-wide limit after link token was issued", async () => {
     const app = await buildApp(env);
-    const owner = await signUpAndGetCookie(app, { email: "lite-recheck@x.com", name: "LR" });
-    await makeLiteUser(owner.userId);
+    const owner = await signUpAndGetCookie(app, { email: "pro-recheck@x.com", name: "PR" });
+    await makeProUser(owner.userId);
     const wsId = await getOwnerWorkspaceId(owner.userId);
-    await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: "item_existing_lite" });
+    for (let i = 0; i < 5; i++) {
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_existing_pro_${i}` });
+    }
     pushExchangeAndAccounts("item_after_link", "access_after_link", "acct_after_link");
     plaidMock.itemRemove.push({ data: { request_id: "remove-after-link" } });
 
@@ -338,16 +340,19 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     expect(plaidMock.itemPublicTokenExchange.length).toBe(1);
     expect(plaidMock.accountsGet.length).toBe(1);
     expect(plaidMock.itemRemove.length).toBe(1);
-    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(5);
     expect(await prisma.plaidItem.findUnique({ where: { itemId: "item_after_link" } })).toBeNull();
     await app.close();
   });
 
-  it("concurrent exchanges for same Lite user create at most one item", async () => {
+  it("concurrent exchanges for same Pro user create at most one item beyond the 5-item cap", async () => {
     const app = await buildApp(env);
-    const owner = await signUpAndGetCookie(app, { email: "lite-race@x.com", name: "Race" });
-    await makeLiteUser(owner.userId);
+    const owner = await signUpAndGetCookie(app, { email: "pro-race@x.com", name: "Race" });
+    await makeProUser(owner.userId);
     const wsId = await getOwnerWorkspaceId(owner.userId);
+    for (let i = 0; i < 4; i++) {
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_race_existing_${i}` });
+    }
     pushExchangeAndAccounts("item_race_1", "access_race_1", "acct_race_1");
     pushExchangeAndAccounts("item_race_2", "access_race_2", "acct_race_2");
     plaidMock.itemRemove.push({ data: { request_id: "remove-race-loser" } });
@@ -364,15 +369,18 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
 
     expect(statuses).toEqual([200, 402]);
     expect(responses.find((r) => r.statusCode === 402)?.json().error).toBe("plaid_item_limit_reached");
-    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(5);
     await app.close();
   });
 
   it("stores pending cleanup row when final limit cleanup fails", async () => {
     const app = await buildApp(env);
-    const owner = await signUpAndGetCookie(app, { email: "lite-cleanup@x.com", name: "LC" });
-    await makeLiteUser(owner.userId);
+    const owner = await signUpAndGetCookie(app, { email: "pro-cleanup@x.com", name: "PC" });
+    await makeProUser(owner.userId);
     const wsId = await getOwnerWorkspaceId(owner.userId);
+    for (let i = 0; i < 4; i++) {
+      await seedPlaidItem({ workspaceId: wsId, connectedBy: owner.userId, itemId: `item_cleanup_existing_${i}` });
+    }
     plaidMock.itemPublicTokenExchange.push({
       data: { access_token: "access_cleanup_pending", item_id: "item_cleanup_pending", request_id: "req" },
     });
@@ -435,7 +443,7 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     });
     expect(cleanup.accessTokenCiphertext.length).toBeGreaterThan(0);
     expect(cleanup.accessTokenIv.length).toBeGreaterThan(0);
-    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(1);
+    expect(await prisma.plaidItem.count({ where: { connectedBy: owner.userId, status: { not: "disconnected" } } })).toBe(5);
     await app.close();
   });
 
@@ -509,7 +517,7 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     await app.close();
   });
 
-  it("detached categorize: Gemini failure does NOT break exchange response", async () => {
+  it("detached categorize: LLM failure does NOT break exchange response", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "ex-cat-fail@x.com", name: "ECF" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -520,7 +528,7 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
         modified: [], removed: [], next_cursor: "c1", has_more: false,
       },
     });
-    geminiMock.generateContent.push(new Error("Gemini down"));
+    geminiMock.generateContent.push(new Error("LLM down"));
     const res = await app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid/exchange`,

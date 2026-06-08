@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
-import { CreateGoalBody, PatchGoalBody } from "@fina/shared";
+import { CreateGoalBody, isPaidFeatureTier, PatchGoalBody } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
 import { generateAndStoreGoalStrategy } from "../goals/generate-strategy.js";
@@ -167,7 +167,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
       );
       // Fire-and-forget LLM strategy generation. The user gets an
       // immediate 201; the detail screen refetches and picks up the
-      // strategy once Gemini returns.
+      // strategy once the LLM returns.
       void generateAndStoreGoalStrategy(app.fina.env, goal.id).catch(() => {});
       return reply.code(201).send({ goal });
     } catch (e) {
@@ -211,7 +211,7 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
         }
         const asOf = new Date();
         const tier = await effectiveTier(ctx.session.userId);
-        if (tier.tier !== "pro") {
+        if (!isPaidFeatureTier(tier.tier)) {
           return reply.code(402).send({ error: "upgrade_required" });
         }
         const row = await prisma.goal.findFirst({

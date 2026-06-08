@@ -24,7 +24,7 @@ describe("EffectiveTier with subscriptions", () => {
   }
 
   async function createSub(userId: string, opts: {
-    tier: "lite" | "pro";
+    tier: "pro" | "max";
     status: "trialing" | "active" | "past_due" | "canceled" | "unpaid" | "incomplete";
     cancelAtPeriodEnd?: boolean;
   }) {
@@ -58,19 +58,10 @@ describe("EffectiveTier with subscriptions", () => {
 
   it("trial wins over paid sub when both active", async () => {
     const user = await createUser({ trialEndsAt: new Date(Date.now() + 10 * 86400_000) });
-    await createSub(user.id, { tier: "lite", status: "active" });
+    await createSub(user.id, { tier: "pro", status: "active" });
     const t = await effectiveTier(user.id);
     expect(t.tier).toBe("pro");
     expect(t.source).toBe("trial");
-  });
-
-  it("returns lite+paid for active lite sub (no trial)", async () => {
-    const user = await createUser();
-    await createSub(user.id, { tier: "lite", status: "active" });
-    const t = await effectiveTier(user.id);
-    expect(t.tier).toBe("lite");
-    expect(t.source).toBe("paid");
-    expect(t.plaidItemLimit).toBe(1);
   });
 
   it("returns pro+paid for active pro sub (no trial)", async () => {
@@ -79,27 +70,39 @@ describe("EffectiveTier with subscriptions", () => {
     const t = await effectiveTier(user.id);
     expect(t.tier).toBe("pro");
     expect(t.source).toBe("paid");
+    expect(t.plaidItemLimit).toBe(5);
+    expect(t.weeklyLlmBudgetCad).toBe(1);
+  });
+
+  it("returns max+paid for active max sub (no trial)", async () => {
+    const user = await createUser();
+    await createSub(user.id, { tier: "max", status: "active" });
+    const t = await effectiveTier(user.id);
+    expect(t.tier).toBe("max");
+    expect(t.source).toBe("paid");
+    expect(t.plaidItemLimit).toBe(20);
+    expect(t.weeklyLlmBudgetCad).toBe(3);
   });
 
   it("trialing status counts as active", async () => {
     const user = await createUser();
-    await createSub(user.id, { tier: "pro", status: "trialing" });
+    await createSub(user.id, { tier: "max", status: "trialing" });
     const t = await effectiveTier(user.id);
-    expect(t.tier).toBe("pro");
+    expect(t.tier).toBe("max");
     expect(t.source).toBe("paid");
   });
 
   it("past_due status keeps user paid (Smart Retries grace)", async () => {
     const user = await createUser();
-    await createSub(user.id, { tier: "pro", status: "past_due" });
+    await createSub(user.id, { tier: "max", status: "past_due" });
     const t = await effectiveTier(user.id);
-    expect(t.tier).toBe("pro");
+    expect(t.tier).toBe("max");
     expect(t.source).toBe("paid");
   });
 
   it("canceled status drops user to free", async () => {
     const user = await createUser();
-    await createSub(user.id, { tier: "pro", status: "canceled" });
+    await createSub(user.id, { tier: "max", status: "canceled" });
     const t = await effectiveTier(user.id);
     expect(t.tier).toBe("free");
     expect(t.source).toBe("default");
@@ -107,31 +110,31 @@ describe("EffectiveTier with subscriptions", () => {
 
   it("incomplete status does not grant paid tier", async () => {
     const user = await createUser();
-    await createSub(user.id, { tier: "pro", status: "incomplete" });
+    await createSub(user.id, { tier: "max", status: "incomplete" });
     const t = await effectiveTier(user.id);
     expect(t.tier).toBe("free");
   });
 
   it("unpaid status does not grant paid tier", async () => {
     const user = await createUser();
-    await createSub(user.id, { tier: "pro", status: "unpaid" });
+    await createSub(user.id, { tier: "max", status: "unpaid" });
     const t = await effectiveTier(user.id);
     expect(t.tier).toBe("free");
   });
 
   it("cancelAtPeriodEnd=true keeps user paid until period ends", async () => {
     const user = await createUser();
-    await createSub(user.id, { tier: "pro", status: "active", cancelAtPeriodEnd: true });
+    await createSub(user.id, { tier: "max", status: "active", cancelAtPeriodEnd: true });
     const t = await effectiveTier(user.id);
-    expect(t.tier).toBe("pro");
+    expect(t.tier).toBe("max");
     expect(t.source).toBe("paid");
   });
 
   it("highest tier wins among multiple active subs", async () => {
     const user = await createUser();
-    await createSub(user.id, { tier: "lite", status: "active" });
     await createSub(user.id, { tier: "pro", status: "active" });
+    await createSub(user.id, { tier: "max", status: "active" });
     const t = await effectiveTier(user.id);
-    expect(t.tier).toBe("pro");
+    expect(t.tier).toBe("max");
   });
 });

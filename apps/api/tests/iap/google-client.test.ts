@@ -26,7 +26,7 @@ const mkV2 = (overrides: Partial<{
   subscriptionState: overrides.subscriptionState ?? "SUBSCRIPTION_STATE_ACTIVE",
   lineItems: [
     {
-      productId: overrides.productId ?? "pro_monthly",
+      productId: overrides.productId ?? "max_monthly",
       expiryTime: overrides.expiryTime ?? new Date(Date.now() + 86400_000).toISOString(),
       offerDetails: {},
     },
@@ -59,10 +59,10 @@ describe("GoogleClient.fetchAndNormalize", () => {
     const ackSpy = vi.spyOn(c as any, "_acknowledge").mockResolvedValue(undefined);
     await c.acknowledgeIfPending({
       purchaseToken: "token-abc",
-      productId: "pro_monthly",
+      productId: "max_monthly",
       acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
     });
-    expect(ackSpy).toHaveBeenCalledWith("token-abc", "pro_monthly");
+    expect(ackSpy).toHaveBeenCalledWith("token-abc", "max_monthly");
   });
 
   it("does not acknowledge when state is already ACKNOWLEDGED", async () => {
@@ -70,7 +70,7 @@ describe("GoogleClient.fetchAndNormalize", () => {
     const ackSpy = vi.spyOn(c as any, "_acknowledge").mockResolvedValue(undefined);
     await c.acknowledgeIfPending({
       purchaseToken: "token-abc",
-      productId: "pro_monthly",
+      productId: "max_monthly",
       acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
     });
     expect(ackSpy).not.toHaveBeenCalled();

@@ -47,12 +47,12 @@ describe("POST /webhooks/iap/apple", () => {
   const appleTx = () => ({
     bundleId: "com.fina.app", environment: "Sandbox", signedDate: Date.now(),
     appAccountToken: deriveAppleToken("u1"),
-    productId: "pro_monthly", originalTransactionId: "OT-1", transactionId: "T-1", raw: {},
+    productId: "max_monthly", originalTransactionId: "OT-1", transactionId: "T-1", raw: {},
   });
 
   it("happy path: existing Subscription row, syncs to active", async () => {
     await prisma.subscription.create({ data: {
-      userId: "u1", tier: "pro", source: "iap_apple",
+      userId: "u1", tier: "max", source: "iap_apple",
       sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
       status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
     } });
@@ -63,7 +63,7 @@ describe("POST /webhooks/iap/apple", () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 60 * 86400_000),
-      productId: "pro_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     const res = await app.inject({
       method: "POST", url: "/webhooks/iap/apple",
@@ -75,7 +75,7 @@ describe("POST /webhooks/iap/apple", () => {
 
   it("reconciliation cleanup failure returns 500 and does not record webhook event", async () => {
     await prisma.subscription.create({ data: {
-      userId: "u1", tier: "pro", source: "iap_apple",
+      userId: "u1", tier: "max", source: "iap_apple",
       sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
       status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
     } });
@@ -86,7 +86,7 @@ describe("POST /webhooks/iap/apple", () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 60 * 86400_000),
-      productId: "pro_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     vi.mocked(reconcilePlaidItemsForUser).mockResolvedValueOnce({
       kept: [],
@@ -111,7 +111,7 @@ describe("POST /webhooks/iap/apple", () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "pro_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     const res = await app.inject({
       method: "POST", url: "/webhooks/iap/apple",
@@ -179,7 +179,7 @@ describe("POST /webhooks/iap/apple", () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "pro_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     await app.inject({ method: "POST", url: "/webhooks/iap/apple", payload: { signedPayload: "fake-jws" } });
     fakeAppleClient.getSubscriptionStatus.mockClear();
@@ -189,7 +189,7 @@ describe("POST /webhooks/iap/apple", () => {
 
   it("Family Sharing revocation flips Subscription.status to canceled", async () => {
     await prisma.subscription.create({ data: {
-      userId: "u1", tier: "pro", source: "iap_apple",
+      userId: "u1", tier: "max", source: "iap_apple",
       sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
       status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
     } });
@@ -229,7 +229,7 @@ describe("POST /webhooks/iap/google", () => {
       obfuscatedExternalAccountId: deriveGoogleToken("u1"),
       acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
       subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
-      productId: "pro_monthly",
+      productId: "max_monthly",
       expiryTime: new Date(Date.now() + 30 * 86400_000),
       linkedPurchaseToken: null, environment: "Production",
       mapped: { status: "active", cancelAtPeriodEnd: false },
@@ -238,7 +238,7 @@ describe("POST /webhooks/iap/google", () => {
     const envelope = {
       message: {
         data: Buffer.from(JSON.stringify({
-          subscriptionNotification: { purchaseToken: "pt-1", subscriptionId: "pro_monthly", notificationType: 4 },
+          subscriptionNotification: { purchaseToken: "pt-1", subscriptionId: "max_monthly", notificationType: 4 },
         })).toString("base64"),
         messageId: "msg-1",
       },
@@ -258,7 +258,7 @@ describe("POST /webhooks/iap/google", () => {
     await prisma.subscription.create({
       data: {
         userId: "u1",
-        tier: "lite",
+        tier: "pro",
         source: "iap_google",
         sourceSubscriptionId: "pt-old",
         sourceCustomerId: deriveGoogleToken("u1"),
@@ -271,7 +271,7 @@ describe("POST /webhooks/iap/google", () => {
       obfuscatedExternalAccountId: deriveGoogleToken("u1"),
       acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
       subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
-      productId: "pro_monthly",
+      productId: "max_monthly",
       expiryTime: new Date(Date.now() + 30 * 86400_000),
       linkedPurchaseToken: "pt-old",
       environment: "Production",
@@ -281,7 +281,7 @@ describe("POST /webhooks/iap/google", () => {
     const envelope = {
       message: {
         data: Buffer.from(JSON.stringify({
-          subscriptionNotification: { purchaseToken: "pt-new", subscriptionId: "pro_monthly", notificationType: 4 },
+          subscriptionNotification: { purchaseToken: "pt-new", subscriptionId: "max_monthly", notificationType: 4 },
         })).toString("base64"),
         messageId: "msg-linked",
       },

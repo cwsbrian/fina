@@ -62,7 +62,7 @@ describe("createIntentService", () => {
 describe("consumeIntentService", () => {
   let workspaceId: string;
   let userId: string;
-  let env: { GEMINI_API_KEY: string; CHAT_MODEL: string };
+  let env: { DEEPSEEK_API_KEY: string; CHAT_MODEL: string };
 
   beforeEach(async () => {
     const stamp = `iv-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
@@ -73,7 +73,7 @@ describe("consumeIntentService", () => {
     const ws = await prisma.workspace.create({ data: { name: "iv-ws" } });
     workspaceId = ws.id;
     await prisma.membership.create({ data: { userId, workspaceId, role: "owner" } });
-    env = { GEMINI_API_KEY: "test-key", CHAT_MODEL: "gemini-2.5-flash-lite" };
+    env = { DEEPSEEK_API_KEY: "test-key", CHAT_MODEL: "deepseek-v4-flash" };
   });
 
   afterEach(async () => {

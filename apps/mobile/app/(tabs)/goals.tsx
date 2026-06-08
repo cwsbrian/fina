@@ -49,7 +49,7 @@ export default function Goals() {
 
   const tier = me?.tier ?? "free";
   const trialActive = me?.trial?.active ?? false;
-  const canSeeGoals = tier === "pro" || trialActive;
+  const canSeeGoals = tier === "pro" || tier === "max" || trialActive;
 
   const load = useCallback(async () => {
     if (!canSeeGoals) return;

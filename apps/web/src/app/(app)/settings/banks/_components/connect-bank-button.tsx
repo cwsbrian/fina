@@ -102,7 +102,7 @@ export function ConnectBankButton({
           className={`${styles.btn} ${styles.btnPrimary}`}
           style={{ textDecoration: "none", display: "inline-flex" }}
         >
-          Upgrade to Lite
+          Upgrade to Pro
         </a>
       </div>
     );
@@ -114,13 +114,13 @@ export function ConnectBankButton({
         <div className={styles.rowMeta} style={{ marginBottom: 12 }}>
           Your plan includes {plaidItemLimit} connected bank{plaidItemLimit === 1 ? "" : "s"}.
         </div>
-        {tier === "lite" ? (
+        {tier === "pro" ? (
           <a
             href="/settings/plan"
             className={`${styles.btn} ${styles.btnPrimary}`}
             style={{ textDecoration: "none", display: "inline-flex" }}
           >
-            Upgrade to Pro
+            Upgrade to Max
           </a>
         ) : (
           <button

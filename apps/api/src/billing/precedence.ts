@@ -12,10 +12,10 @@ const SOURCE_RANK: Record<string, number> = {
   iap_apple: 2,
   iap_google: 3,
 };
-const TIER_RANK: Record<string, number> = { pro: 0, lite: 1 };
+const TIER_RANK: Record<string, number> = { max: 0, pro: 1 };
 
 /** Deterministic primary-sub picker. Stripe wins unconditionally;
- *  inside non-Stripe, pro > lite; then source order; then createdAt ASC.
+ *  inside non-Stripe, max > pro; then source order; then createdAt ASC.
  *  See spec §8 "Stripe always wins regardless of tier". */
 export function pickPrimarySub<T extends Sub>(subs: ReadonlyArray<T>): T | null {
   if (subs.length === 0) return null;
@@ -29,7 +29,7 @@ export function pickPrimarySub<T extends Sub>(subs: ReadonlyArray<T>): T | null 
     if (src !== 0) return src;
     return a.createdAt.getTime() - b.createdAt.getTime();
   });
-  return sorted[0];
+  return sorted[0] ?? null;
 }
 
 /** Filter out rows whose `environment` doesn't match the runtime.

@@ -853,15 +853,25 @@ model IapRetryCounter {
 /// `costUsd` is Decimal(10,6) — 1e-6 precision gives sub-cent accuracy
 /// down to ~$0.000001 per call, more than enough; aggregates to 4 digits
 /// of dollars without overflow.
+///
+/// DeepSeek bills input tokens at different rates depending on prompt cache
+/// status. `inputCacheHitTokens` and `inputCacheMissTokens` preserve the
+/// provider-reported split so `costUsd` can mirror provider billing more
+/// closely. `costCad` is stored at call time using `usdToCadRate`, so weekly
+/// CAD caps are not revalued when the configured FX rate changes.
 model LlmCallLog {
-  id           String   @id @default(uuid())
-  userId       String
-  source       String
-  model        String
-  inputTokens  Int
-  outputTokens Int
-  costUsd      Decimal  @db.Decimal(10, 6)
-  createdAt    DateTime @default(now())
+  id                   String   @id @default(uuid())
+  userId               String
+  source               String
+  model                String
+  inputTokens          Int
+  inputCacheHitTokens  Int      @default(0)
+  inputCacheMissTokens Int      @default(0)
+  outputTokens         Int
+  costUsd              Decimal  @db.Decimal(10, 6)
+  costCad              Decimal  @default(0) @db.Decimal(10, 6)
+  usdToCadRate         Decimal  @default(1.4) @db.Decimal(10, 6)
+  createdAt            DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

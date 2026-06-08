@@ -48,7 +48,7 @@ describe("verifyGoogleEnvelope", () => {
       data: Buffer.from(JSON.stringify({
         subscriptionNotification: {
           purchaseToken: "tok-1",
-          subscriptionId: "pro_monthly",
+          subscriptionId: "max_monthly",
           notificationType: 4,
         },
       })).toString("base64"),

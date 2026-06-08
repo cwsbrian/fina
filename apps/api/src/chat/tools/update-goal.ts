@@ -28,7 +28,7 @@ type Args = z.infer<typeof Args>;
 export const updateGoal: ToolDef<Args, { goal: GoalDTO }> = {
   name: "updateGoal",
   description:
-    "Edit an existing goal's title, target_amount, or due_date. Pro-tier only. goal_id comes from a prior goals_list/goal_detail card. due_date (if changed) must be at least one month out. Cannot change saved amount — savings are computed automatically.",
+    "Edit an existing goal's title, target_amount, or due_date. Paid-tier only. goal_id comes from a prior goals_list/goal_detail card. due_date (if changed) must be at least one month out. Cannot change saved amount — savings are computed automatically.",
   args: Args,
   async run(ctx, args) {
     // Map provided snake_case args to the service's camelCase fields.

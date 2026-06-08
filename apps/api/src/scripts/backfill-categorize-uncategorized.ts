@@ -13,15 +13,19 @@ import { categorizeNewTransactions } from "../categorize/service.js";
 import type { Env } from "../env.js";
 
 async function main(): Promise<void> {
-  // Dev backfill: categorize service only uses GEMINI_API_KEY +
-  // CATEGORIZE_BATCH_MAX. Skip the full env validation (Stripe/Plaid/etc
+  // Dev backfill: categorize service only uses DEEPSEEK_API_KEY,
+  // CHAT_MODEL, and CATEGORIZE_BATCH_MAX. Skip the full env validation (Stripe/Plaid/etc
   // not needed here).
-  const gemini = process.env.GEMINI_API_KEY;
-  if (!gemini) {
-    console.error("GEMINI_API_KEY is required (export it or source the root .env).");
+  const deepseek = process.env.DEEPSEEK_API_KEY;
+  if (!deepseek) {
+    console.error("DEEPSEEK_API_KEY is required (export it or source the root .env).");
     process.exit(1);
   }
-  const env = { GEMINI_API_KEY: gemini, CATEGORIZE_BATCH_MAX: 50 } as unknown as Env;
+  const env = {
+    DEEPSEEK_API_KEY: deepseek,
+    CHAT_MODEL: process.env.CHAT_MODEL ?? "deepseek-v4-flash",
+    CATEGORIZE_BATCH_MAX: 50,
+  } as unknown as Env;
 
   const uncategorized = await prisma.transaction.findMany({
     where: {

@@ -1,9 +1,14 @@
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
-import type { FunctionDeclaration } from "@google/genai";
 import type { ToolDef } from "./tools/types.js";
 
-export function toGeminiFunctionDeclarations(tools: ToolDef[]): FunctionDeclaration[] {
+type FunctionDeclaration = {
+  name: string;
+  description: string;
+  parametersJsonSchema?: unknown;
+};
+
+export function toLlmFunctionDeclarations(tools: ToolDef[]): FunctionDeclaration[] {
   return tools.map((t) => {
     const decl: FunctionDeclaration = { name: t.name, description: t.description };
     if (hasAnyKeys(t.args)) {

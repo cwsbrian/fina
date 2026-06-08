@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { $Enums } from "@prisma/client";
-import { CheckoutBody, SyncBody, ACTIVE_SUBSCRIPTION_STATUSES } from "@fina/shared";
+import { CheckoutBody, SyncBody, ACTIVE_SUBSCRIPTION_STATUSES, resolveNotificationPrefs } from "@fina/shared";
 import type { MeDTO, SubscriptionDTO } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireSession } from "../auth/context.js";
@@ -43,12 +43,12 @@ export async function buildMeBody(
   const primary = pickPrimarySub(filtered);
   const subscription: SubscriptionDTO | null = primary
     ? {
-        tier: primary.tier as "lite" | "pro",
+        tier: primary.tier as "pro" | "max",
         status: primary.status as SubscriptionDTO["status"],
         currentPeriodEnd: primary.currentPeriodEnd.toISOString(),
         cancelAtPeriodEnd: primary.cancelAtPeriodEnd,
         source: primary.source as SubscriptionDTO["source"],
-        pendingTier: primary.pendingTier as "lite" | "pro" | null,
+        pendingTier: primary.pendingTier as "pro" | "max" | null,
         pendingTierAt: primary.pendingTierAt?.toISOString() ?? null,
       }
     : null;
@@ -66,6 +66,8 @@ export async function buildMeBody(
       morningTime: user.morningTime,
       snoozeUntil: snoozeUntilStr,
       pauseEnabled: user.pauseEnabled,
+      notificationPrefs: resolveNotificationPrefs(user.notificationPrefs),
+      categorizationMode: user.categorizationMode,
     },
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },

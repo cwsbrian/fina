@@ -9,8 +9,8 @@ import { testEnv } from "./helpers/test-env.js";
 // `processChatTurn` and `callTitleLLM` are mocked — message-route tests
 // don't need a real LLM. The auto-title mock is critical: without it,
 // the fire-and-forget `void generateAndPersistThreadTitle(...)` in the
-// message route would issue a real Gemini HTTP call in test, which
-// (a) hangs in CI without GEMINI_API_KEY, and (b) under vitest
+// message route would issue a real LLM HTTP call in test, which
+// (a) hangs in CI without a provider API key, and (b) under vitest
 // singleFork can bleed into subsequent tests in the same file.
 vi.mock("../src/chat/turn.js", () => ({
   processChatTurn: vi.fn().mockResolvedValue({
@@ -36,12 +36,30 @@ async function setup(email: string): Promise<{ userId: string; cookie: string; w
   return { userId: u.userId, cookie: u.cookie, wsId };
 }
 
-// Tier upgrade: fresh signup is auto-trial (Pro). For non-Pro tests,
+// Tier upgrade: fresh signup is auto-trial (Pro). For Free tests,
 // set User.trialEndsAt to the past so `effectiveTier` returns "free".
 async function downgradeToFree(userId: string): Promise<void> {
   await prisma.user.update({
     where: { id: userId },
     data: { trialEndsAt: new Date("2020-01-01T00:00:00Z"), trialConsumed: true },
+  });
+}
+
+async function convertToPro(userId: string): Promise<void> {
+  await prisma.user.update({
+    where: { id: userId },
+    data: { trialEndsAt: new Date("2020-01-01T00:00:00Z"), trialConsumed: true },
+  });
+  await prisma.subscription.create({
+    data: {
+      userId,
+      tier: "pro",
+      source: "stripe",
+      sourceSubscriptionId: `sub_pro_${userId}`,
+      status: "active",
+      currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+      cancelAtPeriodEnd: false,
+    },
   });
 }
 
@@ -81,7 +99,18 @@ describe("POST /chat/threads", () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it("402 — non-Pro user", async () => {
+  it("201 — Pro user can create a chat thread", async () => {
+    const { userId, cookie } = await setup("ct-pro@t.co");
+    await convertToPro(userId);
+    const res = await app.inject({
+      method: "POST", url: "/chat/threads",
+      headers: { cookie, "content-type": "application/json" },
+      payload: "{}",
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it("402 — Free user", async () => {
     const { userId, cookie } = await setup("ct3@t.co");
     await downgradeToFree(userId);
     const res = await app.inject({
@@ -134,7 +163,7 @@ describe("GET /chat/threads", () => {
     expect(res.json().threads).toEqual([]);
   });
 
-  it("200 — open to non-Pro users (Lite needs to read brief threads)", async () => {
+  it("200 — open to Free users so system brief threads stay readable", async () => {
     const { userId, cookie } = await setup("gt3@t.co");
     await downgradeToFree(userId);
     const res = await app.inject({ method: "GET", url: "/chat/threads", headers: { cookie } });
@@ -203,7 +232,7 @@ describe("GET /chat/threads/:tid", () => {
     expect(res.json().thread.archivedAt).toBeTruthy();
   });
 
-  it("200 — open to non-Pro users (Lite needs to read brief threads)", async () => {
+  it("200 — open to Free users so system brief threads stay readable", async () => {
     const { userId, cookie } = await setup("gti5@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     await downgradeToFree(userId);
@@ -248,7 +277,7 @@ describe("PATCH /chat/threads/:tid", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it("402 — non-Pro", async () => {
+  it("402 — Free", async () => {
     const { userId, cookie } = await setup("pti4@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     await downgradeToFree(userId);
@@ -286,7 +315,7 @@ describe("DELETE /chat/threads/:tid", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it("402 — non-Pro", async () => {
+  it("402 — Free", async () => {
     const { userId, cookie } = await setup("dti4@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     await downgradeToFree(userId);
@@ -358,7 +387,7 @@ describe("POST /chat/threads/:tid/messages", () => {
     expect(res.statusCode).toBe(403);
   });
 
-  it("402 — non-Pro user", async () => {
+  it("402 — Free user", async () => {
     const { userId, cookie, wsId } = await setup("mt6@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     await downgradeToFree(userId);
@@ -412,17 +441,18 @@ describe("POST /chat/threads/:tid/messages", () => {
   it("429 — weekly LLM budget exceeded for this user", async () => {
     const { userId, cookie, wsId } = await setup("mt10@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
-    // Seed last-7-days cost AT the configured cap. Service uses
-    // `WEEKLY_LLM_BUDGET_USD_PER_USER ?? 1.25` (default) and the
-    // gate fires on `>=`.
+    // Fresh signup is a Pro trial, so the tier default cap is $1 CAD/week.
+    // Stored LLM cost is USD and converted with the test default 1.4 CAD/USD.
     await prisma.llmCallLog.create({
       data: {
         userId,
         source: "chat",
-        model: "gemini-2.5-flash",
+        model: "deepseek-v4-flash",
         inputTokens: 1_000_000,
         outputTokens: 1_000_000,
-        costUsd: "1.25",
+        costUsd: "0.72",
+        costCad: "1.008",
+        usdToCadRate: "1.4",
         createdAt: new Date(),
       },
     });
@@ -443,10 +473,12 @@ describe("POST /chat/threads/:tid/messages", () => {
       data: {
         userId,
         source: "chat",
-        model: "gemini-2.5-flash",
+        model: "deepseek-v4-flash",
         inputTokens: 0,
         outputTokens: 0,
         costUsd: "5.00",
+        costCad: "7.00",
+        usdToCadRate: "1.4",
         createdAt: eightDaysAgo,
       },
     });
@@ -458,16 +490,18 @@ describe("POST /chat/threads/:tid/messages", () => {
     expect(res.statusCode).toBe(200);
   });
 
-  it("429 — another user's spend does not leak across users", async () => {
+  it("200 — another user's spend does not leak across users", async () => {
     const { userId: spenderId } = await setup("mt12a@t.co");
     await prisma.llmCallLog.create({
       data: {
         userId: spenderId,
         source: "chat",
-        model: "gemini-2.5-flash",
+        model: "deepseek-v4-flash",
         inputTokens: 0,
         outputTokens: 0,
-        costUsd: "1.25",
+        costUsd: "3.00",
+        costCad: "4.20",
+        usdToCadRate: "1.4",
         createdAt: new Date(),
       },
     });

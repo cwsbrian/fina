@@ -1,6 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
 import type { Env } from "../env.js";
 import { logLlmCall } from "../llm/budget.js";
+import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
 
 export type LLMTransaction = {
   id: string;
@@ -15,7 +15,7 @@ export type LLMTransaction = {
   };
 };
 
-/** Category vocabulary split by type so Gemini can be constrained to
+/** Category vocabulary split by type so the LLM can be constrained to
  *  pick from the right bucket based on transaction direction. */
 export type LLMCategoryVocab = {
   expense: string[];
@@ -25,11 +25,11 @@ export type LLMCategoryVocab = {
 export type LLMResult = { tx_id: string; category: string };
 
 /**
- * Call Gemini 2.5 Flash Lite to categorize a batch of transactions.
+ * Call the configured light LLM to categorize a batch of transactions.
  * Merchant strings are JSON-encoded (prompt-injection defense).
  * Throws on errors — caller catches and leaves tx uncategorized.
  */
-export async function callGeminiCategorize(
+export async function callLlmCategorize(
   env: Env,
   vocab: LLMCategoryVocab,
   txs: LLMTransaction[],
@@ -38,8 +38,7 @@ export async function callGeminiCategorize(
    *  we still run the call but skip accounting. */
   ownerUserId: string | null,
 ): Promise<LLMResult[]> {
-  const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
-  const model = "gemini-2.5-flash-lite";
+  const model = env.CHAT_MODEL ?? DEFAULT_LIGHT_LLM_MODEL;
 
   const userPayload = {
     expense_categories: vocab.expense,
@@ -53,36 +52,34 @@ export async function callGeminiCategorize(
     })),
   };
 
-  const response = await ai.models.generateContent({
+  const response = await generateLlmContent(env, {
     model,
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          results: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                tx_id: { type: Type.STRING },
-                category: { type: Type.STRING },
-              },
-              required: ["tx_id", "category"],
+    responseMimeType: "application/json",
+    responseSchema: {
+      type: "object",
+      properties: {
+        results: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              tx_id: { type: "string" },
+              category: { type: "string" },
             },
+            required: ["tx_id", "category"],
           },
         },
-        required: ["results"],
       },
-      systemInstruction:
-        "You categorize Canadian personal financial transactions. CAD currency. " +
-        "Positive amount = money out (expense) — pick ONLY from expense_categories. " +
-        "Negative amount = money in (income/refund) — pick ONLY from income_categories. " +
-        "Never cross types. Use exact category names from the matching list. " +
-        "If a transaction includes plaid_hint (Plaid's personal_finance_category with primary/detailed/confidence), " +
-        "treat HIGH/VERY_HIGH as a strong hint and MEDIUM/LOW as a weak hint when mapping into our category list. " +
-        "If genuinely unclear, use 'Other' from the matching type's list.",
+      required: ["results"],
     },
+    systemInstruction:
+      "You categorize Canadian personal financial transactions. CAD currency. " +
+      "Positive amount = money out (expense) — pick ONLY from expense_categories. " +
+      "Negative amount = money in (income/refund) — pick ONLY from income_categories. " +
+      "Never cross types. Use exact category names from the matching list. " +
+      "If a transaction includes plaid_hint (Plaid's personal_finance_category with primary/detailed/confidence), " +
+      "treat HIGH/VERY_HIGH as a strong hint and MEDIUM/LOW as a weak hint when mapping into our category list. " +
+      "If genuinely unclear, use 'Other' from the matching type's list.",
     contents: [
       { role: "user", parts: [{ text: JSON.stringify(userPayload) }] },
     ],
@@ -94,17 +91,24 @@ export async function callGeminiCategorize(
       source: "categorize",
       model,
       inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+      ...(typeof response.usageMetadata?.promptCacheHitTokenCount === "number"
+        ? { inputCacheHitTokens: response.usageMetadata.promptCacheHitTokenCount }
+        : {}),
+      ...(typeof response.usageMetadata?.promptCacheMissTokenCount === "number"
+        ? { inputCacheMissTokens: response.usageMetadata.promptCacheMissTokenCount }
+        : {}),
       outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+      usdToCadRate: env.LLM_BUDGET_USD_TO_CAD_RATE,
     }).catch(() => {});
   }
 
   const text = response.text;
   if (typeof text !== "string" || text.length === 0) {
-    throw new Error("Gemini returned no text");
+    throw new Error("LLM returned no text");
   }
   const parsed = JSON.parse(text) as { results?: LLMResult[] };
   if (!Array.isArray(parsed.results)) {
-    throw new Error(`Gemini response missing results array: ${text.slice(0, 200)}`);
+    throw new Error(`LLM response missing results array: ${text.slice(0, 200)}`);
   }
   return parsed.results;
 }

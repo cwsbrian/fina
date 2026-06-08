@@ -43,17 +43,17 @@ function toMeDTO(
   const filtered = filterEnvironmentRows(activeSubs, runtimeEnv);
   const t = computeEffectiveTier(user, filtered as unknown as Parameters<typeof computeEffectiveTier>[1]);
   // Deterministic primary-sub pick: Stripe wins unconditionally;
-  // inside non-Stripe, pro > lite; then source order; then createdAt ASC.
+  // inside non-Stripe, max > pro; then source order; then createdAt ASC.
   // MeDTO.subscription is null when no active sub.
   const primary = pickPrimarySub(filtered);
   const subscription: SubscriptionDTO | null = primary
     ? {
-        tier: primary.tier as "lite" | "pro",
+        tier: primary.tier as "pro" | "max",
         status: primary.status as SubscriptionDTO["status"],
         currentPeriodEnd: primary.currentPeriodEnd.toISOString(),
         cancelAtPeriodEnd: primary.cancelAtPeriodEnd,
         source: primary.source as SubscriptionDTO["source"],
-        pendingTier: primary.pendingTier as "lite" | "pro" | null,
+        pendingTier: primary.pendingTier as "pro" | "max" | null,
         pendingTierAt: primary.pendingTierAt?.toISOString() ?? null,
       }
     : null;

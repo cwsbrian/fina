@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { geminiMock, resetGeminiMock, lastGeminiRequest } from "./helpers/gemini-mock.js";
+import { geminiMock, resetGeminiMock, lastLlmCategorizeRequest } from "./helpers/gemini-mock.js";
 
 const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
   async () => await import("./helpers/gemini-mock.js"),
@@ -74,7 +74,7 @@ describe("categorizeNewTransactions", () => {
     });
     const txId = await makeTx(wsId, accountId, "Starbucks");
 
-    // No Gemini push — would throw if called.
+    // No LLM mock response — would throw if called.
     await categorizeNewTransactions(env, wsId, [txId]);
 
     const after = await prisma.transaction.findUniqueOrThrow({ where: { id: txId } });
@@ -173,7 +173,7 @@ describe("categorizeNewTransactions", () => {
     const mappedId = await makeTx(wsId, accountId, "Starbucks", "a");
     const llmId = await makeTx(wsId, accountId, "Loblaws", "b");
 
-    geminiMock.generateContent.push(new Error("Gemini API down"));
+    geminiMock.generateContent.push(new Error("LLM API down"));
 
     await categorizeNewTransactions(env, wsId, [mappedId, llmId]);
 
@@ -224,9 +224,9 @@ describe("categorizeNewTransactions", () => {
     // LLM update path prevents overwriting a manual categorization that lands
     // AFTER the service's SELECT but BEFORE the service's UPDATE.
     //
-    // Approach: pause the service at the Gemini call using a pending promise.
+    // Approach: pause the service at the LLM call using a pending promise.
     // While it's paused, apply a manual categorization to the allocation. Then resolve
-    // Gemini. The service's `updateMany(WHERE source IS NULL AND categoryId IS NULL)`
+    // LLM. The service's `updateMany(WHERE source IS NULL AND categoryId IS NULL)`
     // must skip the tx (allocation source is now 'manual').
     const { wsId, accountId } = await setupWorkspaceWithAccount();
     const groceriesId = await categoryId(wsId, "Groceries");
@@ -234,16 +234,16 @@ describe("categorizeNewTransactions", () => {
 
     const txId = await makeTx(wsId, accountId, "Loblaws");
 
-    // Push a pending Gemini promise so the service blocks at the LLM call.
+    // Push a pending LLM promise so the service blocks at the LLM call.
     let geminiResolve!: (r: { results: Array<{ tx_id: string; category: string }> }) => void;
     geminiMock.generateContent.push(
       new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolve = r; }),
     );
 
-    // Start categorize (it will block at Gemini call after loading the tx).
+    // Start categorize (it will block at LLM call after loading the tx).
     const servicePromise = categorizeNewTransactions(env, wsId, [txId]);
 
-    // Poll until the service has loaded and started its Gemini request.
+    // Poll until the service has loaded and started its LLM request.
     // The mock queue being empty means the service already popped the pending
     // promise from the queue.
     for (let i = 0; i < 50; i++) {
@@ -262,7 +262,7 @@ describe("categorizeNewTransactions", () => {
       data: { categoryId: diningId, source: "manual" },
     });
 
-    // Resolve Gemini with a Groceries result for the same tx.
+    // Resolve the LLM with a Groceries result for the same tx.
     geminiResolve({ results: [{ tx_id: txId, category: "Groceries" }] });
     await servicePromise;
 
@@ -380,7 +380,7 @@ describe("categorizeNewTransactions", () => {
     expect(allocs[0]!.source).toBe("mapping");
   });
 
-  it("Gemini result writes a single allocation with source=ai", async () => {
+  it("LLM result writes a single allocation with source=ai", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
     const txId = await makeTx(wsId, accountId, "Loblaws", "alloc-ai");
 
@@ -424,7 +424,7 @@ describe("categorizeNewTransactions", () => {
       ],
     });
 
-    // Even with a matching mapping + Gemini result, the split tx must not be touched.
+    // Even with a matching mapping + LLM result, the split tx must not be touched.
     geminiMock.generateContent.push({ results: [{ tx_id: tx.id, category: "C1-noclobber" }] });
     await categorizeNewTransactions(env, wsId, [tx.id]);
 
@@ -487,7 +487,7 @@ describe("categorize pipeline — history step + needsConfirmation + PFC", () =>
     // Force merchantNormalized to match (normalizeMerchant("Loblaws") → "loblaws").
     await prisma.transaction.update({ where: { id: newTxId }, data: { merchantNormalized: "loblaws" } });
 
-    // No Gemini push — history should resolve it.
+    // No LLM mock response — history should resolve it.
     await categorizeNewTransactions(env, wsId, [newTxId]);
 
     const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: newTxId } });
@@ -637,7 +637,7 @@ describe("categorize pipeline — history step + needsConfirmation + PFC", () =>
     }
   });
 
-  it("PFC present in rawData → lastGeminiRequest() shows plaid_hint for that tx", async () => {
+  it("PFC present in rawData → lastLlmCategorizeRequest() shows plaid_hint for that tx", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
 
     const tx = await prisma.transaction.create({
@@ -665,7 +665,7 @@ describe("categorize pipeline — history step + needsConfirmation + PFC", () =>
 
     await categorizeNewTransactions(env, wsId, [tx.id]);
 
-    const req = lastGeminiRequest() as {
+    const req = lastLlmCategorizeRequest() as {
       transactions: Array<{ tx_id: string; plaid_hint?: { primary: string; detailed: string; confidence: string } }>;
     } | null;
     expect(req).not.toBeNull();
@@ -678,7 +678,7 @@ describe("categorize pipeline — history step + needsConfirmation + PFC", () =>
     });
   });
 
-  it("PFC absent → lastGeminiRequest() does NOT show plaid_hint for that tx, no throw", async () => {
+  it("PFC absent → lastLlmCategorizeRequest() does NOT show plaid_hint for that tx, no throw", async () => {
     const { wsId, accountId } = await setupWorkspaceWithAccount();
 
     const txId = await makeTx(wsId, accountId, "PlainShop", "pfc-absent");
@@ -686,7 +686,7 @@ describe("categorize pipeline — history step + needsConfirmation + PFC", () =>
 
     await categorizeNewTransactions(env, wsId, [txId]);
 
-    const req = lastGeminiRequest() as {
+    const req = lastLlmCategorizeRequest() as {
       transactions: Array<{ tx_id: string; plaid_hint?: unknown }>;
     } | null;
     expect(req).not.toBeNull();

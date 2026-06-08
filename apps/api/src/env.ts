@@ -23,8 +23,8 @@ const Schema = z.object({
   // Stripe
   STRIPE_SECRET_KEY: z.string(),
   STRIPE_WEBHOOK_SECRET: z.string(),
-  STRIPE_PRICE_LITE_MONTHLY: z.string(),
   STRIPE_PRICE_PRO_MONTHLY: z.string(),
+  STRIPE_PRICE_MAX_MONTHLY: z.string(),
   // Per-app Stripe Portal configuration ID (cfg_...). Optional — when
   // set, /billing/portal sessions use this configuration for branding,
   // allowed products, and return URLs. Each app under the same Stripe
@@ -55,8 +55,8 @@ const Schema = z.object({
   // Must base64-decode to exactly 32 bytes. Validation happens lazily inside
   // the crypto helper so tests can use a fixed value without re-running zod.
   ENCRYPTION_KEY: z.string(),
-  // Gemini (categorize)
-  GEMINI_API_KEY: z.string(),
+  // LLM providers
+  DEEPSEEK_API_KEY: z.string().optional(),
   // OPTIONAL — keeps test literals clean. Use `env.CATEGORIZE_BATCH_MAX ?? 50`
   // in service code. z.default() would make the inferred Env type non-optional.
   CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().optional(),
@@ -77,12 +77,14 @@ const Schema = z.object({
   CHAT_HISTORY_LIMIT_MESSAGES: z.coerce.number().int().positive().optional(),
   CHAT_HISTORY_BUDGET_TOKENS: z.coerce.number().int().positive().optional(),
   CHAT_MAX_TOOL_CALLS_PER_TURN: z.coerce.number().int().positive().optional(),
-  // Weekly LLM spend cap per user (USD). Sum of every LlmCallLog row in
-  // the last 7 days. When reached, POST /chat/threads/:tid/messages is
-  // blocked with 429 llm_weekly_budget_exceeded; system-initiated LLM
-  // (brief, categorize, auto-title) keep running so Fina can still talk
-  // to the user. Default applied at use site as $1.25/week (≈$5/month).
-  WEEKLY_LLM_BUDGET_USD_PER_USER: z.coerce.number().positive().optional(),
+  // Optional global override for the tier-based weekly LLM spend caps
+  // (Pro/trial $1 CAD/wk, Max $3 CAD/wk). Sum of every LlmCallLog row in the
+  // last 7 days. When reached, POST /chat/threads/:tid/messages is blocked
+  // with 429 llm_weekly_budget_exceeded; system-initiated LLM keeps running.
+  WEEKLY_LLM_BUDGET_CAD_PER_USER: z.coerce.number().positive().optional(),
+  // Model pricing is stored in USD; tier limits are CAD because Fina pricing
+  // is CAD. This static conversion avoids runtime FX calls.
+  LLM_BUDGET_USD_TO_CAD_RATE: z.coerce.number().positive().default(1.4),
   // Prisma connection pool size. Default 10 covers cron + webhook + a
   // few request handlers without pool starvation under singleFork tests.
   PRISMA_CONNECTION_LIMIT: z.coerce.number().int().min(1).default(10),

@@ -24,8 +24,8 @@
 - [ ] `WEB_APP_URL` — production web URL (e.g., `https://withfina.com`)
 - [ ] `STRIPE_SECRET_KEY` — production sk_live_*
 - [ ] `STRIPE_WEBHOOK_SECRET` — production whsec_*
-- [ ] `STRIPE_PRICE_LITE_MONTHLY` — production price ID
 - [ ] `STRIPE_PRICE_PRO_MONTHLY` — production price ID
+- [ ] `STRIPE_PRICE_MAX_MONTHLY` — production price ID
 - [ ] `PLAID_CLIENT_ID` — production
 - [ ] `PLAID_SECRET` — production secret
 - [ ] `PLAID_ENV` — `production` (test에서는 `sandbox`)

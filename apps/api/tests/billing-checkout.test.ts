@@ -30,11 +30,12 @@ const env = {
   PLAID_SECRET: "test",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test",
+  DEEPSEEK_API_KEY: "test",
+  LLM_BUDGET_USD_TO_CAD_RATE: 1.4,
   STRIPE_SECRET_KEY: "sk_test_dummy",
   STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
   STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
+  STRIPE_PRICE_MAX_MONTHLY: "price_max_test",
 };
 
 describe("POST /billing/checkout", () => {
@@ -60,7 +61,7 @@ describe("POST /billing/checkout", () => {
       method: "POST",
       url: "/billing/checkout",
       headers: { cookie: user.cookie, "content-type": "application/json" },
-      payload: { tier: "pro" },
+      payload: { tier: "max" },
     });
 
     expect(res.statusCode).toBe(200);
@@ -74,7 +75,7 @@ describe("POST /billing/checkout", () => {
     expect(sessionCall.customer).toBe("cus_new");
     expect(sessionCall.customer_email).toBeUndefined();
     expect(sessionCall.client_reference_id).toBe(user.userId);
-    expect(sessionCall.line_items[0].price).toBe(env.STRIPE_PRICE_PRO_MONTHLY);
+    expect(sessionCall.line_items[0].price).toBe(env.STRIPE_PRICE_MAX_MONTHLY);
     expect(sessionCall.success_url).toContain("{CHECKOUT_SESSION_ID}");
     const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
     expect(fresh.stripeCustomerId).toBe("cus_new");
@@ -92,14 +93,14 @@ describe("POST /billing/checkout", () => {
       method: "POST",
       url: "/billing/checkout",
       headers: { cookie: user.cookie, "content-type": "application/json" },
-      payload: { tier: "lite" },
+      payload: { tier: "pro" },
     });
 
     expect(res.statusCode).toBe(200);
     expect(stripe.fns.customersCreate).not.toHaveBeenCalled();
     const sessionCall = stripe.fns.sessionsCreate.mock.calls[0]?.[0];
     expect(sessionCall.customer).toBe("cus_existing");
-    expect(sessionCall.line_items[0].price).toBe(env.STRIPE_PRICE_LITE_MONTHLY);
+    expect(sessionCall.line_items[0].price).toBe(env.STRIPE_PRICE_PRO_MONTHLY);
   });
 
   it("passes trial_end when trial >48h away", async () => {
@@ -112,7 +113,7 @@ describe("POST /billing/checkout", () => {
       method: "POST",
       url: "/billing/checkout",
       headers: { cookie: user.cookie, "content-type": "application/json" },
-      payload: { tier: "pro" },
+      payload: { tier: "max" },
     });
 
     const sessionCall = stripe.fns.sessionsCreate.mock.calls[0]?.[0];
@@ -132,7 +133,7 @@ describe("POST /billing/checkout", () => {
       method: "POST",
       url: "/billing/checkout",
       headers: { cookie: user.cookie, "content-type": "application/json" },
-      payload: { tier: "pro" },
+      payload: { tier: "max" },
     });
 
     const sessionCall = stripe.fns.sessionsCreate.mock.calls[0]?.[0];
@@ -148,7 +149,7 @@ describe("POST /billing/checkout", () => {
     await prisma.subscription.create({
       data: {
         userId: user.userId,
-        tier: "pro",
+        tier: "max",
         source: "stripe",
         sourceSubscriptionId: "sub_existing",
         status: "active" as any,
@@ -160,7 +161,7 @@ describe("POST /billing/checkout", () => {
       method: "POST",
       url: "/billing/checkout",
       headers: { cookie: user.cookie, "content-type": "application/json" },
-      payload: { tier: "lite" },
+      payload: { tier: "pro" },
     });
 
     expect(res.statusCode).toBe(409);
@@ -187,7 +188,7 @@ describe("POST /billing/checkout", () => {
       method: "POST",
       url: "/billing/checkout",
       headers: { "content-type": "application/json" },
-      payload: { tier: "pro" },
+      payload: { tier: "max" },
     });
     expect(res.statusCode).toBe(401);
   });

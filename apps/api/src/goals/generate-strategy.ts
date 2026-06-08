@@ -1,10 +1,10 @@
-import { GoogleGenAI } from "@google/genai";
 import { logLlmCall } from "../llm/budget.js";
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import type { FinaEnv } from "../env.js";
+import type { Env as FinaEnv } from "../env.js";
 import { monthlyEquivalent } from "../recurring/occurrences.js";
 import { DEFAULT_PERIOD } from "../budget-plans/service.js";
+import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
 
 /** One row in a generated savings plan. */
 export type GoalStrategyItem = {
@@ -28,7 +28,7 @@ export type GoalStrategyMeta = {
   notice?: string;
 };
 
-const MODEL_DEFAULT = "gemini-2.5-flash-lite";
+const MODEL_DEFAULT = DEFAULT_LIGHT_LLM_MODEL;
 
 const SYSTEM_PROMPT = `You are Fina, a thoughtful personal-finance coach.
 
@@ -239,7 +239,7 @@ function buildPrompt(args: {
 }
 
 function stripCodeFences(s: string): string {
-  // Gemini occasionally wraps JSON in ```json ... ``` despite the system prompt.
+  // The LLM can still wrap JSON in ```json ... ``` despite the system prompt.
   return s
     .replace(/^\s*```(?:json)?\s*/i, "")
     .replace(/```\s*$/, "")
@@ -389,17 +389,14 @@ export async function generateAndStoreGoalStrategy(
   let items: GoalStrategyItem[] = [];
   let notice: string | undefined;
   try {
-    const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
     const model = env.CHAT_MODEL ?? MODEL_DEFAULT;
-    const response = await client.models.generateContent({
+    const response = await generateLlmContent(env, {
       model,
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        maxOutputTokens: 500,
-        temperature: 0.4,
-        responseMimeType: "application/json",
-      },
+      systemInstruction: SYSTEM_PROMPT,
+      maxOutputTokens: 500,
+      temperature: 0.4,
+      responseMimeType: "application/json",
     });
     // Attribute spend to the workspace owner — same model as categorize.
     // Lookup is best-effort; missing ownership row (test fixture only)
@@ -414,7 +411,14 @@ export async function generateAndStoreGoalStrategy(
         source: "goal_strategy",
         model,
         inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+        ...(typeof response.usageMetadata?.promptCacheHitTokenCount === "number"
+          ? { inputCacheHitTokens: response.usageMetadata.promptCacheHitTokenCount }
+          : {}),
+        ...(typeof response.usageMetadata?.promptCacheMissTokenCount === "number"
+          ? { inputCacheMissTokens: response.usageMetadata.promptCacheMissTokenCount }
+          : {}),
         outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+        usdToCadRate: env.LLM_BUDGET_USD_TO_CAD_RATE,
       }).catch(() => {});
     }
     const text = response.text ?? "";

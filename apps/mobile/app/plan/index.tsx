@@ -12,20 +12,20 @@ import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 function planDetails(tier: LocalProduct["tier"]): { subtitle: string; bullets: string[] } {
   if (tier === "pro") {
     return {
-      subtitle: "For multiple accounts and active planning.",
+      subtitle: "For everyday planning with full Fina access.",
       bullets: [
-        "Up to 10 connected Plaid items",
+        "Up to 5 connected bank accounts",
         "Fina chat, daily brief, and proactive insights",
         "Goals and saving strategy",
       ],
     };
   }
   return {
-    subtitle: "For one connected bank and simple tracking.",
+    subtitle: "For heavier use and more connected accounts.",
     bullets: [
-      "1 connected Plaid item",
-      "Transactions, categories, and review queue",
-      "Budget and spending overview",
+      "Up to 20 connected bank accounts",
+      "Higher weekly AI usage",
+      "Everything included in Pro",
     ],
   };
 }

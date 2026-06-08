@@ -1,9 +1,10 @@
-import { GoogleGenAI, type FunctionCall } from "@google/genai";
 import type { Env } from "../env.js";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { REGISTRY } from "./tools/index.js";
 import { dispatchTool } from "./dispatcher.js";
-import { toGeminiFunctionDeclarations } from "./gemini-adapter.js";
+import { toLlmFunctionDeclarations } from "./llm-tool-adapter.js";
+import { DEFAULT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
 import { buildFinancialContext } from "./context.js";
 import { selectHistoryWindow } from "./history-window.js";
 import type { ToolContext } from "./tools/types.js";
@@ -17,6 +18,13 @@ import {
 } from "../audit/service.js";
 import { logWarn } from "../logger.js";
 import { logLlmCall } from "../llm/budget.js";
+
+type FunctionCall = { name?: string; args?: Record<string, unknown> };
+type LlmCandidateDiagnostic = {
+  finishReason?: unknown;
+  safetyRatings?: unknown;
+  content?: { parts?: unknown[] };
+};
 
 const SYSTEM_PROMPT = `You are Fina, a personal-finance assistant for Canadian users. You help users
 understand their spending, categorize transactions, and plan their budgets.
@@ -297,8 +305,8 @@ Bulk-remove-recurring intent ('모든 구독 지워줘' / 'remove all subscripti
   picker — do NOT ask "which one?".
 - "목표 만들어/추가" / "create a goal" / "여행자금 200만원 목표" → presentGoalForm
   with whatever title/target_amount/due_date you can infer in defaults. The
-  form collects the rest and submits. Goals are Pro-only; presentGoalForm
-  returns a short upgrade message for non-Pro users.
+  form collects the rest and submits. Goals are paid-tier features; presentGoalForm
+  returns a short upgrade message for Free users.
 - Edit a goal: when the user gives a specific new value ("그 목표 300만원으로
   늘려줘", "change the target to 3000") → presentConfirmCard with accept_action
   { tool: "updateGoal", args: { goal_id, target_amount, ... } }. When they want
@@ -321,7 +329,7 @@ type TextBlock = { type: "text"; markdown: string };
 type ToolBlock = { type: "tool"; toolName: string; args: unknown; result: unknown };
 type Block = TextBlock | ToolBlock;
 
-type GeminiContent = {
+type ChatLlmContent = {
   role: "user" | "model";
   parts: Array<
     | { text: string }
@@ -330,8 +338,8 @@ type GeminiContent = {
   >;
 };
 
-export function toGeminiHistory(messages: Array<{ role: string; blocks: unknown }>): GeminiContent[] {
-  const out: GeminiContent[] = [];
+export function toLlmHistory(messages: Array<{ role: string; blocks: unknown }>): ChatLlmContent[] {
+  const out: ChatLlmContent[] = [];
   for (const m of messages) {
     const blocks = m.blocks as Block[];
     if (m.role === "user") {
@@ -348,7 +356,7 @@ export function toGeminiHistory(messages: Array<{ role: string; blocks: unknown 
     out.push({ role: "model", parts: [{ functionCall: { name: t.toolName, args: (t.args as Record<string, unknown>) ?? {} } }] });
     out.push({ role: "user", parts: [{ functionResponse: { name: t.toolName, response: response as Record<string, unknown> } }] });
   }
-  // Drop leading entries that Gemini would reject:
+  // Drop leading entries that chat providers reject:
   // - role "model" (assistant or tool functionCall) without preceding user text
   // - role "user" but a functionResponse with no matching functionCall (happens when
   //   history was trimmed and a tool row was kept while the user that triggered it was cut)
@@ -402,12 +410,7 @@ export async function processChatTurn(
   // headroom. Override via env if a particular workspace needs deeper recall.
   const HISTORY_BUDGET_TOKENS = env.CHAT_HISTORY_BUDGET_TOKENS ?? 16_000;
   const MAX_TOOL_CALLS = env.CHAT_MAX_TOOL_CALLS_PER_TURN ?? 10;
-  // Chat is locked to Flash 2.5 — Lite is too weak at picking among the
-  // full tool set, handling Konglish/Korean intent, and chaining multi-step
-  // turns. Cost difference (~$0.001 vs $0.0005 per message) is absorbed
-  // by the per-user weekly budget cap. Override via env only if Google
-  // releases a clearly stronger model worth testing.
-  const MODEL = env.CHAT_MODEL ?? "gemini-2.5-flash";
+  const MODEL = env.CHAT_MODEL ?? DEFAULT_LLM_MODEL;
 
   const toolCtx: ToolContext = { env, workspaceId: thread.workspaceId, userId, role };
 
@@ -422,32 +425,24 @@ export async function processChatTurn(
   });
 
   const sysInstruction = `${SYSTEM_PROMPT}\n\n${await buildFinancialContext(thread.workspaceId, userId)}`;
-  const tools = [{ functionDeclarations: toGeminiFunctionDeclarations(REGISTRY) }];
+  const tools = [{ functionDeclarations: toLlmFunctionDeclarations(REGISTRY) }];
 
-  const ai = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
-  let contents = toGeminiHistory(historyChrono);
+  let contents = toLlmHistory(historyChrono);
   if (contents.length === 0) throw new Error("chat_history_empty");
 
   const toolCalls: ToolCallRecord[] = [];
   let dispatched = 0;
 
   while (true) {
-    const resp = await ai.models.generateContent({
+    const resp = await generateLlmContent(env, {
       model: MODEL,
       contents,
-      config: {
-        systemInstruction: sysInstruction,
-        tools,
-        // Gemini 2.5 Flash defaults to "thinking" mode which spends output
-        // tokens on internal reasoning and can return zero visible content
-        // for tool-call chat turns. Explicit thinkingBudget: 0 disables it
-        // so the model produces tool calls / text directly. See
-        // ai.google.dev/gemini-api/docs/thinking.
-        thinkingConfig: { thinkingBudget: 0 },
-      },
+      systemInstruction: sysInstruction,
+      tools,
+      thinkingBudget: 0,
     });
 
-    // Account every Gemini call (including multi-round tool dispatch
+    // Account every LLM call (including multi-round tool dispatch
     // iterations) against the user's weekly LLM budget. Fire-and-forget
     // so a bookkeeping failure never aborts a chat turn — the gate at
     // the route handler ran with the pre-turn balance, so a missed log
@@ -457,7 +452,14 @@ export async function processChatTurn(
       source: "chat",
       model: MODEL,
       inputTokens: resp.usageMetadata?.promptTokenCount ?? 0,
+      ...(typeof resp.usageMetadata?.promptCacheHitTokenCount === "number"
+        ? { inputCacheHitTokens: resp.usageMetadata.promptCacheHitTokenCount }
+        : {}),
+      ...(typeof resp.usageMetadata?.promptCacheMissTokenCount === "number"
+        ? { inputCacheMissTokens: resp.usageMetadata.promptCacheMissTokenCount }
+        : {}),
       outputTokens: resp.usageMetadata?.candidatesTokenCount ?? 0,
+      usdToCadRate: env.LLM_BUDGET_USD_TO_CAD_RATE,
     }).catch(() => {});
 
     const fcs: FunctionCall[] = resp.functionCalls ?? [];
@@ -466,18 +468,20 @@ export async function processChatTurn(
       // got nothing actionable from the model. Helps distinguish safety
       // blocks from genuine empty responses.
       if ((resp.text ?? "").trim().length === 0) {
-        const cand = resp.candidates?.[0];
+        const cand = resp.candidates?.[0] as LlmCandidateDiagnostic | undefined;
         logWarn(
           {
             threadId: thread.id,
-            model: MODEL,
-            finishReason: cand?.finishReason,
-            safetyRatings: cand?.safetyRatings,
-            promptFeedback: resp.promptFeedback,
-            partsLen: cand?.content?.parts?.length ?? 0,
-            usage: resp.usageMetadata,
+            err: {
+              model: MODEL,
+              finishReason: cand?.finishReason,
+              safetyRatings: cand?.safetyRatings,
+              promptFeedback: resp.promptFeedback,
+              partsLen: cand?.content?.parts?.length ?? 0,
+              usage: resp.usageMetadata,
+            },
           },
-          "chat: Gemini returned empty text + no function calls",
+          "chat: LLM returned empty text + no function calls",
         );
       }
       return { assistantText: resp.text ?? "", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
@@ -488,7 +492,7 @@ export async function processChatTurn(
       return { assistantText: "I couldn't complete that. Try a simpler request.", toolCalls, presentationBlocks: collectPresentationBlocks(toolCalls) };
     }
 
-    const newContents: GeminiContent[] = [...contents];
+    const newContents: ChatLlmContent[] = [...contents];
     let dispatchedThisRound = 0;
     for (const fc of fcs) {
       if (!fc.name) { logWarn({ threadId: thread.id }, "chat: function call missing name"); continue; }
@@ -510,7 +514,15 @@ export async function processChatTurn(
       const responseObj = dispatch.ok ? { output: dispatch.result } : { error: dispatch.error };
       const redactedArgs = redactToolCallArgs(fcName, fcArgs);
       toolCalls.push({ toolName: fcName, args: redactedArgs, result: responseObj });
-      await prisma.chatMessage.create({ data: { threadId: thread.id, role: "tool", blocks: [{ type: "tool", toolName: fcName, args: redactedArgs, result: responseObj }] } });
+      await prisma.chatMessage.create({
+        data: {
+          threadId: thread.id,
+          role: "tool",
+          blocks: [
+            { type: "tool", toolName: fcName, args: redactedArgs, result: responseObj },
+          ] as unknown as Prisma.InputJsonValue,
+        },
+      });
       newContents.push(
         { role: "model", parts: [{ functionCall: { name: fcName, args: fcArgs } }] },
         { role: "user", parts: [{ functionResponse: { name: fcName, response: responseObj } }] },

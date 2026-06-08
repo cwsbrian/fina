@@ -1,8 +1,7 @@
-import { GoogleGenAI } from "@google/genai";
 import { logLlmCall } from "../llm/budget.js";
 import { prisma } from "../db.js";
-import { prisma } from "../db.js";
-import type { FinaEnv } from "../env.js";
+import type { Env as FinaEnv } from "../env.js";
+import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
 
 export type SuggestedAllocation = {
   categoryId: string;
@@ -15,7 +14,7 @@ export type SuggestResult = {
   notice?: string;
 };
 
-const MODEL_DEFAULT = "gemini-2.5-flash-lite";
+const MODEL_DEFAULT = DEFAULT_LIGHT_LLM_MODEL;
 
 const SYSTEM_PROMPT = `You are Fina, a personal-finance coach.
 
@@ -129,7 +128,7 @@ function parseAllocations(
   }
 }
 
-/** Scale Gemini's amounts proportionally so they sum to exactly
+/** Scale LLM-produced amounts proportionally so they sum to exactly
  *  `totalAmount` in whole dollars. The LLM tends to come close but
  *  rarely lands on the exact total; do the math ourselves. */
 function normalizeToTotal(
@@ -211,17 +210,14 @@ export async function suggestBudgetSplit(
   );
 
   try {
-    const client = new GoogleGenAI({ apiKey: env.GEMINI_API_KEY });
     const model = env.CHAT_MODEL ?? MODEL_DEFAULT;
-    const response = await client.models.generateContent({
+    const response = await generateLlmContent(env, {
       model,
       contents: [{ role: "user", parts: [{ text: lines.join("\n") }] }],
-      config: {
-        systemInstruction: SYSTEM_PROMPT,
-        maxOutputTokens: 500,
-        temperature: 0.3,
-        responseMimeType: "application/json",
-      },
+      systemInstruction: SYSTEM_PROMPT,
+      maxOutputTokens: 500,
+      temperature: 0.3,
+      responseMimeType: "application/json",
     });
     const owner = await prisma.membership.findFirst({
       where: { workspaceId, role: "owner" },
@@ -233,7 +229,14 @@ export async function suggestBudgetSplit(
         source: "budget_suggest",
         model,
         inputTokens: response.usageMetadata?.promptTokenCount ?? 0,
+        ...(typeof response.usageMetadata?.promptCacheHitTokenCount === "number"
+          ? { inputCacheHitTokens: response.usageMetadata.promptCacheHitTokenCount }
+          : {}),
+        ...(typeof response.usageMetadata?.promptCacheMissTokenCount === "number"
+          ? { inputCacheMissTokens: response.usageMetadata.promptCacheMissTokenCount }
+          : {}),
         outputTokens: response.usageMetadata?.candidatesTokenCount ?? 0,
+        usdToCadRate: env.LLM_BUDGET_USD_TO_CAD_RATE,
       }).catch(() => {});
     }
     const text = response.text ?? "";

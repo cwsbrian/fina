@@ -5,16 +5,7 @@ import { signUpAndGetCookie } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 import { currentLocalHHmm, syncMorningTimeToNow } from "./helpers/cron-time.js";
-
-vi.mock("@google/genai", () => ({
-  GoogleGenAI: class {
-    models = {
-      generateContent: async () => ({
-        text: "좋은 아침이야 ☀️ 어제 Starbucks 한 건 분류 필요해. 오늘 시장 $100 잡혀있어. 잘 보내!",
-      }),
-    };
-  },
-}));
+import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 
 vi.mock("expo-server-sdk", () => ({
   Expo: class {
@@ -26,7 +17,13 @@ vi.mock("expo-server-sdk", () => ({
   },
 }));
 
-beforeEach(async () => { await truncateAll(); });
+beforeEach(async () => {
+  await truncateAll();
+  resetGeminiMock();
+  chatGeminiMock.responses.push({
+    text: "좋은 아침이야. 어제 Starbucks 한 건 분류 필요해. 오늘 시장 $100 잡혀있어. 잘 보내!",
+  });
+});
 afterEach(() => { vi.restoreAllMocks(); });  // Vitest singleFork — prevent spy leakage across files.
 afterAll(async () => { await disconnect(); });
 

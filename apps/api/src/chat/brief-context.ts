@@ -21,7 +21,7 @@ function formatMoney(amount: number, currency: string): string {
   }
 }
 
-/** Server-internal forecast summary fed to Gemini (never a client DTO). All
+/** Server-internal forecast summary fed to the LLM (never a client DTO). All
  *  amounts are display-formatted so the prompt uses them verbatim. */
 export type BriefForecast = {
   daysLeft: number;
@@ -105,7 +105,7 @@ export type WorkspaceContext = {
     cadence: string;
     nextDate: string;
   }>;
-  /** Month-end forecast summary (server-internal; fed to Gemini). Always
+  /** Month-end forecast summary (server-internal; fed to the LLM). Always
    *  present; only `portfolio` is nullable (no positive total budget). */
   forecast: BriefForecast;
 };

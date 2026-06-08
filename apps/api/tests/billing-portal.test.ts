@@ -26,11 +26,12 @@ const env = {
   PLAID_SECRET: "test",
   PLAID_ENV: "sandbox" as const,
   ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
-  GEMINI_API_KEY: "test",
+  DEEPSEEK_API_KEY: "test",
+  LLM_BUDGET_USD_TO_CAD_RATE: 1.4,
   STRIPE_SECRET_KEY: "sk_test_dummy",
   STRIPE_WEBHOOK_SECRET: "whsec_test_dummy",
-  STRIPE_PRICE_LITE_MONTHLY: "price_lite_test",
   STRIPE_PRICE_PRO_MONTHLY: "price_pro_test",
+  STRIPE_PRICE_MAX_MONTHLY: "price_max_test",
 };
 
 describe("POST /billing/portal", () => {

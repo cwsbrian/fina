@@ -9,11 +9,11 @@ import { isExpoGo } from "../env";
 import { deriveAppleToken, deriveGoogleToken } from "./binding";
 import type { IAPProductId } from "@fina/shared";
 
-const SKUS: IAPProductId[] = ["lite_monthly", "pro_monthly"];
+const SKUS: IAPProductId[] = ["pro_monthly", "max_monthly"];
 
 export type LocalProduct = {
   productId: IAPProductId;
-  tier: "lite" | "pro";
+  tier: "pro" | "max";
   localizedPrice: string;
   localizedTitle: string;
 };
@@ -90,8 +90,8 @@ export async function fetchProducts(): Promise<LocalProduct[]> {
     .filter((s): s is ProductSubscription => Boolean((s as any).id))
     .map((s) => {
       const id = String((s as any).id);
-      const productId = (id === "pro_monthly" ? "pro_monthly" : "lite_monthly") as IAPProductId;
-      const tier: "lite" | "pro" = productId === "pro_monthly" ? "pro" : "lite";
+      const productId = (id === "max_monthly" ? "max_monthly" : "pro_monthly") as IAPProductId;
+      const tier: "pro" | "max" = productId === "max_monthly" ? "max" : "pro";
       const localizedPrice = String((s as any).displayPrice ?? (s as any).localizedPrice ?? (s as any).price ?? "");
       const localizedTitle = String((s as any).displayName ?? (s as any).title ?? productId);
       return { productId, tier, localizedPrice, localizedTitle };
@@ -242,7 +242,7 @@ export async function listAvailablePurchases(): Promise<
   const seen = new Set<string>();
   for (const p of all) {
     const id = (p as any).id ?? (p as any).productId;
-    if (id !== "lite_monthly" && id !== "pro_monthly") continue;
+    if (id !== "pro_monthly" && id !== "max_monthly") continue;
     const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
     const receipt = String(
       platform === "ios"

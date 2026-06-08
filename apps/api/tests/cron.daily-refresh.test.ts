@@ -177,7 +177,7 @@ function fakeStripeSub(opts: { id: string; customer: string; priceId?: string; s
     status: opts.status ?? "active",
     cancel_at_period_end: false,
     current_period_end: Math.floor((Date.now() + 30 * 86400_000) / 1000),
-    items: { data: [{ price: { id: opts.priceId ?? env.STRIPE_PRICE_PRO_MONTHLY } }] },
+    items: { data: [{ price: { id: opts.priceId ?? env.STRIPE_PRICE_MAX_MONTHLY } }] },
   } as any;
 }
 
@@ -378,7 +378,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       fakeStripeSub({
         id: "sub_refresh",
         customer: "cus_refresh",
-        priceId: env.STRIPE_PRICE_LITE_MONTHLY,
+        priceId: env.STRIPE_PRICE_PRO_MONTHLY,
       }),
     );
     vi.mocked(removeItemForBilling).mockImplementation(async () => {
@@ -407,7 +407,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     await prisma.subscription.create({
       data: {
         userId: "u-provider-fail",
-        tier: "pro",
+        tier: "max",
         source: "stripe",
         sourceSubscriptionId: "sub_local_pro",
         sourceCustomerId: "cus_fail",
@@ -433,7 +433,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     await prisma.subscription.create({
       data: {
         userId: "u-cleanup-fail",
-        tier: "lite",
+        tier: "pro",
         source: "stripe",
         sourceSubscriptionId: "sub_cleanup_fail",
         status: "active",
@@ -460,7 +460,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       data: [
         {
           userId: "u-prod-stale-sandbox",
-          tier: "pro",
+          tier: "max",
           source: "stripe",
           sourceSubscriptionId: "sub_prod_valid",
           status: "active",
@@ -469,7 +469,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
         },
         {
           userId: "u-prod-stale-sandbox",
-          tier: "pro",
+          tier: "max",
           source: "iap_apple",
           sourceSubscriptionId: "OT-stale-sandbox",
           status: "active",
@@ -497,7 +497,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     await prisma.subscription.create({
       data: {
         userId: "u-apple-refresh",
-        tier: "pro",
+        tier: "max",
         source: "iap_apple",
         sourceSubscriptionId: "OT-apple-refresh",
         sourceCustomerId: "apple-account",
@@ -510,7 +510,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       order.push("apple-refresh");
       return {
         expiresDate: new Date(Date.now() + 30 * 86400_000),
-        productId: "lite_monthly",
+        productId: "pro_monthly",
         mapped: { status: "active", cancelAtPeriodEnd: false },
       };
     });
@@ -523,7 +523,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
 
     expect(providerMocks.appleClient.getSubscriptionStatus).toHaveBeenCalledWith("OT-apple-refresh");
     const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-apple-refresh" } });
-    expect(sub.tier).toBe("lite");
+    expect(sub.tier).toBe("max");
     expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
     expect(order.indexOf("apple-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
@@ -538,7 +538,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     await prisma.subscription.create({
       data: {
         userId: "u-google-refresh",
-        tier: "pro",
+        tier: "max",
         source: "iap_google",
         sourceSubscriptionId: "pt-google-refresh",
         sourceCustomerId: "google-account",
@@ -553,7 +553,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
         obfuscatedExternalAccountId: "google-account",
         acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
         subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
-        productId: "lite_monthly",
+        productId: "pro_monthly",
         expiryTime: new Date(Date.now() + 30 * 86400_000),
         linkedPurchaseToken: null,
         environment: "Production",
@@ -571,11 +571,11 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     expect(providerMocks.googleClient.fetchAndNormalize).toHaveBeenCalledWith("pt-google-refresh");
     expect(providerMocks.googleClient.acknowledgeIfPending).toHaveBeenCalledWith({
       purchaseToken: "pt-google-refresh",
-      productId: "lite_monthly",
+      productId: "pro_monthly",
       acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
     });
     const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-google-refresh" } });
-    expect(sub.tier).toBe("lite");
+    expect(sub.tier).toBe("max");
     expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
     expect(order.indexOf("google-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
