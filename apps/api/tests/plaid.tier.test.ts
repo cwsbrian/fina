@@ -92,7 +92,7 @@ describe("computeEffectiveTier — plaidItemLimit", () => {
   it("active trial → Pro limits", () => {
     const t = computeEffectiveTier({ trialEndsAt: new Date(Date.now() + 86_400_000) });
     expect(t.plaidItemLimit).toBe(5);
-    expect(t.weeklyLlmBudgetCad).toBe(1);
+    expect(t.weeklyLlmBudgetCad).toBe(0.5);
   });
 
   it("expired trial → plaidItemLimit: 0", () => {
@@ -112,7 +112,7 @@ describe("computeEffectiveTier — plaidItemLimit", () => {
     );
     expect(t.tier).toBe("pro");
     expect(t.plaidItemLimit).toBe(5);
-    expect(t.weeklyLlmBudgetCad).toBe(1);
+    expect(t.weeklyLlmBudgetCad).toBe(0.5);
   });
 
   it("paid max subscription -> Max limits", () => {
@@ -122,6 +122,6 @@ describe("computeEffectiveTier — plaidItemLimit", () => {
     );
     expect(t.tier).toBe("max");
     expect(t.plaidItemLimit).toBe(20);
-    expect(t.weeklyLlmBudgetCad).toBe(3);
+    expect(t.weeklyLlmBudgetCad).toBe(2);
   });
 });

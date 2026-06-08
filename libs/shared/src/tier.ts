@@ -13,8 +13,8 @@ export function tierAtLeast(actual: Tier, required: Tier): boolean {
  * upsell copy. Max is marketed as expanded usage, with pragmatic internal caps. */
 export const TIER_LIMITS: Record<Tier, { plaidItems: number; weeklyLlmBudgetCad: number }> = {
   free: { plaidItems: 0, weeklyLlmBudgetCad: 0 },
-  pro: { plaidItems: 5, weeklyLlmBudgetCad: 1 },
-  max: { plaidItems: 20, weeklyLlmBudgetCad: 3 },
+  pro: { plaidItems: 5, weeklyLlmBudgetCad: 0.5 },
+  max: { plaidItems: 20, weeklyLlmBudgetCad: 2 },
 };
 
 /** Paid AI features are available to Pro and Max; this helper remains

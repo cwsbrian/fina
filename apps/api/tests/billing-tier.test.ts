@@ -71,7 +71,7 @@ describe("EffectiveTier with subscriptions", () => {
     expect(t.tier).toBe("pro");
     expect(t.source).toBe("paid");
     expect(t.plaidItemLimit).toBe(5);
-    expect(t.weeklyLlmBudgetCad).toBe(1);
+    expect(t.weeklyLlmBudgetCad).toBe(0.5);
   });
 
   it("returns max+paid for active max sub (no trial)", async () => {
@@ -81,7 +81,7 @@ describe("EffectiveTier with subscriptions", () => {
     expect(t.tier).toBe("max");
     expect(t.source).toBe("paid");
     expect(t.plaidItemLimit).toBe(20);
-    expect(t.weeklyLlmBudgetCad).toBe(3);
+    expect(t.weeklyLlmBudgetCad).toBe(2);
   });
 
   it("trialing status counts as active", async () => {
