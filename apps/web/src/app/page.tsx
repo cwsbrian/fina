@@ -723,10 +723,6 @@ export default function Landing() {
             </div>
             <ul>
               <li>Up to 20 connected banks</li>
-              <li>Full two-way chat</li>
-              <li>Forecasting and goals</li>
-              <li>Advanced spending analysis</li>
-              <li>Shared household context</li>
               <li>Expanded AI usage</li>
             </ul>
           </div>
