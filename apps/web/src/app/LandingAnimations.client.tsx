@@ -50,25 +50,12 @@ export function LandingAnimations({
         const priceCards = select('[data-gsap-scrub="price-card"]');
         const createdTriggers: ScrollTrigger[] = [];
 
-        const intro = gsap.timeline({
-          defaults: { duration: 0.72, ease: "power2.out" },
-        });
-
-        intro
-          .fromTo(heroArt, { scale: 1.035 }, { scale: 1, duration: 1.35 }, 0)
-          .fromTo(
-            heroCopy,
-            { autoAlpha: 0, y: 22 },
-            {
-              autoAlpha: 1,
-              y: 0,
-              stagger: 0.08,
-              clearProps: "transform,opacity,visibility",
-            },
-            0.12,
-          );
-
         const heroTrigger = heroSection[0];
+        let refreshFrame = window.requestAnimationFrame(() => {
+          refreshFrame = window.requestAnimationFrame(() => ScrollTrigger.refresh());
+        });
+        let intro: gsap.core.Timeline | null = null;
+        let introFrame = 0;
 
         if (heroTrigger && heroArt.length) {
           gsap
@@ -78,11 +65,52 @@ export function LandingAnimations({
                 start: "top top",
                 end: "bottom top",
                 scrub: 1,
+                invalidateOnRefresh: true,
               },
             })
-            .to(heroArt, { scale: 0.9, y: 120, ease: "none" }, 0)
-            .to(heroCopy, { y: -72, autoAlpha: 0.52, ease: "none" }, 0);
+            .fromTo(
+              heroArt,
+              { scale: 1, y: 0 },
+              { scale: 0.9, y: 120, ease: "none" },
+              0,
+            )
+            .fromTo(
+              heroCopy,
+              { y: 0, autoAlpha: 1 },
+              { y: -72, autoAlpha: 0.52, ease: "none" },
+              0,
+            );
         }
+
+        introFrame = window.requestAnimationFrame(() => {
+          introFrame = window.requestAnimationFrame(() => {
+            if (window.scrollY > 4) {
+              return;
+            }
+
+            intro = gsap.timeline({
+              defaults: { duration: 0.72, ease: "power2.out" },
+            });
+
+            intro
+              .fromTo(
+                heroArt,
+                { scale: 1.035 },
+                { scale: 1, duration: 1.35 },
+                0,
+              )
+              .fromTo(
+                heroCopy,
+                { autoAlpha: 0, y: 22 },
+                {
+                  autoAlpha: 1,
+                  y: 0,
+                  stagger: 0.08,
+                },
+                0.12,
+              );
+          });
+        });
 
         scrubSections.forEach((section) => {
           const scrubMock = section.querySelector('[data-gsap-scrub="mock"]');
@@ -195,6 +223,9 @@ export function LandingAnimations({
         }
 
         return () => {
+          window.cancelAnimationFrame(refreshFrame);
+          window.cancelAnimationFrame(introFrame);
+          intro?.kill();
           createdTriggers.forEach((trigger) => trigger.kill());
         };
       });

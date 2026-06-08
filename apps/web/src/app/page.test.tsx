@@ -75,6 +75,19 @@ describe("Landing", () => {
     expect(source).not.toContain("gsap.defaults");
   });
 
+  it("guards hero scroll animation against reload scroll restoration", () => {
+    const source = readFileSync(
+      join(__dirname, "LandingAnimations.client.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain("window.scrollY > 4");
+    expect(source).toContain("ScrollTrigger.refresh()");
+    expect(source).toContain("invalidateOnRefresh: true");
+    expect(source).toContain("window.cancelAnimationFrame");
+    expect(source).toContain("{ y: 0, autoAlpha: 1 }");
+  });
+
   it("uses compositor-friendly GSAP CSS hints", () => {
     const css = readFileSync(join(__dirname, "page.module.css"), "utf8");
 
