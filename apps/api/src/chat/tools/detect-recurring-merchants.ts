@@ -279,6 +279,10 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
       };
     }
 
-    return { lookbackMonths, candidates: top, block };
+    return {
+      lookbackMonths,
+      candidates: top,
+      ...(block ? { block } : {}),
+    };
   },
 };

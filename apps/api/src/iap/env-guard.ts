@@ -66,7 +66,7 @@ export function requireAppleIapEnv(env: NodeJS.ProcessEnv): AppleIapConfig {
     ascKeyId: n("APPLE_ASC_KEY_ID"),
     ascPrivateKey: appleKey,
     env: appleEnvRaw,
-    appAppleId,
+    ...(appAppleId !== undefined ? { appAppleId } : {}),
   };
 }
 
@@ -110,4 +110,3 @@ export function requireGoogleIapEnv(env: NodeJS.ProcessEnv): GoogleIapConfig {
 export function requireIapEnv(env: NodeJS.ProcessEnv): IapConfig {
   return { apple: requireAppleIapEnv(env), google: requireGoogleIapEnv(env) };
 }
-

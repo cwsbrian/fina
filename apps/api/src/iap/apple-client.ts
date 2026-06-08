@@ -163,12 +163,15 @@ export class AppleClient {
         throw new HttpError(400, "invalid_receipt", `apple notification verify failed: ${e?.name ?? "error"}`);
       });
     const data = ((decoded as any).data ?? {}) as Record<string, unknown>;
+    const subtype = typeof (decoded as any).subtype === "string" ? (decoded as any).subtype : undefined;
+    const signedRenewalInfoJws =
+      typeof data.signedRenewalInfo === "string" ? data.signedRenewalInfo : undefined;
     return {
       notificationUUID: String((decoded as any).notificationUUID ?? ""),
       notificationType: String((decoded as any).notificationType ?? ""),
-      subtype: typeof (decoded as any).subtype === "string" ? (decoded as any).subtype : undefined,
+      ...(subtype !== undefined ? { subtype } : {}),
       signedTransactionJws: String(data.signedTransactionInfo ?? ""),
-      signedRenewalInfoJws: typeof data.signedRenewalInfo === "string" ? data.signedRenewalInfo : undefined,
+      ...(signedRenewalInfoJws !== undefined ? { signedRenewalInfoJws } : {}),
       raw: decoded as Record<string, unknown>,
     };
   }

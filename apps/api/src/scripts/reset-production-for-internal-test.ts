@@ -335,7 +335,7 @@ export async function seedTesterTransactions(workspaceId: string): Promise<numbe
         pending: seed.pending ?? false,
         source: "manual",
         rawData: { seededBy: "prod-reset-internal-test" },
-        note: seed.note,
+        ...(seed.note !== undefined ? { note: seed.note } : {}),
         allocations: {
           create: {
             categoryId: category.id,

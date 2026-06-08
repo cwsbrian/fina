@@ -24,7 +24,7 @@ export async function verifyApplePayload(
   return {
     notificationUUID: n.notificationUUID,
     notificationType: n.notificationType,
-    subtype: n.subtype,
+    ...(n.subtype !== undefined ? { subtype: n.subtype } : {}),
     signedTransactionJws: n.signedTransactionJws,
     raw: n.raw,
   };

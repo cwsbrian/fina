@@ -61,7 +61,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
         const created = await createCategoryService({
           workspaceId: wsId,
           name: nameTrim,
-          type: parsed.data.type,
+          ...(parsed.data.type !== undefined ? { type: parsed.data.type } : {}),
           icon: parsed.data.icon ?? null,
           color: parsed.data.color ?? null,
         });

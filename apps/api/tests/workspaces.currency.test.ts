@@ -33,6 +33,11 @@ describe("PATCH /workspaces/:id/currency", () => {
     expect(body.workspace.currency).toBe("USD");
     const ws = await prisma.workspace.findUniqueOrThrow({ where: { id: wsId } });
     expect(ws.currency).toBe("USD");
+    const accounts = await prisma.bankAccount.findMany({
+      where: { workspaceId: wsId },
+      select: { currency: true },
+    });
+    expect(accounts.every((a) => a.currency === "USD")).toBe(true);
   });
 
   it("400 invalid_body: lowercase currency", async () => {
@@ -136,10 +141,11 @@ describe("PATCH /workspaces/:id/currency", () => {
     const cat = await prisma.category.create({
       data: { workspaceId: wsId, name: "Coffee" },
     });
-    await prisma.budget.create({
+    await prisma.budgetPlan.create({
       data: {
-        workspaceId: wsId, categoryId: cat.id,
-        amount: "100.00",
+        workspaceId: wsId,
+        totalAmount: "100.00",
+        categoryAllocations: [{ categoryId: cat.id, amount: 100 }],
         periodStart: new Date("2026-05-01"),
       },
     });

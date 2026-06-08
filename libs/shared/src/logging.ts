@@ -2,6 +2,7 @@
  *  typos surface as TS errors and log shape stays consistent across
  *  cron / chat / plaid / audit subsystems. */
 export type LogContext = {
+  [key: string]: unknown;
   /** Request-scoped */
   requestId?: string;
   userId?: string;
@@ -14,13 +15,13 @@ export type LogContext = {
   msgId?: string;
   /** Cron */
   cron?: string;
-  event?: "start" | "protected_skip" | "success" | "fail";
+  event?: string;
   durationMs?: number;
   /** Brief cron */
   briefType?: "daily" | "weekly" | "monthly";
   /** Plaid */
   plaidEvent?: string;
-  plaidItemId?: string;
+  plaidItemId?: string | undefined;
   /** Audit log linkage */
   auditAction?: string;
   /** Error context. Pino accepts Error directly (serializes message +

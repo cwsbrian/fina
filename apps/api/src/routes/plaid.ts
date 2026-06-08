@@ -142,7 +142,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
 
     let plaidItemId: string;
     let accountCount: number;
-    let verifiedWsId: string; // hoisted so Step 3 uses the ctx-verified value, not a raw header re-read
+    let verifiedWsId: string | undefined; // hoisted so Step 3 uses the ctx-verified value, not a raw header re-read
     let verifiedUserId: string | undefined;
     let exchAccessToken: string | undefined; // hoisted so failed post-exchange writes can clean up upstream
     let exchItemId: string | undefined;

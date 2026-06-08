@@ -10,7 +10,7 @@ export const logger: Logger = pino({
   },
   // Default `pid` and `hostname` are noise in containerised deploys;
   // drop them. Reinstate if a future log aggregator needs them.
-  base: undefined,
+  base: null,
 });
 
 export function logInfo(ctx: LogContext, msg: string): void {

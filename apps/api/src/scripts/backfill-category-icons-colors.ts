@@ -15,10 +15,11 @@ async function main(): Promise<void> {
   let touched = 0;
   // Match by (name, type) so the "Other" name (which exists in both lists)
   // gets the right icon/color per type.
-  for (const [list, type] of [
+  const categorySets = [
     [DEFAULT_EXPENSE_CATEGORIES, "expense" as const],
     [DEFAULT_INCOME_CATEGORIES, "income" as const],
-  ]) {
+  ] as const;
+  for (const [list, type] of categorySets) {
     for (const c of list) {
       const result = await prisma.category.updateMany({
         where: {
