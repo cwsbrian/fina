@@ -157,7 +157,7 @@ describe("POST /billing/iap/restore", () => {
           environment: "Sandbox",
           signedDate: Date.now(),
           appAccountToken: deriveAppleToken(userId),
-          productId: "pro_monthly",
+          productId: "fina_pro_monthly",
           originalTransactionId: "OT-1",
           transactionId: "T-1",
           raw: {},
@@ -166,7 +166,7 @@ describe("POST /billing/iap/restore", () => {
     });
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "pro_monthly",
+      productId: "fina_pro_monthly",
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     const res = await app.inject({
@@ -176,7 +176,7 @@ describe("POST /billing/iap/restore", () => {
       payload: {
         platform: "ios",
         purchases: [
-          { productId: "pro_monthly", receipt: "ok" },
+          { productId: "fina_pro_monthly", receipt: "ok" },
           { productId: "max_monthly", receipt: "bad" },
         ],
       },

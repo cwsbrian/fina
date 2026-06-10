@@ -1,8 +1,9 @@
 // Dynamic Expo config layered on top of app.json.
 //
 // 1. Cleartext HTTP: enabled ONLY for dev/preview builds whose API URL is
-//    plain http:// (e.g. the Tailscale LAN dev server). Production uses
-//    https://, so cleartext stays disabled there.
+//    plain http:// (e.g. the Tailscale/LAN dev server). Production uses
+//    https://, so cleartext stays disabled there. On iOS this is limited to
+//    local-network resources instead of allowing arbitrary HTTP loads.
 // 2. Low-resource local builds: when FINA_LOCAL_BUILD=1 (set by the local
 //    eas.json profiles), cap the Android build so `eas build --local` doesn't
 //    exhaust RAM and thrash swap to a disk-I/O standstill on a small machine
@@ -48,13 +49,24 @@ const withLocalBuildLimits = (config) =>
 
 module.exports = ({ config }) => {
   const apiUrl = process.env.EXPO_PUBLIC_API_URL || "";
-  const allowCleartext = apiUrl.startsWith("http://");
+  const allowLocalNetworking = process.env.FINA_IOS_ALLOW_LOCAL_NETWORKING === "1";
+  const allowCleartext = apiUrl.startsWith("http://") || allowLocalNetworking;
   const lowResource = process.env.FINA_LOCAL_BUILD === "1";
 
   // expo-build-properties is only needed for cleartext HTTP (its
   // reactNativeArchitectures option didn't take effect — the ABI limit is set
   // in withLocalBuildLimits via gradle.properties instead).
   if (allowCleartext) {
+    config.ios = config.ios || {};
+    config.ios.infoPlist = {
+      ...(config.ios.infoPlist || {}),
+      NSAppTransportSecurity: {
+        ...(config.ios.infoPlist?.NSAppTransportSecurity || {}),
+        NSAllowsLocalNetworking: true,
+      },
+      NSLocalNetworkUsageDescription:
+        "Fina connects to a local development server while testing development builds.",
+    };
     config.plugins = [
       ...(config.plugins || []),
       ["expo-build-properties", { android: { usesCleartextTraffic: true } }],

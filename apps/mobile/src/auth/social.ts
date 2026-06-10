@@ -20,7 +20,14 @@ function copy(code: SocialAuthError): string {
 function report(e: unknown) {
   const code = classifySocialAuthError(e);
   if (code === "oauth_cancelled") return;
-  Alert.alert("Couldn't sign in", copy(code));
+  const detail =
+    e instanceof Error
+      ? e.message
+      : typeof e === "object" && e !== null
+        ? JSON.stringify(e)
+        : String(e);
+  if (__DEV__) console.error("social auth failed", e);
+  Alert.alert("Couldn't sign in", __DEV__ ? `${copy(code)}\n\n${detail}` : copy(code));
 }
 
 export async function signInWithGoogle(): Promise<void> {

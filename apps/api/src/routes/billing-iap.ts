@@ -57,7 +57,20 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
     try {
       const session = await requireSession(req, app);
       const parsed = IAPCheckoutBody.safeParse(req.body);
-      if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+      if (!parsed.success) {
+        const body = req.body as { platform?: unknown; productId?: unknown; receipt?: unknown };
+        app.log.warn(
+          {
+            route: "/billing/iap/checkout",
+            platform: body?.platform,
+            productId: body?.productId,
+            receiptLength: typeof body?.receipt === "string" ? body.receipt.length : null,
+            issues: parsed.error.issues.map((i) => ({ path: i.path, code: i.code })),
+          },
+          "iap_checkout_invalid_body",
+        );
+        return reply.code(400).send({ error: "invalid_body" });
+      }
 
       const userId = session.userId;
 
@@ -69,9 +82,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         select: { source: true },
       });
       const stripeActive = active.some((s) => s.source === "stripe");
-      const iapActive = active.some((s) => s.source === "iap_apple" || s.source === "iap_google");
       if (stripeActive) return reply.code(409).send({ error: "already_subscribed_stripe" });
-      if (iapActive) return reply.code(409).send({ error: "already_subscribed_iap" });
 
       if (parsed.data.platform === "ios") {
         const { client: appleClient } = resolveApple();
@@ -98,7 +109,13 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
       await reconcilePlaidItemsForUser(app.fina.env, userId);
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
-      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      if (e instanceof HttpError) {
+        app.log.warn(
+          { err: e, route: "/billing/iap/checkout", code: e.code },
+          "iap_checkout_rejected",
+        );
+        return reply.code(e.statusCode).send({ error: e.code });
+      }
       app.log.error({ err: e, route: "/billing/iap/checkout" }, "iap_checkout_failed");
       return reply.code(500).send({ error: "iap_checkout_failed" });
     }
@@ -108,7 +125,27 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
     try {
       const session = await requireSession(req, app);
       const parsed = IAPRestoreBody.safeParse(req.body);
-      if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+      if (!parsed.success) {
+        const body = req.body as {
+          platform?: unknown;
+          purchases?: Array<{ productId?: unknown; receipt?: unknown }>;
+        };
+        app.log.warn(
+          {
+            route: "/billing/iap/restore",
+            platform: body?.platform,
+            purchases: Array.isArray(body?.purchases)
+              ? body.purchases.map((p) => ({
+                  productId: p?.productId,
+                  receiptLength: typeof p?.receipt === "string" ? p.receipt.length : null,
+                }))
+              : null,
+            issues: parsed.error.issues.map((i) => ({ path: i.path, code: i.code })),
+          },
+          "iap_restore_invalid_body",
+        );
+        return reply.code(400).send({ error: "invalid_body" });
+      }
 
       const userId = session.userId;
 
@@ -148,10 +185,19 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
           app.log.warn({ err: e, productId: item.productId }, "iap_restore_item_failed");
         }
       }
+      if (!syncedAny) {
+        throw new HttpError(400, "invalid_receipt", "No restorable purchases synced");
+      }
       if (syncedAny) await reconcilePlaidItemsForUser(app.fina.env, userId);
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
-      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      if (e instanceof HttpError) {
+        app.log.warn(
+          { err: e, route: "/billing/iap/restore", code: e.code },
+          "iap_restore_rejected",
+        );
+        return reply.code(e.statusCode).send({ error: e.code });
+      }
       app.log.error({ err: e, route: "/billing/iap/restore" }, "iap_restore_failed");
       return reply.code(500).send({ error: "iap_restore_failed" });
     }

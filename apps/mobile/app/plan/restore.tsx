@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { View, Text, Pressable, ActivityIndicator, Alert, StyleSheet } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useRouter, Stack } from "expo-router";
-import { listAvailablePurchases } from "../../src/iap/client";
+import { finishPurchase, listAvailablePurchases } from "../../src/iap/client";
 import { postIAPRestore } from "../../src/api/billing";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
@@ -31,6 +31,11 @@ export default function PlanRestore() {
           receipt: p.receipt,
         })),
       });
+      await Promise.allSettled(
+        purchases
+          .filter((p) => p.purchase)
+          .map((p) => finishPurchase(p.purchase!)),
+      );
       setStatus(`Restored — tier: ${me.tier}`);
       setTimeout(() => router.replace("/(tabs)/" as never), 1200);
     } catch (e: any) {

@@ -379,6 +379,7 @@ export default function More() {
         {(() => {
           const sub = me?.subscription;
           const isStripeOwned = sub?.source === "stripe";
+          const hasPlanDetails = Boolean(sub);
           const onStripeManagedTap = (label: string) =>
             Alert.alert(
               label,
@@ -403,7 +404,7 @@ export default function More() {
                   onPress={
                     isStripeOwned
                       ? () => onStripeManagedTap("Plan")
-                      : me?.subscription
+                      : hasPlanDetails
                         ? () => router.push("/plan/details" as never)
                         : () => router.push("/plan" as never)
                   }

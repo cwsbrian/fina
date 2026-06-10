@@ -83,13 +83,13 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
       bundleId: "com.fina.app", environment: "Production",
       signedDate: Date.now(),
       appAccountToken: deriveAppleToken("u1"),
-      productId: "pro_monthly",
+      productId: "fina_pro_monthly",
       originalTransactionId: "OT-2", transactionId: "T-2",
       raw: {},
     });
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "pro_monthly",
+      productId: "fina_pro_monthly",
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     await syncSubscriptionFromIAP(cfg, {

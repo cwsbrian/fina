@@ -9,7 +9,10 @@ import { isExpoGo } from "../env";
 import { deriveAppleToken, deriveGoogleToken } from "./binding";
 import type { IAPProductId } from "@fina/shared";
 
-const SKUS: IAPProductId[] = ["pro_monthly", "max_monthly"];
+const SKUS: IAPProductId[] =
+  Platform.OS === "ios"
+    ? ["fina_pro_monthly", "max_monthly"]
+    : ["pro_monthly", "max_monthly"];
 
 export type LocalProduct = {
   productId: IAPProductId;
@@ -82,15 +85,22 @@ export async function fetchProducts(): Promise<LocalProduct[]> {
   // Under Expo Go: return empty array so the plan picker shows the
   // empty-state ("Subscriptions aren't available right now") instead of
   // crashing the whole app on module load.
-  if (!iap) return [];
+  if (!iap) {
+    return [];
+  }
   await ensureConnected();
   const raw = await iap.fetchProducts({ skus: SKUS, type: "subs" });
   if (!raw) return [];
   return (raw as ProductSubscription[])
     .filter((s): s is ProductSubscription => Boolean((s as any).id))
+    .filter((s) => SKUS.includes(String((s as any).id) as IAPProductId))
     .map((s) => {
       const id = String((s as any).id);
-      const productId = (id === "max_monthly" ? "max_monthly" : "pro_monthly") as IAPProductId;
+      const productId = (id === "max_monthly"
+        ? "max_monthly"
+        : Platform.OS === "ios"
+          ? "fina_pro_monthly"
+          : "pro_monthly") as IAPProductId;
       const tier: "pro" | "max" = productId === "max_monthly" ? "max" : "pro";
       const localizedPrice = String((s as any).displayPrice ?? (s as any).localizedPrice ?? (s as any).price ?? "");
       const localizedTitle = String((s as any).displayName ?? (s as any).title ?? productId);
@@ -118,12 +128,28 @@ async function androidOfferToken(
 function toIapError(e: any): IapPurchaseError {
   if (e instanceof IapPurchaseError) return e;
   const code: string = e?.code ?? "";
+  const message = String(e?.message ?? "");
   if (code === "E_USER_CANCELLED") return new IapPurchaseError(code, true, "User cancelled");
   if (code === "E_ALREADY_OWNED") return new IapPurchaseError(code, true, "Already owned — try Restore");
+  if (code === "duplicate-purchase" || message.toLowerCase().includes("duplicate purchase update")) {
+    return new IapPurchaseError("E_ALREADY_OWNED", true, "Already owned — restoring purchase");
+  }
   if (code === "E_NETWORK_ERROR") return new IapPurchaseError(code, true, "Network error");
   if (code === "E_ITEM_UNAVAILABLE") return new IapPurchaseError(code, false, "Product unavailable");
   if (code === "E_SERVICE_ERROR") return new IapPurchaseError(code, true, "Service unavailable");
-  return new IapPurchaseError(code || "E_UNKNOWN", false, e?.message ?? "Purchase failed");
+  return new IapPurchaseError(code || "E_UNKNOWN", false, message || "Purchase failed");
+}
+
+function receiptForPurchase(
+  purchase: Purchase,
+  platform: "ios" | "android",
+): string | null {
+  const p = purchase as any;
+  const receipt =
+    platform === "ios"
+      ? p.purchaseToken ?? p.jwsRepresentationIOS ?? p.transactionReceipt
+      : p.purchaseToken ?? p.purchaseTokenAndroid;
+  return typeof receipt === "string" && receipt.length > 0 ? receipt : null;
 }
 
 export async function purchaseSubscription(args: {
@@ -154,18 +180,15 @@ export async function purchaseSubscription(args: {
     };
     const succeed = (purchase: Purchase) => {
       if (settled) return;
-      const receipt =
-        platform === "ios"
-          ? (purchase as any).jwsRepresentationIOS ?? (purchase as any).transactionReceipt
-          : (purchase as any).purchaseToken ?? (purchase as any).purchaseTokenAndroid;
+      const receipt = receiptForPurchase(purchase, platform);
       if (!receipt) {
         fail(
           new IapPurchaseError(
             "E_NO_RECEIPT",
             false,
             platform === "ios"
-              ? "No JWS receipt returned by StoreKit 2"
-              : "No purchaseToken returned by Play Billing",
+              ? "No StoreKit receipt returned"
+              : "No purchase token returned by Play Billing",
           ),
         );
         return;
@@ -231,30 +254,65 @@ export async function finishPurchase(p: Purchase): Promise<void> {
   await iap.finishTransaction({ purchase: p as any, isConsumable: false });
 }
 
-export async function listAvailablePurchases(): Promise<
-  Array<{ productId: IAPProductId; receipt: string; platform: "ios" | "android"; purchase: Purchase }>
-> {
+type RestorablePurchase = {
+  productId: IAPProductId;
+  receipt: string;
+  platform: "ios" | "android";
+  purchase?: Purchase;
+};
+
+export async function listAvailablePurchases(): Promise<RestorablePurchase[]> {
   const iap = getIap();
   if (!iap) return [];
   await ensureConnected();
-  const all: Purchase[] = await iap.getAvailablePurchases();
-  const out: Array<{ productId: IAPProductId; receipt: string; platform: "ios" | "android"; purchase: Purchase }> = [];
+  const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
+  if (platform === "ios") {
+    try {
+      await iap.restorePurchases();
+    } catch {
+      // Continue with direct queries below. Some sandbox states report
+      // already-owned but restorePurchases itself cannot republish a receipt.
+    }
+  }
+  const all: Purchase[] = await iap.getAvailablePurchases(
+    platform === "ios"
+      ? { alsoPublishToEventListenerIOS: false, onlyIncludeActiveItemsIOS: true }
+      : undefined,
+  );
+  const out: RestorablePurchase[] = [];
   const seen = new Set<string>();
   for (const p of all) {
     const id = (p as any).id ?? (p as any).productId;
-    if (id !== "pro_monthly" && id !== "max_monthly") continue;
-    const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
-    const receipt = String(
-      platform === "ios"
-        ? (p as any).jwsRepresentationIOS ?? (p as any).transactionReceipt
-        : (p as any).purchaseToken ?? (p as any).purchaseTokenAndroid,
-    );
+    if (id !== "pro_monthly" && id !== "fina_pro_monthly" && id !== "max_monthly") continue;
+    const receipt = receiptForPurchase(p, platform);
+    if (!receipt) continue;
     const dedupKey = platform === "ios"
       ? (p as any).originalTransactionIdentifierIOS ?? (p as any).transactionIdIOS ?? receipt
       : receipt;
     if (seen.has(dedupKey)) continue;
     seen.add(dedupKey);
     out.push({ productId: id as IAPProductId, receipt, platform, purchase: p });
+  }
+  if (out.length > 0) return out;
+
+  try {
+    const active = await iap.getActiveSubscriptions(SKUS);
+    for (const sub of active) {
+      if (!sub.isActive) continue;
+      const id = sub.productId;
+      if (id !== "pro_monthly" && id !== "fina_pro_monthly" && id !== "max_monthly") continue;
+      const receipt =
+        platform === "ios"
+          ? sub.purchaseToken
+          : sub.purchaseTokenAndroid ?? sub.purchaseToken;
+      if (!receipt) continue;
+      const dedupKey = sub.transactionId ?? receipt;
+      if (seen.has(dedupKey)) continue;
+      seen.add(dedupKey);
+      out.push({ productId: id as IAPProductId, receipt, platform });
+    }
+  } catch {
+    // Best-effort fallback only. The caller will surface a restore message.
   }
   return out;
 }

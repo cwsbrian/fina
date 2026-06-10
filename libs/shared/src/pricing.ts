@@ -2,8 +2,8 @@
  * pricing copy. Stripe Price IDs live in apps/api env (STRIPE_PRICE_*);
  * this file is the single source of truth for human-readable amounts. */
 export const PRICING = {
-  pro: { monthlyCAD: 7, displayPrice: "$7" },
-  max: { monthlyCAD: 15, displayPrice: "$15" },
+  pro: { monthlyCAD: 7.99, displayPrice: "$7.99" },
+  max: { monthlyCAD: 16.99, displayPrice: "$16.99" },
 } as const;
 
 /** Tuple of paid tiers. Mirrors `keyof typeof PRICING` at runtime so

@@ -510,7 +510,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       order.push("apple-refresh");
       return {
         expiresDate: new Date(Date.now() + 30 * 86400_000),
-        productId: "pro_monthly",
+        productId: "fina_pro_monthly",
         mapped: { status: "active", cancelAtPeriodEnd: false },
       };
     });

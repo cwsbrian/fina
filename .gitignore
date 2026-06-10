@@ -66,3 +66,4 @@ gen-lang-client-*.json
 *-iap-validator*.json
 *.pem
 *.key
+*.p8

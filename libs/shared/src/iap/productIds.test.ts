@@ -5,11 +5,15 @@ describe("IAP_PRODUCT_IDS", () => {
   it("maps pro_monthly → pro", () => {
     expect(IAP_PRODUCT_IDS.pro_monthly.tier).toBe("pro");
   });
+  it("maps fina_pro_monthly → pro", () => {
+    expect(IAP_PRODUCT_IDS.fina_pro_monthly.tier).toBe("pro");
+  });
   it("maps max_monthly → max", () => {
     expect(IAP_PRODUCT_IDS.max_monthly.tier).toBe("max");
   });
   it("tierForIapProductId returns tier for known id", () => {
     expect(tierForIapProductId("pro_monthly")).toBe("pro");
+    expect(tierForIapProductId("fina_pro_monthly")).toBe("pro");
     expect(tierForIapProductId("max_monthly")).toBe("max");
   });
   it("tierForIapProductId returns null for unknown id", () => {

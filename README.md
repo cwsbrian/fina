@@ -22,6 +22,64 @@ pnpm nx run-many -t dev --projects=api,mobile,web --parallel=3
 - `apps/web` — Next.js (App Router)
 - `libs/shared` — shared TypeScript types
 
+## Mobile Deploy
+
+Run mobile deploy commands from `apps/mobile`.
+
+### iOS TestFlight / App Store
+
+App Store Connect uploads currently require Xcode 26 or later with the iOS 26
+SDK. Before building locally, confirm:
+
+```bash
+xcodebuild -version
+xcode-select -p
+sudo xcodebuild -runFirstLaunch
+```
+
+Build a production IPA locally:
+
+```bash
+cd /Users/brianchoi/Documents/work/personal/fina/apps/mobile
+mkdir -p ../../dist
+
+pnpm dlx eas-cli@latest build \
+  --platform ios \
+  --profile production \
+  --local \
+  --output ../../dist/fina-ios-production.ipa
+```
+
+Upload the IPA to App Store Connect:
+
+```bash
+cd /Users/brianchoi/Documents/work/personal/fina/apps/mobile
+
+pnpm dlx eas-cli@latest submit \
+  --platform ios \
+  --profile production \
+  --path ../../dist/fina-ios-production.ipa
+```
+
+If Apple login fails with a macOS Keychain error such as `Security returned a
+non-successful error code: 36`, clear the stale App Store Connect session and
+disable Keychain for the next EAS command:
+
+```bash
+rm -rf ~/.app-store/auth/cwsbrian@gmail.com
+
+EXPO_NO_KEYCHAIN=1 pnpm dlx eas-cli@latest build \
+  --platform ios \
+  --profile production \
+  --local \
+  --output ../../dist/fina-ios-production.ipa
+```
+
+After upload, wait for processing in App Store Connect, then add the build to
+TestFlight internal testing. For the first iOS subscription submission, make
+sure the app version page includes the subscriptions under **In-App Purchases
+and Subscriptions** before submitting for review.
+
 ## Database
 
 Postgres 16 runs in a local Docker container (`docker-compose.yml`). Data is persisted in the

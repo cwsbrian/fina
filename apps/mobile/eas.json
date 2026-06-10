@@ -21,7 +21,10 @@
     },
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "env": {
+        "FINA_IOS_ALLOW_LOCAL_NETWORKING": "1"
+      }
     },
     "preview": {
       "distribution": "internal",
