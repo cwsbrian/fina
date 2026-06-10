@@ -1,3 +1,4 @@
+import { createPrivateKey } from "node:crypto";
 import { HttpError } from "../auth/context.js";
 
 export type AppleIapConfig = {
@@ -36,7 +37,9 @@ function normalizePemText(value: string): string {
     (trimmed.startsWith("'") && trimmed.endsWith("'"))
       ? trimmed.slice(1, -1)
       : trimmed;
-  return unquoted.replace(/\\n/g, "\n");
+  const withNewlines = unquoted.replace(/\\n/g, "\n");
+  const pemBlock = withNewlines.match(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/);
+  return pemBlock?.[0] ?? withNewlines;
 }
 
 /** Validate ONLY the Apple half. Use when the request is known to be
@@ -53,6 +56,14 @@ export function requireAppleIapEnv(env: NodeJS.ProcessEnv): AppleIapConfig {
   );
   if (!appleKey.includes("BEGIN PRIVATE KEY")) {
     throw new HttpError(503, "iap_not_configured", "APPLE_ASC_PRIVATE_KEY shape invalid");
+  }
+  try {
+    const parsedKey = createPrivateKey(appleKey);
+    if (parsedKey.asymmetricKeyType !== "ec") {
+      throw new Error("not an EC private key");
+    }
+  } catch {
+    throw new HttpError(503, "iap_not_configured", "APPLE_ASC_PRIVATE_KEY must be an EC private key");
   }
 
   const appleEnvRaw = n("APPLE_ENV");

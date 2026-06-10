@@ -1,11 +1,16 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect } from "vitest";
 import { requireIapEnv } from "../../src/iap/env-guard.js";
+
+const TEST_ASC_PRIVATE_KEY = generateKeyPairSync("ec", {
+  namedCurve: "prime256v1",
+}).privateKey.export({ type: "pkcs8", format: "pem" }) as string;
 
 const APPLE_ONLY = {
   APPLE_BUNDLE_ID: "com.fina.app",
   APPLE_ASC_ISSUER_ID: "00000000-0000-0000-0000-000000000000",
   APPLE_ASC_KEY_ID: "ABCDEF1234",
-  APPLE_ASC_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\nMIGTAg...\n-----END PRIVATE KEY-----\n",
+  APPLE_ASC_PRIVATE_KEY: TEST_ASC_PRIVATE_KEY,
   APPLE_ENV: "sandbox" as const,
 };
 
@@ -50,6 +55,22 @@ describe("requireIapEnv", () => {
     } as any;
     const cfg = requireIapEnv(env);
     expect(cfg.apple.ascPrivateKey).toContain("\n");
+    expect(cfg.apple.ascPrivateKey).not.toContain("\\n");
+  });
+
+  it("extracts the PEM block when APPLE_ASC_PRIVATE_KEY includes an assignment wrapper", () => {
+    const env = {
+      ...APPLE_ONLY,
+      APPLE_ASC_PRIVATE_KEY: `APPLE_ASC_PRIVATE_KEY="${APPLE_ONLY.APPLE_ASC_PRIVATE_KEY.replace(/\n/g, "\\n")}"`,
+      GOOGLE_PACKAGE_NAME: "app.fina",
+      GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"x@y","private_key":"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"}',
+      GOOGLE_PUBSUB_VERIFY_AUDIENCE: "x",
+      GOOGLE_PUBSUB_VERIFY_EMAIL: "y@z",
+      GOOGLE_PUBSUB_SUBSCRIPTION_NAME: "n",
+    } as any;
+    const cfg = requireIapEnv(env);
+    expect(cfg.apple.ascPrivateKey).toMatch(/^-----BEGIN PRIVATE KEY-----/);
+    expect(cfg.apple.ascPrivateKey).not.toContain("APPLE_ASC_PRIVATE_KEY=");
     expect(cfg.apple.ascPrivateKey).not.toContain("\\n");
   });
 
