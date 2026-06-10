@@ -83,7 +83,7 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     ).rejects.toMatchObject({ code: "user_mismatch", statusCode: 403 });
   });
 
-  it("derives tier from VERIFIED productId, not from request body", async () => {
+  it("derives tier from latest ASC status productId, not stale receipt or request body", async () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
       bundleId: "com.fina.app", environment: "Production",
       signedDate: Date.now(),
@@ -94,7 +94,7 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     });
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "fina_pro_monthly",
+      productId: "max_monthly",
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     await syncSubscriptionFromIAP(cfg, {
@@ -104,7 +104,7 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
 
     const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
-    expect(sub!.tier).toBe("pro");
+    expect(sub!.tier).toBe("max");
   });
 
   it("uses restore verification context for Apple restore", async () => {

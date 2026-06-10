@@ -12,7 +12,7 @@ import {
 } from "../../src/iap/client";
 import { postIAPCheckout, postIAPRestore } from "../../src/api/billing";
 import { apiFetch } from "../../src/api/client";
-import { formatShortDate, tierLabel, type MeDTO as Me } from "@fina/shared";
+import { formatShortDate, tierLabel, trialDaysLeft, type MeDTO as Me } from "@fina/shared";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
@@ -55,6 +55,24 @@ function errorMessage(e: unknown): string {
 
 function hasSubscription(me: Me): boolean {
   return Boolean(me.subscription);
+}
+
+function restoredPlanMessage(me: Me): string {
+  if (me.trial.active) {
+    const trialEnd = formatShortDate(me.trial.endsAt);
+    const standingTier =
+      me.subscription?.pendingTier && me.subscription.pendingTier !== me.subscription.tier
+        ? me.subscription.pendingTier
+        : me.subscription?.tier;
+    if (standingTier) {
+      return trialEnd
+        ? `You're on Pro trial. ${tierLabel(standingTier, false)} starts on ${trialEnd}.`
+        : `You're on Pro trial. ${tierLabel(standingTier, false)} is on file.`;
+    }
+    return trialEnd ? `You're on Pro trial until ${trialEnd}.` : "You're on Pro trial.";
+  }
+  if (me.subscription) return `You're on ${tierLabel(me.subscription.tier, false)}.`;
+  return `You're on ${tierLabel(me.tier, false)}.`;
 }
 
 async function restoreOwnedPurchases(): Promise<Me> {
@@ -102,7 +120,7 @@ export default function PlanPicker() {
 
   const onSubscribe = useCallback(
     async (p: LocalProduct) => {
-      if (!me?.user?.id || busy || me.subscription?.tier === p.tier) return;
+      if (!me?.user?.id || busy || me.subscription?.tier === p.tier || (me.trial.active && p.tier === "pro")) return;
       setBusy(p.productId);
       try {
         const { receipt, platform, purchase } = await purchaseSubscription({
@@ -123,7 +141,7 @@ export default function PlanPicker() {
             try {
               const nextMe = await restoreOwnedPurchases();
               setMe(nextMe);
-              Alert.alert("Subscription restored", `You're on ${tierLabel(nextMe.tier, nextMe.trial.active)}.`);
+              Alert.alert("Subscription restored", restoredPlanMessage(nextMe));
               router.replace("/plan/details" as never);
             } catch (restoreErr) {
               try {
@@ -201,28 +219,38 @@ export default function PlanPicker() {
                 : null);
             const isPending = pendingTier === p.tier;
             const startsAfterTrial = trialStartTier === p.tier;
-            const isCurrent = currentTier === p.tier && !startsAfterTrial;
-            const statusLabel = startsAfterTrial
-              ? `Starts ${formatShortDate(me?.trial.endsAt)}`
-              : isPending
-                ? `Starts ${pendingDate}`
-                : isCurrent
-                  ? "Current plan"
-                  : "Subscribe";
-            const statusDetail = startsAfterTrial
-              ? "After your Pro trial ends."
-              : isPending
-                ? "Your current plan stays active until then."
-                : isCurrent && pendingTier
-                  ? `Current until ${pendingDate}.`
+            const isCurrentTrial = Boolean(me?.trial.active && p.tier === "pro");
+            const isCurrent = currentTier === p.tier && !startsAfterTrial && !isCurrentTrial;
+            const days = trialDaysLeft(me?.trial.endsAt);
+            const statusLabel = isCurrentTrial
+              ? "Current trial"
+              : startsAfterTrial
+                ? `Starts ${formatShortDate(me?.trial.endsAt)}`
+                : isPending
+                  ? `Starts ${pendingDate}`
                   : isCurrent
-                    ? "This is your active subscription."
-                    : null;
+                    ? "Current plan"
+                    : "Subscribe";
+            const statusDetail = isCurrentTrial
+              ? trialStartTier
+                ? `${tierLabel(trialStartTier, false)} starts after your trial.`
+                : days !== null
+                  ? `${days} day${days === 1 ? "" : "s"} left.`
+                  : "You're in your introductory trial."
+              : startsAfterTrial
+                ? "After your Pro trial ends."
+                : isPending
+                  ? "Your current plan stays active until then."
+                  : isCurrent && pendingTier
+                    ? `Current until ${pendingDate}.`
+                    : isCurrent
+                      ? "This is your active subscription."
+                      : null;
             return (
               <Pressable
                 key={p.productId}
                 onPress={() => onSubscribe(p)}
-                disabled={busy !== null || isCurrent || isPending || startsAfterTrial}
+                disabled={busy !== null || isCurrentTrial || isCurrent || isPending || startsAfterTrial}
                 style={{
                   padding: 20,
                   borderRadius: 12,
@@ -236,10 +264,14 @@ export default function PlanPicker() {
                     <Text style={styles.recommendedText}>Recommended</Text>
                   </View>
                 )}
-                {(isCurrent || isPending || startsAfterTrial) && (
+                {(isCurrentTrial || isCurrent || isPending || startsAfterTrial) && (
                   <View style={styles.currentBadge}>
                     <Text style={styles.currentText}>
-                      {isPending || startsAfterTrial ? "Scheduled plan" : "Current plan"}
+                      {isCurrentTrial
+                        ? "Current trial"
+                        : isPending || startsAfterTrial
+                          ? "Scheduled plan"
+                          : "Current plan"}
                     </Text>
                   </View>
                 )}

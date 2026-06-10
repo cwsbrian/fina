@@ -62,10 +62,13 @@ async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: Sy
     throw new HttpError(403, "user_mismatch", "appAccountToken mismatch");
   }
 
-  const tier = tierForIapProductId(verified.productId);
-  if (!tier) throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
-
+  const verifiedTier = tierForIapProductId(verified.productId);
+  if (!verifiedTier) throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
   const status = await deps.appleClient!.getSubscriptionStatus(verified.originalTransactionId);
+  // Restore/already-owned paths can hand us an older transaction JWS. ASC is
+  // the source of truth for the subscription group's current product.
+  const tier = tierForIapProductId(status.productId);
+  if (!tier) throw new HttpError(400, "product_mismatch", `unknown productId ${status.productId}`);
   const pendingTier = status.pendingProductId ? tierForIapProductId(status.pendingProductId) : null;
   const pendingTierAt = pendingTier ? (status.pendingAt ?? status.expiresDate) : null;
 

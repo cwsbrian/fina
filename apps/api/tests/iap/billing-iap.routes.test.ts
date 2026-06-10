@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { buildApp } from "../../src/server.js";
 import { prisma } from "../../src/db.js";
@@ -21,8 +22,9 @@ import { reconcilePlaidItemsForUser } from "../../src/plaid/reconcile.js";
 process.env.APPLE_BUNDLE_ID = "com.fina.app";
 process.env.APPLE_ASC_ISSUER_ID = "00000000-0000-0000-0000-000000000000";
 process.env.APPLE_ASC_KEY_ID = "K1";
-process.env.APPLE_ASC_PRIVATE_KEY =
-  "-----BEGIN PRIVATE KEY-----\nMIGTAg==\n-----END PRIVATE KEY-----\n";
+process.env.APPLE_ASC_PRIVATE_KEY = generateKeyPairSync("ec", {
+  namedCurve: "prime256v1",
+}).privateKey.export({ type: "pkcs8", format: "pem" }) as string;
 process.env.APPLE_ENV = "sandbox";
 process.env.GOOGLE_PACKAGE_NAME = "app.fina";
 process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({
