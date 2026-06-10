@@ -38,8 +38,13 @@ function normalizePemText(value: string): string {
       ? trimmed.slice(1, -1)
       : trimmed;
   const withNewlines = unquoted.replace(/\\n/g, "\n");
-  const pemBlock = withNewlines.match(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/);
-  return pemBlock?.[0] ?? withNewlines;
+  const pemBlock = withNewlines.match(/-----BEGIN PRIVATE KEY-----([\s\S]*?)-----END PRIVATE KEY-----/);
+  if (!pemBlock) return withNewlines;
+
+  const body = pemBlock[1]?.replace(/\s+/g, "");
+  if (!body) return withNewlines;
+  const lines = body.match(/.{1,64}/g) ?? [body];
+  return `-----BEGIN PRIVATE KEY-----\n${lines.join("\n")}\n-----END PRIVATE KEY-----`;
 }
 
 /** Validate ONLY the Apple half. Use when the request is known to be
