@@ -101,6 +101,36 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
     expect(sub!.tier).toBe("pro");
   });
+
+  it("uses restore verification context for Apple restore", async () => {
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app", environment: "Sandbox",
+      signedDate: Date.now() - 30 * 86400_000,
+      appAccountToken: deriveAppleToken("u1"),
+      productId: "max_monthly",
+      originalTransactionId: "OT-restore",
+      transactionId: "T-restore",
+      raw: {},
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await syncSubscriptionFromIAP(cfg, {
+      platform: "ios",
+      receipt: "old-restore-jws",
+      userId: "u1",
+      expectedAppAccountToken: deriveAppleToken("u1"),
+      context: "restore",
+    }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
+
+    expect(fakeAppleClient.verifyAndDecodeTransaction).toHaveBeenCalledWith(
+      "old-restore-jws",
+      { context: "restore" },
+    );
+  });
 });
 
 describe("syncSubscriptionFromIAP — Google checkout path", () => {
@@ -192,7 +222,7 @@ describe("syncSubscriptionFromIAP — Google checkout path", () => {
 
     const all = await prisma.subscription.findMany({ where: { userId: "u1" } });
     expect(all.length).toBe(1);
-    expect(all[0].sourceSubscriptionId).toBe("pt-new");
-    expect(all[0].tier).toBe("max");
+    expect(all[0]!.sourceSubscriptionId).toBe("pt-new");
+    expect(all[0]!.tier).toBe("max");
   });
 });

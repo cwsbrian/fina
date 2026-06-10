@@ -69,6 +69,14 @@ describe("AppleClient.verifyAndDecodeTransaction", () => {
     expect(out).toBeDefined();
   });
 
+  it("accepts old restore payloads after signature verification", async () => {
+    const c = new AppleClient(cfg);
+    const oldRestoreTx = Date.now() - 30 * 86400_000;
+    vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx({ signedDate: oldRestoreTx }));
+    const out = await c.verifyAndDecodeTransaction("x", { context: "restore" });
+    expect(out).toBeDefined();
+  });
+
   it("rejects when appAccountToken is missing", async () => {
     const c = new AppleClient(cfg);
     vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx({ appAccountToken: undefined }));

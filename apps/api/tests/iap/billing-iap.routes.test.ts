@@ -5,6 +5,7 @@ import { truncateAll } from "../helpers/db.js";
 import { signUpAndGetCookie } from "../helpers/auth.js";
 import { testEnv } from "../helpers/test-env.js";
 import { deriveAppleToken } from "../../src/iap/binding.js";
+import { HttpError } from "../../src/auth/context.js";
 
 vi.mock("../../src/plaid/reconcile.js", () => ({
   reconcilePlaidItemsForUser: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
@@ -185,5 +186,27 @@ describe("POST /billing/iap/restore", () => {
     expect(res.json().tier).toBe("pro");
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledTimes(1);
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
+  });
+
+  it("returns first concrete restore error when no purchase syncs", async () => {
+    const { cookie } = await signUpAndGetCookie(app, { email: "u6@test.com" });
+    fakeAppleClient.verifyAndDecodeTransaction.mockRejectedValue(
+      new HttpError(403, "user_mismatch", "appAccountToken mismatch"),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/restore",
+      headers: { cookie },
+      payload: {
+        platform: "ios",
+        purchases: [
+          { productId: "max_monthly", receipt: "mismatched-user-jws" },
+        ],
+      },
+    });
+
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("user_mismatch");
   });
 });

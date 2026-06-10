@@ -10,6 +10,15 @@ function requireSyncedSubscription(result: MeDTO, source: "checkout" | "restore"
   );
 }
 
+function receiptMeta(receipt: string): { receiptLength: number; dotCount: number; looksLikeJws: boolean } {
+  const dotCount = receipt.split(".").length - 1;
+  return {
+    receiptLength: receipt.length,
+    dotCount,
+    looksLikeJws: dotCount === 2,
+  };
+}
+
 export async function postIAPCheckout(body: IAPCheckoutBody): Promise<MeDTO> {
   try {
     const result = await apiFetch<MeDTO>("/billing/iap/checkout", {
@@ -21,7 +30,7 @@ export async function postIAPCheckout(body: IAPCheckoutBody): Promise<MeDTO> {
     console.info("[iap.checkout] ok", {
       platform: body.platform,
       productId: body.productId,
-      receiptLength: body.receipt.length,
+      ...receiptMeta(body.receipt),
       tier: synced.tier,
       subscriptionTier: synced.subscription?.tier ?? null,
       subscriptionSource: synced.subscription?.source ?? null,
@@ -31,7 +40,7 @@ export async function postIAPCheckout(body: IAPCheckoutBody): Promise<MeDTO> {
     console.warn("[iap.checkout] failed", {
       platform: body.platform,
       productId: body.productId,
-      receiptLength: body.receipt.length,
+      ...receiptMeta(body.receipt),
       error: e,
     });
     throw e;
@@ -50,7 +59,7 @@ export async function postIAPRestore(body: IAPRestoreBody): Promise<MeDTO> {
       platform: body.platform,
       purchases: body.purchases.map((p) => ({
         productId: p.productId,
-        receiptLength: p.receipt.length,
+        ...receiptMeta(p.receipt),
       })),
       tier: synced.tier,
       subscriptionTier: synced.subscription?.tier ?? null,
@@ -62,7 +71,7 @@ export async function postIAPRestore(body: IAPRestoreBody): Promise<MeDTO> {
       platform: body.platform,
       purchases: body.purchases.map((p) => ({
         productId: p.productId,
-        receiptLength: p.receipt.length,
+        ...receiptMeta(p.receipt),
       })),
       error: e,
     });

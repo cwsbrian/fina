@@ -50,7 +50,12 @@ export async function syncSubscriptionFromIAP(
 }
 
 async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: SyncDeps): Promise<void> {
-  const context = args.context === "assn" ? "assn" : "asc-api";
+  const context =
+    args.context === "assn"
+      ? "assn"
+      : args.context === "restore"
+        ? "restore"
+        : "checkout";
   const verified = await deps.appleClient!.verifyAndDecodeTransaction(args.receipt, { context });
 
   if (args.expectedAppAccountToken && args.expectedAppAccountToken !== verified.appAccountToken) {

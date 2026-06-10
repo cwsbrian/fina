@@ -158,6 +158,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
           : { googleClient: resolveGoogle().client };
 
       let syncedAny = false;
+      let firstRestoreError: unknown;
       for (const item of parsed.data.purchases) {
         try {
           if (platform === "ios") {
@@ -181,11 +182,13 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
           }
           syncedAny = true;
         } catch (e) {
+          firstRestoreError ??= e;
           // Spec §5.3 restore: "Skip (log + continue) on individual failures".
           app.log.warn({ err: e, productId: item.productId }, "iap_restore_item_failed");
         }
       }
       if (!syncedAny) {
+        if (firstRestoreError instanceof HttpError) throw firstRestoreError;
         throw new HttpError(400, "invalid_receipt", "No restorable purchases synced");
       }
       if (syncedAny) await reconcilePlaidItemsForUser(app.fina.env, userId);

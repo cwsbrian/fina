@@ -62,7 +62,7 @@ export type VerifiedAppleTransaction = {
   raw: Record<string, unknown>;
 };
 
-export type VerifyContext = "asc-api" | "assn";
+export type VerifyContext = "checkout" | "restore" | "asc-api" | "assn";
 
 export class AppleClient {
   private verifier: SignedDataVerifier;
@@ -121,9 +121,18 @@ export class AppleClient {
 
     const signedDate = Number(raw.signedDate ?? 0);
     const ageMs = Date.now() - signedDate;
-    const maxAgeMs = opts.context === "assn" ? 60 * 60 * 1000 : 10 * 60 * 1000;
+    // Checkout/ASC payloads should be fresh. Restore can legitimately hand us
+    // an older StoreKit transaction JWS; the current entitlement is fetched
+    // from ASC immediately after this verification, so keep only the future
+    // skew guard for restore.
+    const maxAgeMs =
+      opts.context === "restore"
+        ? null
+        : opts.context === "assn"
+          ? 60 * 60 * 1000
+          : 10 * 60 * 1000;
     const maxFutureSkewMs = 30_000; // 30s clock skew tolerance for "future" payloads
-    if (signedDate <= 0 || ageMs > maxAgeMs || ageMs < -maxFutureSkewMs) {
+    if (signedDate <= 0 || (maxAgeMs !== null && ageMs > maxAgeMs) || ageMs < -maxFutureSkewMs) {
       throw new HttpError(400, "expired_receipt", "signedDate outside acceptable window");
     }
 
