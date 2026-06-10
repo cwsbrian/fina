@@ -29,6 +29,16 @@ const need = (env: NodeJS.ProcessEnv) => (k: string): string => {
   return v;
 };
 
+function normalizePemText(value: string): string {
+  const trimmed = value.trim();
+  const unquoted =
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+      ? trimmed.slice(1, -1)
+      : trimmed;
+  return unquoted.replace(/\\n/g, "\n");
+}
+
 /** Validate ONLY the Apple half. Use when the request is known to be
  *  iOS — avoids forcing Google env (and vice versa with the Google
  *  variant). When you need both halves at once (e.g., the IAP webhook
@@ -36,9 +46,11 @@ const need = (env: NodeJS.ProcessEnv) => (k: string): string => {
 export function requireAppleIapEnv(env: NodeJS.ProcessEnv): AppleIapConfig {
   const n = need(env);
   const appleKeyRaw = n("APPLE_ASC_PRIVATE_KEY");
-  const appleKey = appleKeyRaw.includes("BEGIN PRIVATE KEY")
-    ? appleKeyRaw
-    : Buffer.from(appleKeyRaw, "base64").toString("utf8");
+  const appleKey = normalizePemText(
+    appleKeyRaw.includes("BEGIN PRIVATE KEY")
+      ? appleKeyRaw
+      : Buffer.from(appleKeyRaw, "base64").toString("utf8"),
+  );
   if (!appleKey.includes("BEGIN PRIVATE KEY")) {
     throw new HttpError(503, "iap_not_configured", "APPLE_ASC_PRIVATE_KEY shape invalid");
   }

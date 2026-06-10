@@ -38,6 +38,21 @@ describe("requireIapEnv", () => {
     expect(cfg.google.serviceAccount.client_email).toBe("x@y");
   });
 
+  it("normalizes escaped newlines in APPLE_ASC_PRIVATE_KEY", () => {
+    const env = {
+      ...APPLE_ONLY,
+      APPLE_ASC_PRIVATE_KEY: APPLE_ONLY.APPLE_ASC_PRIVATE_KEY.replace(/\n/g, "\\n"),
+      GOOGLE_PACKAGE_NAME: "app.fina",
+      GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"x@y","private_key":"-----BEGIN PRIVATE KEY-----\\n…\\n-----END PRIVATE KEY-----\\n"}',
+      GOOGLE_PUBSUB_VERIFY_AUDIENCE: "x",
+      GOOGLE_PUBSUB_VERIFY_EMAIL: "y@z",
+      GOOGLE_PUBSUB_SUBSCRIPTION_NAME: "n",
+    } as any;
+    const cfg = requireIapEnv(env);
+    expect(cfg.apple.ascPrivateKey).toContain("\n");
+    expect(cfg.apple.ascPrivateKey).not.toContain("\\n");
+  });
+
   it("throws 503 iap_not_configured when APPLE_ASC_PRIVATE_KEY missing", () => {
     const env: any = { ...APPLE_ONLY, APPLE_ASC_PRIVATE_KEY: undefined };
     let err: any;
