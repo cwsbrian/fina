@@ -64,6 +64,27 @@ export type VerifiedAppleTransaction = {
 
 export type VerifyContext = "checkout" | "restore" | "asc-api" | "assn";
 
+function describeAppleApiError(e: unknown): string {
+  const x = e as {
+    name?: unknown;
+    message?: unknown;
+    httpStatusCode?: unknown;
+    apiError?: unknown;
+    errorMessage?: unknown;
+  };
+  const parts: string[] = [];
+  if (typeof x.httpStatusCode === "number") parts.push(`status=${x.httpStatusCode}`);
+  if (x.apiError !== undefined && x.apiError !== null) parts.push(`apiError=${String(x.apiError)}`);
+  if (typeof x.errorMessage === "string" && x.errorMessage.length > 0) {
+    parts.push(`errorMessage=${x.errorMessage}`);
+  }
+  if (parts.length > 0) return parts.join(" ");
+
+  const name = typeof x.name === "string" && x.name.length > 0 ? x.name : "error";
+  const message = typeof x.message === "string" && x.message.length > 0 ? `: ${x.message}` : "";
+  return `${name}${message}`;
+}
+
 export class AppleClient {
   private verifier: SignedDataVerifier;
   private asc: AppStoreServerAPIClient;
@@ -207,7 +228,7 @@ export class AppleClient {
     const status = await this.asc
       .getAllSubscriptionStatuses(originalTransactionId)
       .catch((e) => {
-        throw new HttpError(502, "platform_unavailable", `asc api: ${e?.name ?? "error"}`);
+        throw new HttpError(502, "platform_unavailable", `asc api: ${describeAppleApiError(e)}`);
       });
     const item = status.data?.[0]?.lastTransactions?.[0];
     if (!item) throw new HttpError(400, "invalid_receipt", "asc no transaction");

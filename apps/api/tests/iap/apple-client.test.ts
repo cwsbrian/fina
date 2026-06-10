@@ -90,3 +90,24 @@ describe("AppleClient.verifyAndDecodeTransaction", () => {
     await expect(c.verifyAndDecodeTransaction("x")).rejects.toMatchObject({ code: "expired_receipt" });
   });
 });
+
+describe("AppleClient.getSubscriptionStatus", () => {
+  beforeEach(() => vi.restoreAllMocks());
+
+  it("preserves Apple APIException details in platform_unavailable errors", async () => {
+    const c = new AppleClient(cfg);
+    (c as any).asc = {
+      getAllSubscriptionStatuses: vi.fn().mockRejectedValue({
+        name: "Error",
+        httpStatusCode: 401,
+        apiError: 4010002,
+        errorMessage: "Invalid app identifier",
+      }),
+    };
+
+    await expect(c.getSubscriptionStatus("OT-1")).rejects.toMatchObject({
+      code: "platform_unavailable",
+      message: "asc api: status=401 apiError=4010002 errorMessage=Invalid app identifier",
+    });
+  });
+});
