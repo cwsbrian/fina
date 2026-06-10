@@ -142,12 +142,12 @@ export class AppleClient {
 
     const signedDate = Number(raw.signedDate ?? 0);
     const ageMs = Date.now() - signedDate;
-    // Checkout/ASC payloads should be fresh. Restore can legitimately hand us
-    // an older StoreKit transaction JWS; the current entitlement is fetched
-    // from ASC immediately after this verification, so keep only the future
-    // skew guard for restore.
+    // Client-sourced StoreKit transaction JWS values can be older than the
+    // current button tap when Apple returns an already-owned subscription.
+    // The current entitlement is fetched from ASC immediately after this
+    // verification, so checkout/restore keep only the future skew guard.
     const maxAgeMs =
-      opts.context === "restore"
+      opts.context === "checkout" || opts.context === "restore"
         ? null
         : opts.context === "assn"
           ? 60 * 60 * 1000

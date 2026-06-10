@@ -77,6 +77,14 @@ describe("AppleClient.verifyAndDecodeTransaction", () => {
     expect(out).toBeDefined();
   });
 
+  it("accepts old checkout payloads when Apple returns an already-owned subscription", async () => {
+    const c = new AppleClient(cfg);
+    const oldCheckoutTx = Date.now() - 30 * 86400_000;
+    vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx({ signedDate: oldCheckoutTx }));
+    const out = await c.verifyAndDecodeTransaction("x", { context: "checkout" });
+    expect(out).toBeDefined();
+  });
+
   it("rejects when appAccountToken is missing", async () => {
     const c = new AppleClient(cfg);
     vi.spyOn(c as any, "_decodeAndVerifyJws").mockResolvedValue(makeTx({ appAccountToken: undefined }));
