@@ -59,6 +59,24 @@ export default function PlanDetails() {
   const sub = me.subscription;
   const days = trialDaysLeft(me.trial.endsAt);
   const revertsTo = trialRevertsTo(me);
+  const trialEnd = formatShortDate(me.trial.endsAt);
+  const pendingChange =
+    sub?.pendingTier && sub.pendingTier !== sub.tier
+      ? {
+          tier: sub.pendingTier,
+          date: formatShortDate(sub.pendingTierAt ?? sub.currentPeriodEnd),
+        }
+      : null;
+  const subscriptionTiming =
+    me.trial.active && revertsTo && trialEnd
+      ? `${tierLabel(revertsTo, false)} starts on ${trialEnd}`
+      : pendingChange
+        ? `Switches to ${tierLabel(pendingChange.tier, false)} on ${pendingChange.date}`
+        : sub?.cancelAtPeriodEnd
+          ? `Ends on ${formatShortDate(sub.currentPeriodEnd)}`
+          : sub
+            ? `Next charge ${formatShortDate(sub.currentPeriodEnd)}`
+            : "";
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -74,7 +92,7 @@ export default function PlanDetails() {
           )}
           {revertsTo && (
             <Text style={styles.revertText}>
-              Switches to {tierLabel(revertsTo, false)} on {formatShortDate(me.trial.endsAt)}
+              {tierLabel(revertsTo, false)} starts on {trialEnd}
             </Text>
           )}
         </View>
@@ -86,11 +104,7 @@ export default function PlanDetails() {
               {tierLabel(sub.tier, false)} · {PRICING[sub.tier].displayPrice}/mo
             </Text>
             <Text style={styles.subMeta}>via {subscriptionSourceLabel(sub.source)}</Text>
-            <Text style={styles.subMeta}>
-              {sub.cancelAtPeriodEnd
-                ? `Ends on ${formatShortDate(sub.currentPeriodEnd)}`
-                : `Next charge ${formatShortDate(sub.currentPeriodEnd)}`}
-            </Text>
+            <Text style={styles.subMeta}>{subscriptionTiming}</Text>
           </View>
         )}
 

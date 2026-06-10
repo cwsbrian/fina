@@ -543,7 +543,7 @@ export default function Home() {
             </View>
             {revertsTo && (
               <Text style={styles.trialRevertText}>
-                Switches to {tierLabel(revertsTo, false)} on {formatShortDate(me.trial.endsAt)}
+                {tierLabel(revertsTo, false)} starts on {formatShortDate(me.trial.endsAt)}
               </Text>
             )}
           </View>

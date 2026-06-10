@@ -213,7 +213,7 @@ export default function More() {
               </View>
               {revertsTo && (
                 <Text style={styles.profileRevert}>
-                  Switches to {tierLabel(revertsTo, false)} on{" "}
+                  {tierLabel(revertsTo, false)} starts on{" "}
                   {formatShortDate(me.trial.endsAt)}
                 </Text>
               )}

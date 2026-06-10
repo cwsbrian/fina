@@ -73,6 +73,7 @@ export async function refreshBillingStateForUser(env: Env, userId: string): Prom
       appleClient ??= new AppleClient(requireAppleIapEnv(process.env));
       const status = await appleClient.getSubscriptionStatus(row.sourceSubscriptionId);
       const tier = tierForIapProductId(status.productId);
+      const pendingTier = status.pendingProductId ? tierForIapProductId(status.pendingProductId) : null;
       await prisma.subscription.update({
         where: { id: row.id },
         data: {
@@ -80,6 +81,8 @@ export async function refreshBillingStateForUser(env: Env, userId: string): Prom
           status: status.mapped.status as SubscriptionStatus,
           currentPeriodEnd: status.expiresDate,
           cancelAtPeriodEnd: status.mapped.cancelAtPeriodEnd,
+          pendingTier,
+          pendingTierAt: pendingTier ? (status.pendingAt ?? status.expiresDate) : null,
         },
       });
       continue;
@@ -88,6 +91,7 @@ export async function refreshBillingStateForUser(env: Env, userId: string): Prom
     googleClient ??= new GoogleClient(requireGoogleIapEnv(process.env));
     const purchase = await googleClient.fetchAndNormalize(row.sourceSubscriptionId);
     const tier = tierForIapProductId(purchase.productId);
+    const pendingTier = purchase.pendingProductId ? tierForIapProductId(purchase.pendingProductId) : null;
     await prisma.subscription.update({
       where: { id: row.id },
       data: {
@@ -95,6 +99,8 @@ export async function refreshBillingStateForUser(env: Env, userId: string): Prom
         status: purchase.mapped.status as SubscriptionStatus,
         currentPeriodEnd: purchase.expiryTime,
         cancelAtPeriodEnd: purchase.mapped.cancelAtPeriodEnd,
+        pendingTier,
+        pendingTierAt: pendingTier ? (purchase.pendingAt ?? purchase.expiryTime) : null,
         environment: purchase.environment,
       },
     });

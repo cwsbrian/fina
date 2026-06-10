@@ -10,6 +10,8 @@ export type NormalizedGooglePurchase = {
   subscriptionState: GoogleStatusInput["subscriptionState"];
   productId: string;
   expiryTime: Date;
+  pendingProductId: string | null;
+  pendingAt: Date | null;
   linkedPurchaseToken: string | null;
   environment: "Production" | "Sandbox";
   mapped: MappedStatus;
@@ -71,6 +73,11 @@ export class GoogleClient {
     const lineItem = ((raw.lineItems as any[]) ?? [])[0] ?? {};
     const productId = String(lineItem.productId ?? "");
     const expiryTime = new Date(lineItem.expiryTime ?? Date.now());
+    const deferredProductId = lineItem.deferredItemReplacement?.productId;
+    const pendingProductId =
+      typeof deferredProductId === "string" && deferredProductId.length > 0
+        ? deferredProductId
+        : null;
     const subscriptionState = String(raw.subscriptionState ?? "") as GoogleStatusInput["subscriptionState"];
     const linkedPurchaseToken = (raw.linkedPurchaseToken as string | null) ?? null;
     const environment: "Production" | "Sandbox" = raw.testPurchase ? "Sandbox" : "Production";
@@ -82,6 +89,8 @@ export class GoogleClient {
       subscriptionState,
       productId,
       expiryTime,
+      pendingProductId,
+      pendingAt: pendingProductId ? expiryTime : null,
       linkedPurchaseToken,
       environment,
       mapped,

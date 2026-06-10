@@ -16,6 +16,7 @@ const mkV2 = (overrides: Partial<{
   subscriptionState: string;
   expiryTime: string;
   productId: string;
+  deferredProductId: string | null;
   linkedPurchaseToken: string | null;
   environment: "Production" | "Sandbox";
 }> = {}) => ({
@@ -29,6 +30,7 @@ const mkV2 = (overrides: Partial<{
       productId: overrides.productId ?? "max_monthly",
       expiryTime: overrides.expiryTime ?? new Date(Date.now() + 86400_000).toISOString(),
       offerDetails: {},
+      deferredItemReplacement: overrides.deferredProductId ? { productId: overrides.deferredProductId } : undefined,
     },
   ],
   linkedPurchaseToken: overrides.linkedPurchaseToken ?? null,
@@ -81,5 +83,19 @@ describe("GoogleClient.fetchAndNormalize", () => {
     vi.spyOn(c as any, "_getV2").mockResolvedValue(mkV2({ linkedPurchaseToken: "prev-token" }));
     const out = await c.fetchAndNormalize("token-abc");
     expect(out.linkedPurchaseToken).toBe("prev-token");
+  });
+
+  it("surfaces pendingProductId from deferred item replacement", async () => {
+    const c = new GoogleClient(cfg);
+    const expiryTime = new Date(Date.now() + 30 * 86400_000).toISOString();
+    vi.spyOn(c as any, "_getV2").mockResolvedValue(mkV2({
+      productId: "max_monthly",
+      deferredProductId: "pro_monthly",
+      expiryTime,
+    }));
+    const out = await c.fetchAndNormalize("token-abc");
+    expect(out.productId).toBe("max_monthly");
+    expect(out.pendingProductId).toBe("pro_monthly");
+    expect(out.pendingAt?.toISOString()).toBe(expiryTime);
   });
 });

@@ -118,4 +118,29 @@ describe("AppleClient.getSubscriptionStatus", () => {
       message: "asc api: status=401 apiError=4010002 errorMessage=Invalid app identifier",
     });
   });
+
+  it("surfaces pendingProductId from autoRenewProductId when a plan change is queued", async () => {
+    const c = new AppleClient(cfg);
+    const expiresDate = Date.now() + 30 * 86400_000;
+    (c as any).asc = {
+      getAllSubscriptionStatuses: vi.fn().mockResolvedValue({
+        data: [{ lastTransactions: [{ status: 1, signedTransactionInfo: "tx-jws", signedRenewalInfo: "renewal-jws" }] }],
+      }),
+    };
+    vi.spyOn(c, "verifyAndDecodeTransaction").mockResolvedValue({
+      ...makeTx({ productId: "max_monthly" }),
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      raw: { expiresDate },
+    } as any);
+    vi.spyOn(c, "verifyAndDecodeRenewalInfo").mockResolvedValue({
+      autoRenewStatus: 1,
+      autoRenewProductId: "fina_pro_monthly",
+    });
+
+    const out = await c.getSubscriptionStatus("OT-1");
+    expect(out.productId).toBe("max_monthly");
+    expect(out.pendingProductId).toBe("fina_pro_monthly");
+    expect(out.pendingAt?.getTime()).toBe(expiresDate);
+  });
 });

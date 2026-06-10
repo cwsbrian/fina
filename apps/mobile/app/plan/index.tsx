@@ -12,7 +12,7 @@ import {
 } from "../../src/iap/client";
 import { postIAPCheckout, postIAPRestore } from "../../src/api/billing";
 import { apiFetch } from "../../src/api/client";
-import { tierLabel, type MeDTO as Me } from "@fina/shared";
+import { formatShortDate, tierLabel, type MeDTO as Me } from "@fina/shared";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 
@@ -186,17 +186,43 @@ export default function PlanPicker() {
           products.map((p) => {
             const details = planDetails(p.tier);
             const recommended = p.tier === "pro";
+            const sub = me?.subscription ?? null;
+            const pendingTier =
+              sub?.pendingTier && sub.pendingTier !== sub.tier ? sub.pendingTier : null;
+            const pendingDate = formatShortDate(sub?.pendingTierAt ?? sub?.currentPeriodEnd);
+            const trialStartTier =
+              me?.trial.active && sub
+                ? pendingTier ?? sub.tier
+                : null;
             const currentTier =
-              me?.subscription?.tier ??
+              sub?.tier ??
               (!me?.trial.active && (me?.tier === "pro" || me?.tier === "max")
                 ? me.tier
                 : null);
-            const isCurrent = currentTier === p.tier;
+            const isPending = pendingTier === p.tier;
+            const startsAfterTrial = trialStartTier === p.tier;
+            const isCurrent = currentTier === p.tier && !startsAfterTrial;
+            const statusLabel = startsAfterTrial
+              ? `Starts ${formatShortDate(me?.trial.endsAt)}`
+              : isPending
+                ? `Starts ${pendingDate}`
+                : isCurrent
+                  ? "Current plan"
+                  : "Subscribe";
+            const statusDetail = startsAfterTrial
+              ? "After your Pro trial ends."
+              : isPending
+                ? "Your current plan stays active until then."
+                : isCurrent && pendingTier
+                  ? `Current until ${pendingDate}.`
+                  : isCurrent
+                    ? "This is your active subscription."
+                    : null;
             return (
               <Pressable
                 key={p.productId}
                 onPress={() => onSubscribe(p)}
-                disabled={busy !== null || isCurrent}
+                disabled={busy !== null || isCurrent || isPending || startsAfterTrial}
                 style={{
                   padding: 20,
                   borderRadius: 12,
@@ -210,9 +236,11 @@ export default function PlanPicker() {
                     <Text style={styles.recommendedText}>Recommended</Text>
                   </View>
                 )}
-                {isCurrent && (
+                {(isCurrent || isPending || startsAfterTrial) && (
                   <View style={styles.currentBadge}>
-                    <Text style={styles.currentText}>Current plan</Text>
+                    <Text style={styles.currentText}>
+                      {isPending || startsAfterTrial ? "Scheduled plan" : "Current plan"}
+                    </Text>
                   </View>
                 )}
                 <Text
@@ -237,11 +265,11 @@ export default function PlanPicker() {
                   {planPrice(p.tier)}
                 </Text>
                 <Text style={{ marginTop: 12, color: colors.primary, fontWeight: "700" }}>
-                  {isCurrent ? "Current plan" : "Subscribe"}
+                  {statusLabel}
                 </Text>
-                {isCurrent && (
+                {statusDetail && (
                   <Text style={{ marginTop: 4, color: colors.muted }}>
-                    This is your active subscription.
+                    {statusDetail}
                   </Text>
                 )}
                 {busy === p.productId && (

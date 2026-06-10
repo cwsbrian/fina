@@ -66,6 +66,8 @@ async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: Sy
   if (!tier) throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
 
   const status = await deps.appleClient!.getSubscriptionStatus(verified.originalTransactionId);
+  const pendingTier = status.pendingProductId ? tierForIapProductId(status.pendingProductId) : null;
+  const pendingTierAt = pendingTier ? (status.pendingAt ?? status.expiresDate) : null;
 
   await prisma.$transaction(async (tx) => {
     await tx.subscription.upsert({
@@ -85,6 +87,8 @@ async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: Sy
         currentPeriodEnd: status.expiresDate,
         cancelAtPeriodEnd: status.mapped.cancelAtPeriodEnd,
         billingPeriod: "monthly",
+        pendingTier,
+        pendingTierAt,
         environment: verified.environment,
       },
       update: {
@@ -92,6 +96,8 @@ async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: Sy
         status: status.mapped.status,
         currentPeriodEnd: status.expiresDate,
         cancelAtPeriodEnd: status.mapped.cancelAtPeriodEnd,
+        pendingTier,
+        pendingTierAt,
         environment: verified.environment,
       },
     });
@@ -111,6 +117,8 @@ async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: 
 
   const tier = tierForIapProductId(v2.productId);
   if (!tier) throw new HttpError(400, "product_mismatch", `unknown productId ${v2.productId}`);
+  const pendingTier = v2.pendingProductId ? tierForIapProductId(v2.pendingProductId) : null;
+  const pendingTierAt = pendingTier ? (v2.pendingAt ?? v2.expiryTime) : null;
 
   await prisma.$transaction(async (tx) => {
     if (v2.linkedPurchaseToken) {
@@ -122,6 +130,8 @@ async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: 
           status: v2.mapped.status,
           currentPeriodEnd: v2.expiryTime,
           cancelAtPeriodEnd: v2.mapped.cancelAtPeriodEnd,
+          pendingTier,
+          pendingTierAt,
           environment: v2.environment,
         },
       });
@@ -147,6 +157,8 @@ async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: 
         currentPeriodEnd: v2.expiryTime,
         cancelAtPeriodEnd: v2.mapped.cancelAtPeriodEnd,
         billingPeriod: "monthly",
+        pendingTier,
+        pendingTierAt,
         environment: v2.environment,
       },
       update: {
@@ -154,6 +166,8 @@ async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: 
         status: v2.mapped.status,
         currentPeriodEnd: v2.expiryTime,
         cancelAtPeriodEnd: v2.mapped.cancelAtPeriodEnd,
+        pendingTier,
+        pendingTierAt,
         environment: v2.environment,
       },
     });

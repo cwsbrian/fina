@@ -7,12 +7,20 @@ import type { Purchase, ProductSubscription } from "react-native-iap";
 import { Platform } from "react-native";
 import { isExpoGo } from "../env";
 import { deriveAppleToken, deriveGoogleToken } from "./binding";
-import type { IAPProductId } from "@fina/shared";
+import { tierForIapProductId, type IAPProductId, type PaidTier } from "@fina/shared";
 
 const SKUS: IAPProductId[] =
   Platform.OS === "ios"
     ? ["fina_pro_monthly", "max_monthly"]
     : ["pro_monthly", "max_monthly"];
+
+const TIER_RANK: Record<PaidTier, number> = { pro: 1, max: 2 };
+// Numeric values for the legacy replacementMode field follow Google
+// BillingClient ReplacementMode constants.
+const ANDROID_REPLACEMENT_MODE = {
+  CHARGE_PRORATED_PRICE: 2,
+  DEFERRED: 6,
+} as const;
 
 export type LocalProduct = {
   productId: IAPProductId;
@@ -152,6 +160,53 @@ function receiptForPurchase(
   return typeof receipt === "string" && receipt.length > 0 ? receipt : null;
 }
 
+async function androidSubscriptionReplacement(
+  iap: RnIap,
+  targetProductId: IAPProductId,
+): Promise<{ purchaseToken: string; replacementMode: number } | undefined> {
+  const targetTier = tierForIapProductId(targetProductId);
+  if (!targetTier) return undefined;
+
+  const candidates: Array<{ productId: IAPProductId; purchaseToken: string; tier: PaidTier }> = [];
+  const seen = new Set<string>();
+  const pushCandidate = (productId: unknown, purchaseToken: unknown) => {
+    if (typeof productId !== "string" || typeof purchaseToken !== "string" || purchaseToken.length === 0) return;
+    const tier = tierForIapProductId(productId);
+    if (!tier || productId === targetProductId || seen.has(purchaseToken)) return;
+    seen.add(purchaseToken);
+    candidates.push({ productId: productId as IAPProductId, purchaseToken, tier });
+  };
+
+  try {
+    const purchases = await iap.getAvailablePurchases(undefined);
+    for (const p of purchases as any[]) {
+      pushCandidate(p?.productId ?? p?.id, p?.purchaseToken ?? p?.purchaseTokenAndroid);
+    }
+  } catch {
+    // Best-effort; getActiveSubscriptions below may still return the token.
+  }
+
+  try {
+    const active = await iap.getActiveSubscriptions(SKUS);
+    for (const sub of active as any[]) {
+      if (sub?.isActive === false) continue;
+      pushCandidate(sub?.productId, sub?.purchaseTokenAndroid ?? sub?.purchaseToken);
+    }
+  } catch {
+    // New purchases have no old token; they fall through without replacement.
+  }
+
+  const current = candidates[0];
+  if (!current) return undefined;
+  return {
+    purchaseToken: current.purchaseToken,
+    replacementMode:
+      TIER_RANK[targetTier] > TIER_RANK[current.tier]
+        ? ANDROID_REPLACEMENT_MODE.CHARGE_PRORATED_PRICE
+        : ANDROID_REPLACEMENT_MODE.DEFERRED,
+  };
+}
+
 export async function purchaseSubscription(args: {
   productId: IAPProductId;
   userId: string;
@@ -226,11 +281,18 @@ export async function purchaseSubscription(args: {
           // Android — Play Billing requires the base-plan offerToken for subs.
           const obfuscatedAccountId = deriveGoogleToken(args.userId);
           const offerToken = await androidOfferToken(iap, args.productId);
+          const replacement = await androidSubscriptionReplacement(iap, args.productId);
           await iap.requestPurchase({
             request: {
               google: {
                 skus: [args.productId],
                 obfuscatedAccountId,
+                ...(replacement
+                  ? {
+                      purchaseToken: replacement.purchaseToken,
+                      replacementMode: replacement.replacementMode,
+                    }
+                  : {}),
                 ...(offerToken
                   ? { subscriptionOffers: [{ sku: args.productId, offerToken }] }
                   : {}),

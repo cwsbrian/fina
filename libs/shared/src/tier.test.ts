@@ -2,30 +2,30 @@ import { describe, it, expect } from "vitest";
 import { isPaidFeatureTier, isProFeature, TIER_LIMITS, trialRevertsTo } from "./tier.js";
 
 describe("trialRevertsTo", () => {
-  it("trial + pro sub → null (staying Pro is not a downgrade)", () => {
+  it("trial + pro sub → pro", () => {
     expect(
       trialRevertsTo({ trial: { active: true }, subscription: { tier: "pro", pendingTier: null } }),
-    ).toBeNull();
+    ).toBe("pro");
   });
-  it("trial + max sub → null (staying above Pro is not a downgrade)", () => {
+  it("trial + max sub → max", () => {
     expect(
       trialRevertsTo({ trial: { active: true }, subscription: { tier: "max", pendingTier: null } }),
-    ).toBeNull();
+    ).toBe("max");
   });
   it("follows pendingTier when a change is scheduled (max now, pro queued)", () => {
     expect(
       trialRevertsTo({ trial: { active: true }, subscription: { tier: "max", pendingTier: "pro" } }),
-    ).toBeNull();
+    ).toBe("pro");
   });
   it("ignores a pendingTier equal to the current tier", () => {
     expect(
       trialRevertsTo({ trial: { active: true }, subscription: { tier: "pro", pendingTier: "pro" } }),
-    ).toBeNull();
+    ).toBe("pro");
   });
-  it("returns null when an upgrade to max is scheduled during the trial", () => {
+  it("returns max when an upgrade to max is scheduled during the trial", () => {
     expect(
       trialRevertsTo({ trial: { active: true }, subscription: { tier: "pro", pendingTier: "max" } }),
-    ).toBeNull();
+    ).toBe("max");
   });
   it("trial + no sub → null", () => {
     expect(trialRevertsTo({ trial: { active: true }, subscription: null })).toBeNull();

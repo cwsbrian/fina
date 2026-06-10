@@ -223,6 +223,8 @@ export class AppleClient {
   async getSubscriptionStatus(originalTransactionId: string): Promise<{
     expiresDate: Date;
     productId: string;
+    pendingProductId: string | null;
+    pendingAt: Date | null;
     mapped: MappedStatus;
   }> {
     const status = await this.asc
@@ -242,14 +244,27 @@ export class AppleClient {
     const verifiedTx = await this.verifyAndDecodeTransaction(item.signedTransactionInfo!, { context: "asc-api" });
     const renewal = await this.verifyAndDecodeRenewalInfo(item.signedRenewalInfo!);
 
+    const autoRenewStatus = (renewal.autoRenewStatus as 0 | 1) ?? 1;
+    const autoRenewProductId =
+      typeof renewal.autoRenewProductId === "string" && renewal.autoRenewProductId.length > 0
+        ? renewal.autoRenewProductId
+        : null;
+    const expiresDate = new Date(Number(verifiedTx.raw.expiresDate ?? 0));
+    const pendingProductId =
+      autoRenewStatus === 1 && autoRenewProductId && autoRenewProductId !== verifiedTx.productId
+        ? autoRenewProductId
+        : null;
+
     const mapped = mapAppleStatus({
       subscriptionStatus: appleStatusFromCode(item.status as number),
       offerType: (renewal.offerType as number | null) ?? null,
-      autoRenewStatus: (renewal.autoRenewStatus as 0 | 1) ?? 1,
+      autoRenewStatus,
     });
     return {
-      expiresDate: new Date(Number(verifiedTx.raw.expiresDate ?? 0)),
+      expiresDate,
       productId: verifiedTx.productId,
+      pendingProductId,
+      pendingAt: pendingProductId ? expiresDate : null,
       mapped,
     };
   }

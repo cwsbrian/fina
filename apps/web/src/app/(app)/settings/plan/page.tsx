@@ -119,10 +119,8 @@ export default function PlanPage() {
       );
     }
     if (trialActive && sub) {
-      // Trial active AND a paid sub on file. `revertsTo` is non-null only when
-      // the post-trial tier is below Pro (a downgrade to warn about); it
-      // already folds in a scheduled pendingTier. When null, keep the existing
-      // charge / scheduled-switch copy untouched.
+      // Trial active AND a paid sub on file. `revertsTo` names the paid tier
+      // that starts after trial and folds in a scheduled pendingTier.
       const revertsTo = trialRevertsTo(me);
       const upcomingTier =
         sub.pendingTier && sub.pendingTier !== sub.tier ? sub.pendingTier : sub.tier;
@@ -138,7 +136,7 @@ export default function PlanPage() {
             <div className={styles.planCurrentStatus}>
               {days != null ? `${days} day${days === 1 ? "" : "s"} left.` : ""}{" "}
               {revertsTo
-                ? `Switches to ${tierLabel(revertsTo, false)} on ${formatShortDate(me.trial.endsAt)}. ${upcomingPrice} will be charged.`
+                ? `${tierLabel(revertsTo, false)} starts on ${formatShortDate(me.trial.endsAt)}. ${upcomingPrice} will be charged.`
                 : hasSchedule
                   ? `Switches to ${upcomingLabel} on ${at}. ${upcomingPrice} will be charged.`
                   : `${upcomingPrice} will be charged on ${at}.`}

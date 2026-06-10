@@ -35,9 +35,12 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
       transactionId: "T-1",
       raw: {},
     });
+    const periodEnd = new Date(Date.now() + 30 * 86400_000);
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
-      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      expiresDate: periodEnd,
       productId: "max_monthly",
+      pendingProductId: "fina_pro_monthly",
+      pendingAt: periodEnd,
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
 
@@ -53,6 +56,8 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     expect(sub!.source).toBe("iap_apple");
     expect(sub!.sourceSubscriptionId).toBe("OT-1");
     expect(sub!.tier).toBe("max");
+    expect(sub!.pendingTier).toBe("pro");
+    expect(sub!.pendingTierAt?.getTime()).toBe(periodEnd.getTime());
     expect(sub!.environment).toBe("Sandbox");
 
     const user = await prisma.user.findUnique({ where: { id: "u1" } });
@@ -147,6 +152,8 @@ describe("syncSubscriptionFromIAP — Google checkout path", () => {
       subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
       productId: "max_monthly",
       expiryTime: new Date(Date.now() + 30 * 86400_000),
+      pendingProductId: "pro_monthly",
+      pendingAt: new Date(Date.now() + 30 * 86400_000),
       linkedPurchaseToken: null,
       environment: "Production",
       mapped: { status: "active", cancelAtPeriodEnd: false },
@@ -162,6 +169,7 @@ describe("syncSubscriptionFromIAP — Google checkout path", () => {
     const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
     expect(sub!.source).toBe("iap_google");
     expect(sub!.sourceSubscriptionId).toBe("pt-1");
+    expect(sub!.pendingTier).toBe("pro");
     const user = await prisma.user.findUnique({ where: { id: "u1" } });
     expect(user!.iapGoogleObfuscatedId).toBe(deriveGoogleToken("u1"));
     expect(fakeGoogleClient.acknowledgeIfPending).toHaveBeenCalledWith({
