@@ -1,5 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
-import { View, Text, Pressable, ActivityIndicator, ScrollView, StyleSheet } from "react-native";
+import {
+  View,
+  Text,
+  Pressable,
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Platform,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router } from "expo-router";
 import {
@@ -13,6 +21,7 @@ import {
 } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
 import { openManageBilling } from "../../src/iap/manage";
+import { syncNativeSubscriptionManagement } from "../../src/iap/sync";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 
@@ -21,14 +30,26 @@ export default function PlanDetails() {
   const [openingBilling, setOpeningBilling] = useState(false);
 
   useEffect(() => {
-    apiFetch<Me>("/me").then(setMe).catch(() => {});
+    apiFetch<Me>("/me")
+      .then(setMe)
+      .catch(() => {});
   }, []);
 
   const onManageBilling = useCallback(async () => {
     if (openingBilling) return;
     setOpeningBilling(true);
     try {
-      await openManageBilling(me?.subscription?.tier);
+      if (Platform.OS === "ios") {
+        const nextMe = await syncNativeSubscriptionManagement();
+        setMe(nextMe);
+      } else {
+        await openManageBilling(me?.subscription?.tier);
+      }
+    } catch (e) {
+      console.warn("[billing.native] closed or failed", e);
+      apiFetch<Me>("/me")
+        .then(setMe)
+        .catch(() => {});
     } finally {
       setOpeningBilling(false);
     }
@@ -60,6 +81,7 @@ export default function PlanDetails() {
   const days = trialDaysLeft(me.trial.endsAt);
   const revertsTo = trialRevertsTo(me);
   const trialEnd = formatShortDate(me.trial.endsAt);
+  const displayedSubscriptionTier = me.trial.active && revertsTo ? revertsTo : sub?.tier;
   const pendingChange =
     sub?.pendingTier && sub.pendingTier !== sub.tier
       ? {
@@ -67,16 +89,17 @@ export default function PlanDetails() {
           date: formatShortDate(sub.pendingTierAt ?? sub.currentPeriodEnd),
         }
       : null;
-  const subscriptionTiming =
+  const trialSubscriptionTiming =
     me.trial.active && revertsTo && trialEnd
-      ? `${tierLabel(revertsTo, false)} starts on ${trialEnd}`
-      : pendingChange
-        ? `Switches to ${tierLabel(pendingChange.tier, false)} on ${pendingChange.date}`
-        : sub?.cancelAtPeriodEnd
-          ? `Ends on ${formatShortDate(sub.currentPeriodEnd)}`
-          : sub
-            ? `Next charge ${formatShortDate(sub.currentPeriodEnd)}`
-            : "";
+      ? `${tierLabel(revertsTo, false)} is current in the App Store. Trial ends ${trialEnd}.`
+      : null;
+  const subscriptionTiming = pendingChange
+    ? `${tierLabel(pendingChange.tier, false)} is scheduled for ${pendingChange.date}.`
+    : sub?.cancelAtPeriodEnd
+      ? `Ends on ${formatShortDate(sub.currentPeriodEnd)}`
+      : sub
+        ? `Next charge ${formatShortDate(sub.currentPeriodEnd)}`
+        : "";
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -99,38 +122,33 @@ export default function PlanDetails() {
 
         {sub && (
           <View style={styles.card}>
-            <Text style={styles.cardLabel}>Subscription</Text>
-            <Text style={styles.subTier}>
-              {tierLabel(sub.tier, false)} · {PRICING[sub.tier].displayPrice}/mo
+            <Text style={styles.cardLabel}>
+              {me.trial.active ? "Scheduled subscription" : "Subscription"}
             </Text>
+            {displayedSubscriptionTier && (
+              <Text style={styles.subTier}>
+                {tierLabel(displayedSubscriptionTier, false)} ·{" "}
+                {PRICING[displayedSubscriptionTier].displayPrice}/mo
+              </Text>
+            )}
             <Text style={styles.subMeta}>via {subscriptionSourceLabel(sub.source)}</Text>
-            <Text style={styles.subMeta}>{subscriptionTiming}</Text>
+            {trialSubscriptionTiming && (
+              <Text style={styles.subMeta}>{trialSubscriptionTiming}</Text>
+            )}
+            {subscriptionTiming && <Text style={styles.subMeta}>{subscriptionTiming}</Text>}
           </View>
         )}
 
         <View style={styles.actions}>
-          {sub ? (
-            <>
-              <Pressable style={styles.btnPrimary} onPress={() => router.push("/plan" as never)}>
-                <Text style={styles.btnPrimaryText}>Change plan</Text>
-              </Pressable>
-              <Pressable
-                style={styles.btnOutline}
-                onPress={onManageBilling}
-                disabled={openingBilling}
-              >
-                {openingBilling ? (
-                  <ActivityIndicator color={colors.primary} />
-                ) : (
-                  <Text style={styles.btnOutlineText}>Manage billing</Text>
-                )}
-              </Pressable>
-            </>
-          ) : (
-            <Pressable style={styles.btnPrimary} onPress={() => router.push("/plan" as never)}>
-              <Text style={styles.btnPrimaryText}>Choose a plan</Text>
-            </Pressable>
-          )}
+          <Pressable style={styles.btnPrimary} onPress={onManageBilling} disabled={openingBilling}>
+            {openingBilling ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <Text style={styles.btnPrimaryText}>
+                {Platform.OS === "ios" ? "Manage in App Store" : "Manage billing"}
+              </Text>
+            )}
+          </Pressable>
         </View>
       </ScrollView>
     </SafeAreaView>
@@ -152,15 +170,23 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   scroll: { padding: space.lg, gap: space.base },
   card: { backgroundColor: colors.surfaceSoft, borderRadius: 14, padding: space.lg, gap: 4 },
-  cardLabel: { ...type$.bodySm, color: colors.muted, textTransform: "uppercase", letterSpacing: 0.5 },
+  cardLabel: {
+    ...type$.bodySm,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
   planName: { ...type$.titleSm, color: colors.ink, fontWeight: "700" },
   planMeta: { ...type$.bodySm, color: colors.muted },
   revertText: { ...type$.bodySm, color: colors.navy, marginTop: 4 },
   subTier: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   subMeta: { ...type$.bodySm, color: colors.muted },
   actions: { gap: space.sm, marginTop: space.base },
-  btnPrimary: { backgroundColor: colors.primary, borderRadius: 999, paddingVertical: 14, alignItems: "center" },
+  btnPrimary: {
+    backgroundColor: colors.primary,
+    borderRadius: 999,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
   btnPrimaryText: { ...type$.bodyMd, color: "#fff", fontWeight: "600" },
-  btnOutline: { borderWidth: 1, borderColor: colors.hairline, borderRadius: 999, paddingVertical: 14, alignItems: "center" },
-  btnOutlineText: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
 });

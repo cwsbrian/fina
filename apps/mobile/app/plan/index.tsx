@@ -1,328 +1,81 @@
-import { useEffect, useState, useCallback } from "react";
-import { View, Text, Pressable, ActivityIndicator, ScrollView, Alert, StyleSheet } from "react-native";
+import { useCallback, useEffect, useState } from "react";
+import { View, Text, Pressable, ActivityIndicator, StyleSheet, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { useRouter, Stack } from "expo-router";
-import {
-  fetchProducts,
-  purchaseSubscription,
-  finishPurchase,
-  listAvailablePurchases,
-  IapPurchaseError,
-  type LocalProduct,
-} from "../../src/iap/client";
-import { postIAPCheckout, postIAPRestore } from "../../src/api/billing";
+import { Stack, useRouter } from "expo-router";
+import { tierLabel, type MeDTO as Me } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
-import { formatShortDate, tierLabel, trialDaysLeft, type MeDTO as Me } from "@fina/shared";
-import { colors, space, type as type$ } from "../../src/design/tokens";
+import { openManageBilling } from "../../src/iap/manage";
+import { syncNativeSubscriptionManagement } from "../../src/iap/sync";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
+import { colors, space, type as type$ } from "../../src/design/tokens";
 
-function planDetails(tier: LocalProduct["tier"]): { subtitle: string; bullets: string[] } {
-  if (tier === "pro") {
-    return {
-      subtitle: "For everyday planning with full Fina access.",
-      bullets: [
-        "Up to 5 connected bank accounts",
-        "Fina chat, daily brief, and proactive insights",
-        "Goals and saving strategy",
-      ],
-    };
-  }
-  return {
-    subtitle: "For heavier use and more connected accounts.",
-    bullets: [
-      "Up to 20 connected bank accounts",
-      "More room for AI chat",
-      "Everything included in Pro",
-    ],
-  };
-}
-
-function planPrice(tier: LocalProduct["tier"]): string {
-  return tier === "pro" ? "$7.99 / month" : "$16.99 / month";
-}
-
-function errorMessage(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  if (typeof e === "object" && e !== null) {
-    const x = e as { code?: unknown; status?: unknown; message?: unknown };
-    if (typeof x.message === "string") return x.message;
-    if (typeof x.code === "string") {
-      return typeof x.status === "number" ? `${x.code} (HTTP ${x.status})` : x.code;
-    }
-  }
-  return "Something went wrong. Try again.";
-}
-
-function hasSubscription(me: Me): boolean {
-  return Boolean(me.subscription);
-}
-
-function restoredPlanMessage(me: Me): string {
-  if (me.trial.active) {
-    const trialEnd = formatShortDate(me.trial.endsAt);
-    const standingTier =
-      me.subscription?.pendingTier && me.subscription.pendingTier !== me.subscription.tier
-        ? me.subscription.pendingTier
-        : me.subscription?.tier;
-    if (standingTier) {
-      return trialEnd
-        ? `You're on Pro trial. ${tierLabel(standingTier, false)} starts on ${trialEnd}.`
-        : `You're on Pro trial. ${tierLabel(standingTier, false)} is on file.`;
-    }
-    return trialEnd ? `You're on Pro trial until ${trialEnd}.` : "You're on Pro trial.";
-  }
-  if (me.subscription) return `You're on ${tierLabel(me.subscription.tier, false)}.`;
-  return `You're on ${tierLabel(me.tier, false)}.`;
-}
-
-async function restoreOwnedPurchases(): Promise<Me> {
-  const purchases = await listAvailablePurchases();
-  if (purchases.length === 0) {
-    throw new Error("No previous purchases found.");
-  }
-  const nextMe = await postIAPRestore({
-    platform: purchases[0]!.platform,
-    purchases: purchases.map((p) => ({
-      productId: p.productId,
-      receipt: p.receipt,
-    })),
-  });
-  await Promise.allSettled(
-    purchases
-      .filter((p) => p.purchase)
-      .map((p) => finishPurchase(p.purchase!)),
-  );
-  return nextMe;
-}
-
-export default function PlanPicker() {
+export default function PlanNativeManagement() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
-  const [products, setProducts] = useState<LocalProduct[] | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
+  const [openedOnce, setOpenedOnce] = useState(false);
 
   useEffect(() => {
-    apiFetch<Me>("/me").then(setMe).catch(() => {});
+    apiFetch<Me>("/me")
+      .then(setMe)
+      .catch(() => {});
   }, []);
 
-  const load = useCallback(async () => {
+  const openNativeManagement = useCallback(async () => {
+    if (opening) return;
+    setOpening(true);
     try {
-      const list = await fetchProducts();
-      setProducts(list);
-    } catch {
-      setProducts([]); // triggers empty-state
+      if (Platform.OS === "ios") {
+        const nextMe = await syncNativeSubscriptionManagement();
+        setMe(nextMe);
+        if (nextMe.subscription) router.replace("/plan/details" as never);
+      } else {
+        await openManageBilling(me?.subscription?.tier);
+        const nextMe = await apiFetch<Me>("/me");
+        setMe(nextMe);
+      }
+    } catch (e) {
+      console.warn("[billing.native] closed or failed", e);
+      apiFetch<Me>("/me")
+        .then(setMe)
+        .catch(() => {});
+    } finally {
+      setOpenedOnce(true);
+      setOpening(false);
     }
-  }, []);
+  }, [me?.subscription?.tier, opening, router]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  const onSubscribe = useCallback(
-    async (p: LocalProduct) => {
-      if (!me?.user?.id || busy || me.subscription?.tier === p.tier || (me.trial.active && p.tier === "pro")) return;
-      setBusy(p.productId);
-      try {
-        const { receipt, platform, purchase } = await purchaseSubscription({
-          productId: p.productId,
-          userId: me.user.id,
-        });
-        const nextMe = await postIAPCheckout({ platform, productId: p.productId, receipt });
-        // StoreKit 2 requires explicit finish or it re-delivers on next launch.
-        // Call only after server returns 2xx so we don't finish a purchase
-        // the server failed to record.
-        await finishPurchase(purchase);
-        setMe(nextMe);
-        router.replace("/plan/details" as never);
-      } catch (e) {
-        if (e instanceof IapPurchaseError) {
-          if (e.code === "E_USER_CANCELLED") return;
-          if (e.code === "E_ALREADY_OWNED") {
-            try {
-              const nextMe = await restoreOwnedPurchases();
-              setMe(nextMe);
-              Alert.alert("Subscription restored", restoredPlanMessage(nextMe));
-              router.replace("/plan/details" as never);
-            } catch (restoreErr) {
-              try {
-                const latestMe = await apiFetch<Me>("/me");
-                setMe(latestMe);
-                if (hasSubscription(latestMe)) {
-                  router.replace("/plan/details" as never);
-                  return;
-                }
-              } catch {
-                // Fall through to the actionable App Store state message.
-              }
-              const detail = errorMessage(restoreErr);
-              Alert.alert(
-                "Already subscribed",
-                detail === "No previous purchases found."
-                  ? "App Store says this Apple ID already has a subscription, but it did not return an active receipt to restore. Try Restore purchases, or check the sandbox subscription state in Settings."
-                  : detail,
-              );
-              router.push("/plan/restore" as never);
-            }
-            return;
-          }
-          Alert.alert("Couldn't subscribe", e.message);
-          return;
-        }
-        Alert.alert("Couldn't subscribe", errorMessage(e));
-      } finally {
-        setBusy(null);
-      }
-    },
-    [me, busy, router],
-  );
-
-  const body =
-    products === null ? (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 80 }}>
-        <ActivityIndicator />
-      </View>
-    ) : (
-      <ScrollView contentContainerStyle={{ padding: 24, gap: 16 }}>
-        {products.length === 0 ? (
-          <View
-            style={{
-              padding: 24,
-              borderRadius: 12,
-              backgroundColor: colors.surfaceSoft,
-            }}
-          >
-            <Text style={{ fontSize: 16, color: colors.ink }}>
-              Subscriptions aren't available right now. Try again later.
-            </Text>
-            <Pressable onPress={load} style={{ marginTop: 12 }}>
-              <Text style={{ color: colors.primary, fontWeight: "600" }}>
-                Retry
-              </Text>
-            </Pressable>
-          </View>
-        ) : (
-          products.map((p) => {
-            const details = planDetails(p.tier);
-            const recommended = p.tier === "pro";
-            const sub = me?.subscription ?? null;
-            const pendingTier =
-              sub?.pendingTier && sub.pendingTier !== sub.tier ? sub.pendingTier : null;
-            const pendingDate = formatShortDate(sub?.pendingTierAt ?? sub?.currentPeriodEnd);
-            const trialStartTier =
-              me?.trial.active && sub
-                ? pendingTier ?? sub.tier
-                : null;
-            const currentTier =
-              sub?.tier ??
-              (!me?.trial.active && (me?.tier === "pro" || me?.tier === "max")
-                ? me.tier
-                : null);
-            const isPending = pendingTier === p.tier;
-            const startsAfterTrial = trialStartTier === p.tier;
-            const isCurrentTrial = Boolean(me?.trial.active && p.tier === "pro");
-            const isCurrent = currentTier === p.tier && !startsAfterTrial && !isCurrentTrial;
-            const days = trialDaysLeft(me?.trial.endsAt);
-            const statusLabel = isCurrentTrial
-              ? "Current trial"
-              : startsAfterTrial
-                ? `Starts ${formatShortDate(me?.trial.endsAt)}`
-                : isPending
-                  ? `Starts ${pendingDate}`
-                  : isCurrent
-                    ? "Current plan"
-                    : "Subscribe";
-            const statusDetail = isCurrentTrial
-              ? trialStartTier
-                ? `${tierLabel(trialStartTier, false)} starts after your trial.`
-                : days !== null
-                  ? `${days} day${days === 1 ? "" : "s"} left.`
-                  : "You're in your introductory trial."
-              : startsAfterTrial
-                ? "After your Pro trial ends."
-                : isPending
-                  ? "Your current plan stays active until then."
-                  : isCurrent && pendingTier
-                    ? `Current until ${pendingDate}.`
-                    : isCurrent
-                      ? "This is your active subscription."
-                      : null;
-            return (
-              <Pressable
-                key={p.productId}
-                onPress={() => onSubscribe(p)}
-                disabled={busy !== null || isCurrentTrial || isCurrent || isPending || startsAfterTrial}
-                style={{
-                  padding: 20,
-                  borderRadius: 12,
-                  backgroundColor: colors.canvas,
-                  borderWidth: recommended ? 2 : 1,
-                  borderColor: recommended ? colors.primary : colors.hairline,
-                }}
-              >
-                {recommended && (
-                  <View style={styles.recommendedBadge}>
-                    <Text style={styles.recommendedText}>Recommended</Text>
-                  </View>
-                )}
-                {(isCurrentTrial || isCurrent || isPending || startsAfterTrial) && (
-                  <View style={styles.currentBadge}>
-                    <Text style={styles.currentText}>
-                      {isCurrentTrial
-                        ? "Current trial"
-                        : isPending || startsAfterTrial
-                          ? "Scheduled plan"
-                          : "Current plan"}
-                    </Text>
-                  </View>
-                )}
-                <Text
-                  style={{ fontSize: 18, fontWeight: "700", color: colors.ink }}
-                >
-                  {p.localizedTitle}
-                </Text>
-                <Text style={{ marginTop: 4, color: colors.muted }}>
-                  {details.subtitle}
-                </Text>
-                <View style={{ gap: 8, marginTop: 14 }}>
-                  {details.bullets.map((line) => (
-                    <View key={line} style={{ flexDirection: "row", gap: 8 }}>
-                      <Text style={{ color: colors.primary, fontWeight: "700" }}>•</Text>
-                      <Text style={{ flex: 1, color: colors.body }}>{line}</Text>
-                    </View>
-                  ))}
-                </View>
-                <Text
-                  style={{ marginTop: 14, fontSize: 22, fontWeight: "700", color: colors.ink }}
-                >
-                  {planPrice(p.tier)}
-                </Text>
-                <Text style={{ marginTop: 12, color: colors.primary, fontWeight: "700" }}>
-                  {statusLabel}
-                </Text>
-                {statusDetail && (
-                  <Text style={{ marginTop: 4, color: colors.muted }}>
-                    {statusDetail}
-                  </Text>
-                )}
-                {busy === p.productId && (
-                  <ActivityIndicator style={{ marginTop: 8 }} />
-                )}
-              </Pressable>
-            );
-          })
-        )}
-      </ScrollView>
-    );
+    if (me && !openedOnce && !opening) {
+      void openNativeManagement();
+    }
+  }, [me, openedOnce, opening, openNativeManagement]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.head}>
         <HeaderIconButton icon="chevron-back" onPress={() => router.back()} variant="plain" />
-        <Text style={styles.title}>Choose Plan</Text>
+        <Text style={styles.title}>Plan</Text>
         <View style={{ width: 40 }} />
       </View>
-      {body}
+      <View style={styles.center}>
+        <View style={styles.card}>
+          <Text style={styles.cardLabel}>Current plan</Text>
+          <Text style={styles.planName}>
+            {me ? tierLabel(me.tier, me.trial.active) : "Loading"}
+          </Text>
+        </View>
+        <Pressable style={styles.btnPrimary} onPress={openNativeManagement} disabled={opening}>
+          {opening ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <Text style={styles.btnPrimaryText}>
+              {Platform.OS === "ios" ? "Open App Store subscriptions" : "Open billing"}
+            </Text>
+          )}
+        </Pressable>
+      </View>
     </SafeAreaView>
   );
 }
@@ -330,39 +83,39 @@ export default function PlanPicker() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
   head: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     paddingHorizontal: space.sm,
     paddingVertical: space.sm,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
   title: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
-  recommendedBadge: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: "rgba(62, 179, 139, 0.12)",
-    marginBottom: 10,
+  center: {
+    flex: 1,
+    justifyContent: "center",
+    padding: space.lg,
+    gap: space.base,
   },
-  recommendedText: {
-    ...type$.caption,
-    color: colors.primary,
-    fontWeight: "700",
-  },
-  currentBadge: {
-    alignSelf: "flex-start",
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 999,
+  card: {
     backgroundColor: colors.surfaceSoft,
-    marginBottom: 10,
+    borderRadius: 14,
+    padding: space.lg,
+    gap: 4,
   },
-  currentText: {
-    ...type$.caption,
-    color: colors.ink,
-    fontWeight: "700",
+  cardLabel: {
+    ...type$.bodySm,
+    color: colors.muted,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
   },
+  planName: { ...type$.titleSm, color: colors.ink, fontWeight: "700" },
+  btnPrimary: {
+    backgroundColor: colors.primary,
+    borderRadius: 999,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  btnPrimaryText: { ...type$.bodyMd, color: "#fff", fontWeight: "600" },
 });

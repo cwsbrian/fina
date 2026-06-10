@@ -8,6 +8,7 @@ import {
   Alert,
   ActivityIndicator,
   Animated,
+  Platform,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
@@ -32,13 +33,11 @@ import {
 import { useSession, signOut } from "../../src/auth/client";
 import { unregisterForPushNotifications } from "../../src/api/push";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
-import {
-  getActiveWorkspaceId,
-  clearActiveWorkspaceId,
-} from "../../src/workspace/active";
+import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { openManageBilling } from "../../src/iap/manage";
+import { syncNativeSubscriptionManagement } from "../../src/iap/sync";
 import { getAccountSettingsActions } from "../../src/settings/account-actions";
 
 type PlaidItemSummary = {
@@ -61,13 +60,14 @@ export default function More() {
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
 
   const loadMe = useCallback(() => {
-    apiFetch<Me>("/me").then(setMe).catch(() => {});
+    apiFetch<Me>("/me")
+      .then(setMe)
+      .catch(() => {});
   }, []);
 
   const loadActiveWorkspace = useCallback(async () => {
     try {
-      const wsId =
-        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      const wsId = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) return;
       const list = await apiFetch<{
         workspaces: Array<{
@@ -85,8 +85,7 @@ export default function More() {
 
   const loadBanks = useCallback(async () => {
     try {
-      const wsId =
-        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      const wsId = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) return;
       const data = await apiFetch<{ plaidItems: PlaidItemSummary[] }>(
         `/workspaces/${wsId}/plaid-items`,
@@ -150,11 +149,23 @@ export default function More() {
     if (openingBilling) return;
     setOpeningBilling(true);
     try {
-      await openManageBilling(me?.subscription?.tier);
+      if (Platform.OS === "ios") {
+        const nextMe = await syncNativeSubscriptionManagement();
+        setMe(nextMe);
+      } else {
+        await openManageBilling(me?.subscription?.tier);
+      }
+    } catch (e: any) {
+      if (Platform.OS === "ios") {
+        console.warn("[billing.native] closed or failed", e);
+        loadMe();
+        return;
+      }
+      Alert.alert("Couldn't open store billing", e?.message ?? "Try again.");
     } finally {
       setOpeningBilling(false);
     }
-  }, [openingBilling, me?.subscription]);
+  }, [loadMe, openingBilling, me?.subscription]);
 
   const comingSoon = (label: string) => () =>
     Alert.alert("Coming soon", `${label} screen is on the way.`);
@@ -168,13 +179,18 @@ export default function More() {
 
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
   const revertsTo = me ? trialRevertsTo(me) : null;
+  const pendingTier =
+    me?.subscription?.pendingTier && me.subscription.pendingTier !== me.subscription.tier
+      ? me.subscription.pendingTier
+      : null;
+  const pendingTierAt = pendingTier
+    ? formatShortDate(me?.subscription?.pendingTierAt ?? me?.subscription?.currentPeriodEnd)
+    : null;
   const bankSubtitle = banks
     ? banks.length === 0
       ? "Connect to start importing"
       : `${banks.length} connected${
-          banks.some((b) => b.status === "error" || b.errorCode)
-            ? " · needs attention"
-            : ""
+          banks.some((b) => b.status === "error" || b.errorCode) ? " · needs attention" : ""
         }`
     : "—";
 
@@ -196,9 +212,7 @@ export default function More() {
             onPress={() => router.push("/profile/edit" as never)}
           >
             <View style={styles.avatar}>
-              <Text style={styles.avatarText}>
-                {initials(me.user.name, me.user.email)}
-              </Text>
+              <Text style={styles.avatarText}>{initials(me.user.name, me.user.email)}</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.profileName} numberOfLines={1}>
@@ -213,8 +227,13 @@ export default function More() {
               </View>
               {revertsTo && (
                 <Text style={styles.profileRevert}>
-                  {tierLabel(revertsTo, false)} starts on{" "}
-                  {formatShortDate(me.trial.endsAt)}
+                  {tierLabel(revertsTo, false)} starts on {formatShortDate(me.trial.endsAt)}
+                </Text>
+              )}
+              {pendingTier && (
+                <Text style={styles.profileRevert}>
+                  {tierLabel(pendingTier, false)} scheduled
+                  {pendingTierAt ? ` for ${pendingTierAt}` : ""}
                 </Text>
               )}
             </View>
@@ -262,20 +281,14 @@ export default function More() {
         </Pressable>
         <View style={styles.wsActions}>
           <Pressable
-            style={({ pressed }) => [
-              styles.wsAction,
-              pressed && { opacity: 0.6 },
-            ]}
+            style={({ pressed }) => [styles.wsAction, pressed && { opacity: 0.6 }]}
             onPress={() => router.push("/workspace" as never)}
           >
             <Ionicons name="person-outline" size={14} color={colors.body} />
             <Text style={styles.wsActionText}>Manage members</Text>
           </Pressable>
           <Pressable
-            style={({ pressed }) => [
-              styles.wsAction,
-              pressed && { opacity: 0.6 },
-            ]}
+            style={({ pressed }) => [styles.wsAction, pressed && { opacity: 0.6 }]}
             onPress={() => router.push("/workspace/new" as never)}
           >
             <Ionicons name="add" size={16} color={colors.body} />
@@ -338,9 +351,7 @@ export default function More() {
             icon="card-outline"
             title="Banks"
             subtitle={bankSubtitle}
-            warn={
-              banks ? banks.some((b) => b.status === "error" || b.errorCode) : false
-            }
+            warn={banks ? banks.some((b) => b.status === "error" || b.errorCode) : false}
             onPress={() => router.push("/banks" as never)}
             last
           />
@@ -370,15 +381,17 @@ export default function More() {
           />
         </Group>
 
-        {/* Subscription — two modes:
+        {/* Subscription — three modes:
             - Stripe-owned (web): rows look identical to other modes (Plan + Billing)
               but tap fires an Alert telling the user to manage on withfina.com.
-            - IAP-owned (Apple/Google) OR free/trial: Plan + Manage billing
-              (platform-native deep-link). Restore lives on the Choose Plan
-              screen (Apple Guideline 3.1.1), not duplicated here. */}
+            - iOS non-Stripe: Plan + Manage billing open native subscription
+              management, even without a subscription on file.
+            - Google OR free/trial on Android: Plan + Manage billing use the
+              platform billing surface when a billing target is available. */}
         {(() => {
           const sub = me?.subscription;
           const isStripeOwned = sub?.source === "stripe";
+          const opensNativeBilling = Platform.OS === "ios" && !isStripeOwned;
           const hasPlanDetails = Boolean(sub);
           const onStripeManagedTap = (label: string) =>
             Alert.alert(
@@ -388,8 +401,7 @@ export default function More() {
                 { text: "Cancel", style: "cancel" },
                 {
                   text: "Open website",
-                  onPress: () =>
-                    WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`),
+                  onPress: () => WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`),
                 },
               ],
             );
@@ -404,9 +416,11 @@ export default function More() {
                   onPress={
                     isStripeOwned
                       ? () => onStripeManagedTap("Plan")
-                      : hasPlanDetails
-                        ? () => router.push("/plan/details" as never)
-                        : () => router.push("/plan" as never)
+                      : opensNativeBilling
+                        ? onManageBilling
+                        : hasPlanDetails
+                          ? () => router.push("/plan/details" as never)
+                          : onManageBilling
                   }
                 />
                 {isStripeOwned ? (
@@ -487,16 +501,12 @@ export default function More() {
               router.replace("/(onboarding)");
             }}
           >
-            <Text style={styles.devBtnText}>
-              DEV · Reset (clear onboarding + sign out)
-            </Text>
+            <Text style={styles.devBtnText}>DEV · Reset (clear onboarding + sign out)</Text>
           </Pressable>
         )}
 
         {session?.user?.id && (
-          <Text style={styles.versionLine}>
-            Signed in as {session.user.email}
-          </Text>
+          <Text style={styles.versionLine}>Signed in as {session.user.email}</Text>
         )}
       </ScrollView>
       <Animated.View
@@ -521,9 +531,12 @@ export default function More() {
 function modeLabel(me: Me | null): string {
   if (!me) return "—";
   switch (me.user.categorizationMode) {
-    case "strict":   return "Strict";
-    case "flexible": return "Flexible";
-    case "auto":     return "Auto";
+    case "strict":
+      return "Strict";
+    case "flexible":
+      return "Flexible";
+    case "auto":
+      return "Auto";
   }
 }
 
@@ -553,10 +566,7 @@ function briefSubtitle(me: Me | null): string {
   const h12 = h % 12 === 0 ? 12 : h % 12;
   const timeLabel = `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
   if (me.user.pauseEnabled) return "Off";
-  if (
-    me.user.snoozeUntil &&
-    new Date(me.user.snoozeUntil).getTime() > Date.now()
-  ) {
+  if (me.user.snoozeUntil && new Date(me.user.snoozeUntil).getTime() > Date.now()) {
     const d = new Date(me.user.snoozeUntil);
     const dateLabel = d.toLocaleDateString(undefined, {
       month: "short",
@@ -604,34 +614,20 @@ function SettingsRow({
       onPress={onPress}
     >
       <View style={styles.rowGlyph}>
-        <Ionicons
-          name={icon}
-          size={18}
-          color={danger ? colors.down : colors.body}
-        />
+        <Ionicons name={icon} size={18} color={danger ? colors.down : colors.body} />
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>
-        <Text style={[styles.rowTitle, danger && { color: colors.down }]}>
-          {title}
-        </Text>
+        <Text style={[styles.rowTitle, danger && { color: colors.down }]}>{title}</Text>
         {subtitle && (
-          <Text style={[styles.rowSub, warn && { color: colors.down }]}>
-            {subtitle}
-          </Text>
+          <Text style={[styles.rowSub, warn && { color: colors.down }]}>{subtitle}</Text>
         )}
       </View>
       {detail && (
         <View style={styles.rowDetail}>
-          {typeof detail === "string" ? (
-            <Text style={styles.rowDetailText}>{detail}</Text>
-          ) : (
-            detail
-          )}
+          {typeof detail === "string" ? <Text style={styles.rowDetailText}>{detail}</Text> : detail}
         </View>
       )}
-      {onPress && (
-        <Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} />
-      )}
+      {onPress && <Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} />}
     </Pressable>
   );
 }

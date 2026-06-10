@@ -75,10 +75,7 @@ function computeBudgetCap(plan: BudgetCurrent["plan"]): number | null {
   if (!plan) return null;
   if (typeof plan.totalAmount === "number") return plan.totalAmount;
   if (Array.isArray(plan.categoryAllocations)) {
-    const sum = plan.categoryAllocations.reduce(
-      (s, c) => s + Number(c.amount ?? 0),
-      0,
-    );
+    const sum = plan.categoryAllocations.reduce((s, c) => s + Number(c.amount ?? 0), 0);
     return sum > 0 ? sum : null;
   }
   return null;
@@ -147,7 +144,9 @@ export default function Home() {
   const [err, setErr] = useState<string | null>(null);
   const [backendUnavailable, setBackendUnavailable] = useState(false);
   const [budgetCurrent, setBudgetCurrent] = useState<BudgetCurrent | null>(null);
-  const [latestUnboundThread, setLatestUnboundThread] = useState<ChatThreadWithPreview | null>(null);
+  const [latestUnboundThread, setLatestUnboundThread] = useState<ChatThreadWithPreview | null>(
+    null,
+  );
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
   const [recentTxs, setRecentTxs] = useState<TransactionDTO[] | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
@@ -194,21 +193,15 @@ export default function Home() {
             // Threads are returned newest-first by lastMessageAt.
             const unbound = r.threads.find((t) => t.workspaceId === null) ?? null;
             setLatestUnboundThread(unbound);
-            setUnreadFina(
-              r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0),
-            );
+            setUnreadFina(r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0));
             // Threads are returned newest-first by lastMessageAt; the first
             // one with unread messages is what the Home action card opens.
-            setLatestUnreadThreadId(
-              r.threads.find((t) => (t.unreadCount ?? 0) > 0)?.id ?? null,
-            );
+            setLatestUnreadThreadId(r.threads.find((t) => (t.unreadCount ?? 0) > 0)?.id ?? null);
             // hasChatted = any thread (across all workspaces / unbound) has
             // a user-role first message preview — i.e. the user typed at
             // least once. Daily-brief threads carry only assistant messages
             // so firstMessagePreview stays null for them.
-            setHasChattedState(
-              r.threads.some((t) => t.firstMessagePreview !== null),
-            );
+            setHasChattedState(r.threads.some((t) => t.firstMessagePreview !== null));
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
@@ -239,9 +232,7 @@ export default function Home() {
           .then((r) => {
             if (runId !== loadRunId.current) return;
             // Surface all active goals for the overall progress card.
-            const active = r.goals.filter(
-              (g) => !(g as { archivedAt?: string | null }).archivedAt,
-            );
+            const active = r.goals.filter((g) => !(g as { archivedAt?: string | null }).archivedAt);
             setGoals(active);
             setHasGoal(r.goals.length > 0);
           })
@@ -261,9 +252,7 @@ export default function Home() {
             if (runId !== loadRunId.current) return;
             setNeedsReviewCount(0);
           }),
-        apiFetch<{ transactions: TransactionDTO[] }>(
-          `/workspaces/${wsId}/transactions?limit=3`,
-        )
+        apiFetch<{ transactions: TransactionDTO[] }>(`/workspaces/${wsId}/transactions?limit=3`)
           .then((r) => {
             if (runId !== loadRunId.current) return;
             setRecentTxs(r.transactions);
@@ -338,12 +327,17 @@ export default function Home() {
   );
 
   const greetingName =
-    session?.user && me?.user
-      ? displayName({ name: me.user.name, email: me.user.email })
-      : "";
+    session?.user && me?.user ? displayName({ name: me.user.name, email: me.user.email }) : "";
 
   const days = me?.trial?.endsAt ? trialDaysLeft(me.trial.endsAt) : null;
   const revertsTo = me ? trialRevertsTo(me) : null;
+  const pendingTier =
+    me?.subscription?.pendingTier && me.subscription.pendingTier !== me.subscription.tier
+      ? me.subscription.pendingTier
+      : null;
+  const pendingTierAt = pendingTier
+    ? formatShortDate(me?.subscription?.pendingTierAt ?? me?.subscription?.currentPeriodEnd)
+    : null;
 
   const insets = useSafeAreaInsets();
   const totalHeader = insets.top + HEADER_HEIGHT;
@@ -369,12 +363,9 @@ export default function Home() {
   const pct = cap && cap > 0 ? Math.min(999, (spentNum / cap) * 100) : 0;
   const over = pct > 100;
   const spentSplit = splitMoney(spentNum.toFixed(2));
-  const capDisplay =
-    cap !== null ? formatMoney(cap.toFixed(2), CURRENCY).display : null;
+  const capDisplay = cap !== null ? formatMoney(cap.toFixed(2), CURRENCY).display : null;
   const remainingDisplay =
-    remainingNum !== null
-      ? formatMoney(Math.abs(remainingNum).toFixed(2), CURRENCY).display
-      : null;
+    remainingNum !== null ? formatMoney(Math.abs(remainingNum).toFixed(2), CURRENCY).display : null;
 
   // ── Top categories (top 4 by spend) ────────────────────────
   const planAllocByCat = new Map<string, number>();
@@ -396,8 +387,7 @@ export default function Home() {
       p.errorCode === "PENDING_EXPIRATION",
   );
   const trialUrgent = !!(me?.trial?.active && days !== null && days <= 5);
-  const hasBudget =
-    budgetCurrent?.plan !== null && budgetCurrent?.plan !== undefined;
+  const hasBudget = budgetCurrent?.plan !== null && budgetCurrent?.plan !== undefined;
   const bankCount = plaidItems?.length ?? 0;
   // Effective tier: trial active grants Pro features regardless of base tier.
   const effectiveTier: Tier = me?.trial?.active ? "pro" : (me?.tier ?? "free");
@@ -406,9 +396,7 @@ export default function Home() {
   const goalsSavedTotal = goals.reduce((sum, goal) => sum + Number(goal.savedAmount), 0);
   const goalsTargetTotal = goals.reduce((sum, goal) => sum + Number(goal.targetAmount), 0);
   const goalsOverallPct =
-    goalsTargetTotal > 0
-      ? Math.min(100, (goalsSavedTotal / goalsTargetTotal) * 100)
-      : 0;
+    goalsTargetTotal > 0 ? Math.min(100, (goalsSavedTotal / goalsTargetTotal) * 100) : 0;
   // Has the user chatted at least once? See setHasChattedState above.
   const hasChatted = hasChattedState;
 
@@ -445,9 +433,7 @@ export default function Home() {
       // Open the most recent unread thread directly. Fall back to the
       // chat history if we somehow don't know which thread (shouldn't
       // happen — unreadFina > 0 implies at least one unread thread).
-      href: latestUnreadThreadId
-        ? `/(tabs)/chat?thread=${latestUnreadThreadId}`
-        : "/chats",
+      href: latestUnreadThreadId ? `/(tabs)/chat?thread=${latestUnreadThreadId}` : "/chats",
     });
   }
 
@@ -546,6 +532,12 @@ export default function Home() {
                 {tierLabel(revertsTo, false)} starts on {formatShortDate(me.trial.endsAt)}
               </Text>
             )}
+            {pendingTier && (
+              <Text style={styles.trialRevertText}>
+                {tierLabel(pendingTier, false)} scheduled
+                {pendingTierAt ? ` for ${pendingTierAt}` : ""}
+              </Text>
+            )}
           </View>
         )}
 
@@ -583,14 +575,9 @@ export default function Home() {
                     <Text style={styles.heroMetaText}>of {capDisplay} budget</Text>
                     <View style={styles.heroMetaDot} />
                     <Text
-                      style={[
-                        styles.heroMetaTextStrong,
-                        { color: over ? colors.down : colors.up },
-                      ]}
+                      style={[styles.heroMetaTextStrong, { color: over ? colors.down : colors.up }]}
                     >
-                      {over
-                        ? `${remainingDisplay} over`
-                        : `${remainingDisplay} left`}
+                      {over ? `${remainingDisplay} over` : `${remainingDisplay} left`}
                     </Text>
                   </View>
                 ) : (
@@ -612,17 +599,13 @@ export default function Home() {
                       />
                     </View>
                     <View style={styles.heroAxis}>
-                      <Text style={styles.heroAxisText}>
-                        {formatMonthDay(firstOfMonth)}
-                      </Text>
+                      <Text style={styles.heroAxisText}>{formatMonthDay(firstOfMonth)}</Text>
                       <Text style={styles.heroAxisDot}>·</Text>
                       <Text style={styles.heroAxisText}>
                         {daysLeftInMonth} day{daysLeftInMonth === 1 ? "" : "s"} left
                       </Text>
                       <Text style={styles.heroAxisDot}>·</Text>
-                      <Text style={styles.heroAxisText}>
-                        {formatMonthDay(lastOfMonth)}
-                      </Text>
+                      <Text style={styles.heroAxisText}>{formatMonthDay(lastOfMonth)}</Text>
                     </View>
                   </>
                 )}
@@ -651,9 +634,7 @@ export default function Home() {
               <Pressable
                 style={({ pressed }) => [styles.briefCard, pressed && { opacity: 0.85 }]}
                 onPress={() =>
-                  router.push(
-                    `/(tabs)/chat?thread=${latestUnboundThread.id}` as never,
-                  )
+                  router.push(`/(tabs)/chat?thread=${latestUnboundThread.id}` as never)
                 }
               >
                 <View style={styles.briefHead}>
@@ -686,11 +667,7 @@ export default function Home() {
                   )}
                   <View style={styles.briefCta}>
                     <Text style={styles.briefCtaText}>Open</Text>
-                    <Ionicons
-                      name="chevron-forward"
-                      size={14}
-                      color={colors.primary}
-                    />
+                    <Ionicons name="chevron-forward" size={14} color={colors.primary} />
                   </View>
                 </View>
               </Pressable>
@@ -737,7 +714,9 @@ export default function Home() {
               <Pressable
                 style={({ pressed }) => [{ marginTop: space.lg }, pressed && { opacity: 0.85 }]}
                 onPress={() => {
-                  const fallback = analysis.label ? parseYearMonthFromAnalysisLabel(analysis.label) : null;
+                  const fallback = analysis.label
+                    ? parseYearMonthFromAnalysisLabel(analysis.label)
+                    : null;
                   const hrefYear = analysis.year ?? fallback?.year;
                   const hrefMonth = analysis.month ?? fallback?.month;
                   const href =
@@ -786,7 +765,8 @@ export default function Home() {
                     {analysis.prevNet !== null && (
                       <Text style={styles.glanceTrend}>
                         vs {analysis.prevNet >= 0 ? "+" : "−"}
-                        {formatMoney(Math.abs(analysis.prevNet).toFixed(2), CURRENCY).display} last month
+                        {formatMoney(Math.abs(analysis.prevNet).toFixed(2), CURRENCY).display} last
+                        month
                       </Text>
                     )}
                   </View>
@@ -809,20 +789,13 @@ export default function Home() {
                     const meta = categoryMeta(cat);
                     const spent = Number(c.spent);
                     const catCap = planAllocByCat.get(c.categoryId) ?? null;
-                    const catPct =
-                      catCap && catCap > 0
-                        ? Math.min(999, (spent / catCap) * 100)
-                        : 0;
+                    const catPct = catCap && catCap > 0 ? Math.min(999, (spent / catCap) * 100) : 0;
                     const catOver = catPct > 100;
-                    const name =
-                      cat?.name ?? c.categoryName ?? "Uncategorized";
+                    const name = cat?.name ?? c.categoryName ?? "Uncategorized";
                     return (
                       <Pressable
                         key={c.categoryId}
-                        style={({ pressed }) => [
-                          styles.catRow,
-                          pressed && { opacity: 0.7 },
-                        ]}
+                        style={({ pressed }) => [styles.catRow, pressed && { opacity: 0.7 }]}
                         onPress={() => router.push("/budget" as never)}
                       >
                         <View style={[styles.catGlyph, { backgroundColor: meta.bg }]}>
@@ -833,12 +806,7 @@ export default function Home() {
                             <Text style={styles.catName} numberOfLines={1}>
                               {name}
                             </Text>
-                            <Text
-                              style={[
-                                styles.catAmount,
-                                catOver && { color: colors.down },
-                              ]}
-                            >
+                            <Text style={[styles.catAmount, catOver && { color: colors.down }]}>
                               {formatMoney(spent.toFixed(2), CURRENCY).display}
                             </Text>
                           </View>
@@ -850,9 +818,7 @@ export default function Home() {
                                     styles.catBarFill,
                                     {
                                       width: `${Math.min(100, catPct)}%`,
-                                      backgroundColor: catOver
-                                        ? colors.down
-                                        : colors.primary,
+                                      backgroundColor: catOver ? colors.down : colors.primary,
                                     },
                                   ]}
                                 />
@@ -862,9 +828,7 @@ export default function Home() {
                                   {Math.round(catPct)}% of{" "}
                                   {formatMoney(catCap.toFixed(2), CURRENCY).display}
                                 </Text>
-                                {catOver && (
-                                  <Text style={styles.catMetaOver}>Over</Text>
-                                )}
+                                {catOver && <Text style={styles.catMetaOver}>Over</Text>}
                               </View>
                             </>
                           )}
@@ -892,34 +856,24 @@ export default function Home() {
                       ? categories[firstAlloc.categoryId]
                       : null;
                     const isSplit = tx.allocations.length > 1;
-                    const merchant =
-                      tx.merchantNormalized || tx.merchantRaw || "—";
+                    const merchant = tx.merchantNormalized || tx.merchantRaw || "—";
                     const categoryLabel = isSplit
                       ? "Split"
-                      : firstAllocCat?.name ?? "Uncategorized";
+                      : (firstAllocCat?.name ?? "Uncategorized");
                     const meta = categoryMeta(firstAllocCat);
                     const money = formatMoney(tx.amount, tx.currency);
                     return (
                       <Pressable
                         key={tx.id}
-                        style={({ pressed }) => [
-                          styles.txRow,
-                          pressed && { opacity: 0.6 },
-                        ]}
-                        onPress={() =>
-                          router.push(`/transactions/${tx.id}` as never)
-                        }
+                        style={({ pressed }) => [styles.txRow, pressed && { opacity: 0.6 }]}
+                        onPress={() => router.push(`/transactions/${tx.id}` as never)}
                       >
                         <View style={[styles.txGlyph, { backgroundColor: meta.bg }]}>
                           <Ionicons name={meta.icon} size={18} color={meta.fg} />
                         </View>
                         <View style={styles.txMid}>
                           <View style={styles.txTitleLine}>
-                            <Text
-                              style={styles.txTitle}
-                              numberOfLines={1}
-                              ellipsizeMode="tail"
-                            >
+                            <Text style={styles.txTitle} numberOfLines={1} ellipsizeMode="tail">
                               {merchant}
                             </Text>
                             {tx.pending && (
@@ -933,18 +887,11 @@ export default function Home() {
                           </Text>
                         </View>
                         <View style={styles.txRight}>
-                          <Text
-                            style={[
-                              styles.txAmount,
-                              money.isIncome && { color: colors.up },
-                            ]}
-                          >
+                          <Text style={[styles.txAmount, money.isIncome && { color: colors.up }]}>
                             {money.isIncome ? "+" : "−"}
                             {money.display}
                           </Text>
-                          <Text style={styles.txTime}>
-                            {formatTime(tx.occurredAt)}
-                          </Text>
+                          <Text style={styles.txTime}>{formatTime(tx.occurredAt)}</Text>
                         </View>
                       </Pressable>
                     );

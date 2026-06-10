@@ -12,27 +12,39 @@ describe("trialRevertsTo", () => {
       trialRevertsTo({ trial: { active: true }, subscription: { tier: "max", pendingTier: null } }),
     ).toBe("max");
   });
-  it("follows pendingTier when a change is scheduled (max now, pro queued)", () => {
+  it("keeps current tier when a downgrade is scheduled (max now, pro queued)", () => {
     expect(
-      trialRevertsTo({ trial: { active: true }, subscription: { tier: "max", pendingTier: "pro" } }),
-    ).toBe("pro");
+      trialRevertsTo({
+        trial: { active: true },
+        subscription: { tier: "max", pendingTier: "pro" },
+      }),
+    ).toBe("max");
   });
   it("ignores a pendingTier equal to the current tier", () => {
     expect(
-      trialRevertsTo({ trial: { active: true }, subscription: { tier: "pro", pendingTier: "pro" } }),
+      trialRevertsTo({
+        trial: { active: true },
+        subscription: { tier: "pro", pendingTier: "pro" },
+      }),
     ).toBe("pro");
   });
-  it("returns max when an upgrade to max is scheduled during the trial", () => {
+  it("keeps current tier when an upgrade is scheduled during the trial", () => {
     expect(
-      trialRevertsTo({ trial: { active: true }, subscription: { tier: "pro", pendingTier: "max" } }),
-    ).toBe("max");
+      trialRevertsTo({
+        trial: { active: true },
+        subscription: { tier: "pro", pendingTier: "max" },
+      }),
+    ).toBe("pro");
   });
   it("trial + no sub → null", () => {
     expect(trialRevertsTo({ trial: { active: true }, subscription: null })).toBeNull();
   });
   it("no trial → null", () => {
     expect(
-      trialRevertsTo({ trial: { active: false }, subscription: { tier: "pro", pendingTier: null } }),
+      trialRevertsTo({
+        trial: { active: false },
+        subscription: { tier: "pro", pendingTier: null },
+      }),
     ).toBeNull();
   });
 });

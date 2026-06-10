@@ -119,9 +119,12 @@ describe("POST /billing/iap/checkout", () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.tier).toBe("pro");
+    expect(body.tier).toBe("max");
+    expect(body.trial.active).toBe(false);
     expect(body.subscription.tier).toBe("max");
     expect(body.subscription.source).toBe("iap_apple");
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(user.trialConsumed).toBe(true);
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
   });
 
@@ -151,8 +154,6 @@ describe("POST /billing/iap/checkout", () => {
 describe("POST /billing/iap/restore", () => {
   it("partial success — skips failures, returns MeDTO", async () => {
     const { cookie, userId } = await signUpAndGetCookie(app, { email: "u5@test.com" });
-    // Expire the trial so computeEffectiveTier falls through to the subscription tier.
-    await prisma.user.update({ where: { id: userId }, data: { trialEndsAt: null } });
     fakeAppleClient.verifyAndDecodeTransaction.mockImplementation(async (jws: string) => {
       if (jws === "ok")
         return {
@@ -185,7 +186,9 @@ describe("POST /billing/iap/restore", () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json().tier).toBe("pro");
+    const body = res.json();
+    expect(body.tier).toBe("pro");
+    expect(body.trial.active).toBe(false);
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledTimes(1);
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
   });

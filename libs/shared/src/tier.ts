@@ -62,9 +62,10 @@ export function trialDaysLeft(endsAt: string | Date | null | undefined): number 
   return Math.ceil(ms / (24 * 60 * 60 * 1000));
 }
 
-/** The paid tier that starts when the active Pro trial ends. Returns the
- *  sub's tier — or its scheduled pendingTier when a change is queued. Returns
- *  null when not in a trial or no standing sub is on file.
+/** The paid tier currently on file while an active Pro trial is running.
+ *  Scheduled changes remain on MeDTO.subscription.pendingTier and should be
+ *  displayed separately so "Max now, Pro queued" doesn't collapse into
+ *  "Pro starts when the trial ends."
  *  Param/return are PaidTier (exactly MeDTO.subscription's shape) — a standing
  *  sub is never `free`. */
 export function trialRevertsTo(me: {
@@ -72,7 +73,5 @@ export function trialRevertsTo(me: {
   subscription: { tier: PaidTier; pendingTier: PaidTier | null } | null;
 }): PaidTier | null {
   if (!me.trial.active || !me.subscription) return null;
-  const s = me.subscription;
-  const next = s.pendingTier && s.pendingTier !== s.tier ? s.pendingTier : s.tier;
-  return next;
+  return me.subscription.tier;
 }

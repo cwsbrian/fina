@@ -36,7 +36,9 @@ function validateAppleRoots(): void {
     try {
       cert = new X509Certificate(pem);
     } catch (e) {
-      throw new Error(`APPLE_ROOT_CERTS contains an unparseable certificate: ${(e as Error).message}`);
+      throw new Error(
+        `APPLE_ROOT_CERTS contains an unparseable certificate: ${(e as Error).message}`,
+      );
     }
     const spki = cert.publicKey.export({ type: "spki", format: "der" }) as Buffer;
     const spkiHash = createHash("sha256").update(spki).digest("hex");
@@ -54,7 +56,7 @@ export type VerifiedAppleTransaction = {
   bundleId: string;
   environment: "Sandbox" | "Production";
   signedDate: number;
-  appAccountToken: string;
+  appAccountToken: string | null;
   productId: string;
   originalTransactionId: string;
   transactionId: string;
@@ -117,9 +119,12 @@ export class AppleClient {
     return decoded as unknown as Record<string, unknown>;
   }
 
-  /** Verifies a SignedTransaction JWS through six mandatory checks
-   *  (alg, root chain, bundleId, environment, signedDate window,
-   *  appAccountToken). Fails closed with HttpError on any failure. */
+  /** Verifies a SignedTransaction JWS through mandatory checks
+   *  (alg, root chain, bundleId, environment, signedDate window).
+   *  appAccountToken remains mandatory for app-initiated checkout and
+   *  ASSN attribution, but restore/ASC status payloads can legitimately
+   *  come from subscriptions created in Apple's native management surface
+   *  where our appAccountToken was never attached. */
   async verifyAndDecodeTransaction(
     jws: string,
     opts: { context?: VerifyContext } = {},
@@ -157,8 +162,11 @@ export class AppleClient {
       throw new HttpError(400, "expired_receipt", "signedDate outside acceptable window");
     }
 
-    const appAccountToken = raw.appAccountToken;
-    if (typeof appAccountToken !== "string" || appAccountToken.length === 0) {
+    const appAccountToken =
+      typeof raw.appAccountToken === "string" && raw.appAccountToken.length > 0
+        ? raw.appAccountToken
+        : null;
+    if (!appAccountToken && opts.context !== "restore" && opts.context !== "asc-api") {
       throw new HttpError(403, "user_mismatch", "appAccountToken absent on verified transaction");
     }
 
@@ -187,13 +195,16 @@ export class AppleClient {
     signedRenewalInfoJws?: string;
     raw: Record<string, unknown>;
   }> {
-    const decoded = await this.verifier
-      .verifyAndDecodeNotification(signedPayload)
-      .catch((e) => {
-        throw new HttpError(400, "invalid_receipt", `apple notification verify failed: ${e?.name ?? "error"}`);
-      });
+    const decoded = await this.verifier.verifyAndDecodeNotification(signedPayload).catch((e) => {
+      throw new HttpError(
+        400,
+        "invalid_receipt",
+        `apple notification verify failed: ${e?.name ?? "error"}`,
+      );
+    });
     const data = ((decoded as any).data ?? {}) as Record<string, unknown>;
-    const subtype = typeof (decoded as any).subtype === "string" ? (decoded as any).subtype : undefined;
+    const subtype =
+      typeof (decoded as any).subtype === "string" ? (decoded as any).subtype : undefined;
     const signedRenewalInfoJws =
       typeof data.signedRenewalInfo === "string" ? data.signedRenewalInfo : undefined;
     return {
@@ -210,11 +221,13 @@ export class AppleClient {
    *  verifyAndDecodeTransaction — renewal-info payloads have their
    *  own claim set (autoRenewProductId, offerType, autoRenewStatus). */
   async verifyAndDecodeRenewalInfo(jws: string): Promise<Record<string, unknown>> {
-    return (await this.verifier
-      .verifyAndDecodeRenewalInfo(jws)
-      .catch((e) => {
-        throw new HttpError(400, "invalid_receipt", `apple renewal verify failed: ${e?.name ?? "error"}`);
-      })) as unknown as Record<string, unknown>;
+    return (await this.verifier.verifyAndDecodeRenewalInfo(jws).catch((e) => {
+      throw new HttpError(
+        400,
+        "invalid_receipt",
+        `apple renewal verify failed: ${e?.name ?? "error"}`,
+      );
+    })) as unknown as Record<string, unknown>;
   }
 
   /** Fetches the latest subscription state from ASC API by
@@ -227,21 +240,20 @@ export class AppleClient {
     pendingAt: Date | null;
     mapped: MappedStatus;
   }> {
-    const status = await this.asc
-      .getAllSubscriptionStatuses(originalTransactionId)
-      .catch((e) => {
-        throw new HttpError(502, "platform_unavailable", `asc api: ${describeAppleApiError(e)}`);
-      });
+    const status = await this.asc.getAllSubscriptionStatuses(originalTransactionId).catch((e) => {
+      throw new HttpError(502, "platform_unavailable", `asc api: ${describeAppleApiError(e)}`);
+    });
     const item = status.data?.[0]?.lastTransactions?.[0];
     if (!item) throw new HttpError(400, "invalid_receipt", "asc no transaction");
 
     // Decode each inner JWS through its DEDICATED Apple SDK verifier —
     // signedTransactionInfo through the transaction verifier (which
-    // re-runs the 6 checks: alg, root, bundleId, environment,
-    // signedDate, appAccountToken — defense-in-depth), and
+    // re-runs root/bundle/environment/signedDate checks), and
     // signedRenewalInfo through the renewal-info verifier (different
     // payload shape: autoRenewStatus, offerType, autoRenewProductId).
-    const verifiedTx = await this.verifyAndDecodeTransaction(item.signedTransactionInfo!, { context: "asc-api" });
+    const verifiedTx = await this.verifyAndDecodeTransaction(item.signedTransactionInfo!, {
+      context: "asc-api",
+    });
     const renewal = await this.verifyAndDecodeRenewalInfo(item.signedRenewalInfo!);
 
     const autoRenewStatus = (renewal.autoRenewStatus as 0 | 1) ?? 1;
@@ -270,17 +282,26 @@ export class AppleClient {
   }
 }
 
-function appleStatusFromCode(code: number): "SUBSCRIBED" | "BILLING_RETRY" | "EXPIRED" | "REVOKED" | "PAUSED" {
+function appleStatusFromCode(
+  code: number,
+): "SUBSCRIBED" | "BILLING_RETRY" | "EXPIRED" | "REVOKED" | "PAUSED" {
   // Apple's status enum: 1=active, 2=expired, 3=billing retry,
   //                      4=grace, 5=revoked. (Family Sharing handled
   //                      in the webhook subtype path, not here.)
   switch (code) {
-    case 1: return "SUBSCRIBED";
-    case 2: return "EXPIRED";
-    case 3: return "BILLING_RETRY";
-    case 4: return "BILLING_RETRY"; // grace is part of past_due window
-    case 5: return "REVOKED";
-    case 6: return "PAUSED";
-    default: return "EXPIRED";
+    case 1:
+      return "SUBSCRIBED";
+    case 2:
+      return "EXPIRED";
+    case 3:
+      return "BILLING_RETRY";
+    case 4:
+      return "BILLING_RETRY"; // grace is part of past_due window
+    case 5:
+      return "REVOKED";
+    case 6:
+      return "PAUSED";
+    default:
+      return "EXPIRED";
   }
 }

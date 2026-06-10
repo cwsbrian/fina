@@ -1,6 +1,6 @@
 import { prisma } from "../db.js";
 import { HttpError } from "../auth/context.js";
-import { tierForIapProductId } from "@fina/shared";
+import { ACTIVE_SUBSCRIPTION_STATUSES, tierForIapProductId } from "@fina/shared";
 import type { AppleClient } from "./apple-client.js";
 import type { GoogleClient } from "./google-client.js";
 import type { IapConfig } from "./env-guard.js";
@@ -49,21 +49,43 @@ export async function syncSubscriptionFromIAP(
   return syncGoogle(cfg, args, deps);
 }
 
-async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: SyncDeps): Promise<void> {
+const ACTIVE_IAP_STATUSES = new Set<string>(ACTIVE_SUBSCRIPTION_STATUSES);
+
+function consumeTrialForActiveIapStatus(
+  status: string,
+): { trialEndsAt: Date; trialConsumed: true } | {} {
+  if (!ACTIVE_IAP_STATUSES.has(status)) return {};
+  return { trialEndsAt: new Date(), trialConsumed: true };
+}
+
+async function syncApple(
+  _cfg: Partial<IapConfig>,
+  args: SyncArgsApple,
+  deps: SyncDeps,
+): Promise<void> {
   const context =
-    args.context === "assn"
-      ? "assn"
-      : args.context === "restore"
-        ? "restore"
-        : "checkout";
+    args.context === "assn" ? "assn" : args.context === "restore" ? "restore" : "checkout";
   const verified = await deps.appleClient!.verifyAndDecodeTransaction(args.receipt, { context });
 
-  if (args.expectedAppAccountToken && args.expectedAppAccountToken !== verified.appAccountToken) {
+  const isRestore = context === "restore";
+  const appAccountTokenMismatch = Boolean(
+    args.expectedAppAccountToken &&
+    verified.appAccountToken &&
+    args.expectedAppAccountToken !== verified.appAccountToken,
+  );
+  const allowUnboundNativeRestore = isRestore && !verified.appAccountToken;
+  if (
+    args.expectedAppAccountToken &&
+    args.expectedAppAccountToken !== verified.appAccountToken &&
+    !allowUnboundNativeRestore &&
+    !isRestore
+  ) {
     throw new HttpError(403, "user_mismatch", "appAccountToken mismatch");
   }
 
   const verifiedTier = tierForIapProductId(verified.productId);
-  if (!verifiedTier) throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
+  if (!verifiedTier)
+    throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
   const status = await deps.appleClient!.getSubscriptionStatus(verified.originalTransactionId);
   // Restore/already-owned paths can hand us an older transaction JWS. ASC is
   // the source of truth for the subscription group's current product.
@@ -73,6 +95,27 @@ async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: Sy
   const pendingTierAt = pendingTier ? (status.pendingAt ?? status.expiresDate) : null;
 
   await prisma.$transaction(async (tx) => {
+    if (appAccountTokenMismatch && verified.appAccountToken) {
+      const boundUser = await tx.user.findUnique({
+        where: { iapAppleAccountToken: verified.appAccountToken },
+        select: { id: true },
+      });
+      if (boundUser && boundUser.id !== args.userId) {
+        throw new HttpError(403, "user_mismatch", "appAccountToken belongs to another user");
+      }
+    }
+    const existingSub = await tx.subscription.findUnique({
+      where: {
+        source_sourceSubscriptionId: {
+          source: "iap_apple",
+          sourceSubscriptionId: verified.originalTransactionId,
+        },
+      },
+      select: { userId: true },
+    });
+    if (existingSub && existingSub.userId !== args.userId) {
+      throw new HttpError(403, "user_mismatch", "subscription belongs to another user");
+    }
     await tx.subscription.upsert({
       where: {
         source_sourceSubscriptionId: {
@@ -104,17 +147,32 @@ async function syncApple(_cfg: Partial<IapConfig>, args: SyncArgsApple, deps: Sy
         environment: verified.environment,
       },
     });
+    const userData: {
+      iapAppleAccountToken?: string;
+      trialEndsAt?: Date;
+      trialConsumed?: true;
+    } = {
+      ...consumeTrialForActiveIapStatus(status.mapped.status),
+    };
+    if (verified.appAccountToken) userData.iapAppleAccountToken = verified.appAccountToken;
     await tx.user.updateMany({
       where: { id: args.userId },
-      data: { iapAppleAccountToken: verified.appAccountToken },
+      data: userData,
     });
   });
 }
 
-async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: SyncDeps): Promise<void> {
+async function syncGoogle(
+  _cfg: Partial<IapConfig>,
+  args: SyncArgsGoogle,
+  deps: SyncDeps,
+): Promise<void> {
   const v2 = await deps.googleClient!.fetchAndNormalize(args.receipt);
 
-  if (args.expectedObfuscatedAccountId && args.expectedObfuscatedAccountId !== v2.obfuscatedExternalAccountId) {
+  if (
+    args.expectedObfuscatedAccountId &&
+    args.expectedObfuscatedAccountId !== v2.obfuscatedExternalAccountId
+  ) {
     throw new HttpError(403, "user_mismatch", "obfuscatedExternalAccountId mismatch");
   }
 
@@ -139,7 +197,13 @@ async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: 
         },
       });
       if (updated.count > 0) {
-        await tx.user.updateMany({ where: { id: args.userId }, data: { iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId } });
+        await tx.user.updateMany({
+          where: { id: args.userId },
+          data: {
+            iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId,
+            ...consumeTrialForActiveIapStatus(v2.mapped.status),
+          },
+        });
         return;
       }
     }
@@ -176,7 +240,10 @@ async function syncGoogle(_cfg: Partial<IapConfig>, args: SyncArgsGoogle, deps: 
     });
     await tx.user.updateMany({
       where: { id: args.userId },
-      data: { iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId },
+      data: {
+        iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId,
+        ...consumeTrialForActiveIapStatus(v2.mapped.status),
+      },
     });
   });
 

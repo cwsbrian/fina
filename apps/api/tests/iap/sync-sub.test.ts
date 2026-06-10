@@ -14,8 +14,20 @@ const fakeGoogleClient: any = {
 };
 
 const cfg = {
-  apple: { bundleId: "com.fina.app", env: "sandbox" as const, ascIssuerId: "i", ascKeyId: "k", ascPrivateKey: "p" },
-  google: { packageName: "app.fina", serviceAccount: {} as any, pubsubVerifyAudience: "a", pubsubVerifyEmail: "e", pubsubSubscriptionName: "s" },
+  apple: {
+    bundleId: "com.fina.app",
+    env: "sandbox" as const,
+    ascIssuerId: "i",
+    ascKeyId: "k",
+    ascPrivateKey: "p",
+  },
+  google: {
+    packageName: "app.fina",
+    serviceAccount: {} as any,
+    pubsubVerifyAudience: "a",
+    pubsubVerifyEmail: "e",
+    pubsubSubscriptionName: "s",
+  },
 };
 
 describe("syncSubscriptionFromIAP — Apple checkout path", () => {
@@ -27,7 +39,8 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
 
   it("upserts Subscription + writes User.iapAppleAccountToken on success", async () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
-      bundleId: "com.fina.app", environment: "Sandbox",
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
       signedDate: Date.now(),
       appAccountToken: deriveAppleToken("u1"),
       productId: "max_monthly",
@@ -44,12 +57,16 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
 
-    await syncSubscriptionFromIAP(cfg, {
-      platform: "ios",
-      receipt: "jws",
-      userId: "u1",
-      expectedAppAccountToken: deriveAppleToken("u1"),
-    }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "jws",
+        userId: "u1",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
 
     const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
     expect(sub).not.toBeNull();
@@ -64,9 +81,48 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     expect(user!.iapAppleAccountToken).toBe(deriveAppleToken("u1"));
   });
 
+  it("consumes the app trial when Apple sync confirms an active subscription", async () => {
+    const futureTrialEnd = new Date(Date.now() + 7 * 86400_000);
+    await prisma.user.update({
+      where: { id: "u1" },
+      data: { trialStartedAt: new Date(), trialEndsAt: futureTrialEnd, trialConsumed: false },
+    });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: deriveAppleToken("u1"),
+      productId: "max_monthly",
+      originalTransactionId: "OT-trial",
+      transactionId: "T-trial",
+      raw: {},
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "jws",
+        userId: "u1",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: "u1" } });
+    expect(user.trialConsumed).toBe(true);
+    expect(user.trialEndsAt!.getTime()).toBeLessThan(futureTrialEnd.getTime());
+  });
+
   it("403 user_mismatch when verified appAccountToken disagrees with expected", async () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
-      bundleId: "com.fina.app", environment: "Sandbox",
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
       signedDate: Date.now(),
       appAccountToken: deriveAppleToken("OTHER-USER"),
       productId: "max_monthly",
@@ -76,20 +132,28 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     });
 
     await expect(
-      syncSubscriptionFromIAP(cfg, {
-        platform: "ios", receipt: "jws", userId: "u1",
-        expectedAppAccountToken: deriveAppleToken("u1"),
-      }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient }),
+      syncSubscriptionFromIAP(
+        cfg,
+        {
+          platform: "ios",
+          receipt: "jws",
+          userId: "u1",
+          expectedAppAccountToken: deriveAppleToken("u1"),
+        },
+        { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+      ),
     ).rejects.toMatchObject({ code: "user_mismatch", statusCode: 403 });
   });
 
   it("derives tier from latest ASC status productId, not stale receipt or request body", async () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
-      bundleId: "com.fina.app", environment: "Production",
+      bundleId: "com.fina.app",
+      environment: "Production",
       signedDate: Date.now(),
       appAccountToken: deriveAppleToken("u1"),
       productId: "fina_pro_monthly",
-      originalTransactionId: "OT-2", transactionId: "T-2",
+      originalTransactionId: "OT-2",
+      transactionId: "T-2",
       raw: {},
     });
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
@@ -97,11 +161,17 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
       productId: "max_monthly",
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
-    await syncSubscriptionFromIAP(cfg, {
-      platform: "ios", receipt: "jws", userId: "u1",
-      productId: "max_monthly",
-      expectedAppAccountToken: deriveAppleToken("u1"),
-    }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "jws",
+        userId: "u1",
+        productId: "max_monthly",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
 
     const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
     expect(sub!.tier).toBe("max");
@@ -109,7 +179,8 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
 
   it("uses restore verification context for Apple restore", async () => {
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
-      bundleId: "com.fina.app", environment: "Sandbox",
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
       signedDate: Date.now() - 30 * 86400_000,
       appAccountToken: deriveAppleToken("u1"),
       productId: "max_monthly",
@@ -123,18 +194,142 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
       mapped: { status: "active", cancelAtPeriodEnd: false },
     });
 
-    await syncSubscriptionFromIAP(cfg, {
-      platform: "ios",
-      receipt: "old-restore-jws",
-      userId: "u1",
-      expectedAppAccountToken: deriveAppleToken("u1"),
-      context: "restore",
-    }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
-
-    expect(fakeAppleClient.verifyAndDecodeTransaction).toHaveBeenCalledWith(
-      "old-restore-jws",
-      { context: "restore" },
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "old-restore-jws",
+        userId: "u1",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+        context: "restore",
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
     );
+
+    expect(fakeAppleClient.verifyAndDecodeTransaction).toHaveBeenCalledWith("old-restore-jws", {
+      context: "restore",
+    });
+  });
+
+  it("allows Apple restore to claim an unbound subscription with an old appAccountToken", async () => {
+    const oldToken = deriveAppleToken("OLD-USER");
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: oldToken,
+      productId: "max_monthly",
+      originalTransactionId: "OT-old-token-restore",
+      transactionId: "T-old-token-restore",
+      raw: {},
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "old-token-restore-jws",
+        userId: "u1",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+        context: "restore",
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+
+    const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
+    expect(sub!.tier).toBe("max");
+    expect(sub!.sourceSubscriptionId).toBe("OT-old-token-restore");
+    expect(sub!.sourceCustomerId).toBe(oldToken);
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: "u1" } });
+    expect(user.iapAppleAccountToken).toBe(oldToken);
+  });
+
+  it("rejects Apple restore when the old appAccountToken is bound to another user", async () => {
+    const oldToken = deriveAppleToken("OLD-USER");
+    await prisma.user.create({
+      data: { id: "u2", email: "u2@test", iapAppleAccountToken: oldToken },
+    });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: oldToken,
+      productId: "max_monthly",
+      originalTransactionId: "OT-bound-token-restore",
+      transactionId: "T-bound-token-restore",
+      raw: {},
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await expect(
+      syncSubscriptionFromIAP(
+        cfg,
+        {
+          platform: "ios",
+          receipt: "bound-token-restore-jws",
+          userId: "u1",
+          expectedAppAccountToken: deriveAppleToken("u1"),
+          context: "restore",
+        },
+        { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+      ),
+    ).rejects.toMatchObject({ code: "user_mismatch", statusCode: 403 });
+  });
+
+  it("restores a native Apple subscription without appAccountToken for the signed-in user", async () => {
+    const futureTrialEnd = new Date(Date.now() + 7 * 86400_000);
+    await prisma.user.update({
+      where: { id: "u1" },
+      data: { trialStartedAt: new Date(), trialEndsAt: futureTrialEnd, trialConsumed: false },
+    });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: null,
+      productId: "max_monthly",
+      originalTransactionId: "OT-native-restore",
+      transactionId: "T-native-restore",
+      raw: {},
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "native-restore-jws",
+        userId: "u1",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+        context: "restore",
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+
+    const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
+    expect(sub!.source).toBe("iap_apple");
+    expect(sub!.sourceSubscriptionId).toBe("OT-native-restore");
+    expect(sub!.tier).toBe("max");
+    expect(sub!.sourceCustomerId).toBeNull();
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: "u1" } });
+    expect(user.iapAppleAccountToken).toBeNull();
+    expect(user.trialConsumed).toBe(true);
+    expect(user.trialEndsAt!.getTime()).toBeLessThan(futureTrialEnd.getTime());
   });
 });
 
@@ -161,10 +356,16 @@ describe("syncSubscriptionFromIAP — Google checkout path", () => {
     });
     fakeGoogleClient.acknowledgeIfPending.mockResolvedValue(true);
 
-    await syncSubscriptionFromIAP(cfg, {
-      platform: "android", receipt: "pt-1", userId: "u1",
-      expectedObfuscatedAccountId: deriveGoogleToken("u1"),
-    }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "android",
+        receipt: "pt-1",
+        userId: "u1",
+        expectedObfuscatedAccountId: deriveGoogleToken("u1"),
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
 
     const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
     expect(sub!.source).toBe("iap_google");
@@ -187,29 +388,44 @@ describe("syncSubscriptionFromIAP — Google checkout path", () => {
       subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
       productId: "max_monthly",
       expiryTime: new Date(Date.now() + 30 * 86400_000),
-      linkedPurchaseToken: null, environment: "Production",
+      linkedPurchaseToken: null,
+      environment: "Production",
       mapped: { status: "active", cancelAtPeriodEnd: false },
       raw: {},
     });
     fakeGoogleClient.acknowledgeIfPending.mockImplementation(async () => {
       order.push("ack");
     });
-    await syncSubscriptionFromIAP(cfg, {
-      platform: "android", receipt: "pt-2", userId: "u1",
-      expectedObfuscatedAccountId: deriveGoogleToken("u1"),
-    }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
-    const sub = await prisma.subscription.findFirst({ where: { userId: "u1", sourceSubscriptionId: "pt-2" } });
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "android",
+        receipt: "pt-2",
+        userId: "u1",
+        expectedObfuscatedAccountId: deriveGoogleToken("u1"),
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+    const sub = await prisma.subscription.findFirst({
+      where: { userId: "u1", sourceSubscriptionId: "pt-2" },
+    });
     expect(sub).not.toBeNull();
     expect(order).toEqual(["ack"]);
   });
 
   it("rewrites existing row on linkedPurchaseToken chain", async () => {
-    await prisma.subscription.create({ data: {
-      userId: "u1", tier: "pro", source: "iap_google",
-      sourceSubscriptionId: "pt-old", sourceCustomerId: deriveGoogleToken("u1"),
-      status: "active", currentPeriodEnd: new Date(Date.now() + 30*86400_000),
-      environment: "Production",
-    } });
+    await prisma.subscription.create({
+      data: {
+        userId: "u1",
+        tier: "pro",
+        source: "iap_google",
+        sourceSubscriptionId: "pt-old",
+        sourceCustomerId: deriveGoogleToken("u1"),
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Production",
+      },
+    });
 
     fakeGoogleClient.fetchAndNormalize.mockResolvedValue({
       obfuscatedExternalAccountId: deriveGoogleToken("u1"),
@@ -223,10 +439,16 @@ describe("syncSubscriptionFromIAP — Google checkout path", () => {
       raw: {},
     });
 
-    await syncSubscriptionFromIAP(cfg, {
-      platform: "android", receipt: "pt-new", userId: "u1",
-      expectedObfuscatedAccountId: deriveGoogleToken("u1"),
-    }, { appleClient: fakeAppleClient, googleClient: fakeGoogleClient });
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "android",
+        receipt: "pt-new",
+        userId: "u1",
+        expectedObfuscatedAccountId: deriveGoogleToken("u1"),
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
 
     const all = await prisma.subscription.findMany({ where: { userId: "u1" } });
     expect(all.length).toBe(1);

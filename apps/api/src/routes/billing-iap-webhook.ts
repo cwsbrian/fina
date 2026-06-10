@@ -22,17 +22,13 @@ async function reconcilePlaidItemsForWebhook(app: FastifyInstance, userId: strin
 export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<void> {
   // Override the JSON parser to give us the raw buffer, then parse manually.
   // Scoped to this plugin's encapsulation context — does NOT affect other routes.
-  app.addContentTypeParser(
-    "application/json",
-    { parseAs: "buffer" },
-    (_req, body, done) => {
-      try {
-        done(null, JSON.parse((body as Buffer).toString("utf8")));
-      } catch (e) {
-        done(e as Error, undefined);
-      }
-    },
-  );
+  app.addContentTypeParser("application/json", { parseAs: "buffer" }, (_req, body, done) => {
+    try {
+      done(null, JSON.parse((body as Buffer).toString("utf8")));
+    } catch (e) {
+      done(e as Error, undefined);
+    }
+  });
 
   let cached: {
     cfg: ReturnType<typeof requireIapEnv>;
@@ -77,7 +73,10 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         notification.notificationType === "DID_CHANGE_RENEWAL_STATUS" &&
         notification.subtype === "PRODUCT_NOT_FOR_SALE"
       ) {
-        const verifiedTx = await appleClient.verifyAndDecodeTransaction(notification.signedTransactionJws, { context: "assn" });
+        const verifiedTx = await appleClient.verifyAndDecodeTransaction(
+          notification.signedTransactionJws,
+          { context: "assn" },
+        );
         const sub = await prisma.subscription.findFirst({
           where: { source: "iap_apple", sourceSubscriptionId: verifiedTx.originalTransactionId },
           select: { id: true, userId: true },
@@ -89,11 +88,19 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
           });
           await reconcilePlaidItemsForWebhook(app, sub.userId);
         }
-        await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: "family_sharing_revoked" } });
+        await prisma.webhookEvent.create({
+          data: { id: eventId, source: "iap_apple", type: "family_sharing_revoked" },
+        });
         return { ok: true };
       }
 
-      const verifiedTx = await appleClient.verifyAndDecodeTransaction(notification.signedTransactionJws, { context: "assn" });
+      const verifiedTx = await appleClient.verifyAndDecodeTransaction(
+        notification.signedTransactionJws,
+        { context: "assn" },
+      );
+      if (!verifiedTx.appAccountToken) {
+        throw new HttpError(403, "user_mismatch", "appAccountToken absent on Apple notification");
+      }
       const bindingHash = hashBindingToken(verifiedTx.appAccountToken);
 
       // 4-step userId resolution
@@ -107,7 +114,9 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
 
       // Step 2: user binding via iapAppleAccountToken
       if (!userId) {
-        const user = await prisma.user.findUnique({ where: { iapAppleAccountToken: verifiedTx.appAccountToken } });
+        const user = await prisma.user.findUnique({
+          where: { iapAppleAccountToken: verifiedTx.appAccountToken },
+        });
         if (user) userId = user.id;
       }
 
@@ -118,7 +127,12 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         });
         if (tombstone) {
           await prisma.webhookEvent.create({
-            data: { id: eventId, source: "iap_apple", type: "unattributable_after_delete", body: { tokenHash: bindingHash } as any },
+            data: {
+              id: eventId,
+              source: "iap_apple",
+              type: "unattributable_after_delete",
+              body: { tokenHash: bindingHash } as any,
+            },
           });
           return reply.code(200).send({ ok: true });
         }
@@ -133,22 +147,33 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         });
         if (counter.attempts > MAX_UNKNOWN_RETRIES) {
           await prisma.webhookEvent.create({
-            data: { id: eventId, source: "iap_apple", type: "unattributable_giveup", body: { tokenHash: bindingHash, attempts: counter.attempts } as any },
+            data: {
+              id: eventId,
+              source: "iap_apple",
+              type: "unattributable_giveup",
+              body: { tokenHash: bindingHash, attempts: counter.attempts } as any,
+            },
           });
           return reply.code(200).send({ ok: true });
         }
         return reply.code(500).send({ error: "user_unknown" });
       }
 
-      await syncSubscriptionFromIAP(cfg, {
-        platform: "ios",
-        receipt: notification.signedTransactionJws,
-        userId,
-        context: "assn",
-      }, { appleClient, googleClient });
+      await syncSubscriptionFromIAP(
+        cfg,
+        {
+          platform: "ios",
+          receipt: notification.signedTransactionJws,
+          userId,
+          context: "assn",
+        },
+        { appleClient, googleClient },
+      );
       await reconcilePlaidItemsForWebhook(app, userId);
 
-      await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_apple", type: notification.notificationType } });
+      await prisma.webhookEvent.create({
+        data: { id: eventId, source: "iap_apple", type: notification.notificationType },
+      });
       return reply.code(200).send({ ok: true });
     } catch (e) {
       if (e instanceof HttpError && e.statusCode === 400) {
@@ -174,7 +199,9 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       if (existing) return { ok: true };
 
       if (note.kind === "ignore") {
-        await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: `ignored_${note.reason}` } });
+        await prisma.webhookEvent.create({
+          data: { id: eventId, source: "iap_google", type: `ignored_${note.reason}` },
+        });
         return { ok: true };
       }
 
@@ -194,7 +221,9 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
         const bindingHash = hashBindingToken(v2.obfuscatedExternalAccountId);
 
         // Step 2: user binding via iapGoogleObfuscatedId
-        const user = await prisma.user.findUnique({ where: { iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId } });
+        const user = await prisma.user.findUnique({
+          where: { iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId },
+        });
         if (user) userId = user.id;
 
         // Step 3: IapDeletedBinding tombstone
@@ -204,7 +233,12 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
           });
           if (tombstone) {
             await prisma.webhookEvent.create({
-              data: { id: eventId, source: "iap_google", type: "unattributable_after_delete", body: { tokenHash: bindingHash } as any },
+              data: {
+                id: eventId,
+                source: "iap_google",
+                type: "unattributable_after_delete",
+                body: { tokenHash: bindingHash } as any,
+              },
             });
             return reply.code(200).send({ ok: true });
           }
@@ -219,7 +253,12 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
           });
           if (counter.attempts > MAX_UNKNOWN_RETRIES) {
             await prisma.webhookEvent.create({
-              data: { id: eventId, source: "iap_google", type: "unattributable_giveup", body: { tokenHash: bindingHash, attempts: counter.attempts } as any },
+              data: {
+                id: eventId,
+                source: "iap_google",
+                type: "unattributable_giveup",
+                body: { tokenHash: bindingHash, attempts: counter.attempts } as any,
+              },
             });
             return reply.code(200).send({ ok: true });
           }
@@ -228,15 +267,21 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       }
 
       // userId resolved — proceed with sync.
-      await syncSubscriptionFromIAP(cfg, {
-        platform: "android",
-        receipt: note.payload.purchaseToken,
-        userId,
-        context: "rtdn",
-      }, { appleClient, googleClient });
+      await syncSubscriptionFromIAP(
+        cfg,
+        {
+          platform: "android",
+          receipt: note.payload.purchaseToken,
+          userId,
+          context: "rtdn",
+        },
+        { appleClient, googleClient },
+      );
       await reconcilePlaidItemsForWebhook(app, userId);
 
-      await prisma.webhookEvent.create({ data: { id: eventId, source: "iap_google", type: `notif_${note.payload.notificationType}` } });
+      await prisma.webhookEvent.create({
+        data: { id: eventId, source: "iap_google", type: `notif_${note.payload.notificationType}` },
+      });
       return reply.code(200).send({ ok: true });
     } catch (e) {
       if (e instanceof HttpError && e.statusCode === 400) {

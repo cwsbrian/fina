@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
 import { buildApp } from "../../src/server.js";
 import { prisma } from "../../src/db.js";
 import { truncateAll } from "../helpers/db.js";
@@ -8,7 +9,9 @@ import { deriveAppleToken, deriveGoogleToken, hashBindingToken } from "../../src
 vi.mock("../../src/plaid/reconcile.js", () => ({
   reconcilePlaidItemsForUser: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
   reconcileOrphanPlaidItems: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
-  retryPendingPlaidBillingCleanups: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
+  retryPendingPlaidBillingCleanups: vi
+    .fn()
+    .mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
   refreshBillingStateForUser: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -18,10 +21,13 @@ import { reconcilePlaidItemsForUser } from "../../src/plaid/reconcile.js";
 process.env.APPLE_BUNDLE_ID = "com.fina.app";
 process.env.APPLE_ASC_ISSUER_ID = "00000000-0000-0000-0000-000000000000";
 process.env.APPLE_ASC_KEY_ID = "K1";
-process.env.APPLE_ASC_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n";
+process.env.APPLE_ASC_PRIVATE_KEY = generateKeyPairSync("ec", {
+  namedCurve: "prime256v1",
+}).privateKey.export({ type: "pkcs8", format: "pem" }) as string;
 process.env.APPLE_ENV = "sandbox";
 process.env.GOOGLE_PACKAGE_NAME = "app.fina";
-process.env.GOOGLE_SERVICE_ACCOUNT_JSON = '{"client_email":"iap@fina.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----\\n"}';
+process.env.GOOGLE_SERVICE_ACCOUNT_JSON =
+  '{"client_email":"iap@fina.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\\nfake\\n-----END PRIVATE KEY-----\\n"}';
 process.env.GOOGLE_PUBSUB_VERIFY_AUDIENCE = "https://api.fina.app/webhooks/iap/google";
 process.env.GOOGLE_PUBSUB_VERIFY_EMAIL = "iap@fina.iam.gserviceaccount.com";
 process.env.GOOGLE_PUBSUB_SUBSCRIPTION_NAME = "projects/fina/subscriptions/iap-rtdn";
@@ -33,40 +39,67 @@ const fakeAppleClient: any = {
   verifyAndDecodeRenewalInfo: vi.fn(),
   getSubscriptionStatus: vi.fn(),
 };
-const fakeGoogleClient: any = { fetchAndNormalize: vi.fn(), acknowledgeIfPending: vi.fn().mockResolvedValue(true) };
+const fakeGoogleClient: any = {
+  fetchAndNormalize: vi.fn(),
+  acknowledgeIfPending: vi.fn().mockResolvedValue(true),
+};
 const fakeOidcClient: any = { verifyIdToken: vi.fn() };
 
 beforeEach(async () => {
   await truncateAll();
   vi.clearAllMocks();
-  app = await buildApp(testEnv(), { iap: { appleClient: fakeAppleClient, googleClient: fakeGoogleClient, oidcClient: fakeOidcClient } });
-  await prisma.user.create({ data: { id: "u1", email: "u1@test", iapAppleAccountToken: deriveAppleToken("u1") } });
+  app = await buildApp(testEnv(), {
+    iap: {
+      appleClient: fakeAppleClient,
+      googleClient: fakeGoogleClient,
+      oidcClient: fakeOidcClient,
+    },
+  });
+  await prisma.user.create({
+    data: { id: "u1", email: "u1@test", iapAppleAccountToken: deriveAppleToken("u1") },
+  });
 });
 
 describe("POST /webhooks/iap/apple", () => {
   const appleTx = () => ({
-    bundleId: "com.fina.app", environment: "Sandbox", signedDate: Date.now(),
+    bundleId: "com.fina.app",
+    environment: "Sandbox",
+    signedDate: Date.now(),
     appAccountToken: deriveAppleToken("u1"),
-    productId: "max_monthly", originalTransactionId: "OT-1", transactionId: "T-1", raw: {},
+    productId: "max_monthly",
+    originalTransactionId: "OT-1",
+    transactionId: "T-1",
+    raw: {},
   });
 
   it("happy path: existing Subscription row, syncs to active", async () => {
-    await prisma.subscription.create({ data: {
-      userId: "u1", tier: "max", source: "iap_apple",
-      sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
-      status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
-    } });
+    await prisma.subscription.create({
+      data: {
+        userId: "u1",
+        tier: "max",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-1",
+        sourceCustomerId: deriveAppleToken("u1"),
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
-      notificationUUID: "uuid-1", notificationType: "DID_RENEW",
-      signedTransactionJws: "tx-jws", raw: {},
+      notificationUUID: "uuid-1",
+      notificationType: "DID_RENEW",
+      signedTransactionJws: "tx-jws",
+      raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 60 * 86400_000),
-      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/apple",
+      method: "POST",
+      url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
     expect(res.statusCode).toBe(200);
@@ -74,19 +107,29 @@ describe("POST /webhooks/iap/apple", () => {
   });
 
   it("reconciliation cleanup failure returns 500 and does not record webhook event", async () => {
-    await prisma.subscription.create({ data: {
-      userId: "u1", tier: "max", source: "iap_apple",
-      sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
-      status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
-    } });
+    await prisma.subscription.create({
+      data: {
+        userId: "u1",
+        tier: "max",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-1",
+        sourceCustomerId: deriveAppleToken("u1"),
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
-      notificationUUID: "uuid-reconcile-fail", notificationType: "DID_RENEW",
-      signedTransactionJws: "tx-jws", raw: {},
+      notificationUUID: "uuid-reconcile-fail",
+      notificationType: "DID_RENEW",
+      signedTransactionJws: "tx-jws",
+      raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 60 * 86400_000),
-      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     vi.mocked(reconcilePlaidItemsForUser).mockResolvedValueOnce({
       kept: [],
@@ -95,30 +138,39 @@ describe("POST /webhooks/iap/apple", () => {
     });
 
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/apple",
+      method: "POST",
+      url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
 
     expect(res.statusCode).toBe(500);
-    await expect(prisma.webhookEvent.count({ where: { id: "apple:uuid-reconcile-fail" } })).resolves.toBe(0);
+    await expect(
+      prisma.webhookEvent.count({ where: { id: "apple:uuid-reconcile-fail" } }),
+    ).resolves.toBe(0);
   });
 
   it("step 4.2 fallback: webhook before checkout — finds user via binding", async () => {
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
-      notificationUUID: "uuid-2", notificationType: "SUBSCRIBED",
-      signedTransactionJws: "tx-jws", raw: {},
+      notificationUUID: "uuid-2",
+      notificationType: "SUBSCRIBED",
+      signedTransactionJws: "tx-jws",
+      raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
     });
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/apple",
+      method: "POST",
+      url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
     expect(res.statusCode).toBe(200);
-    const sub = await prisma.subscription.findFirst({ where: { userId: "u1", source: "iap_apple" } });
+    const sub = await prisma.subscription.findFirst({
+      where: { userId: "u1", source: "iap_apple" },
+    });
     expect(sub).not.toBeNull();
   });
 
@@ -128,44 +180,56 @@ describe("POST /webhooks/iap/apple", () => {
       data: { source: "iap_apple", tokenHash: hashBindingToken(deriveAppleToken("u1")) },
     });
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
-      notificationUUID: "uuid-3", notificationType: "DID_RENEW",
-      signedTransactionJws: "tx-jws", raw: {},
+      notificationUUID: "uuid-3",
+      notificationType: "DID_RENEW",
+      signedTransactionJws: "tx-jws",
+      raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/apple",
+      method: "POST",
+      url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
     expect(res.statusCode).toBe(200);
     const sub = await prisma.subscription.findFirst({ where: { source: "iap_apple" } });
     expect(sub).toBeNull();
-    const tombstoneEvent = await prisma.webhookEvent.findFirst({ where: { type: "unattributable_after_delete" } });
+    const tombstoneEvent = await prisma.webhookEvent.findFirst({
+      where: { type: "unattributable_after_delete" },
+    });
     expect(tombstoneEvent).not.toBeNull();
   });
 
   it("step 4.4 unknown user returns 500 up to retry-cap, then forensic 200", async () => {
     await prisma.user.update({ where: { id: "u1" }, data: { iapAppleAccountToken: null } });
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
-      notificationUUID: "uuid-4-stable", notificationType: "DID_RENEW",
-      signedTransactionJws: "tx-jws", raw: {},
+      notificationUUID: "uuid-4-stable",
+      notificationType: "DID_RENEW",
+      signedTransactionJws: "tx-jws",
+      raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     for (let i = 0; i < 5; i++) {
       const res = await app.inject({
-        method: "POST", url: "/webhooks/iap/apple",
+        method: "POST",
+        url: "/webhooks/iap/apple",
         payload: { signedPayload: "fake-jws" },
       });
       expect(res.statusCode).toBe(500);
     }
     const res6 = await app.inject({
-      method: "POST", url: "/webhooks/iap/apple",
+      method: "POST",
+      url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
     expect(res6.statusCode).toBe(200);
-    const forensic = await prisma.webhookEvent.findFirst({ where: { type: "unattributable_giveup" } });
+    const forensic = await prisma.webhookEvent.findFirst({
+      where: { type: "unattributable_giveup" },
+    });
     expect(forensic).not.toBeNull();
     const res7 = await app.inject({
-      method: "POST", url: "/webhooks/iap/apple",
+      method: "POST",
+      url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
     expect(res7.statusCode).toBe(200);
@@ -173,38 +237,61 @@ describe("POST /webhooks/iap/apple", () => {
 
   it("dedup — second delivery of same notificationUUID short-circuits", async () => {
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
-      notificationUUID: "uuid-dup", notificationType: "DID_RENEW",
-      signedTransactionJws: "tx-jws", raw: {},
+      notificationUUID: "uuid-dup",
+      notificationType: "DID_RENEW",
+      signedTransactionJws: "tx-jws",
+      raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
       expiresDate: new Date(Date.now() + 30 * 86400_000),
-      productId: "max_monthly", mapped: { status: "active", cancelAtPeriodEnd: false },
+      productId: "max_monthly",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
     });
-    await app.inject({ method: "POST", url: "/webhooks/iap/apple", payload: { signedPayload: "fake-jws" } });
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/iap/apple",
+      payload: { signedPayload: "fake-jws" },
+    });
     fakeAppleClient.getSubscriptionStatus.mockClear();
-    await app.inject({ method: "POST", url: "/webhooks/iap/apple", payload: { signedPayload: "fake-jws" } });
+    await app.inject({
+      method: "POST",
+      url: "/webhooks/iap/apple",
+      payload: { signedPayload: "fake-jws" },
+    });
     expect(fakeAppleClient.getSubscriptionStatus).not.toHaveBeenCalled();
   });
 
   it("Family Sharing revocation flips Subscription.status to canceled", async () => {
-    await prisma.subscription.create({ data: {
-      userId: "u1", tier: "max", source: "iap_apple",
-      sourceSubscriptionId: "OT-1", sourceCustomerId: deriveAppleToken("u1"),
-      status: "active", currentPeriodEnd: new Date(Date.now() + 30 * 86400_000), environment: "Sandbox",
-    } });
+    await prisma.subscription.create({
+      data: {
+        userId: "u1",
+        tier: "max",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-1",
+        sourceCustomerId: deriveAppleToken("u1"),
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
     fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
-      notificationUUID: "uuid-fs", notificationType: "DID_CHANGE_RENEWAL_STATUS",
+      notificationUUID: "uuid-fs",
+      notificationType: "DID_CHANGE_RENEWAL_STATUS",
       subtype: "PRODUCT_NOT_FOR_SALE",
-      signedTransactionJws: "tx-jws", raw: {},
+      signedTransactionJws: "tx-jws",
+      raw: {},
     });
     fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue(appleTx());
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/apple",
+      method: "POST",
+      url: "/webhooks/iap/apple",
       payload: { signedPayload: "fake-jws" },
     });
     expect(res.statusCode).toBe(200);
-    const sub = await prisma.subscription.findFirst({ where: { source: "iap_apple", sourceSubscriptionId: "OT-1" } });
+    const sub = await prisma.subscription.findFirst({
+      where: { source: "iap_apple", sourceSubscriptionId: "OT-1" },
+    });
     expect(sub!.status).toBe("canceled");
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), "u1");
   });
@@ -224,28 +311,39 @@ describe("POST /webhooks/iap/google", () => {
   });
 
   it("happy path", async () => {
-    await prisma.user.update({ where: { id: "u1" }, data: { iapGoogleObfuscatedId: deriveGoogleToken("u1") } });
+    await prisma.user.update({
+      where: { id: "u1" },
+      data: { iapGoogleObfuscatedId: deriveGoogleToken("u1") },
+    });
     fakeGoogleClient.fetchAndNormalize.mockResolvedValue({
       obfuscatedExternalAccountId: deriveGoogleToken("u1"),
       acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
       subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
       productId: "max_monthly",
       expiryTime: new Date(Date.now() + 30 * 86400_000),
-      linkedPurchaseToken: null, environment: "Production",
+      linkedPurchaseToken: null,
+      environment: "Production",
       mapped: { status: "active", cancelAtPeriodEnd: false },
       raw: {},
     });
     const envelope = {
       message: {
-        data: Buffer.from(JSON.stringify({
-          subscriptionNotification: { purchaseToken: "pt-1", subscriptionId: "max_monthly", notificationType: 4 },
-        })).toString("base64"),
+        data: Buffer.from(
+          JSON.stringify({
+            subscriptionNotification: {
+              purchaseToken: "pt-1",
+              subscriptionId: "max_monthly",
+              notificationType: 4,
+            },
+          }),
+        ).toString("base64"),
         messageId: "msg-1",
       },
       subscription: "projects/fina/subscriptions/iap-rtdn",
     };
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/google",
+      method: "POST",
+      url: "/webhooks/iap/google",
       headers: { authorization: "Bearer fake-jwt" },
       payload: envelope,
     });
@@ -254,7 +352,10 @@ describe("POST /webhooks/iap/google", () => {
   });
 
   it("linked purchase-token replacement reconciles the resolved user", async () => {
-    await prisma.user.update({ where: { id: "u1" }, data: { iapGoogleObfuscatedId: deriveGoogleToken("u1") } });
+    await prisma.user.update({
+      where: { id: "u1" },
+      data: { iapGoogleObfuscatedId: deriveGoogleToken("u1") },
+    });
     await prisma.subscription.create({
       data: {
         userId: "u1",
@@ -280,22 +381,31 @@ describe("POST /webhooks/iap/google", () => {
     });
     const envelope = {
       message: {
-        data: Buffer.from(JSON.stringify({
-          subscriptionNotification: { purchaseToken: "pt-new", subscriptionId: "max_monthly", notificationType: 4 },
-        })).toString("base64"),
+        data: Buffer.from(
+          JSON.stringify({
+            subscriptionNotification: {
+              purchaseToken: "pt-new",
+              subscriptionId: "max_monthly",
+              notificationType: 4,
+            },
+          }),
+        ).toString("base64"),
         messageId: "msg-linked",
       },
       subscription: "projects/fina/subscriptions/iap-rtdn",
     };
 
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/google",
+      method: "POST",
+      url: "/webhooks/iap/google",
       headers: { authorization: "Bearer fake-jwt" },
       payload: envelope,
     });
 
     expect(res.statusCode).toBe(200);
-    const subs = await prisma.subscription.findMany({ where: { userId: "u1", source: "iap_google" } });
+    const subs = await prisma.subscription.findMany({
+      where: { userId: "u1", source: "iap_google" },
+    });
     expect(subs).toHaveLength(1);
     expect(subs[0]!.sourceSubscriptionId).toBe("pt-new");
     expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), "u1");
@@ -304,13 +414,16 @@ describe("POST /webhooks/iap/google", () => {
   it("testNotification → 200 ignore", async () => {
     const envelope = {
       message: {
-        data: Buffer.from(JSON.stringify({ testNotification: { version: "1.0" } })).toString("base64"),
+        data: Buffer.from(JSON.stringify({ testNotification: { version: "1.0" } })).toString(
+          "base64",
+        ),
         messageId: "msg-test",
       },
       subscription: "projects/fina/subscriptions/iap-rtdn",
     };
     const res = await app.inject({
-      method: "POST", url: "/webhooks/iap/google",
+      method: "POST",
+      url: "/webhooks/iap/google",
       headers: { authorization: "Bearer fake-jwt" },
       payload: envelope,
     });

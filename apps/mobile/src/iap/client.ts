@@ -3,31 +3,13 @@
 // `getIap()` below — lazy-required inside try/catch so Expo Go (which has
 // no NitroModules support) can still load this file. Functions degrade to
 // empty-state / typed errors when the module is unavailable.
-import type { Purchase, ProductSubscription } from "react-native-iap";
+import type { Purchase } from "react-native-iap";
 import { Platform } from "react-native";
 import { isExpoGo } from "../env";
-import { deriveAppleToken, deriveGoogleToken } from "./binding";
-import { tierForIapProductId, type IAPProductId, type PaidTier } from "@fina/shared";
+import type { IAPProductId } from "@fina/shared";
 
 const SKUS: IAPProductId[] =
-  Platform.OS === "ios"
-    ? ["fina_pro_monthly", "max_monthly"]
-    : ["pro_monthly", "max_monthly"];
-
-const TIER_RANK: Record<PaidTier, number> = { pro: 1, max: 2 };
-// Numeric values for the legacy replacementMode field follow Google
-// BillingClient ReplacementMode constants.
-const ANDROID_REPLACEMENT_MODE = {
-  CHARGE_PRORATED_PRICE: 2,
-  DEFERRED: 6,
-} as const;
-
-export type LocalProduct = {
-  productId: IAPProductId;
-  tier: "pro" | "max";
-  localizedPrice: string;
-  localizedTitle: string;
-};
+  Platform.OS === "ios" ? ["fina_pro_monthly", "max_monthly"] : ["pro_monthly", "max_monthly"];
 
 /** Error class surfaced to callers so the UI can map react-native-iap's
  *  string codes to user-friendly messaging. The code is the canonical
@@ -35,7 +17,11 @@ export type LocalProduct = {
  *  already-owned (Restore handles the latter). `E_RN_IAP_UNAVAILABLE` is
  *  our own code, emitted only when running under Expo Go (no dev client). */
 export class IapPurchaseError extends Error {
-  constructor(public code: string, public recoverable: boolean, message: string) {
+  constructor(
+    public code: string,
+    public recoverable: boolean,
+    message: string,
+  ) {
     super(message);
     this.name = "IapPurchaseError";
   }
@@ -88,224 +74,47 @@ async function ensureConnected(): Promise<RnIap> {
   return iap;
 }
 
-export async function fetchProducts(): Promise<LocalProduct[]> {
-  const iap = getIap();
-  // Under Expo Go: return empty array so the plan picker shows the
-  // empty-state ("Subscriptions aren't available right now") instead of
-  // crashing the whole app on module load.
-  if (!iap) {
-    return [];
-  }
-  await ensureConnected();
-  const raw = await iap.fetchProducts({ skus: SKUS, type: "subs" });
-  if (!raw) return [];
-  return (raw as ProductSubscription[])
-    .filter((s): s is ProductSubscription => Boolean((s as any).id))
-    .filter((s) => SKUS.includes(String((s as any).id) as IAPProductId))
-    .map((s) => {
-      const id = String((s as any).id);
-      const productId = (id === "max_monthly"
-        ? "max_monthly"
-        : Platform.OS === "ios"
-          ? "fina_pro_monthly"
-          : "pro_monthly") as IAPProductId;
-      const tier: "pro" | "max" = productId === "max_monthly" ? "max" : "pro";
-      const localizedPrice = String((s as any).displayPrice ?? (s as any).localizedPrice ?? (s as any).price ?? "");
-      const localizedTitle = String((s as any).displayName ?? (s as any).title ?? productId);
-      return { productId, tier, localizedPrice, localizedTitle };
-    });
-}
-
-/** Resolve the Android base-plan offerToken for a subscription SKU. Play
- *  Billing v5+ requires it on the purchase request — launchBillingFlow fails
- *  with "item could not be found" if a sub is launched without one. The
- *  product query carries the token in subscriptionOfferDetailsAndroid. */
-async function androidOfferToken(
-  iap: RnIap,
-  productId: IAPProductId,
-): Promise<string | undefined> {
-  const raw = await iap.fetchProducts({ skus: [productId], type: "subs" });
-  const product = (raw as any[] | null)?.find((p) => String(p?.id) === productId);
-  const offers = product?.subscriptionOfferDetailsAndroid ?? product?.subscriptionOffers;
-  const token = offers?.[0]?.offerToken;
-  return token ? String(token) : undefined;
-}
-
 /** Map react-native-iap's string error codes (from purchaseErrorListener or a
  *  synchronous launch throw) to our typed IapPurchaseError. */
 function toIapError(e: any): IapPurchaseError {
   if (e instanceof IapPurchaseError) return e;
   const code: string = e?.code ?? "";
   const message = String(e?.message ?? "");
-  if (code === "E_USER_CANCELLED") return new IapPurchaseError(code, true, "User cancelled");
-  if (code === "E_ALREADY_OWNED") return new IapPurchaseError(code, true, "Already owned — try Restore");
-  if (code === "duplicate-purchase" || message.toLowerCase().includes("duplicate purchase update")) {
+  const normalizedCode = code.toUpperCase().replace(/-/g, "_");
+  const lowerMessage = message.toLowerCase();
+  if (
+    normalizedCode === "E_USER_CANCELLED" ||
+    normalizedCode === "E_USER_CANCELED" ||
+    normalizedCode === "USER_CANCELLED" ||
+    normalizedCode === "USER_CANCELED" ||
+    normalizedCode === "USER_CANCEL" ||
+    lowerMessage.includes("user cancelled") ||
+    lowerMessage.includes("user canceled")
+  ) {
+    return new IapPurchaseError("E_USER_CANCELLED", true, "User cancelled");
+  }
+  if (code === "E_ALREADY_OWNED")
+    return new IapPurchaseError(code, true, "Already owned — try Restore");
+  if (
+    code === "duplicate-purchase" ||
+    message.toLowerCase().includes("duplicate purchase update")
+  ) {
     return new IapPurchaseError("E_ALREADY_OWNED", true, "Already owned — restoring purchase");
   }
   if (code === "E_NETWORK_ERROR") return new IapPurchaseError(code, true, "Network error");
-  if (code === "E_ITEM_UNAVAILABLE") return new IapPurchaseError(code, false, "Product unavailable");
+  if (code === "E_ITEM_UNAVAILABLE")
+    return new IapPurchaseError(code, false, "Product unavailable");
   if (code === "E_SERVICE_ERROR") return new IapPurchaseError(code, true, "Service unavailable");
   return new IapPurchaseError(code || "E_UNKNOWN", false, message || "Purchase failed");
 }
 
-function receiptForPurchase(
-  purchase: Purchase,
-  platform: "ios" | "android",
-): string | null {
+function receiptForPurchase(purchase: Purchase, platform: "ios" | "android"): string | null {
   const p = purchase as any;
   const receipt =
     platform === "ios"
-      ? p.purchaseToken ?? p.jwsRepresentationIOS ?? p.transactionReceipt
-      : p.purchaseToken ?? p.purchaseTokenAndroid;
+      ? (p.purchaseToken ?? p.jwsRepresentationIOS ?? p.transactionReceipt)
+      : (p.purchaseToken ?? p.purchaseTokenAndroid);
   return typeof receipt === "string" && receipt.length > 0 ? receipt : null;
-}
-
-async function androidSubscriptionReplacement(
-  iap: RnIap,
-  targetProductId: IAPProductId,
-): Promise<{ purchaseToken: string; replacementMode: number } | undefined> {
-  const targetTier = tierForIapProductId(targetProductId);
-  if (!targetTier) return undefined;
-
-  const candidates: Array<{ productId: IAPProductId; purchaseToken: string; tier: PaidTier }> = [];
-  const seen = new Set<string>();
-  const pushCandidate = (productId: unknown, purchaseToken: unknown) => {
-    if (typeof productId !== "string" || typeof purchaseToken !== "string" || purchaseToken.length === 0) return;
-    const tier = tierForIapProductId(productId);
-    if (!tier || productId === targetProductId || seen.has(purchaseToken)) return;
-    seen.add(purchaseToken);
-    candidates.push({ productId: productId as IAPProductId, purchaseToken, tier });
-  };
-
-  try {
-    const purchases = await iap.getAvailablePurchases(undefined);
-    for (const p of purchases as any[]) {
-      pushCandidate(p?.productId ?? p?.id, p?.purchaseToken ?? p?.purchaseTokenAndroid);
-    }
-  } catch {
-    // Best-effort; getActiveSubscriptions below may still return the token.
-  }
-
-  try {
-    const active = await iap.getActiveSubscriptions(SKUS);
-    for (const sub of active as any[]) {
-      if (sub?.isActive === false) continue;
-      pushCandidate(sub?.productId, sub?.purchaseTokenAndroid ?? sub?.purchaseToken);
-    }
-  } catch {
-    // New purchases have no old token; they fall through without replacement.
-  }
-
-  const current = candidates[0];
-  if (!current) return undefined;
-  return {
-    purchaseToken: current.purchaseToken,
-    replacementMode:
-      TIER_RANK[targetTier] > TIER_RANK[current.tier]
-        ? ANDROID_REPLACEMENT_MODE.CHARGE_PRORATED_PRICE
-        : ANDROID_REPLACEMENT_MODE.DEFERRED,
-  };
-}
-
-export async function purchaseSubscription(args: {
-  productId: IAPProductId;
-  userId: string;
-}): Promise<{ receipt: string; platform: "ios" | "android"; purchase: Purchase }> {
-  const iap = await ensureConnected();
-  const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
-
-  // react-native-iap v14 (Nitro) delivers the completed purchase through
-  // purchaseUpdatedListener — NOT as the return value of requestPurchase, which
-  // resolves empty on Android. Arm the listeners first, fire the request, then
-  // resolve on the matching purchase event (or reject via the error listener).
-  return await new Promise((resolve, reject) => {
-    let settled = false;
-    const subs: Array<{ remove: () => void }> = [];
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const cleanup = () => {
-      if (timer) clearTimeout(timer);
-      for (const s of subs) s.remove();
-    };
-    const fail = (e: any) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      reject(toIapError(e));
-    };
-    const succeed = (purchase: Purchase) => {
-      if (settled) return;
-      const receipt = receiptForPurchase(purchase, platform);
-      if (!receipt) {
-        fail(
-          new IapPurchaseError(
-            "E_NO_RECEIPT",
-            false,
-            platform === "ios"
-              ? "No StoreKit receipt returned"
-              : "No purchase token returned by Play Billing",
-          ),
-        );
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve({ receipt: String(receipt), platform, purchase });
-    };
-
-    subs.push(
-      iap.purchaseUpdatedListener((purchase) => {
-        const id = (purchase as any).productId ?? (purchase as any).id;
-        if (id && id !== args.productId) return; // a different SKU — keep waiting
-        succeed(purchase);
-      }),
-    );
-    subs.push(iap.purchaseErrorListener((err) => fail(err)));
-
-    // Safety net: if neither listener fires (e.g. the sheet is dismissed with
-    // no cancel event), don't leave the subscribe button spinning forever.
-    timer = setTimeout(
-      () => fail(new IapPurchaseError("E_UNKNOWN", true, "Purchase timed out")),
-      180_000,
-    );
-
-    void (async () => {
-      try {
-        if (platform === "ios") {
-          const appAccountToken = deriveAppleToken(args.userId);
-          await iap.requestPurchase({
-            request: { apple: { sku: args.productId, appAccountToken } },
-            type: "subs",
-          });
-        } else {
-          // Android — Play Billing requires the base-plan offerToken for subs.
-          const obfuscatedAccountId = deriveGoogleToken(args.userId);
-          const offerToken = await androidOfferToken(iap, args.productId);
-          const replacement = await androidSubscriptionReplacement(iap, args.productId);
-          await iap.requestPurchase({
-            request: {
-              google: {
-                skus: [args.productId],
-                obfuscatedAccountId,
-                ...(replacement
-                  ? {
-                      purchaseToken: replacement.purchaseToken,
-                      replacementMode: replacement.replacementMode,
-                    }
-                  : {}),
-                ...(offerToken
-                  ? { subscriptionOffers: [{ sku: args.productId, offerToken }] }
-                  : {}),
-              },
-            },
-            type: "subs",
-          });
-        }
-      } catch (e) {
-        fail(e); // synchronous launch failure (e.g. bad offer token)
-      }
-    })();
-  });
 }
 
 /** Call ONLY after server returns 2xx — protects against
@@ -323,19 +132,77 @@ type RestorablePurchase = {
   purchase?: Purchase;
 };
 
+function pushRestorablePurchase(
+  out: RestorablePurchase[],
+  seen: Set<string>,
+  purchase: Purchase,
+  platform: "ios" | "android",
+): void {
+  const id = (purchase as any).id ?? (purchase as any).productId;
+  if (id !== "pro_monthly" && id !== "fina_pro_monthly" && id !== "max_monthly") return;
+  const receipt = receiptForPurchase(purchase, platform);
+  if (!receipt) return;
+  const dedupKey =
+    platform === "ios"
+      ? ((purchase as any).originalTransactionIdentifierIOS ??
+        (purchase as any).transactionIdIOS ??
+        receipt)
+      : receipt;
+  if (seen.has(dedupKey)) return;
+  seen.add(dedupKey);
+  out.push({ productId: id as IAPProductId, receipt, platform, purchase });
+}
+
+function pushRestorableReceipt(
+  out: RestorablePurchase[],
+  seen: Set<string>,
+  productId: unknown,
+  receipt: unknown,
+  platform: "ios" | "android",
+  dedupKey?: unknown,
+): void {
+  if (
+    productId !== "pro_monthly" &&
+    productId !== "fina_pro_monthly" &&
+    productId !== "max_monthly"
+  )
+    return;
+  if (typeof receipt !== "string" || receipt.length === 0) return;
+  const key = typeof dedupKey === "string" && dedupKey.length > 0 ? dedupKey : receipt;
+  if (seen.has(key)) return;
+  seen.add(key);
+  out.push({ productId: productId as IAPProductId, receipt, platform });
+}
+
+async function collectCurrentIOSEntitlements(
+  iap: RnIap,
+  out: RestorablePurchase[],
+  seen: Set<string>,
+): Promise<void> {
+  for (const sku of SKUS) {
+    try {
+      const entitlement = await iap.currentEntitlementIOS(sku);
+      if (entitlement) {
+        pushRestorablePurchase(out, seen, entitlement as Purchase, "ios");
+        if (out.some((p) => p.productId === sku)) continue;
+      }
+    } catch {
+      // Fall back to transaction JWS below.
+    }
+    try {
+      const jws = await iap.getTransactionJwsIOS(sku);
+      pushRestorableReceipt(out, seen, sku, jws, "ios", jws);
+    } catch {
+      // Some products simply have no current entitlement.
+    }
+  }
+}
+
 export async function listAvailablePurchases(): Promise<RestorablePurchase[]> {
   const iap = getIap();
   if (!iap) return [];
   await ensureConnected();
   const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
-  if (platform === "ios") {
-    try {
-      await iap.restorePurchases();
-    } catch {
-      // Continue with direct queries below. Some sandbox states report
-      // already-owned but restorePurchases itself cannot republish a receipt.
-    }
-  }
   const all: Purchase[] = await iap.getAvailablePurchases(
     platform === "ios"
       ? { alsoPublishToEventListenerIOS: false, onlyIncludeActiveItemsIOS: true }
@@ -344,37 +211,67 @@ export async function listAvailablePurchases(): Promise<RestorablePurchase[]> {
   const out: RestorablePurchase[] = [];
   const seen = new Set<string>();
   for (const p of all) {
-    const id = (p as any).id ?? (p as any).productId;
-    if (id !== "pro_monthly" && id !== "fina_pro_monthly" && id !== "max_monthly") continue;
-    const receipt = receiptForPurchase(p, platform);
-    if (!receipt) continue;
-    const dedupKey = platform === "ios"
-      ? (p as any).originalTransactionIdentifierIOS ?? (p as any).transactionIdIOS ?? receipt
-      : receipt;
-    if (seen.has(dedupKey)) continue;
-    seen.add(dedupKey);
-    out.push({ productId: id as IAPProductId, receipt, platform, purchase: p });
+    pushRestorablePurchase(out, seen, p, platform);
   }
   if (out.length > 0) return out;
+
+  if (platform === "ios") {
+    await collectCurrentIOSEntitlements(iap, out, seen);
+    if (out.length > 0) return out;
+  }
 
   try {
     const active = await iap.getActiveSubscriptions(SKUS);
     for (const sub of active) {
       if (!sub.isActive) continue;
-      const id = sub.productId;
-      if (id !== "pro_monthly" && id !== "fina_pro_monthly" && id !== "max_monthly") continue;
       const receipt =
-        platform === "ios"
-          ? sub.purchaseToken
-          : sub.purchaseTokenAndroid ?? sub.purchaseToken;
-      if (!receipt) continue;
-      const dedupKey = sub.transactionId ?? receipt;
-      if (seen.has(dedupKey)) continue;
-      seen.add(dedupKey);
-      out.push({ productId: id as IAPProductId, receipt, platform });
+        platform === "ios" ? sub.purchaseToken : (sub.purchaseTokenAndroid ?? sub.purchaseToken);
+      pushRestorableReceipt(out, seen, sub.productId, receipt, platform, sub.transactionId);
     }
   } catch {
     // Best-effort fallback only. The caller will surface a restore message.
+  }
+  return out;
+}
+
+export async function showNativeSubscriptionManagement(): Promise<RestorablePurchase[]> {
+  const iap = await ensureConnected();
+  if (Platform.OS !== "ios") return [];
+
+  let changed: Purchase[] = [];
+  try {
+    changed = await iap.showManageSubscriptionsIOS();
+  } catch (e) {
+    throw toIapError(e);
+  }
+
+  const out: RestorablePurchase[] = [];
+  const seen = new Set<string>();
+
+  for (const p of changed) pushRestorablePurchase(out, seen, p, "ios");
+
+  try {
+    const all: Purchase[] = await iap.getAvailablePurchases({
+      alsoPublishToEventListenerIOS: false,
+      onlyIncludeActiveItemsIOS: true,
+    });
+    for (const p of all) pushRestorablePurchase(out, seen, p, "ios");
+  } catch {
+    // Best-effort; App Store server notifications may still update the backend.
+  }
+
+  if (out.length === 0) {
+    await collectCurrentIOSEntitlements(iap, out, seen);
+  }
+
+  try {
+    const active = await iap.getActiveSubscriptions(SKUS);
+    for (const sub of active) {
+      if (!sub.isActive) continue;
+      pushRestorableReceipt(out, seen, sub.productId, sub.purchaseToken, "ios", sub.transactionId);
+    }
+  } catch {
+    // Best-effort; the caller falls back to refetching /me when no receipt is available.
   }
   return out;
 }
