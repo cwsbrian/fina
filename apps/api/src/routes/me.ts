@@ -23,6 +23,8 @@ import {
 } from "../push/send.js";
 import { localMidnightToUtc } from "../chat/tools/periods.js";
 import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
+import { refreshDueIapSubscriptionsForUser } from "../iap/refresh.js";
+import type { RefreshDueIapOptions } from "../iap/refresh.js";
 
 /** Convert "YYYY-MM-DD" + tz → UTC instant at NOON in that tz. Noon (not
  *  midnight) so the row's date-portion-in-tz unambiguously reads as the
@@ -85,6 +87,18 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   app.get("/me", async (req, reply) => {
     try {
       const session = await requireSession(req, app);
+      const injected = (app.fina.iap ?? {}) as {
+        appleClient?: RefreshDueIapOptions["appleClient"];
+        googleClient?: RefreshDueIapOptions["googleClient"];
+      };
+      const refreshOpts: RefreshDueIapOptions = {};
+      if (injected.appleClient) refreshOpts.appleClient = injected.appleClient;
+      if (injected.googleClient) refreshOpts.googleClient = injected.googleClient;
+      try {
+        await refreshDueIapSubscriptionsForUser(session.userId, refreshOpts);
+      } catch (e) {
+        app.log.warn({ err: e, userId: session.userId }, "iap_due_refresh_failed");
+      }
       const user = await prisma.user.findUnique({ where: { id: session.userId } });
       if (!user) return reply.code(404).send({ error: "no_user" });
       const activeSubs = await prisma.subscription.findMany({

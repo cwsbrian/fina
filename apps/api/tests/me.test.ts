@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { buildApp } from "../src/server.js";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
@@ -41,6 +41,59 @@ describe("GET /me", () => {
     const body = res.json();
     expect(body.tier).toBe("free");
     expect(body.trial.active).toBe(false);
+    await app.close();
+  });
+
+  it("refreshes due native IAP subscription state before returning /me", async () => {
+    const fakeAppleClient = {
+      getSubscriptionStatus: vi.fn().mockResolvedValue({
+        expiresDate: new Date("2026-06-11T22:27:02Z"),
+        productId: "fina_pro_monthly",
+        pendingProductId: null,
+        pendingAt: null,
+        mapped: { status: "active", cancelAtPeriodEnd: false },
+      }),
+    };
+    const app = await buildApp(env, {
+      iap: {
+        appleClient: fakeAppleClient,
+        googleClient: { fetchAndNormalize: vi.fn(), acknowledgeIfPending: vi.fn() },
+        oidcClient: { verifyIdToken: vi.fn() },
+      },
+    });
+    const user = await signUpAndGetCookie(app, { email: "iap-due@example.com", name: "IAP Due" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { trialEndsAt: new Date("2026-06-01T00:00:00Z"), trialConsumed: true },
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: user.userId,
+        tier: "max",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-DUE",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() - 1000),
+        pendingTier: "pro",
+        pendingTierAt: new Date(Date.now() - 1000),
+        environment: "Sandbox",
+      },
+    });
+
+    const res = await app.inject({ method: "GET", url: "/me", headers: { cookie: user.cookie } });
+
+    expect(res.statusCode).toBe(200);
+    expect(fakeAppleClient.getSubscriptionStatus).toHaveBeenCalledWith("OT-DUE");
+    expect(res.json().subscription).toMatchObject({
+      tier: "pro",
+      pendingTier: null,
+      source: "iap_apple",
+    });
+    const sub = await prisma.subscription.findFirstOrThrow({
+      where: { userId: user.userId, source: "iap_apple" },
+    });
+    expect(sub.tier).toBe("pro");
+    expect(sub.pendingTier).toBeNull();
     await app.close();
   });
 
