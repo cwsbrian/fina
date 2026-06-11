@@ -18,14 +18,26 @@ export function parseDevOrigins(value: string | undefined): string[] {
     .filter((s) => s.length > 0);
 }
 
+function parseCsv(value: string | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+}
+
 export function createAuth(env: Env) {
   const socialProviders: Record<
     string,
-    { clientId: string; clientSecret: string; appBundleIdentifier?: string }
+    { clientId: string | string[]; clientSecret: string; appBundleIdentifier?: string }
   > = {};
   if (env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET) {
+    const googleClientIds: [string, ...string[]] = [
+      env.GOOGLE_CLIENT_ID,
+      ...parseCsv(env.GOOGLE_NATIVE_CLIENT_IDS),
+    ];
     socialProviders.google = {
-      clientId: env.GOOGLE_CLIENT_ID,
+      clientId: googleClientIds.length === 1 ? googleClientIds[0] : googleClientIds,
       clientSecret: env.GOOGLE_CLIENT_SECRET,
     };
   }

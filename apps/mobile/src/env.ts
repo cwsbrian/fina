@@ -12,6 +12,8 @@ export const isExpoGo =
 const Schema = z.object({
   EXPO_PUBLIC_API_URL: z.string().url(),
   EXPO_PUBLIC_WEB_URL: z.string().url(),
+  EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: z.string().optional(),
+  EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: z.string().optional(),
 });
 
 // Why not just throw at module init: a thrown Zod error here crashes
@@ -25,6 +27,8 @@ const Schema = z.object({
 const parsed = Schema.safeParse({
   EXPO_PUBLIC_API_URL: process.env.EXPO_PUBLIC_API_URL,
   EXPO_PUBLIC_WEB_URL: process.env.EXPO_PUBLIC_WEB_URL,
+  EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
+  EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID,
 });
 
 export const envError: string | null = parsed.success
@@ -40,4 +44,6 @@ export const env = parsed.success
       // a confusing module-init crash.
       EXPO_PUBLIC_API_URL: "https://invalid.localhost",
       EXPO_PUBLIC_WEB_URL: "https://invalid.localhost",
+      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: undefined,
+      EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID: undefined,
     };

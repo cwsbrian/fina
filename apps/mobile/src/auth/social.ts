@@ -1,10 +1,63 @@
 import { Alert, Platform } from "react-native";
-import * as Linking from "expo-linking";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Crypto from "expo-crypto";
 import { classifySocialAuthError, type SocialAuthError } from "@fina/shared";
 import { router } from "expo-router";
 import { signIn } from "./client";
+import { env, isExpoGo } from "../env";
+
+type GoogleSignInResponse =
+  | { type: "success"; data: { idToken: string | null } }
+  | { type: "cancelled"; data: null }
+  | { type: "noSavedCredentialFound"; data: null };
+
+type GoogleSignInModule = {
+  GoogleSignin: {
+    configure(options: {
+      webClientId: string;
+      offlineAccess: boolean;
+      iosClientId?: string;
+    }): void;
+    hasPlayServices(options: { showPlayServicesUpdateDialog: boolean }): Promise<boolean>;
+    signIn(): Promise<GoogleSignInResponse>;
+  };
+};
+
+let googleSignIn: GoogleSignInModule | null | undefined;
+let googleConfigured = false;
+
+function getGoogleSignIn(): GoogleSignInModule | null {
+  if (googleSignIn !== undefined) return googleSignIn;
+  if (isExpoGo) {
+    googleSignIn = null;
+    return googleSignIn;
+  }
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    googleSignIn = require("@react-native-google-signin/google-signin/native") as GoogleSignInModule;
+  } catch {
+    googleSignIn = null;
+  }
+  return googleSignIn;
+}
+
+function configureGoogleSignIn(google: GoogleSignInModule): void {
+  if (googleConfigured) return;
+  const webClientId = env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim();
+  if (!webClientId) {
+    throw new Error("Google sign-in is not configured for this build.");
+  }
+  const iosClientId = env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID?.trim();
+  if (Platform.OS === "ios" && !iosClientId) {
+    throw new Error("Google iOS client ID is not configured for this build.");
+  }
+  google.GoogleSignin.configure({
+    webClientId,
+    offlineAccess: false,
+    ...(Platform.OS === "ios" && iosClientId ? { iosClientId } : {}),
+  });
+  googleConfigured = true;
+}
 
 function copy(code: SocialAuthError): string {
   switch (code) {
@@ -32,14 +85,25 @@ function report(e: unknown) {
 
 export async function signInWithGoogle(): Promise<void> {
   try {
-    const callbackURL = Linking.createURL("/");
+    const google = getGoogleSignIn();
+    if (!google) {
+      throw new Error("Google sign-in requires a development or production build.");
+    }
+    configureGoogleSignIn(google);
+    if (Platform.OS === "android") {
+      await google.GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+    }
+    const nativeResult = await google.GoogleSignin.signIn();
+    if (nativeResult.type !== "success") return;
+    const token = nativeResult.data.idToken;
+    if (!token) {
+      throw new Error("Google did not return an identity token.");
+    }
     const res = await signIn.social({
       provider: "google",
-      callbackURL,
+      idToken: { token },
     });
     if (res.error) return report(res.error);
-    // @better-auth/expo silently returns (no error, no session) when the user
-    // dismisses the browser — only navigate when a session actually resulted.
     if (!res.data) return;
     router.replace("/(tabs)");
   } catch (e) {

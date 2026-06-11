@@ -47,8 +47,15 @@ const withLocalBuildLimits = (config) =>
     return cfg;
   });
 
+function googleIosUrlScheme(clientId) {
+  if (!clientId || !clientId.endsWith(".apps.googleusercontent.com")) return "";
+  return `com.googleusercontent.apps.${clientId.replace(".apps.googleusercontent.com", "")}`;
+}
+
 module.exports = ({ config }) => {
   const apiUrl = process.env.EXPO_PUBLIC_API_URL || "";
+  const googleIosClientId = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || "";
+  const googleUrlScheme = googleIosUrlScheme(googleIosClientId);
   const allowLocalNetworking = process.env.FINA_IOS_ALLOW_LOCAL_NETWORKING === "1";
   const allowCleartext = apiUrl.startsWith("http://") || allowLocalNetworking;
   const lowResource = process.env.FINA_LOCAL_BUILD === "1";
@@ -70,6 +77,16 @@ module.exports = ({ config }) => {
     config.plugins = [
       ...(config.plugins || []),
       ["expo-build-properties", { android: { usesCleartextTraffic: true } }],
+    ];
+  }
+
+  if (googleUrlScheme) {
+    config.plugins = [
+      ...(config.plugins || []),
+      [
+        "@react-native-google-signin/google-signin",
+        { iosUrlScheme: googleUrlScheme },
+      ],
     ];
   }
 

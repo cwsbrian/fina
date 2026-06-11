@@ -12,7 +12,10 @@ describe("createAuth social providers", () => {
         APPLE_CLIENT_SECRET: "asecret",
       }),
     );
-    const sp = auth.options.socialProviders as Record<string, { clientId: string; appBundleIdentifier?: string }>;
+    const sp = auth.options.socialProviders as Record<
+      string,
+      { clientId: string | string[]; appBundleIdentifier?: string }
+    >;
     expect(Object.keys(sp).sort()).toEqual(["apple", "google"]);
     expect(sp.apple.appBundleIdentifier).toBe("com.withfina.app");
     // Loose-cast: better-auth's Auth.options is the literal we passed, which
@@ -25,6 +28,21 @@ describe("createAuth social providers", () => {
     )?.accountLinking;
     expect(linking?.enabled).toBe(true);
     expect(linking?.trustedProviders).toBeUndefined();
+  });
+
+  it("allows native Google client ids for mobile idToken sign-in", () => {
+    const auth = createAuth(
+      testEnv({
+        GOOGLE_CLIENT_ID: "web-client",
+        GOOGLE_CLIENT_SECRET: "gsecret",
+        GOOGLE_NATIVE_CLIENT_IDS: "ios-client, android-client ",
+      }),
+    );
+    const sp = auth.options.socialProviders as Record<
+      string,
+      { clientId: string | string[] }
+    >;
+    expect(sp.google.clientId).toEqual(["web-client", "ios-client", "android-client"]);
   });
 
   it("registers neither provider when creds are unset", () => {

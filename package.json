@@ -17,7 +17,7 @@
     "smoke:api:lan": "DATABASE_URL=postgresql://fina:fina@localhost:5433/fina WEB_APP_URL=http://192.168.30.164:3100 BETTER_AUTH_URL=http://192.168.30.164:4000 DEV_ORIGINS=http://192.168.30.164:3100 APPLE_ENV=sandbox CRON_ENABLED=false nx run api:dev",
     "smoke:web": "pnpm --filter @fina/web smoke",
     "smoke:web:lan": "pnpm --filter @fina/web smoke:lan",
-    "smoke:mobile:lan": "EXPO_PUBLIC_API_URL=http://192.168.30.164:4000 EXPO_PUBLIC_WEB_URL=http://192.168.30.164:3100 FINA_IOS_ALLOW_LOCAL_NETWORKING=1 REACT_NATIVE_PACKAGER_HOSTNAME=192.168.30.164 pnpm --filter @fina/mobile exec expo start --host lan --clear",
+    "smoke:mobile:lan": "EXPO_PUBLIC_API_URL=http://192.168.30.164:4000 EXPO_PUBLIC_WEB_URL=http://192.168.30.164:3100 EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=287347024529-d8t4lqc5s0tlin407ees3juug913gkqv.apps.googleusercontent.com FINA_IOS_ALLOW_LOCAL_NETWORKING=1 REACT_NATIVE_PACKAGER_HOSTNAME=192.168.30.164 pnpm --filter @fina/mobile exec expo start --host lan --clear",
     "smoke:db:studio": "DATABASE_URL=postgresql://fina:fina@localhost:5433/fina pnpm --filter @fina/api db:studio",
     "smoke:db:migrate": "DATABASE_URL=postgresql://fina:fina@localhost:5433/fina pnpm --filter @fina/api db:migrate",
     "smoke:db:reset": "docker exec fina-postgres-dev psql -U fina -d fina -c 'TRUNCATE TABLE invites, memberships, workspaces, verifications, sessions, accounts, users RESTART IDENTITY CASCADE;'",

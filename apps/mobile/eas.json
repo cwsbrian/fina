@@ -6,7 +6,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "https://api.withfina.com",
-        "EXPO_PUBLIC_WEB_URL": "https://withfina.com"
+        "EXPO_PUBLIC_WEB_URL": "https://withfina.com",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "287347024529-d8t4lqc5s0tlin407ees3juug913gkqv.apps.googleusercontent.com"
       }
     },
     "playtest": {
@@ -16,7 +17,8 @@
       },
       "env": {
         "EXPO_PUBLIC_API_URL": "http://192.168.30.164:4000",
-        "EXPO_PUBLIC_WEB_URL": "http://192.168.30.164:3100"
+        "EXPO_PUBLIC_WEB_URL": "http://192.168.30.164:3100",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "287347024529-d8t4lqc5s0tlin407ees3juug913gkqv.apps.googleusercontent.com"
       }
     },
     "development": {
@@ -25,6 +27,7 @@
       "env": {
         "EXPO_PUBLIC_API_URL": "http://192.168.30.164:4000",
         "EXPO_PUBLIC_WEB_URL": "http://192.168.30.164:3100",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "287347024529-d8t4lqc5s0tlin407ees3juug913gkqv.apps.googleusercontent.com",
         "FINA_IOS_ALLOW_LOCAL_NETWORKING": "1"
       }
     },
@@ -39,6 +42,7 @@
       "env": {
         "EXPO_PUBLIC_API_URL": "http://192.168.30.164:4000",
         "EXPO_PUBLIC_WEB_URL": "http://192.168.30.164:3100",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "287347024529-d8t4lqc5s0tlin407ees3juug913gkqv.apps.googleusercontent.com",
         "FINA_LOCAL_BUILD": "1"
       }
     },
@@ -50,6 +54,7 @@
       "env": {
         "EXPO_PUBLIC_API_URL": "http://192.168.30.164:4000",
         "EXPO_PUBLIC_WEB_URL": "http://192.168.30.164:3100",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID": "287347024529-d8t4lqc5s0tlin407ees3juug913gkqv.apps.googleusercontent.com",
         "FINA_LOCAL_BUILD": "1"
       }
     }

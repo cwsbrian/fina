@@ -19,7 +19,12 @@ type MobileAuthClient = {
   signIn: {
     email: (input: { email: string; password: string }) => AuthResult;
     social: (input:
-      | { provider: "google"; callbackURL: string }
+      | {
+          provider: "google";
+          idToken: {
+            token: string;
+          };
+        }
       | {
           provider: "apple";
           idToken: {

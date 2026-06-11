@@ -6,6 +6,13 @@ const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, "../..");
 
 const config = getDefaultConfig(projectRoot);
+const googleSigninPackageRoot = path.dirname(
+  require.resolve("@react-native-google-signin/google-signin/package.json"),
+);
+const googleSigninApiEntrypoint = path.join(
+  googleSigninPackageRoot,
+  "lib/module/signIn/GoogleSignin.js",
+);
 
 // pnpm monorepo: watch the workspace root so changes outside apps/mobile
 // are picked up, and let Metro fall through to the hoisted node_modules.
@@ -40,6 +47,9 @@ config.resolver.sourceExts = [...sourceExts, "svg"];
 // imports to `.ts` (and `.jsx` → `.tsx`) when the TS source exists.
 const baseResolveRequest = config.resolver.resolveRequest;
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === "@react-native-google-signin/google-signin/native") {
+    return { type: "sourceFile", filePath: googleSigninApiEntrypoint };
+  }
   if (
     (moduleName.endsWith(".js") || moduleName.endsWith(".jsx")) &&
     (moduleName.startsWith("./") || moduleName.startsWith("../"))
