@@ -33,6 +33,7 @@ import {
 import { useSession, signOut } from "../../src/auth/client";
 import { unregisterForPushNotifications } from "../../src/api/push";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
+import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
@@ -63,7 +64,9 @@ export default function More() {
     fetchMeWithNativeSubscriptionSync()
       .then((nextMe) => {
         setMe(nextMe);
-        if (nextMe.iapIntegrity.isPlanMismatch) router.push("/plan" as never);
+        if (isBillingLocked(nextMe)) {
+          router.push("/plan" as never);
+        }
       })
       .catch(() => {});
   }, []);

@@ -7,6 +7,7 @@ import {
 import { Platform } from "react-native";
 import { postIAPCheckout, postIAPIntegrityCheck, postIAPRestore } from "../api/billing";
 import { apiFetch } from "../api/client";
+import { isBillingLocked } from "../billing/recovery-ui";
 import {
   finishPurchase,
   IapPurchaseError,
@@ -35,7 +36,7 @@ function shouldCheckNativeIntegrity(me: MeDTO): boolean {
   const nativeSource = nativeSubscriptionSource();
   if (!nativeSource || !me.iapIntegrity.requiresCheck) return false;
   if (!me.subscription || me.subscription.source !== nativeSource) return false;
-  if (me.iapIntegrity.isPlanMismatch) return false;
+  if (isBillingLocked(me)) return false;
   return true;
 }
 

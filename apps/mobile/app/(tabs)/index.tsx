@@ -40,6 +40,7 @@ import {
   parseYearMonthFromAnalysisLabel,
 } from "../../src/home/analysis-glance";
 import { analysisRequestPath } from "../../src/analysis/request";
+import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
@@ -169,7 +170,7 @@ export default function Home() {
       const meData = await fetchMeWithNativeSubscriptionSync();
       if (runId !== loadRunId.current) return;
       setMe(meData);
-      if (meData.iapIntegrity.isPlanMismatch) {
+      if (isBillingLocked(meData)) {
         router.replace("/plan" as never);
         return;
       }

@@ -3,6 +3,7 @@ import type {
   IAPIntegrityCheckBody,
   IAPRestoreBody,
   MeDTO,
+  SyncBody,
 } from "@fina/shared";
 import { apiFetch } from "./client";
 
@@ -86,6 +87,14 @@ export async function postIAPCheckout(body: IAPCheckoutBody): Promise<MeDTO> {
 
 export async function postIAPIntegrityCheck(body: IAPIntegrityCheckBody): Promise<MeDTO> {
   return await apiFetch<MeDTO>("/billing/iap/integrity-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+export async function postBillingSync(body: SyncBody = {}): Promise<MeDTO> {
+  return await apiFetch<MeDTO>("/billing/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
