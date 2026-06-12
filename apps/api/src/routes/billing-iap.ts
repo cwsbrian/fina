@@ -64,6 +64,23 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
   const meRuntimeEnv = (): "sandbox" | "production" =>
     process.env.APPLE_ENV === "production" ? "production" : "sandbox";
 
+  const authoritativeNativeTier = async (
+    platform: "ios" | "android",
+    receipt: string | null | undefined,
+  ): Promise<ReturnType<typeof tierForIapProductId> | null> => {
+    if (!receipt) return null;
+    if (platform === "ios") {
+      const { client: appleClient } = resolveApple();
+      const tx = await appleClient.verifyAndDecodeTransaction(receipt, { context: "restore" });
+      const status = await appleClient.getSubscriptionStatus(tx.originalTransactionId);
+      return tierForIapProductId(status.productId);
+    }
+
+    const { client: googleClient } = resolveGoogle();
+    const purchase = await googleClient.fetchAndNormalize(receipt);
+    return tierForIapProductId(purchase.productId);
+  };
+
   app.post("/billing/iap/checkout", async (req, reply) => {
     try {
       const session = await requireSession(req, app);
@@ -247,11 +264,16 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         orderBy: { currentPeriodEnd: "desc" },
       });
       const primary = pickPrimarySub(filterEnvironmentRows(activeSubs, meRuntimeEnv()));
-      const nativeTier = parsed.data.nativeProductId
+      const clientNativeTier = parsed.data.nativeProductId
         ? tierForIapProductId(parsed.data.nativeProductId)
         : null;
+      const verifiedNativeTier =
+        (await authoritativeNativeTier(parsed.data.platform, parsed.data.receipt)) ??
+        clientNativeTier;
       const result =
-        primary && nativeTier && primary.tier === nativeTier ? "matched" : "mismatched";
+        primary && verifiedNativeTier && primary.tier === verifiedNativeTier
+          ? "matched"
+          : "mismatched";
 
       if (parsed.data.result !== result) {
         app.log.warn(
@@ -260,6 +282,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
             clientResult: parsed.data.result,
             serverResult: result,
             nativeProductId: parsed.data.nativeProductId,
+            verifiedNativeTier,
             primaryTier: primary?.tier ?? null,
           },
           "iap_integrity_result_corrected",

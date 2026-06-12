@@ -79,6 +79,7 @@ async function checkNativeIapIntegrity(me: MeDTO): Promise<MeDTO | null> {
     platform,
     result: matching ? "matched" : "mismatched",
     nativeProductId,
+    receipt: matching?.receipt ?? entitlements[0]?.receipt ?? null,
   });
 }
 

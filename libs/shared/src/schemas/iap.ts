@@ -36,5 +36,8 @@ export const IAPIntegrityCheckBody = z.object({
   platform: IAPPlatform,
   result: z.enum(["matched", "mismatched"]),
   nativeProductId: IAPProductIdEnum.nullable(),
+  /** Optional native proof for server-side verification.
+   *  iOS: signedTransaction JWS string. Android: purchaseToken. */
+  receipt: z.string().min(1).nullable().optional(),
 });
 export type IAPIntegrityCheckBody = z.infer<typeof IAPIntegrityCheckBody>;

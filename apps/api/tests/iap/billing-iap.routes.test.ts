@@ -328,4 +328,68 @@ describe("POST /billing/iap/integrity-check", () => {
     const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     expect(user.isPlanMismatch).toBe(true);
   });
+
+  it("uses an Apple receipt to override a misleading client entitlement product id", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "u10@test.com" });
+    await prisma.subscription.create({
+      data: {
+        userId,
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-integrity-3",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      productId: "fina_pro_monthly",
+      originalTransactionId: "OT-integrity-3",
+      environment: "Sandbox",
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      productId: "max_monthly",
+      pendingProductId: "fina_pro_monthly",
+      pendingAt: new Date(Date.now() + 30 * 86400_000),
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+      raw: {},
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/integrity-check",
+      headers: {
+        cookie,
+        [CLIENT_DEVICE_ID_HEADER]: "ios-device-integrity-3",
+        [CLIENT_PLATFORM_HEADER]: "ios",
+      },
+      payload: {
+        platform: "ios",
+        result: "matched",
+        nativeProductId: "fina_pro_monthly",
+        receipt: "pro-looking-jws",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().iapIntegrity.isPlanMismatch).toBe(true);
+    expect(fakeAppleClient.verifyAndDecodeTransaction).toHaveBeenCalledWith("pro-looking-jws", {
+      context: "restore",
+    });
+    expect(fakeAppleClient.getSubscriptionStatus).toHaveBeenCalledWith("OT-integrity-3");
+    const [user, device] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+      prisma.userDevice.findUniqueOrThrow({
+        where: {
+          userId_clientDeviceId: {
+            userId,
+            clientDeviceId: "ios-device-integrity-3",
+          },
+        },
+      }),
+    ]);
+    expect(user.isPlanMismatch).toBe(true);
+    expect(device.lastIapIntegrityResult).toBe("mismatched");
+  });
 });
