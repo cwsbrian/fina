@@ -84,6 +84,18 @@ export default function PlanScreen() {
     Platform.OS === "ios" ? "iap_apple" : "iap_google";
   const storeName = Platform.OS === "ios" ? "the App Store" : "Google Play";
 
+  const goHome = useCallback(() => {
+    router.replace("/(tabs)" as never);
+  }, [router]);
+
+  const goBack = useCallback(() => {
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    goHome();
+  }, [goHome, router]);
+
   useEffect(() => {
     busyRef.current = busy;
   }, [busy]);
@@ -172,14 +184,16 @@ export default function PlanScreen() {
           "Restore incomplete",
           "We found a subscription, but it still does not match this Fina account.",
         );
+        return;
       }
+      goHome();
     } catch (e: any) {
       Alert.alert("Restore failed", e?.message ?? "Try again.");
       void loadMe();
     } finally {
       setBusy(null);
     }
-  }, [busy, loadMe, storeName]);
+  }, [busy, goHome, loadMe, storeName]);
 
   const startNativeCheckout = useCallback(
     async (tier: PaidTier) => {
@@ -217,7 +231,7 @@ export default function PlanScreen() {
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.head}>
-        <HeaderIconButton icon="chevron-back" onPress={() => router.back()} variant="plain" />
+        <HeaderIconButton icon="chevron-back" onPress={goBack} variant="plain" />
         <Text style={styles.title}>Plan</Text>
         <View style={{ width: 40 }} />
       </View>
