@@ -23,6 +23,7 @@ import {
 } from "../push/send.js";
 import { localMidnightToUtc } from "../chat/tools/periods.js";
 import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
+import { billingRecoveryForMe } from "../billing/recovery.js";
 import { refreshDueIapSubscriptionsForUser } from "../iap/refresh.js";
 import type { RefreshDueIapOptions } from "../iap/refresh.js";
 import {
@@ -88,6 +89,7 @@ function toMeDTO(
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
     subscription,
+    billingRecovery: billingRecoveryForMe(user, primary, iapDevice),
     iapIntegrity: iapIntegrityForMe(user, primary, iapPlatform, iapDevice),
   };
 }

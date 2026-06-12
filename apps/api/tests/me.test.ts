@@ -26,6 +26,13 @@ describe("GET /me", () => {
     expect(body.tier).toBe("pro");
     expect(body.trial.active).toBe(true);
     expect(typeof body.trial.endsAt).toBe("string");
+    expect(body.billingRecovery).toEqual({
+      locked: false,
+      reason: null,
+      source: null,
+      action: null,
+      lastCheckedAt: null,
+    });
     await app.close();
   });
 

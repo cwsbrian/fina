@@ -10,6 +10,7 @@ import { ensureStripeCustomer } from "../stripe/ensure-customer.js";
 import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
 import { computeEffectiveTier } from "../auth/tier.js";
 import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
+import { billingRecoveryForMe } from "../billing/recovery.js";
 import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 import { iapIntegrityForMe } from "../iap/integrity.js";
 
@@ -73,6 +74,7 @@ export async function buildMeBody(
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
     subscription,
+    billingRecovery: billingRecoveryForMe(user, primary, null),
     iapIntegrity: iapIntegrityForMe(user, primary, null, null),
   };
 }
@@ -172,6 +174,7 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
 
       const user = await prisma.user.findUniqueOrThrow({ where: { id: session.userId } });
       const stripe = stripeClient(app.fina.env);
+      const syncedStripeSubscriptionIds = new Set<string>();
 
       // Path A — sessionId provided (Checkout success redirect, codex R2).
       // Works even when User.stripeCustomerId is still null.
@@ -189,7 +192,10 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
         if (sess.subscription) {
           const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
           const synced = await syncSubscriptionFromStripe(app.fina.env, subId, user.id, app.log);
-          if (synced) await reconcilePlaidItemsForUser(app.fina.env, user.id);
+          if (synced) {
+            syncedStripeSubscriptionIds.add(subId);
+            await reconcilePlaidItemsForUser(app.fina.env, user.id);
+          }
         }
       }
 
@@ -203,11 +209,35 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
         });
         for (const sub of subs.data) {
           const synced = await syncSubscriptionFromStripe(app.fina.env, sub.id, user.id, app.log);
-          if (synced) await reconcilePlaidItemsForUser(app.fina.env, user.id);
+          if (synced) {
+            syncedStripeSubscriptionIds.add(sub.id);
+            await reconcilePlaidItemsForUser(app.fina.env, user.id);
+          }
         }
       }
 
       const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
+      if (syncedStripeSubscriptionIds.size > 0) {
+        const activeAfterStripeSync = await prisma.subscription.findMany({
+          where: {
+            userId: user.id,
+            status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+          },
+          orderBy: { currentPeriodEnd: "desc" },
+        });
+        const primaryAfterStripeSync = pickPrimarySub(
+          filterEnvironmentRows(activeAfterStripeSync, runtimeEnv),
+        );
+        if (
+          primaryAfterStripeSync?.source === "stripe" &&
+          syncedStripeSubscriptionIds.has(primaryAfterStripeSync.sourceSubscriptionId)
+        ) {
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { isPlanMismatch: false },
+          });
+        }
+      }
       return await buildMeBody(user.id, runtimeEnv);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

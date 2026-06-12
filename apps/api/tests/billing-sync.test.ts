@@ -165,6 +165,126 @@ describe("POST /billing/sync", () => {
     expect(stripe.fns.subsList).not.toHaveBeenCalled();
     expect(reconcilePlaidItemsForUser).not.toHaveBeenCalled();
     expect(res.json().subscription).toBeNull();
+    expect(res.json().billingRecovery).toEqual({
+      locked: false,
+      reason: null,
+      source: null,
+      action: null,
+      lastCheckedAt: null,
+    });
+  });
+
+  it("maps a Stripe plan mismatch to sync_stripe and clears it after Stripe sync", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "s5@example.com", name: "S Five" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { stripeCustomerId: "cus_s5", isPlanMismatch: true },
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: user.userId,
+        tier: "pro",
+        source: "stripe",
+        sourceSubscriptionId: "sub_s5",
+        sourceCustomerId: "cus_s5",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        billingPeriod: "monthly",
+      },
+    });
+    stripe.fns.subsList.mockResolvedValue({
+      data: [
+        fakeStripeSub({
+          id: "sub_s5",
+          customer: "cus_s5",
+          priceId: env.STRIPE_PRICE_PRO_MONTHLY,
+        }),
+      ],
+    });
+    stripe.fns.subsRetrieve.mockResolvedValue(
+      fakeStripeSub({
+        id: "sub_s5",
+        customer: "cus_s5",
+        priceId: env.STRIPE_PRICE_PRO_MONTHLY,
+      }),
+    );
+
+    const locked = await app.inject({
+      method: "GET",
+      url: "/me",
+      headers: { cookie: user.cookie },
+    });
+    expect(locked.statusCode).toBe(200);
+    expect(locked.json().billingRecovery).toMatchObject({
+      locked: true,
+      reason: "plan_mismatch",
+      source: "stripe",
+      action: "sync_stripe",
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/sync",
+      headers: { cookie: user.cookie, "content-type": "application/json" },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().billingRecovery.locked).toBe(false);
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
+    expect(fresh.isPlanMismatch).toBe(false);
+  });
+
+  it("does not clear a Stripe mismatch when only an inactive Stripe row is re-fetched", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "s6@example.com", name: "S Six" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { stripeCustomerId: "cus_s6", isPlanMismatch: true },
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: user.userId,
+        tier: "pro",
+        source: "stripe",
+        sourceSubscriptionId: "sub_s6",
+        sourceCustomerId: "cus_s6",
+        status: "canceled",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        billingPeriod: "monthly",
+      },
+    });
+    stripe.fns.subsList.mockResolvedValue({
+      data: [
+        fakeStripeSub({
+          id: "sub_s6",
+          customer: "cus_s6",
+          priceId: env.STRIPE_PRICE_PRO_MONTHLY,
+          status: "canceled",
+        }),
+      ],
+    });
+    stripe.fns.subsRetrieve.mockResolvedValue(
+      fakeStripeSub({
+        id: "sub_s6",
+        customer: "cus_s6",
+        priceId: env.STRIPE_PRICE_PRO_MONTHLY,
+        status: "canceled",
+      }),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/sync",
+      headers: { cookie: user.cookie, "content-type": "application/json" },
+      payload: {},
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().billingRecovery.locked).toBe(true);
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
+    expect(fresh.isPlanMismatch).toBe(true);
   });
 
   it("returns 401 for anonymous", async () => {

@@ -3,6 +3,14 @@ import type { SubscriptionDTO } from "./subscription.js";
 import type { NotificationPrefs } from "../notifications.js";
 import type { CategorizationMode } from "../categorization.js";
 
+export type BillingRecoveryDTO = {
+  locked: boolean;
+  reason: "plan_mismatch" | null;
+  source: SubscriptionDTO["source"] | null;
+  action: "restore_iap" | "sync_stripe" | null;
+  lastCheckedAt: string | null;
+};
+
 /** Response of `GET /me`. Use this everywhere — never re-declare. */
 export type MeDTO = {
   user: {
@@ -31,6 +39,9 @@ export type MeDTO = {
    *  retained in DB for history but excluded from this field so the UI
    *  never accidentally shows Manage to a user whose sub is dead. */
   subscription: SubscriptionDTO | null;
+  /** Source-agnostic billing lock/recovery state. Native IAP and Stripe use
+   *  different recovery actions, but app lock decisions should use this shape. */
+  billingRecovery: BillingRecoveryDTO;
   /** Native-store integrity guard. Webhooks remain the source of truth; this
    * only throttles occasional device-local checks and carries the global lock. */
   iapIntegrity: {
