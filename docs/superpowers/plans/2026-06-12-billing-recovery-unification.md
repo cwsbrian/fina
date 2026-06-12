@@ -237,7 +237,7 @@ it("maps a Google plan mismatch to restore_iap", async () => {
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run tests/me.test.ts tests/billing-sync.test.ts tests/iap/billing-iap.routes.test.ts
 ```
 
 Expected: FAIL because `billingRecovery` is not present on `MeDTO` responses.
@@ -398,7 +398,7 @@ After Path B finishes and before `return await buildMeBody(...)`, clear the lock
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run tests/me.test.ts tests/billing-sync.test.ts tests/iap/billing-iap.routes.test.ts
 ```
 
 Expected: PASS.
@@ -947,7 +947,7 @@ Expected: PASS.
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run tests/me.test.ts tests/billing-sync.test.ts tests/iap/billing-iap.routes.test.ts
 ```
 
 Expected: PASS.
