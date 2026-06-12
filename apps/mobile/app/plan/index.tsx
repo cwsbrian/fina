@@ -24,7 +24,14 @@ import {
   type MeDTO as Me,
   type PaidTier,
 } from "@fina/shared";
+import { postBillingSync } from "../../src/api/billing";
 import { apiFetch } from "../../src/api/client";
+import {
+  billingRecoveryButtonLabel,
+  billingRecoveryFootnote,
+  billingRecoveryLockCopy,
+  isBillingLocked,
+} from "../../src/billing/recovery-ui";
 import { IapPurchaseError } from "../../src/iap/client";
 import { nativeBillingUnavailableMessage, openManageBilling } from "../../src/iap/manage";
 import {
@@ -165,11 +172,22 @@ export default function PlanScreen() {
     }
   }, [busy, loadMe, me?.subscription]);
 
-  const restoreNativeSubscription = useCallback(async () => {
-    if (busy) return;
+  const recoverBilling = useCallback(async () => {
+    if (busy || !me) return;
+    const action = me.billingRecovery?.action ?? null;
+    if (!action) {
+      Alert.alert(
+        "Recovery unavailable",
+        "We could not determine where this subscription is managed. Contact support.",
+      );
+      return;
+    }
     setBusy("restore");
     try {
-      const nextMe = await restoreCurrentNativeSubscriptions();
+      const nextMe =
+        action === "sync_stripe"
+          ? await postBillingSync()
+          : await restoreCurrentNativeSubscriptions();
       if (!nextMe) {
         Alert.alert(
           "No subscription found",
@@ -179,21 +197,21 @@ export default function PlanScreen() {
         return;
       }
       setMe(nextMe);
-      if (nextMe.iapIntegrity.isPlanMismatch) {
+      if (isBillingLocked(nextMe)) {
         Alert.alert(
-          "Restore incomplete",
-          "We found a subscription, but it still does not match this Fina account.",
+          "Recovery incomplete",
+          "We could not confirm that this Fina account and billing provider match yet.",
         );
         return;
       }
       goHome();
     } catch (e: any) {
-      Alert.alert("Restore failed", e?.message ?? "Try again.");
+      Alert.alert("Recovery failed", e?.message ?? "Try again.");
       void loadMe();
     } finally {
       setBusy(null);
     }
-  }, [busy, goHome, loadMe, storeName]);
+  }, [busy, goHome, loadMe, me, storeName]);
 
   const startNativeCheckout = useCallback(
     async (tier: PaidTier) => {
@@ -251,7 +269,7 @@ export default function PlanScreen() {
 
   const sub = me.subscription;
   const canManageInStore = sub?.source === nativeSource;
-  const isPlanMismatch = me.iapIntegrity.isPlanMismatch;
+  const isPlanMismatch = isBillingLocked(me);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -271,9 +289,9 @@ export default function PlanScreen() {
             <View style={styles.lockIcon}>
               <Ionicons name="lock-closed-outline" size={22} color={colors.primary} />
             </View>
-            <Text style={styles.lockTitle}>Restore required</Text>
+            <Text style={styles.lockTitle}>Recovery required</Text>
             <Text style={styles.lockCopy}>
-              This Fina account and the subscription on this device do not match.
+              {billingRecoveryLockCopy(me)}
             </Text>
             <Pressable
               style={({ pressed }) => [
@@ -281,14 +299,16 @@ export default function PlanScreen() {
                 pressed && !busy && { opacity: 0.78 },
                 busy && styles.buttonDisabled,
               ]}
-              onPress={restoreNativeSubscription}
+              onPress={recoverBilling}
               disabled={Boolean(busy)}
             >
               {busy === "restore" ? (
                 <ActivityIndicator size="small" color={colors.onPrimary} />
               ) : (
                 <>
-                  <Text style={styles.restoreButtonText}>Restore purchases</Text>
+                  <Text style={styles.restoreButtonText}>
+                    {billingRecoveryButtonLabel(me)}
+                  </Text>
                   <Ionicons name="refresh" size={16} color={colors.onPrimary} />
                 </>
               )}
@@ -349,7 +369,7 @@ export default function PlanScreen() {
         )}
 
         <Text style={styles.footnote}>
-          {storeName} handles payment, cancellation, and subscription changes.
+          {billingRecoveryFootnote(me, storeName)}
         </Text>
       </ScrollView>
     </SafeAreaView>
@@ -447,8 +467,8 @@ function PlanCard({
 function currentPlanMeta(me: Me): string {
   const sub = me.subscription;
   const days = trialDaysLeft(me.trial.endsAt);
-  if (me.iapIntegrity.isPlanMismatch) {
-    return "Subscription restore is required before Fina can continue.";
+  if (isBillingLocked(me)) {
+    return "Billing recovery is required before Fina can continue.";
   }
   if (me.trial.active) {
     const revertsTo = trialRevertsTo(me);
@@ -477,8 +497,8 @@ function planAction(
 ): { label: string; disabled: boolean; kind: "primary" | "secondary" } {
   const sub = me.subscription;
   const label = tierLabel(tier, false);
-  if (me.iapIntegrity.isPlanMismatch) {
-    return { label: "Restore required", disabled: true, kind: "secondary" };
+  if (isBillingLocked(me)) {
+    return { label: "Recovery required", disabled: true, kind: "secondary" };
   }
   if (sub?.tier === tier && !sub.pendingTier && !sub.cancelAtPeriodEnd) {
     return { label: "Current plan", disabled: true, kind: "secondary" };
