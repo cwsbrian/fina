@@ -1,4 +1,9 @@
-import type { IAPRestoreBody, MeDTO } from "@fina/shared";
+import type {
+  IAPCheckoutBody,
+  IAPIntegrityCheckBody,
+  IAPRestoreBody,
+  MeDTO,
+} from "@fina/shared";
 import { apiFetch } from "./client";
 
 function requireSyncedSubscription(result: MeDTO): MeDTO {
@@ -49,4 +54,40 @@ export async function postIAPRestore(body: IAPRestoreBody): Promise<MeDTO> {
     });
     throw e;
   }
+}
+
+export async function postIAPCheckout(body: IAPCheckoutBody): Promise<MeDTO> {
+  try {
+    const result = await apiFetch<MeDTO>("/billing/iap/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const synced = requireSyncedSubscription(result);
+    console.info("[iap.checkout] ok", {
+      platform: body.platform,
+      productId: body.productId,
+      ...receiptMeta(body.receipt),
+      tier: synced.tier,
+      subscriptionTier: synced.subscription?.tier ?? null,
+      subscriptionSource: synced.subscription?.source ?? null,
+    });
+    return synced;
+  } catch (e) {
+    console.warn("[iap.checkout] failed", {
+      platform: body.platform,
+      productId: body.productId,
+      ...receiptMeta(body.receipt),
+      error: e,
+    });
+    throw e;
+  }
+}
+
+export async function postIAPIntegrityCheck(body: IAPIntegrityCheckBody): Promise<MeDTO> {
+  return await apiFetch<MeDTO>("/billing/iap/integrity-check", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 }

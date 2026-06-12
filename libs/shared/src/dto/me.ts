@@ -31,4 +31,11 @@ export type MeDTO = {
    *  retained in DB for history but excluded from this field so the UI
    *  never accidentally shows Manage to a user whose sub is dead. */
   subscription: SubscriptionDTO | null;
+  /** Native-store integrity guard. Webhooks remain the source of truth; this
+   * only throttles occasional device-local checks and carries the global lock. */
+  iapIntegrity: {
+    isPlanMismatch: boolean;
+    requiresCheck: boolean;
+    lastCheckedAt: string | null;
+  };
 };

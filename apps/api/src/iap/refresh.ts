@@ -2,7 +2,7 @@ import type { SubscriptionStatus } from "@prisma/client";
 import { tierForIapProductId } from "@fina/shared";
 import { prisma } from "../db.js";
 import { filterEnvironmentRows } from "../billing/precedence.js";
-import { requireAppleIapEnv, requireGoogleIapEnv } from "./env-guard.js";
+import { requireAppleIapEnv, requireGoogleReceiptIapEnv } from "./env-guard.js";
 import { AppleClient } from "./apple-client.js";
 import { GoogleClient } from "./google-client.js";
 
@@ -73,7 +73,7 @@ export async function refreshDueIapSubscriptionsForUser(
       continue;
     }
 
-    googleClient ??= new GoogleClient(requireGoogleIapEnv(process.env));
+    googleClient ??= new GoogleClient(requireGoogleReceiptIapEnv(process.env));
     const purchase = await googleClient.fetchAndNormalize(row.sourceSubscriptionId);
     const tier = tierForIapProductId(purchase.productId);
     const pendingTier = purchase.pendingProductId

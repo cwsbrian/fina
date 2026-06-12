@@ -1,15 +1,26 @@
 import type { FastifyInstance } from "fastify";
 import type { $Enums } from "@prisma/client";
-import { IAPCheckoutBody, IAPRestoreBody, ACTIVE_SUBSCRIPTION_STATUSES } from "@fina/shared";
+import {
+  IAPCheckoutBody,
+  IAPIntegrityCheckBody,
+  IAPRestoreBody,
+  ACTIVE_SUBSCRIPTION_STATUSES,
+  tierForIapProductId,
+} from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireSession } from "../auth/context.js";
-import { requireAppleIapEnv, requireGoogleIapEnv } from "../iap/env-guard.js";
+import { requireAppleIapEnv, requireGoogleReceiptIapEnv } from "../iap/env-guard.js";
 import { syncSubscriptionFromIAP } from "../iap/sync-sub.js";
 import { deriveAppleToken, deriveGoogleToken } from "../iap/binding.js";
 import { AppleClient } from "../iap/apple-client.js";
 import { GoogleClient } from "../iap/google-client.js";
 import { buildMeBody } from "./billing.js";
 import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
+import { filterEnvironmentRows, pickPrimarySub } from "../billing/precedence.js";
+import {
+  readNativeIapClient,
+  recordIapIntegrityResult,
+} from "../iap/integrity.js";
 
 export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
   // Per-platform memoized cache. Splitting Apple and Google means a dev
@@ -35,11 +46,11 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
   const resolveGoogle = (): { client: GoogleClient } => {
     const injected = (app as any).fina?.iap?.googleClient as GoogleClient | undefined;
     if (injected) {
-      requireGoogleIapEnv(process.env); // validate, discard result
+      requireGoogleReceiptIapEnv(process.env); // validate, discard result
       return { client: injected };
     }
     if (!cachedGoogle) {
-      const cfg = requireGoogleIapEnv(process.env);
+      const cfg = requireGoogleReceiptIapEnv(process.env);
       cachedGoogle = { client: new GoogleClient(cfg) };
     }
     return cachedGoogle;
@@ -106,6 +117,10 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         }, { googleClient });
       }
 
+      await prisma.user.update({
+        where: { id: userId },
+        data: { isPlanMismatch: false },
+      });
       await reconcilePlaidItemsForUser(app.fina.env, userId);
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
@@ -191,7 +206,13 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         if (firstRestoreError instanceof HttpError) throw firstRestoreError;
         throw new HttpError(400, "invalid_receipt", "No restorable purchases synced");
       }
-      if (syncedAny) await reconcilePlaidItemsForUser(app.fina.env, userId);
+      if (syncedAny) {
+        await prisma.user.update({
+          where: { id: userId },
+          data: { isPlanMismatch: false },
+        });
+        await reconcilePlaidItemsForUser(app.fina.env, userId);
+      }
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
       if (e instanceof HttpError) {
@@ -203,6 +224,59 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
       }
       app.log.error({ err: e, route: "/billing/iap/restore" }, "iap_restore_failed");
       return reply.code(500).send({ error: "iap_restore_failed" });
+    }
+  });
+
+  app.post("/billing/iap/integrity-check", async (req, reply) => {
+    try {
+      const session = await requireSession(req, app);
+      const parsed = IAPIntegrityCheckBody.safeParse(req.body);
+      if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+
+      const client = readNativeIapClient(req);
+      if (!client) return reply.code(400).send({ error: "missing_device" });
+      if (client.platform !== parsed.data.platform) {
+        return reply.code(400).send({ error: "platform_mismatch" });
+      }
+
+      const activeSubs = await prisma.subscription.findMany({
+        where: {
+          userId: session.userId,
+          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+        },
+        orderBy: { currentPeriodEnd: "desc" },
+      });
+      const primary = pickPrimarySub(filterEnvironmentRows(activeSubs, meRuntimeEnv()));
+      const nativeTier = parsed.data.nativeProductId
+        ? tierForIapProductId(parsed.data.nativeProductId)
+        : null;
+      const result =
+        primary && nativeTier && primary.tier === nativeTier ? "matched" : "mismatched";
+
+      if (parsed.data.result !== result) {
+        app.log.warn(
+          {
+            userId: session.userId,
+            clientResult: parsed.data.result,
+            serverResult: result,
+            nativeProductId: parsed.data.nativeProductId,
+            primaryTier: primary?.tier ?? null,
+          },
+          "iap_integrity_result_corrected",
+        );
+      }
+
+      await recordIapIntegrityResult({
+        userId: session.userId,
+        client,
+        result,
+        primary,
+      });
+      return await buildMeBody(session.userId, meRuntimeEnv());
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      app.log.error({ err: e, route: "/billing/iap/integrity-check" }, "iap_integrity_failed");
+      return reply.code(500).send({ error: "iap_integrity_failed" });
     }
   });
 }

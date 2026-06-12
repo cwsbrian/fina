@@ -6,10 +6,12 @@
 import type { Purchase } from "react-native-iap";
 import { Platform } from "react-native";
 import { isExpoGo } from "../env";
-import type { IAPProductId } from "@fina/shared";
+import type { IAPProductId, PaidTier } from "@fina/shared";
+import { deriveAppleToken, deriveGoogleToken } from "./binding";
 
 const SKUS: IAPProductId[] =
   Platform.OS === "ios" ? ["fina_pro_monthly", "max_monthly"] : ["pro_monthly", "max_monthly"];
+const PURCHASE_FLOW_TIMEOUT_MS = 90_000;
 
 /** Error class surfaced to callers so the UI can map react-native-iap's
  *  string codes to user-friendly messaging. The code is the canonical
@@ -96,14 +98,26 @@ function toIapError(e: any): IapPurchaseError {
   if (code === "E_ALREADY_OWNED")
     return new IapPurchaseError(code, true, "Already owned — try Restore");
   if (
+    code === "already-owned" ||
+    normalizedCode === "ALREADY_OWNED" ||
+    lowerMessage.includes("already owned") ||
     code === "duplicate-purchase" ||
     message.toLowerCase().includes("duplicate purchase update")
   ) {
     return new IapPurchaseError("E_ALREADY_OWNED", true, "Already owned — restoring purchase");
   }
   if (code === "E_NETWORK_ERROR") return new IapPurchaseError(code, true, "Network error");
-  if (code === "E_ITEM_UNAVAILABLE")
-    return new IapPurchaseError(code, false, "Product unavailable");
+  if (
+    code === "E_ITEM_UNAVAILABLE" ||
+    normalizedCode === "ITEM_UNAVAILABLE" ||
+    normalizedCode === "SKU_NOT_FOUND"
+  ) {
+    return new IapPurchaseError(
+      "E_ITEM_UNAVAILABLE",
+      false,
+      "This subscription is not available for purchase in the current Google Play test setup.",
+    );
+  }
   if (code === "E_SERVICE_ERROR") return new IapPurchaseError(code, true, "Service unavailable");
   return new IapPurchaseError(code || "E_UNKNOWN", false, message || "Purchase failed");
 }
@@ -117,6 +131,16 @@ function receiptForPurchase(purchase: Purchase, platform: "ios" | "android"): st
   return typeof receipt === "string" && receipt.length > 0 ? receipt : null;
 }
 
+function productIdForTier(tier: PaidTier): IAPProductId {
+  if (tier === "max") return "max_monthly";
+  return Platform.OS === "ios" ? "fina_pro_monthly" : "pro_monthly";
+}
+
+function productIdsForAndroidTier(tier: PaidTier): IAPProductId[] {
+  if (tier === "max") return ["max_monthly"];
+  return ["pro_monthly", "fina_pro_monthly"];
+}
+
 /** Call ONLY after server returns 2xx — protects against
  *  client-finishing-before-server-records race. No-op under Expo Go. */
 export async function finishPurchase(p: Purchase): Promise<void> {
@@ -125,7 +149,7 @@ export async function finishPurchase(p: Purchase): Promise<void> {
   await iap.finishTransaction({ purchase: p as any, isConsumable: false });
 }
 
-type RestorablePurchase = {
+export type RestorablePurchase = {
   productId: IAPProductId;
   receipt: string;
   platform: "ios" | "android";
@@ -174,6 +198,173 @@ function pushRestorableReceipt(
   out.push({ productId: productId as IAPProductId, receipt, platform });
 }
 
+function purchaseFromNativeResult(
+  result: Purchase | Purchase[] | null | undefined,
+  expectedProductId: IAPProductId,
+  platform: "ios" | "android",
+): RestorablePurchase | null {
+  const purchases = Array.isArray(result) ? result : result ? [result] : [];
+  const out: RestorablePurchase[] = [];
+  const seen = new Set<string>();
+  for (const purchase of purchases) {
+    pushRestorablePurchase(out, seen, purchase, platform);
+  }
+  return out.find((purchase) => purchase.productId === expectedProductId) ?? null;
+}
+
+async function resolveAndroidSubscriptionProduct(
+  iap: RnIap,
+  tier: PaidTier,
+): Promise<{ productId: IAPProductId; subscriptionOffers: Array<{ sku: string; offerToken: string }> }> {
+  const candidates = productIdsForAndroidTier(tier);
+  const products = await iap.fetchProducts({ skus: candidates, type: "subs" });
+  const product = candidates
+    .map((candidate) =>
+      (products ?? []).find((item: any) => {
+        const id = item?.id ?? item?.productId;
+        return id === candidate;
+      }),
+    )
+    .find(Boolean) as any;
+
+  if (!product) {
+    throw new IapPurchaseError(
+      "E_ITEM_UNAVAILABLE",
+      false,
+      "This subscription product is not available in Google Play for this build.",
+    );
+  }
+
+  const productId = (product.id ?? product.productId) as IAPProductId;
+
+  const offers = [
+    ...(Array.isArray(product?.subscriptionOffers) ? product.subscriptionOffers : []),
+    ...(Array.isArray(product?.subscriptionOfferDetailsAndroid)
+      ? product.subscriptionOfferDetailsAndroid
+      : []),
+  ];
+  const offer = offers.find((item: any) => {
+    const token = item?.offerTokenAndroid ?? item?.offerToken;
+    return typeof token === "string" && token.length > 0;
+  }) as any;
+  const offerToken = offer?.offerTokenAndroid ?? offer?.offerToken;
+  if (typeof offerToken !== "string" || offerToken.length === 0) {
+    throw new IapPurchaseError(
+      "E_ITEM_UNAVAILABLE",
+      false,
+      "This subscription product has no available Google Play base plan offer.",
+    );
+  }
+  return { productId, subscriptionOffers: [{ sku: productId, offerToken }] };
+}
+
+export async function requestSubscriptionPurchase(
+  tier: PaidTier,
+  userId: string,
+): Promise<RestorablePurchase> {
+  const iap = await ensureConnected();
+  if (Platform.OS !== "ios" && Platform.OS !== "android") {
+    throw new IapPurchaseError("E_RN_IAP_UNAVAILABLE", false, "Unsupported platform.");
+  }
+
+  const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
+  let productId = productIdForTier(tier);
+  let subscriptionOffers: Array<{ sku: string; offerToken: string }> | undefined;
+  let androidReplacement:
+    | { oldProductId: string; replacementMode: "with-time-proration" | "deferred" }
+    | undefined;
+  if (platform === "android") {
+    const resolved = await resolveAndroidSubscriptionProduct(iap, tier);
+    productId = resolved.productId;
+    subscriptionOffers = resolved.subscriptionOffers;
+    try {
+      const active = await iap.getActiveSubscriptions(SKUS);
+      const current = active.find(
+        (sub) => sub.isActive && sub.productId && sub.productId !== productId,
+      );
+      if (current?.productId) {
+        androidReplacement = {
+          oldProductId: current.productId,
+          replacementMode:
+            current.productId === "max_monthly" && productId !== "max_monthly"
+              ? "deferred"
+              : "with-time-proration",
+        };
+      }
+    } catch {
+      // If Play cannot report active subscriptions, start the normal flow.
+    }
+  }
+
+  return await new Promise<RestorablePurchase>((resolve, reject) => {
+    let settled = false;
+    let purchaseSub: { remove(): void } | null = null;
+    let errorSub: { remove(): void } | null = null;
+    let timeout: ReturnType<typeof setTimeout> | null = null;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timeout) clearTimeout(timeout);
+      purchaseSub?.remove();
+      errorSub?.remove();
+      fn();
+    };
+
+    purchaseSub = iap.purchaseUpdatedListener((purchase) => {
+      const next = purchaseFromNativeResult(purchase, productId, platform);
+      if (next) settle(() => resolve(next));
+    });
+    errorSub = iap.purchaseErrorListener((error) => {
+      settle(() => reject(toIapError(error)));
+    });
+    timeout = setTimeout(() => {
+      settle(() =>
+        reject(
+          new IapPurchaseError(
+            "E_PURCHASE_FLOW_TIMEOUT",
+            true,
+            "Google Play did not return a purchase result. Your current subscription was refreshed; try again if nothing changed.",
+          ),
+        ),
+      );
+    }, PURCHASE_FLOW_TIMEOUT_MS);
+
+    void (async () => {
+      try {
+        const result =
+          platform === "ios"
+            ? await iap.requestPurchase({
+                request: {
+                  apple: {
+                    sku: productId,
+                    appAccountToken: deriveAppleToken(userId),
+                    andDangerouslyFinishTransactionAutomatically: false,
+                  },
+                },
+                type: "subs",
+              })
+            : await iap.requestPurchase({
+                request: {
+                  google: {
+                    skus: [productId],
+                    obfuscatedAccountId: deriveGoogleToken(userId),
+                    ...(subscriptionOffers ? { subscriptionOffers } : {}),
+                    ...(androidReplacement
+                      ? { subscriptionProductReplacementParams: androidReplacement }
+                      : {}),
+                  },
+                },
+                type: "subs",
+              });
+        const next = purchaseFromNativeResult(result, productId, platform);
+        if (next) settle(() => resolve(next));
+      } catch (e) {
+        settle(() => reject(toIapError(e)));
+      }
+    })();
+  });
+}
+
 async function collectCurrentIOSEntitlements(
   iap: RnIap,
   out: RestorablePurchase[],
@@ -196,6 +387,32 @@ async function collectCurrentIOSEntitlements(
       // Some products simply have no current entitlement.
     }
   }
+}
+
+export async function listCurrentNativeEntitlements(): Promise<RestorablePurchase[]> {
+  const iap = getIap();
+  if (!iap) return [];
+  await ensureConnected();
+  const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
+  const out: RestorablePurchase[] = [];
+  const seen = new Set<string>();
+
+  if (platform === "ios") {
+    await collectCurrentIOSEntitlements(iap, out, seen);
+    return out;
+  }
+
+  try {
+    const active = await iap.getActiveSubscriptions(SKUS);
+    for (const sub of active) {
+      if (!sub.isActive) continue;
+      const receipt = sub.purchaseTokenAndroid ?? sub.purchaseToken;
+      pushRestorableReceipt(out, seen, sub.productId, receipt, platform, sub.transactionId);
+    }
+  } catch {
+    // No active Play subscription visible on this device.
+  }
+  return out;
 }
 
 export async function listAvailablePurchases(): Promise<RestorablePurchase[]> {
@@ -238,42 +455,15 @@ export async function showNativeSubscriptionManagement(): Promise<RestorablePurc
   const iap = await ensureConnected();
   if (Platform.OS !== "ios") return [];
 
-  let changed: Purchase[] = [];
   try {
-    changed = await iap.showManageSubscriptionsIOS();
+    if (typeof iap.deepLinkToSubscriptions === "function") {
+      await iap.deepLinkToSubscriptions();
+      return [];
+    }
+    return [];
   } catch (e) {
     throw toIapError(e);
   }
-
-  const out: RestorablePurchase[] = [];
-  const seen = new Set<string>();
-
-  for (const p of changed) pushRestorablePurchase(out, seen, p, "ios");
-
-  try {
-    const all: Purchase[] = await iap.getAvailablePurchases({
-      alsoPublishToEventListenerIOS: false,
-      onlyIncludeActiveItemsIOS: true,
-    });
-    for (const p of all) pushRestorablePurchase(out, seen, p, "ios");
-  } catch {
-    // Best-effort; App Store server notifications may still update the backend.
-  }
-
-  if (out.length === 0) {
-    await collectCurrentIOSEntitlements(iap, out, seen);
-  }
-
-  try {
-    const active = await iap.getActiveSubscriptions(SKUS);
-    for (const sub of active) {
-      if (!sub.isActive) continue;
-      pushRestorableReceipt(out, seen, sub.productId, sub.purchaseToken, "ios", sub.transactionId);
-    }
-  } catch {
-    // Best-effort; the caller falls back to refetching /me when no receipt is available.
-  }
-  return out;
 }
 
 export async function disconnect(): Promise<void> {

@@ -11,6 +11,7 @@ import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
 import { computeEffectiveTier } from "../auth/tier.js";
 import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
 import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
+import { iapIntegrityForMe } from "../iap/integrity.js";
 
 // Stripe requires trial_end to be at least 48h in the future (codex R3).
 // Trials expiring sooner than this are treated as already-expired — the
@@ -72,6 +73,7 @@ export async function buildMeBody(
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
     subscription,
+    iapIntegrity: iapIntegrityForMe(user, primary, null, null),
   };
 }
 

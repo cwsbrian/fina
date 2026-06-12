@@ -68,6 +68,13 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       const existing = await prisma.webhookEvent.findUnique({ where: { id: eventId } });
       if (existing) return { ok: true };
 
+      if (notification.notificationType === "TEST") {
+        await prisma.webhookEvent.create({
+          data: { id: eventId, source: "iap_apple", type: "TEST" },
+        });
+        return { ok: true };
+      }
+
       // Family Sharing revocation — flip Subscription.status to canceled
       if (
         notification.notificationType === "DID_CHANGE_RENEWAL_STATUS" &&
@@ -285,6 +292,18 @@ export async function billingIapWebhookRoutes(app: FastifyInstance): Promise<voi
       return reply.code(200).send({ ok: true });
     } catch (e) {
       if (e instanceof HttpError && e.statusCode === 400) {
+        app.log.warn(
+          {
+            error: e.code,
+            reason: e.message,
+            hasAuthorization: Boolean(req.headers.authorization),
+            subscription: (req.body as { subscription?: string } | undefined)?.subscription,
+            expectedSubscription: process.env.GOOGLE_PUBSUB_SUBSCRIPTION_NAME,
+            expectedAudience: process.env.GOOGLE_PUBSUB_VERIFY_AUDIENCE,
+            expectedEmail: process.env.GOOGLE_PUBSUB_VERIFY_EMAIL,
+          },
+          "webhook_iap_google_rejected",
+        );
         return reply.code(400).send({ error: (e as HttpError).code });
       }
       app.log.error({ err: e }, "webhook_iap_google_failed");

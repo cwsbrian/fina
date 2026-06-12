@@ -14,9 +14,12 @@ export type AppleIapConfig = {
   appAppleId?: number;
 };
 
-export type GoogleIapConfig = {
+export type GoogleReceiptIapConfig = {
   packageName: string;
   serviceAccount: { client_email: string; private_key: string; [k: string]: unknown };
+};
+
+export type GoogleIapConfig = GoogleReceiptIapConfig & {
   pubsubVerifyAudience: string;
   pubsubVerifyEmail: string;
   pubsubSubscriptionName: string;
@@ -98,20 +101,11 @@ export function requireAppleIapEnv(env: NodeJS.ProcessEnv): AppleIapConfig {
   };
 }
 
-/** Validate ONLY the Google half. Pub/Sub fields are required because
- *  the webhook route depends on them; we keep them in the same config
- *  so callers that need receipt validation alone (checkout/restore)
- *  still pay the full Google cost up front rather than splitting into
- *  a third type. If you ever want receipt-only Google (no Pub/Sub),
- *  add a `requireGoogleReceiptEnv()` variant — for now Pub/Sub is
- *  cheap enough to require together. */
-export function requireGoogleIapEnv(env: NodeJS.ProcessEnv): GoogleIapConfig {
-  const n = need(env);
-  const saRaw = n("GOOGLE_SERVICE_ACCOUNT_JSON");
+function parseGoogleServiceAccount(saRaw: string): GoogleReceiptIapConfig["serviceAccount"] {
   const saText = saRaw.trimStart().startsWith("{")
     ? saRaw
     : Buffer.from(saRaw, "base64").toString("utf8");
-  let serviceAccount: GoogleIapConfig["serviceAccount"];
+  let serviceAccount: GoogleReceiptIapConfig["serviceAccount"];
   try {
     serviceAccount = JSON.parse(saText);
   } catch {
@@ -120,10 +114,28 @@ export function requireGoogleIapEnv(env: NodeJS.ProcessEnv): GoogleIapConfig {
   if (!serviceAccount.client_email || !serviceAccount.private_key) {
     throw new HttpError(503, "iap_not_configured", "GOOGLE_SERVICE_ACCOUNT_JSON missing client_email/private_key");
   }
+  return serviceAccount;
+}
 
+/** Validate the Google fields needed for direct purchase receipt
+ *  validation. Checkout, restore, and refresh do not need Pub/Sub
+ *  verification settings; those are only required by the RTDN webhook. */
+export function requireGoogleReceiptIapEnv(env: NodeJS.ProcessEnv): GoogleReceiptIapConfig {
+  const n = need(env);
   return {
     packageName: n("GOOGLE_PACKAGE_NAME"),
-    serviceAccount,
+    serviceAccount: parseGoogleServiceAccount(n("GOOGLE_SERVICE_ACCOUNT_JSON")),
+  };
+}
+
+/** Validate the full Google IAP config, including Pub/Sub fields used
+ *  by Real-time Developer Notifications. */
+export function requireGoogleIapEnv(env: NodeJS.ProcessEnv): GoogleIapConfig {
+  const n = need(env);
+  const receipt = requireGoogleReceiptIapEnv(env);
+
+  return {
+    ...receipt,
     pubsubVerifyAudience: n("GOOGLE_PUBSUB_VERIFY_AUDIENCE"),
     pubsubVerifyEmail: n("GOOGLE_PUBSUB_VERIFY_EMAIL"),
     pubsubSubscriptionName: n("GOOGLE_PUBSUB_SUBSCRIPTION_NAME"),

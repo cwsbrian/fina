@@ -61,6 +61,7 @@ async function sendToUserDevices(
   // Build carrier messages — filter out malformed tokens.
   const messages: CarrierMessage[] = [];
   for (const d of devices) {
+    if (!d.expoPushToken) continue;
     if (!Expo.isExpoPushToken(d.expoPushToken)) {
       logWarn({ userId, removedDeviceId: d.id }, "skipping malformed push token");
       continue;

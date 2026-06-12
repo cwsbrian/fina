@@ -1,6 +1,6 @@
 import { google } from "googleapis";
 import { HttpError } from "../auth/context.js";
-import type { GoogleIapConfig } from "./env-guard.js";
+import type { GoogleReceiptIapConfig } from "./env-guard.js";
 import { mapGoogleStatus } from "./status-mapping.js";
 import type { MappedStatus, GoogleStatusInput } from "./status-mapping.js";
 
@@ -21,7 +21,7 @@ export type NormalizedGooglePurchase = {
 export class GoogleClient {
   private androidPublisher;
 
-  constructor(private cfg: GoogleIapConfig) {
+  constructor(private cfg: GoogleReceiptIapConfig) {
     const auth = new google.auth.GoogleAuth({
       credentials: cfg.serviceAccount as any,
       scopes: ["https://www.googleapis.com/auth/androidpublisher"],

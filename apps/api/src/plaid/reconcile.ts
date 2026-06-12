@@ -8,7 +8,7 @@ import { sanitizePlaidError } from "./client.js";
 import { removeItemForBilling } from "./items.js";
 import { stripeClient } from "../stripe/client.js";
 import { syncSubscriptionFromStripe } from "../stripe/sync-sub.js";
-import { requireAppleIapEnv, requireGoogleIapEnv } from "../iap/env-guard.js";
+import { requireAppleIapEnv, requireGoogleReceiptIapEnv } from "../iap/env-guard.js";
 import { AppleClient } from "../iap/apple-client.js";
 import { GoogleClient } from "../iap/google-client.js";
 import { filterEnvironmentRows } from "../billing/precedence.js";
@@ -88,7 +88,7 @@ export async function refreshBillingStateForUser(env: Env, userId: string): Prom
       continue;
     }
 
-    googleClient ??= new GoogleClient(requireGoogleIapEnv(process.env));
+    googleClient ??= new GoogleClient(requireGoogleReceiptIapEnv(process.env));
     const purchase = await googleClient.fetchAndNormalize(row.sourceSubscriptionId);
     const tier = tierForIapProductId(purchase.productId);
     const pendingTier = purchase.pendingProductId ? tierForIapProductId(purchase.pendingProductId) : null;

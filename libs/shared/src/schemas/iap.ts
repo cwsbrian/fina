@@ -31,3 +31,10 @@ export const IAPRestoreBody = z.object({
     .max(20),
 });
 export type IAPRestoreBody = z.infer<typeof IAPRestoreBody>;
+
+export const IAPIntegrityCheckBody = z.object({
+  platform: IAPPlatform,
+  result: z.enum(["matched", "mismatched"]),
+  nativeProductId: IAPProductIdEnum.nullable(),
+});
+export type IAPIntegrityCheckBody = z.infer<typeof IAPIntegrityCheckBody>;

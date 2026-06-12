@@ -25,6 +25,12 @@ import { localMidnightToUtc } from "../chat/tools/periods.js";
 import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js";
 import { refreshDueIapSubscriptionsForUser } from "../iap/refresh.js";
 import type { RefreshDueIapOptions } from "../iap/refresh.js";
+import {
+  iapIntegrityForMe,
+  readNativeIapClient,
+  touchNativeIapDevice,
+  type NativeIapPlatform,
+} from "../iap/integrity.js";
 
 /** Convert "YYYY-MM-DD" + tz → UTC instant at NOON in that tz. Noon (not
  *  midnight) so the row's date-portion-in-tz unambiguously reads as the
@@ -36,9 +42,11 @@ function tzNoonUtc(dateStr: string, tz: string): Date {
 }
 
 function toMeDTO(
-  user: Awaited<ReturnType<typeof prisma.user.findUnique>> & object,
-  activeSubs: Array<{ tier: string; status: string; currentPeriodEnd: Date; cancelAtPeriodEnd: boolean; source: string; pendingTier: string | null; pendingTierAt: Date | null; environment: string; createdAt: Date; sourceSubscriptionId: string }>,
+  user: NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>,
+  activeSubs: Array<{ tier: string; status: string; currentPeriodEnd: Date; cancelAtPeriodEnd: boolean; source: SubscriptionDTO["source"]; pendingTier: string | null; pendingTierAt: Date | null; environment: string; createdAt: Date; updatedAt: Date; sourceSubscriptionId: string }>,
   runtimeEnv: "sandbox" | "production",
+  iapDevice: Awaited<ReturnType<typeof touchNativeIapDevice>>,
+  iapPlatform: NativeIapPlatform | null,
 ): MeDTO {
   // Sandbox env filter MUST run before precedence — stale sandbox rows
   // should not influence the primary pick or the EffectiveTier.
@@ -80,6 +88,7 @@ function toMeDTO(
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
     subscription,
+    iapIntegrity: iapIntegrityForMe(user, primary, iapPlatform, iapDevice),
   };
 }
 
@@ -87,6 +96,7 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
   app.get("/me", async (req, reply) => {
     try {
       const session = await requireSession(req, app);
+      const nativeIapClient = readNativeIapClient(req);
       const injected = (app.fina.iap ?? {}) as {
         appleClient?: RefreshDueIapOptions["appleClient"];
         googleClient?: RefreshDueIapOptions["googleClient"];
@@ -99,14 +109,17 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       } catch (e) {
         app.log.warn({ err: e, userId: session.userId }, "iap_due_refresh_failed");
       }
-      const user = await prisma.user.findUnique({ where: { id: session.userId } });
+      const [user, iapDevice] = await Promise.all([
+        prisma.user.findUnique({ where: { id: session.userId } }),
+        touchNativeIapDevice(session.userId, nativeIapClient),
+      ]);
       if (!user) return reply.code(404).send({ error: "no_user" });
       const activeSubs = await prisma.subscription.findMany({
         where: { userId: user.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
         orderBy: { currentPeriodEnd: "desc" },
       });
       const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
-      return toMeDTO(user, activeSubs, runtimeEnv);
+      return toMeDTO(user, activeSubs, runtimeEnv, iapDevice, nativeIapClient?.platform ?? null);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
@@ -229,12 +242,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         where: { id: session.userId },
         data,
       });
+      const nativeIapClient = readNativeIapClient(req);
+      const iapDevice = await touchNativeIapDevice(session.userId, nativeIapClient);
       const activeSubs = await prisma.subscription.findMany({
         where: { userId: updated.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
         orderBy: { currentPeriodEnd: "desc" },
       });
       const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
-      return toMeDTO(updated, activeSubs, runtimeEnv);
+      return toMeDTO(updated, activeSubs, runtimeEnv, iapDevice, nativeIapClient?.platform ?? null);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;

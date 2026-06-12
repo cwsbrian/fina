@@ -36,8 +36,8 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
-import { openManageBilling } from "../../src/iap/manage";
-import { syncNativeSubscriptionManagement } from "../../src/iap/sync";
+import { nativeBillingUnavailableMessage, openManageBilling } from "../../src/iap/manage";
+import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 import { getAccountSettingsActions } from "../../src/settings/account-actions";
 
 type PlaidItemSummary = {
@@ -60,8 +60,11 @@ export default function More() {
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
 
   const loadMe = useCallback(() => {
-    apiFetch<Me>("/me")
-      .then(setMe)
+    fetchMeWithNativeSubscriptionSync()
+      .then((nextMe) => {
+        setMe(nextMe);
+        if (nextMe.iapIntegrity.isPlanMismatch) router.push("/plan" as never);
+      })
       .catch(() => {});
   }, []);
 
@@ -147,20 +150,20 @@ export default function More() {
 
   const onManageBilling = useCallback(async () => {
     if (openingBilling) return;
+    if (!me?.subscription && Platform.OS === "android") {
+      router.push("/plan" as never);
+      return;
+    }
+    const unavailable = nativeBillingUnavailableMessage(me?.subscription?.source);
+    if (unavailable) {
+      Alert.alert("Manage subscription", unavailable);
+      return;
+    }
     setOpeningBilling(true);
     try {
-      if (Platform.OS === "ios") {
-        const nextMe = await syncNativeSubscriptionManagement();
-        setMe(nextMe);
-      } else {
-        await openManageBilling(me?.subscription?.tier);
-      }
+      await openManageBilling(me?.subscription?.tier, me?.subscription?.source);
+      loadMe();
     } catch (e: any) {
-      if (Platform.OS === "ios") {
-        console.warn("[billing.native] closed or failed", e);
-        loadMe();
-        return;
-      }
       Alert.alert("Couldn't open store billing", e?.message ?? "Try again.");
     } finally {
       setOpeningBilling(false);
@@ -381,18 +384,10 @@ export default function More() {
           />
         </Group>
 
-        {/* Subscription — three modes:
-            - Stripe-owned (web): rows look identical to other modes (Plan + Billing)
-              but tap fires an Alert telling the user to manage on withfina.com.
-            - iOS non-Stripe: Plan + Manage billing open native subscription
-              management, even without a subscription on file.
-            - Google OR free/trial on Android: Plan + Manage billing use the
-              platform billing surface when a billing target is available. */}
+        {/* Subscription */}
         {(() => {
           const sub = me?.subscription;
           const isStripeOwned = sub?.source === "stripe";
-          const opensNativeBilling = Platform.OS === "ios" && !isStripeOwned;
-          const hasPlanDetails = Boolean(sub);
           const onStripeManagedTap = (label: string) =>
             Alert.alert(
               label,
@@ -416,11 +411,9 @@ export default function More() {
                   onPress={
                     isStripeOwned
                       ? () => onStripeManagedTap("Plan")
-                      : opensNativeBilling
-                        ? onManageBilling
-                        : hasPlanDetails
-                          ? () => router.push("/plan/details" as never)
-                          : onManageBilling
+                      : Platform.OS === "android"
+                        ? () => router.push("/plan" as never)
+                        : onManageBilling
                   }
                 />
                 {isStripeOwned ? (
@@ -433,13 +426,17 @@ export default function More() {
                 ) : (
                   <SettingsRow
                     icon="card-outline"
-                    title="Manage billing"
+                    title={sub ? "Manage billing" : "Subscribe"}
                     detail={
                       openingBilling ? (
                         <ActivityIndicator size="small" color={colors.primary} />
                       ) : undefined
                     }
-                    onPress={onManageBilling}
+                    onPress={
+                      Platform.OS === "android" && !sub
+                        ? () => router.push("/plan" as never)
+                        : onManageBilling
+                    }
                     last
                   />
                 )}

@@ -64,8 +64,8 @@ export async function verifyGoogleEnvelope(
   if (payload.aud !== cfg.pubsubVerifyAudience) {
     throw new HttpError(400, "invalid_receipt", "oidc audience mismatch");
   }
-  if (payload.email !== cfg.pubsubVerifyEmail || payload.azp !== cfg.pubsubVerifyEmail) {
-    throw new HttpError(400, "invalid_receipt", "oidc email/azp mismatch");
+  if (payload.email !== cfg.pubsubVerifyEmail || payload.email_verified !== true) {
+    throw new HttpError(400, "invalid_receipt", "oidc email mismatch");
   }
   const nowSec = Math.floor(Date.now() / 1000);
   if (!payload.exp || payload.exp < nowSec) {

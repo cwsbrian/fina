@@ -62,7 +62,8 @@ describe("verifyGoogleEnvelope", () => {
       aud: googleCfg.pubsubVerifyAudience,
       iss: "https://accounts.google.com",
       email: googleCfg.pubsubVerifyEmail,
-      azp: googleCfg.pubsubVerifyEmail,
+      azp: "113774264463038321964",
+      email_verified: true,
       exp: Math.floor(Date.now() / 1000) + 60,
     }),
   }) });
@@ -91,7 +92,7 @@ describe("verifyGoogleEnvelope", () => {
 
   it("rejects when audience mismatches", async () => {
     const bad = { verifyIdToken: vi.fn().mockResolvedValue({
-      getPayload: () => ({ aud: "wrong", iss: "https://accounts.google.com", email: googleCfg.pubsubVerifyEmail, azp: googleCfg.pubsubVerifyEmail, exp: Math.floor(Date.now()/1000)+60 }),
+      getPayload: () => ({ aud: "wrong", iss: "https://accounts.google.com", email: googleCfg.pubsubVerifyEmail, azp: "113774264463038321964", email_verified: true, exp: Math.floor(Date.now()/1000)+60 }),
     }) };
     await expect(
       verifyGoogleEnvelope("Bearer x", makeEnvelope(), googleCfg, { oidcClient: bad as any }),
@@ -100,7 +101,7 @@ describe("verifyGoogleEnvelope", () => {
 
   it("rejects when email mismatches", async () => {
     const bad = { verifyIdToken: vi.fn().mockResolvedValue({
-      getPayload: () => ({ aud: googleCfg.pubsubVerifyAudience, iss: "https://accounts.google.com", email: "attacker@evil.com", azp: googleCfg.pubsubVerifyEmail, exp: Math.floor(Date.now()/1000)+60 }),
+      getPayload: () => ({ aud: googleCfg.pubsubVerifyAudience, iss: "https://accounts.google.com", email: "attacker@evil.com", azp: "113774264463038321964", email_verified: true, exp: Math.floor(Date.now()/1000)+60 }),
     }) };
     await expect(
       verifyGoogleEnvelope("Bearer x", makeEnvelope(), googleCfg, { oidcClient: bad as any }),
@@ -109,7 +110,7 @@ describe("verifyGoogleEnvelope", () => {
 
   it("rejects expired token (zero clock skew)", async () => {
     const bad = { verifyIdToken: vi.fn().mockResolvedValue({
-      getPayload: () => ({ aud: googleCfg.pubsubVerifyAudience, iss: "https://accounts.google.com", email: googleCfg.pubsubVerifyEmail, azp: googleCfg.pubsubVerifyEmail, exp: Math.floor(Date.now()/1000) - 10 }),
+      getPayload: () => ({ aud: googleCfg.pubsubVerifyAudience, iss: "https://accounts.google.com", email: googleCfg.pubsubVerifyEmail, azp: "113774264463038321964", email_verified: true, exp: Math.floor(Date.now()/1000) - 10 }),
     }) };
     await expect(
       verifyGoogleEnvelope("Bearer x", makeEnvelope(), googleCfg, { oidcClient: bad as any }),

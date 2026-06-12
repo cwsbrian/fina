@@ -42,6 +42,7 @@ import {
 import { analysisRequestPath } from "../../src/analysis/request";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
+import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 
 const HEADER_HEIGHT = 84;
 const CURRENCY = "CAD";
@@ -165,10 +166,14 @@ export default function Home() {
     setErr(null);
     setBackendUnavailable(false);
     try {
-      const wsId = await bootstrapActiveWorkspace();
-      const meData = await apiFetch<Me>("/me");
+      const meData = await fetchMeWithNativeSubscriptionSync();
       if (runId !== loadRunId.current) return;
       setMe(meData);
+      if (meData.iapIntegrity.isPlanMismatch) {
+        router.replace("/plan" as never);
+        return;
+      }
+      const wsId = await bootstrapActiveWorkspace();
       const now = new Date();
       if (!wsId) return;
 

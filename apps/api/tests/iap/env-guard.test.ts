@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, it, expect } from "vitest";
-import { requireIapEnv } from "../../src/iap/env-guard.js";
+import { requireGoogleReceiptIapEnv, requireIapEnv } from "../../src/iap/env-guard.js";
 
 const TEST_ASC_PRIVATE_KEY = generateKeyPairSync("ec", {
   namedCurve: "prime256v1",
@@ -13,6 +13,28 @@ const APPLE_ONLY = {
   APPLE_ASC_PRIVATE_KEY: TEST_ASC_PRIVATE_KEY,
   APPLE_ENV: "sandbox" as const,
 };
+
+const GOOGLE_RECEIPT_ONLY = {
+  GOOGLE_PACKAGE_NAME: "app.fina",
+  GOOGLE_SERVICE_ACCOUNT_JSON: '{"client_email":"x@y","private_key":"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"}',
+};
+
+describe("requireGoogleReceiptIapEnv", () => {
+  it("returns Google receipt config without Pub/Sub env", () => {
+    const cfg = requireGoogleReceiptIapEnv(GOOGLE_RECEIPT_ONLY as any);
+    expect(cfg.packageName).toBe("app.fina");
+    expect(cfg.serviceAccount.client_email).toBe("x@y");
+  });
+
+  it("accepts base64-encoded GOOGLE_SERVICE_ACCOUNT_JSON without Pub/Sub env", () => {
+    const raw = '{"client_email":"x@y","private_key":"-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----\\n"}';
+    const cfg = requireGoogleReceiptIapEnv({
+      GOOGLE_PACKAGE_NAME: "app.fina",
+      GOOGLE_SERVICE_ACCOUNT_JSON: Buffer.from(raw).toString("base64"),
+    } as any);
+    expect(cfg.serviceAccount.private_key).toContain("BEGIN PRIVATE KEY");
+  });
+});
 
 describe("requireIapEnv", () => {
   it("returns apple+google configs when all set", () => {

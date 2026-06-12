@@ -3,6 +3,7 @@ import { prisma } from "../db.js";
 import { HttpError, requireSession } from "../auth/context.js";
 import { RegisterDeviceBody, UnregisterDeviceBody } from "@fina/shared";
 import { logInfo } from "../logger.js";
+import { readNativeIapClient } from "../iap/integrity.js";
 
 export async function devicesRoutes(app: FastifyInstance): Promise<void> {
   app.post("/devices", async (req, reply) => {
@@ -11,20 +12,66 @@ export async function devicesRoutes(app: FastifyInstance): Promise<void> {
       const parsed = RegisterDeviceBody.safeParse(req.body);
       if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
       const { expoPushToken, platform } = parsed.data;
+      const client = readNativeIapClient(req);
 
-      await prisma.userDevice.upsert({
-        where: { userId_expoPushToken: { userId: session.userId, expoPushToken } },
-        create: {
-          userId: session.userId,
-          expoPushToken,
-          platform,
-          lastSeenAt: new Date(),
-        },
-        update: {
-          platform,           // in case user reinstalls; keep platform fresh
-          lastSeenAt: new Date(),
-        },
-      });
+      if (client) {
+        const existingByToken = await prisma.userDevice.findUnique({
+          where: { userId_expoPushToken: { userId: session.userId, expoPushToken } },
+          select: { id: true },
+        });
+        if (existingByToken) {
+          await prisma.userDevice.deleteMany({
+            where: {
+              userId: session.userId,
+              clientDeviceId: client.clientDeviceId,
+              id: { not: existingByToken.id },
+            },
+          });
+          await prisma.userDevice.update({
+            where: { id: existingByToken.id },
+            data: {
+              clientDeviceId: client.clientDeviceId,
+              platform,
+              lastSeenAt: new Date(),
+            },
+          });
+        } else {
+          await prisma.userDevice.upsert({
+            where: {
+              userId_clientDeviceId: {
+                userId: session.userId,
+                clientDeviceId: client.clientDeviceId,
+              },
+            },
+            create: {
+              userId: session.userId,
+              clientDeviceId: client.clientDeviceId,
+              expoPushToken,
+              platform,
+              lastSeenAt: new Date(),
+            },
+            update: {
+              expoPushToken,
+              platform,
+              lastSeenAt: new Date(),
+            },
+          });
+        }
+      } else {
+        await prisma.userDevice.upsert({
+          where: { userId_expoPushToken: { userId: session.userId, expoPushToken } },
+          create: {
+            userId: session.userId,
+            expoPushToken,
+            platform,
+            lastSeenAt: new Date(),
+          },
+          update: {
+            platform,           // in case user reinstalls; keep platform fresh
+            lastSeenAt: new Date(),
+          },
+        });
+      }
       return reply.code(204).send();
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

@@ -26,6 +26,9 @@ export type ApiClientOpts = {
   getCookieHeader?: () => string | null | Promise<string | null>;
   /** Whether to set `credentials: "include"` (web only — RN ignores it). */
   withCredentials?: boolean;
+  /** Optional extra headers, used by native clients for install-scoped
+   * metadata such as device id and platform. */
+  getExtraHeaders?: () => Record<string, string> | null | Promise<Record<string, string> | null>;
 };
 
 export type ApiFetch = <T>(path: string, init?: RequestInit) => Promise<T>;
@@ -34,6 +37,7 @@ export function makeApiFetch(opts: ApiClientOpts): ApiFetch {
   return async function apiFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
     const wsId = await opts.getActiveWorkspaceId();
     const cookie = opts.getCookieHeader ? await opts.getCookieHeader() : null;
+    const extraHeaders = opts.getExtraHeaders ? await opts.getExtraHeaders() : null;
 
     // Only declare content-type when there's actually a body — Fastify 5
     // rejects body-less POST/DELETE/PATCH with 400 "Body cannot be empty
@@ -50,6 +54,7 @@ export function makeApiFetch(opts: ApiClientOpts): ApiFetch {
           ...(hasBody ? { "content-type": "application/json" } : {}),
           ...(wsId ? { [WORKSPACE_HEADER]: wsId } : {}),
           ...(cookie ? { cookie } : {}),
+          ...(extraHeaders ?? {}),
           ...init.headers,
         },
       });

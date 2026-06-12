@@ -5,8 +5,9 @@ import { prisma } from "../../src/db.js";
 import { truncateAll } from "../helpers/db.js";
 import { signUpAndGetCookie } from "../helpers/auth.js";
 import { testEnv } from "../helpers/test-env.js";
-import { deriveAppleToken } from "../../src/iap/binding.js";
+import { deriveAppleToken, deriveGoogleToken } from "../../src/iap/binding.js";
 import { HttpError } from "../../src/auth/context.js";
+import { CLIENT_DEVICE_ID_HEADER, CLIENT_PLATFORM_HEADER } from "@fina/shared";
 
 vi.mock("../../src/plaid/reconcile.js", () => ({
   reconcilePlaidItemsForUser: vi.fn().mockResolvedValue({ kept: [], disconnected: [], failed: [] }),
@@ -17,7 +18,7 @@ vi.mock("../../src/plaid/reconcile.js", () => ({
 
 import { reconcilePlaidItemsForUser } from "../../src/plaid/reconcile.js";
 
-// Set IAP env vars so requireIapEnv(process.env) inside the route handlers passes.
+// Set IAP env vars so platform-specific env guards inside the route handlers pass.
 // These are sandbox-safe fake values — same shape used in env-guard.test.ts.
 process.env.APPLE_BUNDLE_ID = "com.fina.app";
 process.env.APPLE_ASC_ISSUER_ID = "00000000-0000-0000-0000-000000000000";
@@ -31,9 +32,6 @@ process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({
   client_email: "iap@fina.iam.gserviceaccount.com",
   private_key: "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n",
 });
-process.env.GOOGLE_PUBSUB_VERIFY_AUDIENCE = "https://api.fina.app/webhooks/iap/google";
-process.env.GOOGLE_PUBSUB_VERIFY_EMAIL = "iap-pubsub@fina.iam.gserviceaccount.com";
-process.env.GOOGLE_PUBSUB_SUBSCRIPTION_NAME = "projects/fina/subscriptions/iap-rtdn";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
 const fakeAppleClient: any = {
@@ -213,5 +211,121 @@ describe("POST /billing/iap/restore", () => {
 
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe("user_mismatch");
+  });
+
+  it("restores Android purchases with receipt env only", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "u7@test.com" });
+    fakeGoogleClient.fetchAndNormalize.mockResolvedValue({
+      obfuscatedExternalAccountId: deriveGoogleToken(userId),
+      acknowledgementState: "ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED",
+      subscriptionState: "SUBSCRIPTION_STATE_ACTIVE",
+      productId: "pro_monthly",
+      expiryTime: new Date(Date.now() + 30 * 86400_000),
+      pendingProductId: null,
+      pendingAt: null,
+      linkedPurchaseToken: null,
+      environment: "Sandbox",
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+      raw: {},
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/restore",
+      headers: { cookie },
+      payload: {
+        platform: "android",
+        purchases: [{ productId: "pro_monthly", receipt: "purchase-token" }],
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().subscription.source).toBe("iap_google");
+    expect(fakeGoogleClient.fetchAndNormalize).toHaveBeenCalledWith("purchase-token");
+    expect(reconcilePlaidItemsForUser).toHaveBeenCalledWith(testEnv(), userId);
+  });
+});
+
+describe("POST /billing/iap/integrity-check", () => {
+  it("records a matched native entitlement without locking the user", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "u8@test.com" });
+    await prisma.subscription.create({
+      data: {
+        userId,
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-integrity-1",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/integrity-check",
+      headers: {
+        cookie,
+        [CLIENT_DEVICE_ID_HEADER]: "ios-device-integrity-1",
+        [CLIENT_PLATFORM_HEADER]: "ios",
+      },
+      payload: {
+        platform: "ios",
+        result: "matched",
+        nativeProductId: "fina_pro_monthly",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().iapIntegrity.isPlanMismatch).toBe(false);
+    const [user, device] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+      prisma.userDevice.findUniqueOrThrow({
+        where: {
+          userId_clientDeviceId: {
+            userId,
+            clientDeviceId: "ios-device-integrity-1",
+          },
+        },
+      }),
+    ]);
+    expect(user.isPlanMismatch).toBe(false);
+    expect(device.lastIapIntegrityResult).toBe("matched");
+    expect(device.lastIapIntegrityCheckedAt).toBeTruthy();
+  });
+
+  it("locks the user when native entitlement tier mismatches the server tier", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "u9@test.com" });
+    await prisma.subscription.create({
+      data: {
+        userId,
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-integrity-2",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/integrity-check",
+      headers: {
+        cookie,
+        [CLIENT_DEVICE_ID_HEADER]: "ios-device-integrity-2",
+        [CLIENT_PLATFORM_HEADER]: "ios",
+      },
+      payload: {
+        platform: "ios",
+        result: "matched",
+        nativeProductId: "max_monthly",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().iapIntegrity.isPlanMismatch).toBe(true);
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(user.isPlanMismatch).toBe(true);
   });
 });

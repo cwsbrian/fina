@@ -2,6 +2,8 @@
 
 Mobile In-App Purchase (Apple StoreKit 2 + Google Play Billing) 를 sandbox 에서 end-to-end 로 돌려보는 절차. 처음 한 번 setup 한 다음에는 daily 테스트는 §7 부터 만 보면 됨.
 
+**플랫폼 설정값/웹훅 runbook:** `docs/runbooks/iap-platform-setup.md`
+
 **주요 코드 파일 위치:**
 - API IAP 코드: `apps/api/src/iap/*.ts`, `apps/api/src/routes/billing-iap*.ts`
 - Mobile IAP 코드: `apps/mobile/src/iap/*.ts`, `apps/mobile/app/plan/*.tsx`

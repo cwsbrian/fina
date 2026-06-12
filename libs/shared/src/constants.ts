@@ -6,6 +6,14 @@
  * header and read workspaceId from the request body instead. */
 export const WORKSPACE_HEADER = "x-workspace-id";
 
+/** Stable app-install identifier sent by mobile clients. The API uses this
+ * for per-device integrity throttles, not for authentication. */
+export const CLIENT_DEVICE_ID_HEADER = "x-fina-device-id";
+
+/** Mobile platform for the current install. Kept separate from user-agent so
+ * server-side billing logic can reason about native store ownership. */
+export const CLIENT_PLATFORM_HEADER = "x-fina-platform";
+
 /** Storage key for the user's last-selected workspace id. Cookie on web,
  * AsyncStorage on mobile. Same name across apps so the docs / debug tools
  * line up. */

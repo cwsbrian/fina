@@ -72,6 +72,25 @@ describe("POST /webhooks/iap/apple", () => {
     raw: {},
   });
 
+  it("records App Store Server Notifications test payloads without a transaction", async () => {
+    fakeAppleClient.verifyAndDecodeNotification.mockResolvedValue({
+      notificationUUID: "uuid-test",
+      notificationType: "TEST",
+      signedTransactionJws: "",
+      raw: {},
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: "/webhooks/iap/apple",
+      payload: { signedPayload: "fake-jws" },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(fakeAppleClient.verifyAndDecodeTransaction).not.toHaveBeenCalled();
+    const event = await prisma.webhookEvent.findUnique({ where: { id: "apple:uuid-test" } });
+    expect(event?.source).toBe("iap_apple");
+    expect(event?.type).toBe("TEST");
+  });
+
   it("happy path: existing Subscription row, syncs to active", async () => {
     await prisma.subscription.create({
       data: {
@@ -304,7 +323,8 @@ describe("POST /webhooks/iap/google", () => {
         aud: "https://api.fina.app/webhooks/iap/google",
         iss: "https://accounts.google.com",
         email: "iap@fina.iam.gserviceaccount.com",
-        azp: "iap@fina.iam.gserviceaccount.com",
+        azp: "113774264463038321964",
+        email_verified: true,
         exp: Math.floor(Date.now() / 1000) + 60,
       }),
     });
