@@ -16,13 +16,16 @@
 - Create `apps/api/src/billing/recovery.ts`: source-agnostic mapping from user/primary subscription/IAP device to `billingRecovery`.
 - Modify `apps/api/src/routes/me.ts`: include `billingRecovery` in `/me`.
 - Modify `apps/api/src/routes/billing.ts`: include `billingRecovery` in `/billing/sync` responses and clear mismatch when Stripe sync converges.
-- Modify `apps/api/src/routes/billing-iap.ts`: existing restore/checkout responses should receive `billingRecovery` through `buildMeBody`.
+- No direct edit expected in `apps/api/src/routes/billing-iap.ts`: existing restore/checkout responses receive `billingRecovery` through `buildMeBody`.
 - Modify `apps/mobile/src/api/billing.ts`: add `postBillingSync`.
+- Create `apps/mobile/src/billing/recovery-ui.ts`: small pure helpers for lock checks, recovery labels, and provider footnotes.
+- Create `apps/mobile/src/billing/recovery-ui.test.ts`: mobile recovery copy/action tests.
 - Modify `apps/mobile/src/iap/sync.ts`: keep native integrity checks but consume `billingRecovery` for lock decisions.
 - Modify `apps/mobile/app/(tabs)/index.tsx` and `apps/mobile/app/(tabs)/more.tsx`: route locked users using `billingRecovery.locked`.
 - Modify `apps/mobile/app/plan/index.tsx`: one recovery function that dispatches `restore_iap` or `sync_stripe`.
 - Test `apps/api/tests/billing-sync.test.ts`: Stripe recovery state and clearing behavior.
 - Test `apps/api/tests/iap/billing-iap.routes.test.ts`: Apple/Google recovery state mapping.
+- Test `apps/api/tests/me.test.ts`: normal `/me` recovery state.
 
 ---
 
@@ -33,12 +36,25 @@
 - Create: `apps/api/src/billing/recovery.ts`
 - Modify: `apps/api/src/routes/me.ts`
 - Modify: `apps/api/src/routes/billing.ts`
+- Test: `apps/api/tests/me.test.ts`
 - Test: `apps/api/tests/billing-sync.test.ts`
 - Test: `apps/api/tests/iap/billing-iap.routes.test.ts`
 
 - [ ] **Step 1: Write failing API expectations**
 
 Add these assertions to existing tests before implementation.
+
+In `apps/api/tests/me.test.ts`, inside `it("returns user + tier=pro + trial active for fresh signup", ...)`, add:
+
+```ts
+expect(body.billingRecovery).toEqual({
+  locked: false,
+  reason: null,
+  source: null,
+  action: null,
+  lastCheckedAt: null,
+});
+```
 
 In `apps/api/tests/billing-sync.test.ts`, inside `it("no-op for user with neither sessionId nor stripeCustomerId", ...)`, add:
 
@@ -108,6 +124,61 @@ it("maps a Stripe plan mismatch to sync_stripe and clears it after Stripe sync",
 });
 ```
 
+In `apps/api/tests/billing-sync.test.ts`, add this negative test immediately after the Stripe clearing test:
+
+```ts
+it("does not clear a Stripe mismatch when only an inactive Stripe row is re-fetched", async () => {
+  const app = await buildApp(env);
+  const user = await signUpAndGetCookie(app, { email: "s6@example.com", name: "S Six" });
+  await prisma.user.update({
+    where: { id: user.userId },
+    data: { stripeCustomerId: "cus_s6", isPlanMismatch: true },
+  });
+  await prisma.subscription.create({
+    data: {
+      userId: user.userId,
+      tier: "pro",
+      source: "stripe",
+      sourceSubscriptionId: "sub_s6",
+      sourceCustomerId: "cus_s6",
+      status: "canceled",
+      currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+      billingPeriod: "monthly",
+    },
+  });
+  stripe.fns.subsList.mockResolvedValue({
+    data: [
+      fakeStripeSub({
+        id: "sub_s6",
+        customer: "cus_s6",
+        priceId: env.STRIPE_PRICE_PRO_MONTHLY,
+        status: "canceled",
+      }),
+    ],
+  });
+  stripe.fns.subsRetrieve.mockResolvedValue(
+    fakeStripeSub({
+      id: "sub_s6",
+      customer: "cus_s6",
+      priceId: env.STRIPE_PRICE_PRO_MONTHLY,
+      status: "canceled",
+    }),
+  );
+
+  const res = await app.inject({
+    method: "POST",
+    url: "/billing/sync",
+    headers: { cookie: user.cookie, "content-type": "application/json" },
+    payload: {},
+  });
+
+  expect(res.statusCode).toBe(200);
+  expect(res.json().billingRecovery.locked).toBe(true);
+  const fresh = await prisma.user.findUniqueOrThrow({ where: { id: user.userId } });
+  expect(fresh.isPlanMismatch).toBe(true);
+});
+```
+
 In `apps/api/tests/iap/billing-iap.routes.test.ts`, add this expectation to the Apple mismatch test after `expect(res.json().iapIntegrity.isPlanMismatch).toBe(true);`:
 
 ```ts
@@ -166,7 +237,7 @@ it("maps a Google plan mismatch to restore_iap", async () => {
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
 ```
 
 Expected: FAIL because `billingRecovery` is not present on `MeDTO` responses.
@@ -271,25 +342,34 @@ In `buildMeBody`, add this property immediately before `iapIntegrity`:
 
 - [ ] **Step 6: Clear Stripe mismatch after successful Stripe convergence**
 
-In `apps/api/src/routes/billing.ts`, inside `POST /billing/sync`, track whether any Stripe subscription synced:
+In `apps/api/src/routes/billing.ts`, inside `POST /billing/sync`, track the exact Stripe subscription IDs successfully re-fetched during this sync:
 
 ```ts
-      let syncedAnyStripeSubscription = false;
+      const syncedStripeSubscriptionIds = new Set<string>();
 ```
 
-Set it to true in both places where `syncSubscriptionFromStripe` returns a row:
+In Path A, add the session subscription ID to the set only when `syncSubscriptionFromStripe` returns a row:
 
 ```ts
           if (synced) {
-            syncedAnyStripeSubscription = true;
+            syncedStripeSubscriptionIds.add(subId);
             await reconcilePlaidItemsForUser(app.fina.env, user.id);
           }
 ```
 
-After Path B finishes and before `return await buildMeBody(...)`, add a primary-source check and clear the lock only when the synced state now points at Stripe:
+In Path B, add the listed subscription ID to the set only when `syncSubscriptionFromStripe` returns a row:
 
 ```ts
-      if (syncedAnyStripeSubscription) {
+          if (synced) {
+            syncedStripeSubscriptionIds.add(sub.id);
+            await reconcilePlaidItemsForUser(app.fina.env, user.id);
+          }
+```
+
+After Path B finishes and before `return await buildMeBody(...)`, clear the lock only when the current primary active subscription is Stripe and that exact primary row was re-fetched during this sync:
+
+```ts
+      if (syncedStripeSubscriptionIds.size > 0) {
         const activeAfterStripeSync = await prisma.subscription.findMany({
           where: {
             userId: user.id,
@@ -301,7 +381,10 @@ After Path B finishes and before `return await buildMeBody(...)`, add a primary-
         const primaryAfterStripeSync = pickPrimarySub(
           filterEnvironmentRows(activeAfterStripeSync, runtimeEnv),
         );
-        if (primaryAfterStripeSync?.source === "stripe") {
+        if (
+          primaryAfterStripeSync?.source === "stripe" &&
+          syncedStripeSubscriptionIds.has(primaryAfterStripeSync.sourceSubscriptionId)
+        ) {
           await prisma.user.update({
             where: { id: user.id },
             data: { isPlanMismatch: false },
@@ -315,7 +398,7 @@ After Path B finishes and before `return await buildMeBody(...)`, add a primary-
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
 ```
 
 Expected: PASS.
@@ -325,7 +408,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add libs/shared/src/dto/me.ts apps/api/src/billing/recovery.ts apps/api/src/routes/me.ts apps/api/src/routes/billing.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
+git add libs/shared/src/dto/me.ts apps/api/src/billing/recovery.ts apps/api/src/routes/me.ts apps/api/src/routes/billing.ts apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
 git commit -m "Add unified billing recovery state"
 ```
 
@@ -337,6 +420,7 @@ Expected: commit succeeds.
 
 **Files:**
 - Modify: `apps/mobile/src/api/billing.ts`
+- Create: `apps/mobile/src/billing/recovery-ui.ts`
 - Modify: `apps/mobile/src/iap/sync.ts`
 - Modify: `apps/mobile/app/(tabs)/index.tsx`
 - Modify: `apps/mobile/app/(tabs)/more.tsx`
@@ -367,14 +451,24 @@ export async function postBillingSync(body: SyncBody = {}): Promise<MeDTO> {
 }
 ```
 
-- [ ] **Step 2: Move mobile lock decision to `billingRecovery`**
+- [ ] **Step 2: Create mobile billing lock helper**
 
-In `apps/mobile/src/iap/sync.ts`, keep `shouldCheckNativeIntegrity` native-only, but add:
+Create `apps/mobile/src/billing/recovery-ui.ts`:
 
 ```ts
-function isBillingLocked(me: MeDTO): boolean {
+import type { MeDTO } from "@fina/shared";
+
+type BillingLockShape = Pick<MeDTO, "billingRecovery" | "iapIntegrity">;
+
+export function isBillingLocked(me: BillingLockShape): boolean {
   return me.billingRecovery?.locked ?? me.iapIntegrity.isPlanMismatch;
 }
+```
+
+In `apps/mobile/src/iap/sync.ts`, import:
+
+```ts
+import { isBillingLocked } from "../billing/recovery-ui";
 ```
 
 Update `shouldCheckNativeIntegrity`:
@@ -405,10 +499,16 @@ In `apps/mobile/app/(tabs)/index.tsx`, replace:
 with:
 
 ```ts
-      if (meData.billingRecovery?.locked ?? meData.iapIntegrity.isPlanMismatch) {
+      if (isBillingLocked(meData)) {
         router.replace("/plan" as never);
         return;
       }
+```
+
+Add the import:
+
+```ts
+import { isBillingLocked } from "../../src/billing/recovery-ui";
 ```
 
 In `apps/mobile/app/(tabs)/more.tsx`, replace:
@@ -420,9 +520,15 @@ In `apps/mobile/app/(tabs)/more.tsx`, replace:
 with:
 
 ```ts
-        if (nextMe.billingRecovery?.locked ?? nextMe.iapIntegrity.isPlanMismatch) {
+        if (isBillingLocked(nextMe)) {
           router.push("/plan" as never);
         }
+```
+
+Add the import:
+
+```ts
+import { isBillingLocked } from "../../src/billing/recovery-ui";
 ```
 
 - [ ] **Step 4: Run typecheck**
@@ -440,7 +546,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add apps/mobile/src/api/billing.ts apps/mobile/src/iap/sync.ts 'apps/mobile/app/(tabs)/index.tsx' 'apps/mobile/app/(tabs)/more.tsx'
+git add apps/mobile/src/api/billing.ts apps/mobile/src/billing/recovery-ui.ts apps/mobile/src/iap/sync.ts 'apps/mobile/app/(tabs)/index.tsx' 'apps/mobile/app/(tabs)/more.tsx'
 git commit -m "Use billing recovery for mobile lock routing"
 ```
 
@@ -451,9 +557,11 @@ Expected: commit succeeds.
 ### Task 3: Unified Plan Screen Recovery Action
 
 **Files:**
+- Modify: `apps/mobile/src/billing/recovery-ui.ts`
+- Create: `apps/mobile/src/billing/recovery-ui.test.ts`
 - Modify: `apps/mobile/app/plan/index.tsx`
 
-- [ ] **Step 1: Import Stripe sync client**
+- [ ] **Step 1: Import Stripe sync client and recovery helpers**
 
 In `apps/mobile/app/plan/index.tsx`, add:
 
@@ -461,19 +569,188 @@ In `apps/mobile/app/plan/index.tsx`, add:
 import { postBillingSync } from "../../src/api/billing";
 ```
 
-- [ ] **Step 2: Add shared lock helper**
-
-Near existing helper functions in `apps/mobile/app/plan/index.tsx`, add:
+Also add:
 
 ```ts
-function billingLocked(me: Me): boolean {
+import {
+  billingRecoveryButtonLabel,
+  billingRecoveryFootnote,
+  billingRecoveryLockCopy,
+  isBillingLocked,
+} from "../../src/billing/recovery-ui";
+```
+
+- [ ] **Step 2: Extend recovery helpers and add mobile tests**
+
+Replace `apps/mobile/src/billing/recovery-ui.ts` with:
+
+```ts
+import type { MeDTO } from "@fina/shared";
+
+type BillingLockShape = Pick<MeDTO, "billingRecovery" | "iapIntegrity">;
+type BillingRecoveryShape = Pick<MeDTO, "billingRecovery" | "iapIntegrity" | "subscription">;
+
+export function isBillingLocked(me: BillingLockShape): boolean {
   return me.billingRecovery?.locked ?? me.iapIntegrity.isPlanMismatch;
 }
 
-function recoveryButtonLabel(me: Me): string {
-  if (me.billingRecovery?.action === "sync_stripe") return "Sync billing";
-  return "Restore purchases";
+export function billingRecoveryButtonLabel(me: BillingRecoveryShape): string {
+  switch (me.billingRecovery?.action ?? null) {
+    case "sync_stripe":
+      return "Sync billing";
+    case "restore_iap":
+      return "Restore purchases";
+    case null:
+      return "Contact support";
+  }
 }
+
+export function billingRecoveryLockCopy(me: BillingRecoveryShape): string {
+  if ((me.billingRecovery?.action ?? null) === null) {
+    return "We could not determine where this subscription is managed.";
+  }
+  return "This Fina account and your billing provider do not match.";
+}
+
+export function billingRecoveryFootnote(me: BillingRecoveryShape, storeName: string): string {
+  if (me.subscription?.source === "stripe" || me.billingRecovery?.action === "sync_stripe") {
+    return "Fina web billing handles payment, cancellation, and subscription changes.";
+  }
+  return `${storeName} handles payment, cancellation, and subscription changes.`;
+}
+```
+
+Create `apps/mobile/src/billing/recovery-ui.test.ts`:
+
+```ts
+import { describe, expect, it } from "vitest";
+import type { MeDTO } from "@fina/shared";
+import {
+  billingRecoveryButtonLabel,
+  billingRecoveryFootnote,
+  billingRecoveryLockCopy,
+  isBillingLocked,
+} from "./recovery-ui";
+
+function me(overrides: Partial<MeDTO>): MeDTO {
+  return {
+    user: {
+      id: "u1",
+      email: "u@example.com",
+      name: null,
+      tz: "America/Vancouver",
+      locale: "en",
+      morningTime: "08:00",
+      snoozeUntil: null,
+      pauseEnabled: false,
+      notificationPrefs: {
+        morningBrief: true,
+        bankReconnect: true,
+        workspaceInvites: true,
+        trialExpiring: true,
+        goalMilestones: true,
+        largeCharges: true,
+        transactionAdded: true,
+        productUpdates: true,
+      },
+      categorizationMode: "flexible",
+    },
+    tier: "pro",
+    trial: { active: false, endsAt: null },
+    subscription: null,
+    billingRecovery: {
+      locked: false,
+      reason: null,
+      source: null,
+      action: null,
+      lastCheckedAt: null,
+    },
+    iapIntegrity: {
+      isPlanMismatch: false,
+      requiresCheck: false,
+      lastCheckedAt: null,
+    },
+    ...overrides,
+  };
+}
+
+describe("billing recovery UI helpers", () => {
+  it("uses billingRecovery.locked for app lock decisions", () => {
+    expect(
+      isBillingLocked(
+        me({
+          billingRecovery: {
+            locked: true,
+            reason: "plan_mismatch",
+            source: "stripe",
+            action: "sync_stripe",
+            lastCheckedAt: null,
+          },
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("shows Stripe sync copy for Stripe recovery", () => {
+    const locked = me({
+      subscription: {
+        tier: "pro",
+        status: "active",
+        currentPeriodEnd: new Date().toISOString(),
+        cancelAtPeriodEnd: false,
+        source: "stripe",
+        pendingTier: null,
+        pendingTierAt: null,
+      },
+      billingRecovery: {
+        locked: true,
+        reason: "plan_mismatch",
+        source: "stripe",
+        action: "sync_stripe",
+        lastCheckedAt: null,
+      },
+    });
+    expect(billingRecoveryButtonLabel(locked)).toBe("Sync billing");
+    expect(billingRecoveryFootnote(locked, "the App Store")).toContain("web billing");
+  });
+
+  it("shows native restore copy for IAP recovery", () => {
+    const locked = me({
+      subscription: {
+        tier: "pro",
+        status: "active",
+        currentPeriodEnd: new Date().toISOString(),
+        cancelAtPeriodEnd: false,
+        source: "iap_apple",
+        pendingTier: null,
+        pendingTierAt: null,
+      },
+      billingRecovery: {
+        locked: true,
+        reason: "plan_mismatch",
+        source: "iap_apple",
+        action: "restore_iap",
+        lastCheckedAt: null,
+      },
+    });
+    expect(billingRecoveryButtonLabel(locked)).toBe("Restore purchases");
+    expect(billingRecoveryFootnote(locked, "the App Store")).toContain("App Store handles");
+  });
+
+  it("does not label unknown-source recovery as native restore", () => {
+    const locked = me({
+      billingRecovery: {
+        locked: true,
+        reason: "plan_mismatch",
+        source: null,
+        action: null,
+        lastCheckedAt: null,
+      },
+    });
+    expect(billingRecoveryButtonLabel(locked)).toBe("Contact support");
+    expect(billingRecoveryLockCopy(locked)).toContain("could not determine");
+  });
+});
 ```
 
 - [ ] **Step 3: Replace restore-only handler with provider-dispatched recovery**
@@ -483,7 +760,14 @@ Replace `restoreNativeSubscription` with:
 ```ts
   const recoverBilling = useCallback(async () => {
     if (busy || !me) return;
-    const action = me.billingRecovery?.action ?? "restore_iap";
+    const action = me.billingRecovery?.action ?? null;
+    if (!action) {
+      Alert.alert(
+        "Recovery unavailable",
+        "We could not determine where this subscription is managed. Contact support.",
+      );
+      return;
+    }
     setBusy("restore");
     try {
       const nextMe =
@@ -500,7 +784,7 @@ Replace `restoreNativeSubscription` with:
         return;
       }
       setMe(nextMe);
-      if (billingLocked(nextMe)) {
+      if (isBillingLocked(nextMe)) {
         Alert.alert(
           "Recovery incomplete",
           "We could not confirm that this Fina account and billing provider match yet.",
@@ -528,7 +812,7 @@ Replace:
 with:
 
 ```ts
-  const isPlanMismatch = billingLocked(me);
+  const isPlanMismatch = isBillingLocked(me);
 ```
 
 Replace the lock copy:
@@ -540,7 +824,7 @@ Replace the lock copy:
 with:
 
 ```tsx
-              This Fina account and your billing provider do not match.
+              {billingRecoveryLockCopy(me)}
 ```
 
 Replace `onPress={restoreNativeSubscription}` with:
@@ -558,7 +842,19 @@ Replace the button label:
 with:
 
 ```tsx
-                  <Text style={styles.restoreButtonText}>{recoveryButtonLabel(me)}</Text>
+                  <Text style={styles.restoreButtonText}>{billingRecoveryButtonLabel(me)}</Text>
+```
+
+Replace the footnote:
+
+```tsx
+          {storeName} handles payment, cancellation, and subscription changes.
+```
+
+with:
+
+```tsx
+          {billingRecoveryFootnote(me, storeName)}
 ```
 
 - [ ] **Step 5: Update plan helper guards**
@@ -572,7 +868,7 @@ In `currentPlanMeta`, replace:
 with:
 
 ```ts
-  if (billingLocked(me)) {
+  if (isBillingLocked(me)) {
 ```
 
 In `planAction`, replace:
@@ -584,25 +880,26 @@ In `planAction`, replace:
 with:
 
 ```ts
-  if (billingLocked(me)) {
+  if (isBillingLocked(me)) {
 ```
 
-- [ ] **Step 6: Run mobile typecheck**
+- [ ] **Step 6: Run mobile recovery helper tests and typecheck**
 
 Run:
 
 ```bash
+pnpm --filter @fina/mobile exec vitest run src/billing/recovery-ui.test.ts --config vitest.config.ts
 pnpm exec nx typecheck mobile
 ```
 
-Expected: PASS.
+Expected: both commands PASS.
 
 - [ ] **Step 7: Commit Plan screen recovery work**
 
 Run:
 
 ```bash
-git add apps/mobile/app/plan/index.tsx
+git add apps/mobile/src/billing/recovery-ui.ts apps/mobile/src/billing/recovery-ui.test.ts apps/mobile/app/plan/index.tsx
 git commit -m "Unify mobile billing recovery actions"
 ```
 
@@ -650,12 +947,22 @@ Expected: PASS.
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm exec nx test api -- --run apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/tests/iap/billing-iap.routes.test.ts
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Inspect git status**
+- [ ] **Step 5: Run focused mobile recovery helper tests**
+
+Run:
+
+```bash
+pnpm --filter @fina/mobile exec vitest run src/billing/recovery-ui.test.ts --config vitest.config.ts
+```
+
+Expected: PASS.
+
+- [ ] **Step 6: Inspect git status**
 
 Run:
 
