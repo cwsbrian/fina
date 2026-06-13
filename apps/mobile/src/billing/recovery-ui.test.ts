@@ -13,6 +13,7 @@ function me(overrides: Partial<MeDTO>): MeDTO {
       id: "u1",
       email: "u@example.com",
       name: null,
+      role: "user",
       tz: "America/Vancouver",
       locale: "en",
       morningTime: "08:00",
