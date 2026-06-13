@@ -3,7 +3,7 @@ type Sub = {
   tier: string;
   createdAt: Date;
   environment: string;
-  sourceSubscriptionId: string;
+  sourceSubscriptionId?: string;
   [k: string]: unknown;
 };
 
