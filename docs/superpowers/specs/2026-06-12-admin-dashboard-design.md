@@ -25,7 +25,27 @@ This role is separate from workspace membership `Role` (`owner`, `editor`, `view
 
 Admin role does not imply a paid plan, trial override, billing source, or entitlement. Billing logic continues to use subscriptions, trials, and future grant records when those exist.
 
-The first admin user is promoted manually in the database after the migration. No public or self-service role update endpoint is part of v1.
+The first admin user is promoted through a local/server-side script after the migration. No public or self-service role update endpoint is part of v1.
+
+## Admin Bootstrap Command
+
+Add an API package script for controlled role assignment:
+
+```bash
+pnpm --filter @fina/api admin:set-role -- --email cwsbrian@gmail.com --role admin
+```
+
+The underlying script should live in `apps/api/src/scripts/set-user-role.ts` and update exactly one user by normalized email. It should:
+
+- Require both `--email` and `--role`.
+- Accept only `user` or `admin`.
+- Normalize email to lowercase before lookup.
+- Fail if the user does not exist.
+- Print the updated user id, email, and role.
+- Never create users.
+- Never modify billing, trials, subscriptions, workspace roles, or sessions.
+
+This command is the bootstrap path for setting `cwsbrian@gmail.com` to admin in each environment. It can also demote an admin later by passing `--role user`.
 
 ## Shared Contracts
 
@@ -141,6 +161,7 @@ API tests should cover:
 - Default users have `role=user`.
 - `/me` returns `user.role` for default and admin users.
 - `PATCH /me` cannot change role.
+- The admin role script promotes an existing normalized email and fails for a missing user.
 - `/admin/users` returns 401 without a session.
 - `/admin/users` returns 403 for a signed-in non-admin, even if they are a workspace owner.
 - `/admin/users` returns 200 for an admin.
