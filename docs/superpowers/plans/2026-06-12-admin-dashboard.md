@@ -23,6 +23,7 @@
 - Modify `apps/api/src/routes/me.ts`: include role in `GET /me` and `PATCH /me`.
 - Modify `apps/api/src/routes/billing.ts`: include role in billing sync `MeDTO`.
 - Create `apps/api/src/routes/admin.ts`: implement `GET /admin/users`.
+- Modify `apps/api/src/billing/precedence.ts`: make `sourceSubscriptionId` optional in the local helper type so admin reads do not need to select provider IDs.
 - Modify `apps/api/src/server.ts`: register admin routes.
 - Create `apps/api/src/scripts/set-user-role.ts`: reusable function and CLI for role assignment.
 - Modify `apps/api/package.json`: add `admin:set-role`.
@@ -31,10 +32,12 @@
 - Create `apps/api/tests/admin.routes.test.ts`: cover admin list authorization, pagination, and subscription state.
 - Create `apps/api/tests/admin.set-user-role.test.ts`: cover bootstrap command helper.
 - Modify `apps/web/src/components/AppShell.tsx`: render Admin nav only for admins.
+- Create `apps/web/src/components/shell-nav.ts`: pure nav item builder used by `AppShell`.
+- Create `apps/web/src/components/shell-nav.test.ts`: behavior tests for admin/non-admin nav items.
 - Create `apps/web/src/app/(app)/admin/page.tsx`: read-only admin table.
 - Create `apps/web/src/app/(app)/admin/admin.module.css`: compact admin table styling.
-- Create `apps/web/src/app/(app)/admin/page.test.ts`: source-level smoke assertions for the admin page.
-- Create `apps/web/src/components/AppShell.admin-nav.test.ts`: source-level smoke assertions for conditional admin nav.
+- Create `apps/web/src/app/(app)/admin/admin-page-model.ts`: pure admin page formatting, merge, and error-state helpers.
+- Create `apps/web/src/app/(app)/admin/admin-page-model.test.ts`: behavior tests for admin table formatting, pagination merge, and 403 data clearing.
 
 ---
 
@@ -276,6 +279,16 @@ describe("setUserRoleByEmail", () => {
       "User not found: missing@example.com",
     );
   });
+
+  it("fails when role is invalid at runtime", async () => {
+    await prisma.user.create({
+      data: { id: "admin-3", email: "admin3@example.com", name: "Admin" },
+    });
+
+    await expect(setUserRoleByEmail("admin3@example.com", "owner")).rejects.toThrow(
+      "Invalid role: owner",
+    );
+  });
 });
 ```
 
@@ -311,9 +324,12 @@ function readFlag(argv: string[], name: string): string | null {
 
 export async function setUserRoleByEmail(
   email: string,
-  role: UserRole,
+  role: string,
 ): Promise<SetUserRoleResult> {
   const normalizedEmail = email.trim().toLowerCase();
+  if (!isUserRole(role)) {
+    throw new Error(`Invalid role: ${role}`);
+  }
   const existing = await prisma.user.findUnique({
     where: { email: normalizedEmail },
     select: { id: true, email: true },
@@ -397,6 +413,7 @@ git commit -m "Add admin role bootstrap command"
 - Modify: `apps/api/src/routes/billing.ts`
 - Modify: `apps/api/tests/auth.context.test.ts`
 - Modify: `apps/api/tests/me.test.ts`
+- Modify: `apps/api/tests/billing-sync.test.ts`
 
 - [ ] **Step 1: Write failing guard and MeDTO tests**
 
@@ -509,12 +526,24 @@ it("does not allow role changes through PATCH /me", async () => {
     headers: { cookie, "content-type": "application/json" },
     payload: JSON.stringify({ role: "admin" }),
   });
-  expect(res.statusCode).toBe(200);
-  expect(res.json().user.role).toBe("user");
+  expect(res.statusCode).toBe(400);
+  expect(res.json().error).toBe("invalid_body");
   const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
   expect(fresh.role).toBe("user");
   await app.close();
 });
+```
+
+In `apps/api/tests/billing-sync.test.ts`, inside `it("no-op for user with neither sessionId nor stripeCustomerId", ...)`, update the signed-up user to admin before calling `/billing/sync` and assert the returned `MeDTO` carries the role:
+
+```ts
+await prisma.user.update({ where: { id: user.userId }, data: { role: "admin" } });
+```
+
+Add this assertion after `expect(res.statusCode).toBe(200);`:
+
+```ts
+expect(res.json().user.role).toBe("admin");
 ```
 
 - [ ] **Step 2: Run focused API tests and verify failure**
@@ -522,7 +551,7 @@ it("does not allow role changes through PATCH /me", async () => {
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/auth.context.test.ts tests/me.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/auth.context.test.ts tests/me.test.ts tests/billing-sync.test.ts
 ```
 
 Expected: FAIL because `requireAdminSession` and `MeDTO.user.role` are not implemented.
@@ -589,7 +618,7 @@ Place it next to `email` and `name`.
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/auth.context.test.ts tests/me.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/auth.context.test.ts tests/me.test.ts tests/billing-sync.test.ts
 ```
 
 Expected: PASS.
@@ -599,7 +628,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add apps/api/src/auth/context.ts apps/api/src/routes/me.ts apps/api/src/routes/billing.ts apps/api/tests/auth.context.test.ts apps/api/tests/me.test.ts
+git add apps/api/src/auth/context.ts apps/api/src/routes/me.ts apps/api/src/routes/billing.ts apps/api/tests/auth.context.test.ts apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts
 git commit -m "Add DB-backed admin guard"
 ```
 
@@ -609,6 +638,7 @@ git commit -m "Add DB-backed admin guard"
 
 **Files:**
 - Create: `apps/api/src/routes/admin.ts`
+- Modify: `apps/api/src/billing/precedence.ts`
 - Modify: `apps/api/src/server.ts`
 - Test: `apps/api/tests/admin.routes.test.ts`
 
@@ -617,14 +647,48 @@ git commit -m "Add DB-backed admin guard"
 Create `apps/api/tests/admin.routes.test.ts`:
 
 ```ts
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { buildApp } from "../src/server.js";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { signUpAndGetCookie } from "./helpers/auth.js";
+import { getOwnerWorkspaceId, signUpAndGetCookie } from "./helpers/auth.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv({ APPLE_ENV: "production" });
+
+function expectSafeUserShape(row: Record<string, unknown>) {
+  expect(Object.keys(row).sort()).toEqual([
+    "activeSubscriptionCount",
+    "createdAt",
+    "email",
+    "id",
+    "isPlanMismatch",
+    "name",
+    "role",
+    "subscription",
+    "tier",
+    "trial",
+  ].sort());
+  expect(Object.keys(row.trial as Record<string, unknown>).sort()).toEqual(["active", "endsAt"]);
+  if (row.subscription) {
+    expect(Object.keys(row.subscription as Record<string, unknown>).sort()).toEqual([
+      "cancelAtPeriodEnd",
+      "currentPeriodEnd",
+      "environment",
+      "pendingTier",
+      "pendingTierAt",
+      "source",
+      "status",
+      "tier",
+    ].sort());
+  }
+}
+
+async function createAdmin(app: Awaited<ReturnType<typeof buildApp>>) {
+  const admin = await signUpAndGetCookie(app, { email: "admin-list@example.com" });
+  await prisma.user.update({ where: { id: admin.userId }, data: { role: "admin" } });
+  return admin;
+}
 
 describe("GET /admin/users", () => {
   beforeEach(async () => {
@@ -643,29 +707,80 @@ describe("GET /admin/users", () => {
     await app.close();
   });
 
-  it("403 for a signed-in non-admin", async () => {
+  it("403 for a workspace owner who is not a global admin", async () => {
     const app = await buildApp(env);
     const user = await signUpAndGetCookie(app, { email: "owner-not-admin@example.com" });
+    const wsId = await getOwnerWorkspaceId(user.userId);
     const res = await app.inject({
       method: "GET",
       url: "/admin/users",
-      headers: { cookie: user.cookie, "x-workspace-id": "ignored" },
+      headers: { cookie: user.cookie, "x-workspace-id": wsId },
     });
     expect(res.statusCode).toBe(403);
     expect(res.json().error).toBe("admin_required");
     await app.close();
   });
 
-  it("returns paginated safe user rows for an admin", async () => {
+  it("400 for an invalid cursor", async () => {
     const app = await buildApp(env);
-    const admin = await signUpAndGetCookie(app, { email: "admin-list@example.com" });
+    const admin = await createAdmin(app);
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/users?cursor=not-a-valid-cursor",
+      headers: { cookie: admin.cookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_query");
+    await app.close();
+  });
+
+  it("paginates without skipping or duplicating users", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
+    const a = await signUpAndGetCookie(app, { email: "page-a@example.com" });
+    const b = await signUpAndGetCookie(app, { email: "page-b@example.com" });
+    const c = await signUpAndGetCookie(app, { email: "page-c@example.com" });
+    await prisma.user.update({ where: { id: admin.userId }, data: { createdAt: new Date("2026-06-12T00:00:04Z") } });
+    await prisma.user.update({ where: { id: c.userId }, data: { createdAt: new Date("2026-06-12T00:00:03Z") } });
+    await prisma.user.update({ where: { id: b.userId }, data: { createdAt: new Date("2026-06-12T00:00:02Z") } });
+    await prisma.user.update({ where: { id: a.userId }, data: { createdAt: new Date("2026-06-12T00:00:01Z") } });
+
+    const page1 = await app.inject({
+      method: "GET",
+      url: "/admin/users?limit=2",
+      headers: { cookie: admin.cookie },
+    });
+    expect(page1.statusCode).toBe(200);
+    expect(typeof page1.json().nextCursor).toBe("string");
+
+    const page2 = await app.inject({
+      method: "GET",
+      url: `/admin/users?limit=2&cursor=${encodeURIComponent(page1.json().nextCursor)}`,
+      headers: { cookie: admin.cookie },
+    });
+    expect(page2.statusCode).toBe(200);
+    expect(page2.json().nextCursor).toBeNull();
+
+    const ids = [...page1.json().users, ...page2.json().users].map((u: { id: string }) => u.id);
+    expect(ids).toEqual([admin.userId, c.userId, b.userId, a.userId]);
+    expect(new Set(ids).size).toBe(ids.length);
+    await app.close();
+  });
+
+  it("returns safe fields and filters production subscription state", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
     const paid = await signUpAndGetCookie(app, { email: "paid@example.com", name: "Paid User" });
-    await prisma.user.update({ where: { id: admin.userId }, data: { role: "admin" } });
+    const infoSpy = vi.spyOn(app.log, "info");
     await prisma.user.update({
       where: { id: paid.userId },
       data: {
         trialEndsAt: new Date("2026-06-01T00:00:00Z"),
         trialConsumed: true,
+        stripeCustomerId: "cus_secret_admin",
+        iapAppleAccountToken: "apple-secret-token",
+        iapGoogleObfuscatedId: "google-secret-obf",
+        notificationPrefs: { productUpdates: false },
         isPlanMismatch: true,
       },
     });
@@ -673,31 +788,51 @@ describe("GET /admin/users", () => {
       data: [
         {
           userId: paid.userId,
-          tier: "pro",
+          tier: "max",
           source: "iap_google",
-          sourceSubscriptionId: "g-admin-1",
+          sourceSubscriptionId: "google_secret_sub",
           status: "active",
           currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
           environment: "Sandbox",
         },
         {
           userId: paid.userId,
-          tier: "max",
+          tier: "pro",
           source: "stripe",
-          sourceSubscriptionId: "sub_admin_1",
-          sourceCustomerId: "cus_admin_1",
+          sourceSubscriptionId: "stripe_secret_active",
+          sourceCustomerId: "cus_secret_admin",
           status: "past_due",
           currentPeriodEnd: new Date("2026-07-02T00:00:00Z"),
           environment: "Production",
         },
         {
           userId: paid.userId,
-          tier: "pro",
+          tier: "max",
           source: "stripe",
-          sourceSubscriptionId: "sub_canceled_1",
-          sourceCustomerId: "cus_admin_1",
+          sourceSubscriptionId: "stripe_secret_canceled",
+          sourceCustomerId: "cus_secret_admin",
           status: "canceled",
           currentPeriodEnd: new Date("2026-07-03T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: paid.userId,
+          tier: "max",
+          source: "stripe",
+          sourceSubscriptionId: "stripe_secret_unpaid",
+          sourceCustomerId: "cus_secret_admin",
+          status: "unpaid",
+          currentPeriodEnd: new Date("2026-07-04T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: paid.userId,
+          tier: "max",
+          source: "stripe",
+          sourceSubscriptionId: "stripe_secret_incomplete",
+          sourceCustomerId: "cus_secret_admin",
+          status: "incomplete",
+          currentPeriodEnd: new Date("2026-07-05T00:00:00Z"),
           environment: "Production",
         },
       ],
@@ -705,40 +840,128 @@ describe("GET /admin/users", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/admin/users?limit=1",
+      url: "/admin/users?limit=10",
       headers: { cookie: admin.cookie },
     });
 
     expect(res.statusCode).toBe(200);
     expect(res.headers["cache-control"]).toBe("no-store");
-    const body = res.json();
-    expect(body.users).toHaveLength(1);
-    expect(typeof body.nextCursor).toBe("string");
-
-    const page2 = await app.inject({
-      method: "GET",
-      url: `/admin/users?limit=10&cursor=${encodeURIComponent(body.nextCursor)}`,
-      headers: { cookie: admin.cookie },
-    });
-    expect(page2.statusCode).toBe(200);
-    const rows = [...body.users, ...page2.json().users];
-    const paidRow = rows.find((u: { email: string }) => u.email === "paid@example.com");
+    const paidRow = res.json().users.find((u: { email: string }) => u.email === "paid@example.com");
+    expectSafeUserShape(paidRow);
     expect(paidRow).toMatchObject({
       email: "paid@example.com",
       name: "Paid User",
       role: "user",
-      tier: "max",
+      tier: "pro",
       activeSubscriptionCount: 1,
       isPlanMismatch: true,
       subscription: {
-        tier: "max",
+        tier: "pro",
         status: "past_due",
         source: "stripe",
         environment: "Production",
       },
     });
-    expect(JSON.stringify(paidRow)).not.toContain("cus_admin_1");
-    expect(JSON.stringify(paidRow)).not.toContain("sub_admin_1");
+    const serialized = JSON.stringify(paidRow);
+    expect(serialized).not.toContain("cus_secret_admin");
+    expect(serialized).not.toContain("apple-secret-token");
+    expect(serialized).not.toContain("google-secret-obf");
+    expect(serialized).not.toContain("stripe_secret");
+    expect(serialized).not.toContain("google_secret_sub");
+    expect(serialized).not.toContain("notificationPrefs");
+    expect(infoSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ adminUserId: admin.userId, limit: 10, returned: expect.any(Number) }),
+      "admin_users_listed",
+    );
+    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("paid@example.com");
+    await app.close();
+  });
+
+  it("uses Stripe as primary subscription even when IAP has a higher tier", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
+    const user = await signUpAndGetCookie(app, { email: "stripe-primary@example.com" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { trialEndsAt: new Date("2026-06-01T00:00:00Z"), trialConsumed: true },
+    });
+    await prisma.subscription.createMany({
+      data: [
+        {
+          userId: user.userId,
+          tier: "max",
+          source: "iap_apple",
+          sourceSubscriptionId: "apple-prod-max",
+          status: "active",
+          currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: user.userId,
+          tier: "pro",
+          source: "stripe",
+          sourceSubscriptionId: "stripe-prod-pro",
+          status: "active",
+          currentPeriodEnd: new Date("2026-07-02T00:00:00Z"),
+          environment: "Production",
+        },
+      ],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/users?limit=10",
+      headers: { cookie: admin.cookie },
+    });
+
+    const row = res.json().users.find((u: { email: string }) => u.email === "stripe-primary@example.com");
+    expect(row.tier).toBe("max");
+    expect(row.activeSubscriptionCount).toBe(2);
+    expect(row.subscription).toMatchObject({ source: "stripe", tier: "pro" });
+    await app.close();
+  });
+
+  it("uses max over pro among non-Stripe subscriptions", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
+    const user = await signUpAndGetCookie(app, { email: "iap-primary@example.com" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { trialEndsAt: new Date("2026-06-01T00:00:00Z"), trialConsumed: true },
+    });
+    await prisma.subscription.createMany({
+      data: [
+        {
+          userId: user.userId,
+          tier: "pro",
+          source: "iap_apple",
+          sourceSubscriptionId: "apple-prod-pro",
+          status: "active",
+          currentPeriodEnd: new Date("2026-07-01T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: user.userId,
+          tier: "max",
+          source: "iap_google",
+          sourceSubscriptionId: "google-prod-max",
+          status: "active",
+          currentPeriodEnd: new Date("2026-07-02T00:00:00Z"),
+          environment: "Production",
+        },
+      ],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/admin/users?limit=10",
+      headers: { cookie: admin.cookie },
+    });
+
+    const row = res.json().users.find((u: { email: string }) => u.email === "iap-primary@example.com");
+    expect(row.tier).toBe("max");
+    expect(row.activeSubscriptionCount).toBe(2);
+    expect(row.subscription).toMatchObject({ source: "iap_google", tier: "max" });
     await app.close();
   });
 });
@@ -755,6 +978,12 @@ DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina
 Expected: FAIL with 404 for `/admin/users`.
 
 - [ ] **Step 3: Implement admin route**
+
+In `apps/api/src/billing/precedence.ts`, change the local `Sub` type so provider ids are optional because the sorter does not read them:
+
+```ts
+  sourceSubscriptionId?: string;
+```
 
 Create `apps/api/src/routes/admin.ts`:
 
@@ -792,14 +1021,21 @@ function encodeCursor(cursor: Cursor): string {
 }
 
 function decodeCursor(value: unknown): Cursor | null {
-  if (typeof value !== "string" || value.length === 0) return null;
+  if (value === undefined) return null;
+  if (typeof value !== "string" || value.length === 0) {
+    throw new HttpError(400, "invalid_query");
+  }
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<Cursor>;
-    if (typeof parsed.createdAt !== "string" || typeof parsed.id !== "string") return null;
-    if (Number.isNaN(new Date(parsed.createdAt).getTime())) return null;
+    if (typeof parsed.createdAt !== "string" || typeof parsed.id !== "string") {
+      throw new HttpError(400, "invalid_query");
+    }
+    if (Number.isNaN(new Date(parsed.createdAt).getTime())) {
+      throw new HttpError(400, "invalid_query");
+    }
     return { createdAt: parsed.createdAt, id: parsed.id };
   } catch {
-    return null;
+    throw new HttpError(400, "invalid_query");
   }
 }
 
@@ -878,7 +1114,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
               pendingTierAt: true,
               environment: true,
               createdAt: true,
-              sourceSubscriptionId: true,
             },
           })
         : [];
@@ -912,11 +1147,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         };
       });
 
-      const extra = users[limit];
+      const hasMore = users.length > limit;
+      const last = pageUsers.at(-1);
       const response: AdminUsersResponse = {
         users: rows,
-        nextCursor: extra
-          ? encodeCursor({ createdAt: extra.createdAt.toISOString(), id: extra.id })
+        nextCursor: hasMore && last
+          ? encodeCursor({ createdAt: last.createdAt.toISOString(), id: last.id })
           : null,
       };
 
@@ -959,7 +1195,7 @@ Expected: PASS.
 Run:
 
 ```bash
-git add apps/api/src/routes/admin.ts apps/api/src/server.ts apps/api/tests/admin.routes.test.ts
+git add apps/api/src/routes/admin.ts apps/api/src/billing/precedence.ts apps/api/src/server.ts apps/api/tests/admin.routes.test.ts
 git commit -m "Add read-only admin users API"
 ```
 
@@ -969,47 +1205,102 @@ git commit -m "Add read-only admin users API"
 
 **Files:**
 - Modify: `apps/web/src/components/AppShell.tsx`
-- Create: `apps/web/src/components/AppShell.admin-nav.test.ts`
+- Create: `apps/web/src/components/shell-nav.ts`
+- Create: `apps/web/src/components/shell-nav.test.ts`
 - Create: `apps/web/src/app/(app)/admin/page.tsx`
 - Create: `apps/web/src/app/(app)/admin/admin.module.css`
-- Create: `apps/web/src/app/(app)/admin/page.test.ts`
+- Create: `apps/web/src/app/(app)/admin/admin-page-model.ts`
+- Create: `apps/web/src/app/(app)/admin/admin-page-model.test.ts`
 
-- [ ] **Step 1: Write source-level web tests**
+- [ ] **Step 1: Write behavior tests for nav and admin page model**
 
-Create `apps/web/src/components/AppShell.admin-nav.test.ts`:
+Create `apps/web/src/components/shell-nav.test.ts`:
 
 ```ts
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { navItemsForRole } from "./shell-nav";
 
-describe("AppShell admin nav", () => {
-  it("renders the Admin nav item only from MeDTO user role", () => {
-    const source = readFileSync(join(__dirname, "AppShell.tsx"), "utf8");
+describe("navItemsForRole", () => {
+  it("hides Admin for default users", () => {
+    expect(navItemsForRole("user").map((item) => item.label)).not.toContain("Admin");
+    expect(navItemsForRole(null).map((item) => item.label)).not.toContain("Admin");
+  });
 
-    expect(source).toContain('me?.user.role === "admin"');
-    expect(source).toContain('label: "Admin"');
-    expect(source).toContain('path: "/admin"');
+  it("shows Admin for global admins", () => {
+    expect(navItemsForRole("admin")).toContainEqual({
+      id: "admin",
+      label: "Admin",
+      path: "/admin",
+    });
   });
 });
 ```
 
-Create `apps/web/src/app/(app)/admin/page.test.ts`:
+Create `apps/web/src/app/(app)/admin/admin-page-model.test.ts`:
 
 ```ts
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { AdminUserDTO, AdminUsersResponse } from "@fina/shared";
+import {
+  adminErrorState,
+  formatAdminDate,
+  formatAdminSubscription,
+  mergeAdminUsersPage,
+} from "./admin-page-model";
 
-describe("Admin page source", () => {
-  it("fetches the admin users API and handles forbidden responses", () => {
-    const source = readFileSync(join(__dirname, "page.tsx"), "utf8");
+const row: AdminUserDTO = {
+  id: "user-1",
+  email: "paid@example.com",
+  name: "Paid User",
+  createdAt: "2026-06-12T00:00:00.000Z",
+  role: "user",
+  tier: "pro",
+  trial: { active: false, endsAt: null },
+  subscription: {
+    tier: "pro",
+    status: "active",
+    currentPeriodEnd: "2026-07-12T00:00:00.000Z",
+    cancelAtPeriodEnd: false,
+    source: "stripe",
+    pendingTier: "max",
+    pendingTierAt: "2026-07-12T00:00:00.000Z",
+    environment: "Production",
+  },
+  activeSubscriptionCount: 1,
+  isPlanMismatch: false,
+};
 
-    expect(source).toContain('"use client"');
-    expect(source).toContain('apiFetch<AdminUsersResponse>("/admin/users"');
-    expect(source).toContain('err.code === "admin_required"');
-    expect(source).toContain("activeSubscriptionCount");
-    expect(source).toContain("isPlanMismatch");
+describe("admin page model", () => {
+  it("formats subscription state without provider identifiers", () => {
+    expect(formatAdminSubscription(row)).toContain("Web pro active");
+    expect(formatAdminSubscription(row)).toContain("pending max");
+    expect(formatAdminSubscription({ ...row, subscription: null })).toBe("No active subscription");
+  });
+
+  it("formats null dates as None", () => {
+    expect(formatAdminDate(null)).toBe("None");
+  });
+
+  it("merges additional pages without dropping prior rows", () => {
+    const first: AdminUsersResponse = { users: [row], nextCursor: "cursor-1" };
+    const second: AdminUsersResponse = {
+      users: [{ ...row, id: "user-2", email: "second@example.com" }],
+      nextCursor: null,
+    };
+
+    expect(mergeAdminUsersPage(null, first, false)).toEqual(first);
+    expect(mergeAdminUsersPage(first, second, true)).toEqual({
+      users: [row, { ...row, id: "user-2", email: "second@example.com" }],
+      nextCursor: null,
+    });
+  });
+
+  it("clears cached admin data on forbidden errors", () => {
+    expect(adminErrorState({ status: 403, code: "admin_required" })).toEqual({
+      data: null,
+      cursor: null,
+      err: "forbidden",
+    });
   });
 });
 ```
@@ -1019,19 +1310,25 @@ describe("Admin page source", () => {
 Run:
 
 ```bash
-pnpm --filter @fina/web exec vitest run src/components/AppShell.admin-nav.test.ts "src/app/(app)/admin/page.test.ts"
+pnpm --filter @fina/web exec vitest run src/components/shell-nav.test.ts "src/app/(app)/admin/admin-page-model.test.ts"
 ```
 
-Expected: FAIL because the new tests reference missing source content.
+Expected: FAIL because `shell-nav.ts` and `admin-page-model.ts` do not exist.
 
-- [ ] **Step 3: Add conditional Admin nav**
+- [ ] **Step 3: Add nav helper and wire AppShell**
 
-Modify `apps/web/src/components/AppShell.tsx`.
-
-Change `NAV_ITEMS` to omit Admin by default:
+Create `apps/web/src/components/shell-nav.ts`:
 
 ```ts
-const NAV_ITEMS = [
+import type { UserRole } from "@fina/shared";
+
+export type NavItem = {
+  id: string;
+  label: string;
+  path: string;
+};
+
+export const NAV_ITEMS: NavItem[] = [
   { id: "home", label: "Home", path: "/home" },
   { id: "banks", label: "Banks", path: "/settings/banks" },
   { id: "workspace", label: "Workspace", path: "/settings/workspace" },
@@ -1039,14 +1336,25 @@ const NAV_ITEMS = [
   { id: "account", label: "Account", path: "/settings/account" },
 ];
 
-const ADMIN_NAV_ITEM = { id: "admin", label: "Admin", path: "/admin" };
+export const ADMIN_NAV_ITEM: NavItem = { id: "admin", label: "Admin", path: "/admin" };
+
+export function navItemsForRole(role: UserRole | null | undefined): NavItem[] {
+  return role === "admin" ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
+}
 ```
+
+Modify `apps/web/src/components/AppShell.tsx`:
+
+```ts
+import { navItemsForRole } from "./shell-nav";
+```
+
+Remove the local `NAV_ITEMS` constant from `AppShell.tsx`.
 
 Before `return`, add:
 
 ```ts
-  const navItems =
-    me?.user.role === "admin" ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
+  const navItems = navItemsForRole(me?.user.role);
 ```
 
 Change the nav rendering loop:
@@ -1055,24 +1363,25 @@ Change the nav rendering loop:
             {navItems.map((it) => (
 ```
 
-- [ ] **Step 4: Add admin page**
+- [ ] **Step 4: Add admin page model helpers**
 
-Create `apps/web/src/app/(app)/admin/page.tsx`:
+Create `apps/web/src/app/(app)/admin/admin-page-model.ts`:
 
-```tsx
-"use client";
-
-import { useEffect, useState } from "react";
+```ts
 import {
   isApiError,
   subscriptionSourceLabel,
-  type AdminUsersResponse,
   type AdminUserDTO,
+  type AdminUsersResponse,
 } from "@fina/shared";
-import { apiFetch } from "../../../lib/api";
-import styles from "./admin.module.css";
 
-function formatDate(value: string | null): string {
+export type AdminPageErrorState = {
+  data: null;
+  cursor: null;
+  err: string;
+};
+
+export function formatAdminDate(value: string | null): string {
   if (!value) return "None";
   return new Date(value).toLocaleDateString(undefined, {
     year: "numeric",
@@ -1081,15 +1390,57 @@ function formatDate(value: string | null): string {
   });
 }
 
-function formatSub(user: AdminUserDTO): string {
+export function formatAdminSubscription(user: AdminUserDTO): string {
   if (!user.subscription) return "No active subscription";
   const sub = user.subscription;
   const pending =
     sub.pendingTier && sub.pendingTierAt
-      ? `, pending ${sub.pendingTier} on ${formatDate(sub.pendingTierAt)}`
+      ? `, pending ${sub.pendingTier} on ${formatAdminDate(sub.pendingTierAt)}`
       : "";
-  return `${subscriptionSourceLabel(sub.source)} ${sub.tier} ${sub.status}, ends ${formatDate(sub.currentPeriodEnd)}${pending}`;
+  return `${subscriptionSourceLabel(sub.source)} ${sub.tier} ${sub.status}, ends ${formatAdminDate(sub.currentPeriodEnd)}${pending}`;
 }
+
+export function mergeAdminUsersPage(
+  previous: AdminUsersResponse | null,
+  page: AdminUsersResponse,
+  append: boolean,
+): AdminUsersResponse {
+  if (!append || !previous) return page;
+  return {
+    users: [...previous.users, ...page.users],
+    nextCursor: page.nextCursor,
+  };
+}
+
+export function adminErrorState(error: unknown): AdminPageErrorState {
+  if (isApiError(error) && error.code === "admin_required") {
+    return { data: null, cursor: null, err: "forbidden" };
+  }
+  return {
+    data: null,
+    cursor: null,
+    err: isApiError(error) ? error.code : "load_error",
+  };
+}
+```
+
+- [ ] **Step 5: Add admin page**
+
+Create `apps/web/src/app/(app)/admin/page.tsx`:
+
+```tsx
+"use client";
+
+import { useEffect, useState } from "react";
+import type { AdminUsersResponse } from "@fina/shared";
+import { apiFetch } from "../../../lib/api";
+import {
+  adminErrorState,
+  formatAdminDate,
+  formatAdminSubscription,
+  mergeAdminUsersPage,
+} from "./admin-page-model";
+import styles from "./admin.module.css";
 
 export default function AdminPage() {
   const [data, setData] = useState<AdminUsersResponse | null>(null);
@@ -1103,18 +1454,14 @@ export default function AdminPage() {
     try {
       const qs = nextCursor ? `?cursor=${encodeURIComponent(nextCursor)}` : "";
       const page = await apiFetch<AdminUsersResponse>(`/admin/users${qs}`);
-      setData((prev) =>
-        nextCursor && prev
-          ? { users: [...prev.users, ...page.users], nextCursor: page.nextCursor }
-          : page,
-      );
-      setCursor(page.nextCursor);
+      const merged = mergeAdminUsersPage(data, page, Boolean(nextCursor));
+      setData(merged);
+      setCursor(merged.nextCursor);
     } catch (e) {
-      if (isApiError(e) && e.code === "admin_required") {
-        setErr("forbidden");
-      } else {
-        setErr(isApiError(e) ? e.code : "load_error");
-      }
+      const next = adminErrorState(e);
+      setData(next.data);
+      setCursor(next.cursor);
+      setErr(next.err);
     } finally {
       setLoading(false);
     }
@@ -1178,11 +1525,11 @@ export default function AdminPage() {
                 <td>
                   <div className={styles.primary}>{user.tier}</div>
                   <div className={styles.muted}>
-                    {user.trial.active ? `Trial ends ${formatDate(user.trial.endsAt)}` : "No active trial"}
+                    {user.trial.active ? `Trial ends ${formatAdminDate(user.trial.endsAt)}` : "No active trial"}
                   </div>
                 </td>
                 <td>
-                  <div className={styles.primary}>{formatSub(user)}</div>
+                  <div className={styles.primary}>{formatAdminSubscription(user)}</div>
                   <div className={styles.muted}>{user.subscription?.environment ?? "No environment"}</div>
                 </td>
                 <td>{user.activeSubscriptionCount}</td>
@@ -1191,7 +1538,7 @@ export default function AdminPage() {
                     {user.isPlanMismatch ? "Mismatch" : "OK"}
                   </span>
                 </td>
-                <td>{formatDate(user.createdAt)}</td>
+                <td>{formatAdminDate(user.createdAt)}</td>
               </tr>
             ))}
           </tbody>
@@ -1213,7 +1560,7 @@ export default function AdminPage() {
 }
 ```
 
-- [ ] **Step 5: Add admin page CSS**
+- [ ] **Step 6: Add admin page CSS**
 
 Create `apps/web/src/app/(app)/admin/admin.module.css`:
 
@@ -1243,6 +1590,7 @@ Create `apps/web/src/app/(app)/admin/admin.module.css`:
 .muted {
   color: var(--color-muted);
   font-size: 13px;
+  overflow-wrap: anywhere;
 }
 
 .tableWrap {
@@ -1264,19 +1612,21 @@ Create `apps/web/src/app/(app)/admin/admin.module.css`:
   text-align: left;
   vertical-align: top;
   font-size: 14px;
+  max-width: 280px;
 }
 
 .table th {
   font-size: 12px;
   color: var(--color-muted);
   text-transform: uppercase;
-  letter-spacing: 0.3px;
+  letter-spacing: 0;
   background: var(--color-surface-soft);
 }
 
 .primary {
   color: var(--color-ink);
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .badge,
@@ -1323,23 +1673,23 @@ Create `apps/web/src/app/(app)/admin/admin.module.css`:
 }
 ```
 
-- [ ] **Step 6: Run web tests and typecheck**
+- [ ] **Step 7: Run web tests and typecheck**
 
 Run:
 
 ```bash
-pnpm --filter @fina/web exec vitest run src/components/AppShell.admin-nav.test.ts "src/app/(app)/admin/page.test.ts"
+pnpm --filter @fina/web exec vitest run src/components/shell-nav.test.ts "src/app/(app)/admin/admin-page-model.test.ts"
 pnpm exec nx run web:typecheck
 ```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit Task 5**
+- [ ] **Step 8: Commit Task 5**
 
 Run:
 
 ```bash
-git add apps/web/src/components/AppShell.tsx apps/web/src/components/AppShell.admin-nav.test.ts apps/web/src/app/\\(app\\)/admin/page.tsx apps/web/src/app/\\(app\\)/admin/admin.module.css apps/web/src/app/\\(app\\)/admin/page.test.ts
+git add apps/web/src/components/AppShell.tsx apps/web/src/components/shell-nav.ts apps/web/src/components/shell-nav.test.ts apps/web/src/app/\\(app\\)/admin/page.tsx apps/web/src/app/\\(app\\)/admin/admin.module.css apps/web/src/app/\\(app\\)/admin/admin-page-model.ts apps/web/src/app/\\(app\\)/admin/admin-page-model.test.ts
 git commit -m "Add read-only admin dashboard"
 ```
 
@@ -1355,9 +1705,9 @@ git commit -m "Add read-only admin dashboard"
 Run:
 
 ```bash
-DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/admin.set-user-role.test.ts tests/auth.context.test.ts tests/me.test.ts tests/admin.routes.test.ts
+DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test pnpm --filter @fina/api exec vitest run --config vitest.config.ts tests/admin.set-user-role.test.ts tests/auth.context.test.ts tests/me.test.ts tests/billing-sync.test.ts tests/admin.routes.test.ts
 pnpm exec nx run shared:test
-pnpm --filter @fina/web exec vitest run src/components/AppShell.admin-nav.test.ts "src/app/(app)/admin/page.test.ts"
+pnpm --filter @fina/web exec vitest run src/components/shell-nav.test.ts "src/app/(app)/admin/admin-page-model.test.ts"
 pnpm exec nx run shared:typecheck
 pnpm exec nx run api:typecheck
 pnpm exec nx run web:typecheck
@@ -1408,7 +1758,7 @@ Expected: only intended admin-dashboard files changed. Existing unrelated `READM
 If Step 1 or Step 2 required small fixes, commit those fixes:
 
 ```bash
-git add apps/api/prisma/schema.prisma apps/api/prisma/migrations/20260612_admin_user_role/migration.sql libs/shared/src/user-role.ts libs/shared/src/user-role.test.ts libs/shared/src/dto/admin.ts libs/shared/src/dto/me.ts libs/shared/src/errors.ts libs/shared/src/index.ts apps/api/src/scripts/set-user-role.ts apps/api/package.json apps/api/tests/admin.set-user-role.test.ts apps/api/src/auth/context.ts apps/api/src/routes/me.ts apps/api/src/routes/billing.ts apps/api/tests/auth.context.test.ts apps/api/tests/me.test.ts apps/api/src/routes/admin.ts apps/api/src/server.ts apps/api/tests/admin.routes.test.ts apps/web/src/components/AppShell.tsx apps/web/src/components/AppShell.admin-nav.test.ts apps/web/src/app/\\(app\\)/admin/page.tsx apps/web/src/app/\\(app\\)/admin/admin.module.css apps/web/src/app/\\(app\\)/admin/page.test.ts
+git add apps/api/prisma/schema.prisma apps/api/prisma/migrations/20260612_admin_user_role/migration.sql libs/shared/src/user-role.ts libs/shared/src/user-role.test.ts libs/shared/src/dto/admin.ts libs/shared/src/dto/me.ts libs/shared/src/errors.ts libs/shared/src/index.ts apps/api/src/scripts/set-user-role.ts apps/api/package.json apps/api/tests/admin.set-user-role.test.ts apps/api/src/auth/context.ts apps/api/src/routes/me.ts apps/api/src/routes/billing.ts apps/api/tests/auth.context.test.ts apps/api/tests/me.test.ts apps/api/tests/billing-sync.test.ts apps/api/src/routes/admin.ts apps/api/src/billing/precedence.ts apps/api/src/server.ts apps/api/tests/admin.routes.test.ts apps/web/src/components/AppShell.tsx apps/web/src/components/shell-nav.ts apps/web/src/components/shell-nav.test.ts apps/web/src/app/\\(app\\)/admin/page.tsx apps/web/src/app/\\(app\\)/admin/admin.module.css apps/web/src/app/\\(app\\)/admin/admin-page-model.ts apps/web/src/app/\\(app\\)/admin/admin-page-model.test.ts
 git commit -m "Stabilize admin dashboard verification"
 ```
 
