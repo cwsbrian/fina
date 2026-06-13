@@ -154,6 +154,7 @@ describe("POST /billing/sync", () => {
   it("no-op for user with neither sessionId nor stripeCustomerId", async () => {
     const app = await buildApp(env);
     const user = await signUpAndGetCookie(app, { email: "s4@example.com", name: "S Four" });
+    await prisma.user.update({ where: { id: user.userId }, data: { role: "admin" } });
     const res = await app.inject({
       method: "POST",
       url: "/billing/sync",
@@ -161,6 +162,7 @@ describe("POST /billing/sync", () => {
       payload: {},
     });
     expect(res.statusCode).toBe(200);
+    expect(res.json().user.role).toBe("admin");
     expect(stripe.fns.sessionsRetrieve).not.toHaveBeenCalled();
     expect(stripe.fns.subsList).not.toHaveBeenCalled();
     expect(reconcilePlaidItemsForUser).not.toHaveBeenCalled();

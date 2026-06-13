@@ -22,6 +22,7 @@ describe("GET /me", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.user.email).toBe("me1@example.com");
+    expect(body.user.role).toBe("user");
     expect(body).not.toHaveProperty("workspace");
     expect(body.tier).toBe("pro");
     expect(body.trial.active).toBe(true);
@@ -33,6 +34,18 @@ describe("GET /me", () => {
       action: null,
       lastCheckedAt: null,
     });
+    await app.close();
+  });
+
+  it("returns admin role for an admin user", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "admin-me@example.com" });
+    await prisma.user.update({ where: { id: user.userId }, data: { role: "admin" } });
+
+    const res = await app.inject({ method: "GET", url: "/me", headers: { cookie: user.cookie } });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user.role).toBe("admin");
     await app.close();
   });
 
@@ -147,6 +160,22 @@ describe("PATCH /me", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("invalid_body");
+    await app.close();
+  });
+
+  it("does not allow role changes through PATCH /me", async () => {
+    const app = await buildApp(testEnv());
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "patch-role@t.co" });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ role: "admin" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_body");
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(fresh.role).toBe("user");
     await app.close();
   });
 

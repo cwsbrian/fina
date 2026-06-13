@@ -78,6 +78,7 @@ function toMeDTO(
       id: user.id,
       email: user.email,
       name: user.name,
+      role: user.role,
       tz: user.tz,
       locale: user.locale,
       morningTime: user.morningTime,
