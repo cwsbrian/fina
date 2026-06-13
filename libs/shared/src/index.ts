@@ -1,5 +1,6 @@
 // Core enums
 export * from "./roles.js";
+export * from "./user-role.js";
 export * from "./tier.js";
 
 // Cross-cutting
@@ -24,6 +25,7 @@ export * from "./dto/plaid.js";
 export * from "./dto/health.js";
 export * from "./dto/subscription.js";
 export * from "./dto/goals.js";
+export * from "./dto/admin.js";
 
 // Validators (pure helpers used by both API services and frontend forms)
 export * from "./validation/money.js";

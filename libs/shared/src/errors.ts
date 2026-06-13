@@ -12,6 +12,7 @@ export const API_ERROR_CODES = [
   // Auth / session
   "unauthenticated",
   "no_user",
+  "admin_required",
   "missing_workspace_header",
   "no_membership",
   "insufficient_role",

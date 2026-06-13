@@ -21,6 +21,7 @@ model User {
   image         String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  role          UserRole @default(user)
 
   // Fina extensions
   tz               String    @default("America/Toronto")
@@ -76,6 +77,11 @@ model User {
   llmCallLogs LlmCallLog[]
 
   @@map("users")
+}
+
+enum UserRole {
+  user
+  admin
 }
 
 model Session {

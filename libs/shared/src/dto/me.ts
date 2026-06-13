@@ -2,6 +2,7 @@ import type { Tier } from "../tier.js";
 import type { SubscriptionDTO } from "./subscription.js";
 import type { NotificationPrefs } from "../notifications.js";
 import type { CategorizationMode } from "../categorization.js";
+import type { UserRole } from "../user-role.js";
 
 export type BillingRecoveryDTO = {
   locked: boolean;
@@ -17,6 +18,7 @@ export type MeDTO = {
     id: string;
     email: string;
     name: string | null;
+    role: UserRole;
     tz: string;
     locale: string;
     /** Daily brief settings (Plan 2B). */
