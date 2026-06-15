@@ -4,6 +4,11 @@ import React, { useRef } from "react";
 import gsap from "gsap";
 import { useGSAP } from "@gsap/react";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
+import {
+  HERO_FIRST_FRAME_SOURCE,
+  HERO_FRAME_SOURCES,
+  heroFrameForProgress,
+} from "./hero-frames";
 
 gsap.registerPlugin(useGSAP, ScrollTrigger);
 
@@ -41,7 +46,10 @@ export function LandingAnimations({
       mm.add("(prefers-reduced-motion: no-preference)", () => {
         const heroSection = select('[data-gsap-scrub="hero"]');
         const heroArt = select('[data-gsap="hero-art"]');
-        const heroCopy = select('[data-gsap="hero-copy"] > *');
+        const heroCopy = select('[data-gsap="hero-copy"]');
+        const heroFrame = select('[data-hero-sequence-frame="true"]')[0] as
+          | HTMLImageElement
+          | undefined;
         const revealItems = select('[data-gsap="reveal"]:not([data-gsap-scrub])');
         const mockRows = select('[data-gsap="mock-row"]');
         const scrubSections = select('[data-gsap-scrub="section"]');
@@ -51,11 +59,36 @@ export function LandingAnimations({
         const createdTriggers: ScrollTrigger[] = [];
 
         const heroTrigger = heroSection[0];
+        const preloadedHeroFrames = heroFrame
+          ? HERO_FRAME_SOURCES.map((src) => {
+              const image = new Image();
+              image.src = src;
+              return image;
+            })
+          : [];
+        let activeHeroFrame = -1;
         let refreshFrame = window.requestAnimationFrame(() => {
           refreshFrame = window.requestAnimationFrame(() => ScrollTrigger.refresh());
         });
         let intro: gsap.core.Timeline | null = null;
         let introFrame = 0;
+
+        const updateHeroFrame = (progress: number) => {
+          if (!heroFrame) {
+            return;
+          }
+
+          const nextFrame = heroFrameForProgress(progress);
+
+          if (nextFrame === activeHeroFrame) {
+            return;
+          }
+
+          activeHeroFrame = nextFrame;
+          heroFrame.src = HERO_FRAME_SOURCES[nextFrame] ?? HERO_FIRST_FRAME_SOURCE;
+        };
+
+        updateHeroFrame(0);
 
         if (heroTrigger && heroArt.length) {
           gsap
@@ -63,21 +96,25 @@ export function LandingAnimations({
               scrollTrigger: {
                 trigger: heroTrigger,
                 start: "top top",
-                end: "bottom top",
-                scrub: 1,
+                end: () => `+=${Math.max(window.innerHeight * 0.82, 680)}`,
+                pin: true,
+                pinSpacing: true,
+                anticipatePin: 1,
+                scrub: 0.35,
                 invalidateOnRefresh: true,
+                onUpdate: (self) => updateHeroFrame(self.progress),
               },
             })
             .fromTo(
               heroArt,
               { scale: 1, y: 0 },
-              { scale: 0.9, y: 120, ease: "none" },
+              { scale: 1.045, y: 0, ease: "none" },
               0,
             )
             .fromTo(
               heroCopy,
-              { y: 0, autoAlpha: 1 },
-              { y: -72, autoAlpha: 0.52, ease: "none" },
+              { xPercent: -50, y: 0 },
+              { xPercent: -50, y: -340, duration: 1, ease: "none" },
               0,
             );
         }
@@ -101,11 +138,10 @@ export function LandingAnimations({
               )
               .fromTo(
                 heroCopy,
-                { autoAlpha: 0, y: 22 },
+                { xPercent: -50, y: 22 },
                 {
-                  autoAlpha: 1,
+                  xPercent: -50,
                   y: 0,
-                  stagger: 0.08,
                 },
                 0.12,
               );
@@ -226,6 +262,7 @@ export function LandingAnimations({
           window.cancelAnimationFrame(refreshFrame);
           window.cancelAnimationFrame(introFrame);
           intro?.kill();
+          preloadedHeroFrames.length = 0;
           createdTriggers.forEach((trigger) => trigger.kill());
         };
       });

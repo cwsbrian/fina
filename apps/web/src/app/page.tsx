@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import React from "react";
 import styles from "./page.module.css";
+import { HERO_FIRST_FRAME_SOURCE } from "./hero-frames";
 import { LandingAnimations } from "./LandingAnimations.client";
 import { WaitlistForm } from "./WaitlistForm.client";
 
@@ -37,12 +38,17 @@ export default function Landing() {
 
       <section className="hero" data-gsap-scrub="hero">
         <div className="hero-art" data-gsap="hero-art">
-          <img
-            src="/landing/mq18xqya-ChatGPT-Image-Jun-5_-2026_-11_16_57-AM.png"
-            alt="Calm morning kitchen ritual with soft garden light through the window"
-            width="3840"
-            height="1536"
-          />
+          <div className="hero-sequence" data-hero-sequence="true">
+            <img
+              data-hero-sequence-frame="true"
+              src={HERO_FIRST_FRAME_SOURCE}
+              alt="Fina product story sequence from the hero video"
+              width="1440"
+              height="810"
+              loading="eager"
+              decoding="sync"
+            />
+          </div>
           <div className="hero-fade"></div>
         </div>
         <div className="hero-copy wrap" data-gsap="hero-copy">

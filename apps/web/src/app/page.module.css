@@ -37,7 +37,7 @@
   max-width: 100%;
 }
 .landing :global([data-gsap="hero-art"]),
-.landing :global([data-gsap="hero-copy"] > *),
+.landing :global([data-gsap="hero-copy"]),
 .landing :global([data-gsap="reveal"]),
 .landing :global([data-gsap="mock-row"]),
 .landing :global([data-gsap-scrub="mock"]),
@@ -196,49 +196,75 @@
 }
 .landing :global(.hero) {
   position: relative;
+  min-height: 100dvh;
   padding-top: 0;
   text-align: center;
   overflow: hidden;
+  color: #fff;
 }
 .landing :global(.hero-art) {
-  position: relative;
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: clamp(420px, 46vw, 620px);
+  height: 100dvh;
+}
+.landing :global(.hero-sequence) {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #14120f;
 }
 .landing :global(.hero-art img),
 .landing :global(.hero-art svg) {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  object-position: center 52%;
+  object-position: center center;
 }
 .landing :global(.hero-fade) {
   position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 18%;
+  inset: auto 0 0;
+  height: 58%;
   background: linear-gradient(
     to bottom,
-    rgba(252, 250, 247, 0) 0%,
-    var(--bg) 85%
+    rgba(20, 18, 15, 0) 0%,
+    rgba(20, 18, 15, 0.32) 42%,
+    rgba(20, 18, 15, 0.76) 100%
   );
+  pointer-events: none;
 }
 .landing :global(.hero-copy) {
-  position: relative;
-  margin-top: -90px;
-  padding-bottom: 10px;
+  position: absolute;
+  left: 50%;
+  bottom: clamp(36px, 8vh, 88px);
+  z-index: 2;
+  width: 100%;
+  max-width: min(760px, calc(100% - 48px));
+  margin: 0;
+  padding-bottom: 0;
+  transform: translateX(-50%);
 }
 .landing :global(.hero h1) {
   margin: 0 auto;
   max-width: 14ch;
+  color: #fff;
+  text-shadow: 0 18px 70px rgba(20, 18, 15, 0.56);
 }
 .landing :global(.hero .lead) {
   margin: 22px auto 0;
   max-width: 34ch;
+  color: rgba(255, 255, 255, 0.78);
+  text-shadow: 0 10px 34px rgba(20, 18, 15, 0.5);
 }
 .landing :global(.hero .pill-btn) {
   margin-top: 30px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #1f1d1a;
+  box-shadow: 0 18px 48px rgba(20, 18, 15, 0.24);
+}
+.landing :global(.hero .fine) {
+  color: rgba(255, 255, 255, 0.64) !important;
+  text-shadow: 0 8px 28px rgba(20, 18, 15, 0.54);
 }
 .landing :global(.logos) {
   padding: 70px 0 30px;
@@ -1237,14 +1263,18 @@
     font-size: 13px;
     padding: 8px 13px;
   }
+  .landing :global(.hero) {
+    min-height: 100dvh;
+  }
   .landing :global(.hero-art) {
-    height: 360px;
+    height: 100dvh;
   }
   .landing :global(.hero-art img) {
-    object-position: center 48%;
+    object-position: center center;
   }
   .landing :global(.hero-copy) {
-    margin-top: -62px;
+    bottom: 42px;
+    max-width: calc(100% - 40px);
     padding-bottom: 0;
   }
   .landing :global(.hero h1),
