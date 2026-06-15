@@ -1,5 +1,7 @@
-import { isUserRole, type UserRole } from "@fina/shared";
 import { prisma } from "../db.js";
+
+const USER_ROLES = ["user", "admin"] as const;
+type UserRole = (typeof USER_ROLES)[number];
 
 export type SetUserRoleResult = {
   id: string;
@@ -7,10 +9,21 @@ export type SetUserRoleResult = {
   role: UserRole;
 };
 
+function isUserRole(value: string): value is UserRole {
+  return (USER_ROLES as readonly string[]).includes(value);
+}
+
 function readFlag(argv: string[], name: string): string | null {
   const idx = argv.indexOf(name);
   if (idx === -1 || idx === argv.length - 1) return null;
   return argv[idx + 1] ?? null;
+}
+
+function parseArgs(argv: string[]): { email: string | null; role: string | null } {
+  const email = readFlag(argv, "--email");
+  const role = readFlag(argv, "--role");
+  if (email || role) return { email, role };
+  return { email: argv[0] ?? null, role: argv[1] ?? null };
 }
 
 export async function setUserRoleByEmail(
@@ -44,11 +57,10 @@ export async function setUserRoleByEmail(
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
-  const email = readFlag(argv, "--email");
-  const role = readFlag(argv, "--role");
+  const { email, role } = parseArgs(argv);
   if (!email || !role || !isUserRole(role)) {
     throw new Error(
-      "Usage: pnpm --filter @fina/api admin:set-role -- --email user@example.com --role admin",
+      "Usage: fina-admin-set-role user@example.com admin\n   or: pnpm admin:set-role -- --email user@example.com --role admin",
     );
   }
 

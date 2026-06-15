@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import { readFileSync } from "node:fs";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { prisma } from "../src/db.js";
-import { setUserRoleByEmail } from "../src/scripts/set-user-role.js";
+import { main, setUserRoleByEmail } from "../src/scripts/set-user-role.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 
 describe("setUserRoleByEmail", () => {
@@ -37,6 +38,33 @@ describe("setUserRoleByEmail", () => {
     const updated = await setUserRoleByEmail("admin2@example.com", "user");
 
     expect(updated.role).toBe("user");
+  });
+
+  it("supports production-friendly positional args", async () => {
+    await prisma.user.create({
+      data: { id: "admin-4", email: "admin4@example.com", name: "Admin" },
+    });
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await main(["admin4@example.com", "admin"]);
+
+    expect(log).toHaveBeenCalledWith(
+      JSON.stringify(
+        { id: "admin-4", email: "admin4@example.com", role: "admin" },
+        null,
+        2,
+      ),
+    );
+    await expect(
+      prisma.user.findUniqueOrThrow({ where: { id: "admin-4" } }),
+    ).resolves.toMatchObject({ role: "admin" });
+    log.mockRestore();
+  });
+
+  it("does not import workspace-only packages in the runtime script", () => {
+    const source = readFileSync("src/scripts/set-user-role.ts", "utf8");
+
+    expect(source).not.toContain("@fina/shared");
   });
 
   it("fails when the user does not exist", async () => {
