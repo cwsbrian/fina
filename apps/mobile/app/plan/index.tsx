@@ -14,7 +14,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
-  PRICING,
+  IAP_PRICING,
   TIER_LIMITS,
   formatShortDate,
   subscriptionSourceLabel,
@@ -410,7 +410,7 @@ function PlanCard({
           <Text style={styles.planSummary}>{copy.summary}</Text>
         </View>
         <View style={styles.priceBlock}>
-          <Text style={styles.price}>{PRICING[tier].displayPrice}</Text>
+          <Text style={styles.price}>{IAP_PRICING[tier].displayPrice}</Text>
           <Text style={styles.priceUnit}>/ mo</Text>
         </View>
       </View>

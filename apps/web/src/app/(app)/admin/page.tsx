@@ -78,7 +78,7 @@ export default function AdminPage() {
               <th>Role</th>
               <th>Tier</th>
               <th>Subscription</th>
-              <th>Active</th>
+              <th>Active subs</th>
               <th>Mismatch</th>
               <th>Created</th>
             </tr>

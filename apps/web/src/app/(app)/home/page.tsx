@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { QRCodeSVG } from "qrcode.react";
 import {
   displayName,
+  STRIPE_PRICING,
   trialDaysLeft,
   tierLabel,
   trialRevertsTo,
@@ -202,7 +203,7 @@ export default function HomePage() {
             <div className={styles.bannerSub}>
               {revertsTo
                 ? `${tierLabel(revertsTo, false)} starts on ${formatShortDate(me?.trial.endsAt)}.`
-                : "Add a card to keep Pro at $15/mo when the trial ends."}
+                : `Add a card to keep Pro at ${STRIPE_PRICING.pro.displayPrice}/mo when the trial ends.`}
             </div>
           </div>
           <button

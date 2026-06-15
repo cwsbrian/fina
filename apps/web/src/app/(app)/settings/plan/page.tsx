@@ -3,8 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  PRICING,
+  STRIPE_PRICING,
   TIER_LIMITS,
+  subscriptionSourceLabel,
   trialDaysLeft,
   trialRevertsTo,
   tierLabel,
@@ -15,6 +16,12 @@ import {
 } from "@fina/shared";
 import { apiFetch } from "../../../../lib/api";
 import styles from "../settings.module.css";
+import {
+  canManageSubscriptionOnWeb,
+  canSwitchPlanOnWeb,
+  externalBillingManagementText,
+  priceForBillingSource,
+} from "./plan-page-model";
 
 export default function PlanPage() {
   const router = useRouter();
@@ -91,6 +98,30 @@ export default function PlanPage() {
   const trialActive = me.trial.active;
   const days = trialDaysLeft(me.trial.endsAt);
   const sub: SubscriptionDTO | null = me.subscription;
+  const canManageOnWeb = canManageSubscriptionOnWeb(sub);
+  const externalManagementText = externalBillingManagementText(sub);
+
+  const renderManagementAction = (
+    label: string,
+    variant: "primary" | "outline" = "outline",
+  ) => {
+    if (canManageOnWeb) {
+      return (
+        <button
+          type="button"
+          className={`${styles.btn} ${variant === "primary" ? styles.btnPrimary : styles.btnOutline}`}
+          onClick={onManage}
+          disabled={busy !== null}
+        >
+          {busy === "portal" ? "Opening…" : label}
+        </button>
+      );
+    }
+    if (externalManagementText) {
+      return <div className={styles.billingFootnote}>{externalManagementText}</div>;
+    }
+    return null;
+  };
 
   const renderCurrentCard = () => {
     // Decision matrix from spec §"MeDTO extension" → "UI decision matrix".
@@ -125,7 +156,7 @@ export default function PlanPage() {
       const upcomingTier =
         sub.pendingTier && sub.pendingTier !== sub.tier ? sub.pendingTier : sub.tier;
       const upcomingLabel = tierLabel(upcomingTier, false);
-      const upcomingPrice = PRICING[upcomingTier].displayPrice;
+      const upcomingPrice = priceForBillingSource(sub.source, upcomingTier);
       const at = new Date(sub.currentPeriodEnd).toLocaleDateString();
       const hasSchedule = sub.pendingTier && sub.pendingTier !== sub.tier;
       return (
@@ -143,19 +174,15 @@ export default function PlanPage() {
             </div>
           </div>
           <div className={styles.planCurrentActions}>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnOutline}`}
-              onClick={onManage}
-              disabled={busy !== null}
-            >
-              {busy === "portal" ? "Opening…" : "Manage subscription"}
-            </button>
+            {renderManagementAction("Manage subscription")}
           </div>
         </div>
       );
     }
     if (sub && sub.status === "past_due") {
+      const paymentRecoveryText = canManageOnWeb
+        ? "Update your card to keep your subscription active."
+        : externalManagementText ?? "Resolve billing with your subscription provider.";
       return (
         <div className={styles.planCurrent} style={{ borderColor: "var(--color-down)" }}>
           <div>
@@ -164,18 +191,11 @@ export default function PlanPage() {
             </div>
             <div className={styles.planCurrentName}>{tierLabel(sub.tier, false)}</div>
             <div className={styles.planCurrentStatus}>
-              Update your card to keep your subscription active.
+              {paymentRecoveryText}
             </div>
           </div>
           <div className={styles.planCurrentActions}>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnPrimary}`}
-              onClick={onManage}
-              disabled={busy !== null}
-            >
-              Update card
-            </button>
+            {renderManagementAction("Update card", "primary")}
           </div>
         </div>
       );
@@ -191,14 +211,7 @@ export default function PlanPage() {
             </div>
           </div>
           <div className={styles.planCurrentActions}>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnOutline}`}
-              onClick={onManage}
-              disabled={busy !== null}
-            >
-              Resume
-            </button>
+            {renderManagementAction("Resume")}
           </div>
         </div>
       );
@@ -215,18 +228,11 @@ export default function PlanPage() {
             <div className={styles.planCurrentLabel}>Current plan</div>
             <div className={styles.planCurrentName}>{currentLabel}</div>
             <div className={styles.planCurrentStatus}>
-              Switches to {nextLabel} on {at}. {PRICING[sub.pendingTier].displayPrice} will be charged.
+              Switches to {nextLabel} on {at}. {priceForBillingSource(sub.source, sub.pendingTier)} will be charged.
             </div>
           </div>
           <div className={styles.planCurrentActions}>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnOutline}`}
-              onClick={onManage}
-              disabled={busy !== null}
-            >
-              Manage subscription
-            </button>
+            {renderManagementAction("Manage subscription")}
           </div>
         </div>
       );
@@ -242,14 +248,7 @@ export default function PlanPage() {
             </div>
           </div>
           <div className={styles.planCurrentActions}>
-            <button
-              type="button"
-              className={`${styles.btn} ${styles.btnOutline}`}
-              onClick={onManage}
-              disabled={busy !== null}
-            >
-              Manage subscription
-            </button>
+            {renderManagementAction("Manage subscription")}
           </div>
         </div>
       );
@@ -281,6 +280,13 @@ export default function PlanPage() {
     // subscription. Checkout (creating a new sub) is only correct when
     // the user has no active subscription yet.
     if (sub !== null) {
+      if (!canSwitchPlanOnWeb(sub)) {
+        return (
+          <button type="button" className={`${styles.btn} ${styles.btnOutline}`} disabled>
+            {`Managed in ${subscriptionSourceLabel(sub.source)}`}
+          </button>
+        );
+      }
       // A scheduled change is already in flight for this tier — let the
       // user manage it via Portal rather than queuing another change.
       if (sub.pendingTier === tier) {
@@ -339,13 +345,13 @@ export default function PlanPage() {
                 <th style={{ textAlign: "left", padding: 12 }}></th>
                 <th style={{ textAlign: "left", padding: 12 }}>Free</th>
                 <th style={{ textAlign: "left", padding: 12 }}>
-                  Pro · {PRICING.pro.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                  Pro · {STRIPE_PRICING.pro.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
                   <span className={`${styles.pill} ${styles.pillActive}`} style={{ marginLeft: 8 }}>
                     Recommended
                   </span>
                 </th>
                 <th style={{ textAlign: "left", padding: 12 }}>
-                  Max · {PRICING.max.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                  Max · {STRIPE_PRICING.max.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
                 </th>
               </tr>
             </thead>

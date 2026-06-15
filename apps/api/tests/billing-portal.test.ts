@@ -79,6 +79,36 @@ describe("POST /billing/portal", () => {
     });
   });
 
+  it("returns 409 when an active native IAP subscription owns billing", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, { email: "p3@example.com", name: "P Three" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { stripeCustomerId: "cus_stale" },
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: user.userId,
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "apple-original-tx-p3",
+        status: "active" as any,
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/portal",
+      headers: { cookie: user.cookie },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("non_stripe_subscription");
+    expect(stripe.fns.portalCreate).not.toHaveBeenCalled();
+  });
+
   it("returns 401 for anonymous", async () => {
     const app = await buildApp(env);
     const res = await app.inject({ method: "POST", url: "/billing/portal" });

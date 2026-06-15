@@ -148,6 +148,18 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       if (!user.stripeCustomerId) {
         return reply.code(404).send({ error: "portal_failed" });
       }
+      const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
+      const activeSubs = await prisma.subscription.findMany({
+        where: {
+          userId: user.id,
+          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+        },
+        orderBy: { currentPeriodEnd: "desc" },
+      });
+      const primary = pickPrimarySub(filterEnvironmentRows(activeSubs, runtimeEnv));
+      if (primary && primary.source !== "stripe") {
+        return reply.code(409).send({ error: "non_stripe_subscription" });
+      }
       const stripe = stripeClient(app.fina.env);
       const portal = await stripe.billingPortal.sessions.create({
         customer: user.stripeCustomerId,
