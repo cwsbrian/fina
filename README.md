@@ -55,10 +55,10 @@ Upload the IPA to App Store Connect:
 ```bash
 cd /Users/brianchoi/Documents/work/personal/fina/apps/mobile
 
-pnpm dlx eas-cli@latest submit \
+EXPO_NO_KEYCHAIN=1 pnpm dlx eas-cli@latest submit \
   --platform ios \
   --profile production \
-  --path ../../dist/fina-ios-production.ipa
+  --path ../../dist/fina-ios-production-v15.ipa
 ```
 
 If Apple login fails with a macOS Keychain error such as `Security returned a
