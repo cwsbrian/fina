@@ -108,7 +108,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             onClick={() => navigate("/home")}
             aria-label="Fina home"
           >
-            <img src="/images/logo-dark.png" alt="Fina" className={styles.brandLogo} />
+            <img src="/branding/fina-wordmark.png" alt="Fina" className={styles.brandLogo} />
           </button>
 
           <div className={styles.links}>

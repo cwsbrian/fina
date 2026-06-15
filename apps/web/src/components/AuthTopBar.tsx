@@ -13,7 +13,7 @@ export function AuthTopBar({ homePath = "/" }: { homePath?: string }) {
         onClick={() => router.push(homePath)}
         aria-label="Fina home"
       >
-        <img src="/images/logo-dark.png" alt="Fina" className={styles.brandLogo} />
+        <img src="/branding/fina-wordmark.png" alt="Fina" className={styles.brandLogo} />
       </button>
       <div className={styles.topMeta}>Made in Canada · CAD</div>
     </div>

@@ -11,7 +11,7 @@ export default function LegalLayout({
       <header className={styles.header}>
         <Link href="/" className={styles.brand} aria-label="Fina home">
           <img
-            src="/images/logo-dark.png"
+            src="/branding/fina-wordmark.png"
             alt="Fina"
             className={styles.brandLogo}
           />
