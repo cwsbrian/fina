@@ -100,4 +100,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 # main.ts can close Fastify + Prisma cleanly. Without it `docker stop` would
 # SIGKILL after 10s and connections get torn mid-flight.
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["node", "main.js"]
+CMD ["sh", "-c", "pnpm exec prisma migrate deploy --schema=./prisma/schema.prisma && node main.js"]
