@@ -13,6 +13,7 @@ import { pickPrimarySub, filterEnvironmentRows } from "../billing/precedence.js"
 import { billingRecoveryForMe } from "../billing/recovery.js";
 import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 import { iapIntegrityForMe } from "../iap/integrity.js";
+import type { NativeIapPlatform } from "../iap/integrity.js";
 
 // Stripe requires trial_end to be at least 48h in the future (codex R3).
 // Trials expiring sooner than this are treated as already-expired — the
@@ -27,6 +28,7 @@ function useTrialEnd(trialEndsAt: Date | null): boolean {
 export async function buildMeBody(
   userId: string,
   runtimeEnv: "sandbox" | "production",
+  nativeIapPlatform: NativeIapPlatform | null = null,
 ): Promise<MeDTO> {
   const [user, activeSubs] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: userId } }),
@@ -75,7 +77,7 @@ export async function buildMeBody(
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
     subscription,
-    billingRecovery: billingRecoveryForMe(user, primary, null),
+    billingRecovery: billingRecoveryForMe(user, primary, null, nativeIapPlatform),
     iapIntegrity: iapIntegrityForMe(user, primary, null, null),
   };
 }

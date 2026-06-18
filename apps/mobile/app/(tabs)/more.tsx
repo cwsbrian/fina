@@ -39,7 +39,11 @@ import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspac
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
-import { presentNativeSubscriptionStoreAndSync } from "../../src/iap/native-subscription-store";
+import {
+  hasNativeSubscriptionStoreEntitlementReader,
+  listNativeSubscriptionStoreEntitlements,
+  presentNativeSubscriptionStoreAndSync,
+} from "../../src/iap/native-subscription-store";
 import { planEntryAction } from "../../src/iap/plan-mode";
 import {
   getAccountSettingsActions,
@@ -55,6 +59,15 @@ type ActiveWorkspace = {
   id: string;
   name: string;
   role: "owner" | "editor" | "viewer";
+};
+
+const MORE_PLAN_DEBUG_MARKER = "more-plan-debug-2026-06-18-storekit-entitlements";
+
+type NativeDebugState = {
+  available: boolean;
+  checkedAt: string;
+  entitlements: Awaited<ReturnType<typeof listNativeSubscriptionStoreEntitlements>> | null;
+  error: string | null;
 };
 
 const IAP_ERROR_MESSAGES = {
@@ -87,16 +100,19 @@ export default function More() {
   const [activeWs, setActiveWs] = useState<ActiveWorkspace | null>(null);
   const [banks, setBanks] = useState<PlaidItemSummary[] | null>(null);
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
+  const [nativeDebug, setNativeDebug] = useState<NativeDebugState | null>(null);
 
-  const loadMe = useCallback(() => {
-    fetchMeWithNativeSubscriptionSync()
-      .then((nextMe) => {
-        setMe(nextMe);
-        if (isBillingLocked(nextMe)) {
-          router.push("/billing/recovery" as never);
-        }
-      })
-      .catch(() => {});
+  const loadMe = useCallback(async (): Promise<Me | null> => {
+    try {
+      const nextMe = await fetchMeWithNativeSubscriptionSync();
+      setMe(nextMe);
+      if (isBillingLocked(nextMe)) {
+        router.push("/billing/recovery" as never);
+      }
+      return nextMe;
+    } catch {
+      return null;
+    }
   }, []);
 
   const loadActiveWorkspace = useCallback(async () => {
@@ -159,6 +175,34 @@ export default function More() {
       loadNeedsReview();
     }, [loadMe, loadActiveWorkspace, loadBanks, loadNeedsReview]),
   );
+
+  useEffect(() => {
+    if (!__DEV__ || Platform.OS !== "ios") return;
+    let cancelled = false;
+    const available = hasNativeSubscriptionStoreEntitlementReader();
+    const checkedAt = new Date().toISOString();
+    setNativeDebug({ available, checkedAt, entitlements: null, error: null });
+    if (!available) return;
+
+    listNativeSubscriptionStoreEntitlements()
+      .then((entitlements) => {
+        if (cancelled) return;
+        setNativeDebug({ available, checkedAt, entitlements, error: null });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setNativeDebug({
+          available,
+          checkedAt,
+          entitlements: null,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [me?.user.id]);
 
   const onSignOut = () => {
     Alert.alert("Sign out", "Sign out of Fina?", [
@@ -251,10 +295,14 @@ export default function More() {
             router.push("/billing/recovery" as never);
             return;
           }
-          Alert.alert(
-            "Couldn't update subscription",
-            iapErrorMessage(e),
-          );
+          void loadMe().then((nextMe) => {
+            if (nextMe && isBillingLocked(nextMe)) return;
+            Alert.alert(
+              "Couldn't update subscription",
+              iapErrorMessage(e),
+            );
+          });
+          return;
         });
       return;
     }
@@ -487,6 +535,63 @@ export default function More() {
                   last
                 />
               </Group>
+              {__DEV__ && (
+                <View style={styles.debugBox}>
+                  <Text style={styles.debugTitle}>Plan debug</Text>
+                  <Text style={styles.debugText}>marker: {MORE_PLAN_DEBUG_MARKER}</Text>
+                  <Text style={styles.debugText}>
+                    user: {me ? `${me.user.email} / ${me.user.id}` : "null"}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    me: {me ? `${me.tier}, trial: ${String(me.trial.active)}` : "null"}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    sub:{" "}
+                    {me?.subscription
+                      ? `${me.subscription.source}/${me.subscription.tier}/${me.subscription.status}`
+                      : "null"}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    billingRecovery:{" "}
+                    {JSON.stringify(
+                      me
+                        ? {
+                            locked: me.billingRecovery.locked,
+                            action: me.billingRecovery.action,
+                            source: me.billingRecovery.source,
+                            reason: me.billingRecovery.reason,
+                            lastCheckedAt: me.billingRecovery.lastCheckedAt,
+                          }
+                        : null,
+                    )}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    iapIntegrity:{" "}
+                    {JSON.stringify(
+                      me
+                        ? {
+                            isPlanMismatch: me.iapIntegrity.isPlanMismatch,
+                            requiresCheck: me.iapIntegrity.requiresCheck,
+                            lastCheckedAt: me.iapIntegrity.lastCheckedAt,
+                          }
+                        : null,
+                    )}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    nativeEntitlementReader:{" "}
+                    {nativeDebug ? String(nativeDebug.available) : "null"}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    nativeCheckedAt: {nativeDebug?.checkedAt ?? "null"}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    nativeEntitlements: {JSON.stringify(nativeDebug?.entitlements ?? null)}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    nativeError: {nativeDebug?.error ?? "null"}
+                  </Text>
+                </View>
+              )}
             </>
           );
         })()}
@@ -819,6 +924,17 @@ const styles = StyleSheet.create({
   rowDetailText: { ...type$.bodyMd, color: colors.muted },
 
   // Dev / footer
+  debugBox: {
+    marginTop: space.sm,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: 12,
+    padding: space.sm,
+    gap: 4,
+    backgroundColor: colors.surfaceSoft,
+  },
+  debugTitle: { ...type$.captionStrong, color: colors.ink },
+  debugText: { ...type$.caption, color: colors.muted },
   devBtn: {
     marginTop: space.lg,
     padding: 12,

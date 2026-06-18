@@ -335,6 +335,92 @@ describe("POST /billing/iap/integrity-check", () => {
     expect(user.isPlanMismatch).toBe(true);
   });
 
+  it("locks a trial-only user when the device has an active iOS entitlement", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "u12@test.com" });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/integrity-check",
+      headers: {
+        cookie,
+        [CLIENT_DEVICE_ID_HEADER]: "ios-device-integrity-trial",
+        [CLIENT_PLATFORM_HEADER]: "ios",
+      },
+      payload: {
+        platform: "ios",
+        result: "mismatched",
+        nativeProductId: "max_monthly",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().iapIntegrity.isPlanMismatch).toBe(true);
+    expect(res.json().billingRecovery).toMatchObject({
+      locked: true,
+      reason: "plan_mismatch",
+      source: "iap_apple",
+      action: "restore_iap",
+    });
+    const [user, device] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+      prisma.userDevice.findUniqueOrThrow({
+        where: {
+          userId_clientDeviceId: {
+            userId,
+            clientDeviceId: "ios-device-integrity-trial",
+          },
+        },
+      }),
+    ]);
+    expect(user.isPlanMismatch).toBe(true);
+    expect(device.lastIapIntegrityResult).toBe("mismatched");
+  });
+
+  it("locks a trial-only user from client native product id when Apple integrity receipt verification fails", async () => {
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "u13@test.com" });
+    fakeAppleClient.verifyAndDecodeTransaction.mockRejectedValue(
+      new HttpError(400, "invalid_receipt", "environment mismatch"),
+    );
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/integrity-check",
+      headers: {
+        cookie,
+        [CLIENT_DEVICE_ID_HEADER]: "ios-device-integrity-receipt-fallback",
+        [CLIENT_PLATFORM_HEADER]: "ios",
+      },
+      payload: {
+        platform: "ios",
+        result: "mismatched",
+        nativeProductId: "fina_pro_monthly",
+        receipt: "unverifiable-current-entitlement-jws",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().iapIntegrity.isPlanMismatch).toBe(true);
+    expect(res.json().billingRecovery).toMatchObject({
+      locked: true,
+      reason: "plan_mismatch",
+      source: "iap_apple",
+      action: "restore_iap",
+    });
+    const [user, device] = await Promise.all([
+      prisma.user.findUniqueOrThrow({ where: { id: userId } }),
+      prisma.userDevice.findUniqueOrThrow({
+        where: {
+          userId_clientDeviceId: {
+            userId,
+            clientDeviceId: "ios-device-integrity-receipt-fallback",
+          },
+        },
+      }),
+    ]);
+    expect(user.isPlanMismatch).toBe(true);
+    expect(device.lastIapIntegrityResult).toBe("mismatched");
+  });
+
   it("maps a Google plan mismatch to restore_iap", async () => {
     const { cookie, userId } = await signUpAndGetCookie(app, { email: "u11@test.com" });
     await prisma.subscription.create({

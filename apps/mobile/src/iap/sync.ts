@@ -8,6 +8,7 @@ import { Platform } from "react-native";
 import { postIAPCheckout, postIAPIntegrityCheck, postIAPRestore } from "../api/billing";
 import { apiFetch } from "../api/client";
 import { isBillingLocked } from "../billing/recovery-ui";
+import { listNativeSubscriptionStoreEntitlements } from "./native-subscription-store";
 import {
   finishPurchase,
   IapPurchaseError,
@@ -34,10 +35,10 @@ function nativeSubscriptionSource(): SubscriptionSource | null {
 
 function shouldCheckNativeIntegrity(me: MeDTO): boolean {
   const nativeSource = nativeSubscriptionSource();
-  if (!nativeSource || !me.iapIntegrity.requiresCheck) return false;
-  if (!me.subscription || me.subscription.source !== nativeSource) return false;
+  if (!nativeSource) return false;
   if (isBillingLocked(me)) return false;
-  return true;
+  if (!me.subscription) return true;
+  return me.subscription.source === nativeSource && me.iapIntegrity.requiresCheck;
 }
 
 export async function restoreCurrentNativeSubscriptions(): Promise<MeDTO | null> {
@@ -54,8 +55,13 @@ export async function restoreCurrentNativeSubscriptions(): Promise<MeDTO | null>
 }
 
 export async function syncCurrentNativeSubscriptions(): Promise<MeDTO | null> {
-  if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
-  const entitlements = await listCurrentNativeEntitlements();
+  const platform = Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : null;
+  if (!platform) return null;
+
+  let entitlements = await listCurrentNativeEntitlements();
+  if (entitlements.length === 0 && platform === "ios") {
+    entitlements = await listNativeSubscriptionStoreEntitlements();
+  }
   if (entitlements.length === 0) return null;
   return await syncNativePurchaseProofs(entitlements);
 }
@@ -74,11 +80,14 @@ async function syncNativePurchaseProofs(
 
 async function checkNativeIapIntegrity(me: MeDTO): Promise<MeDTO | null> {
   if (!isIapAvailable()) return null;
-  if (!me.subscription) return null;
   const platform = Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : null;
   if (!platform) return null;
 
-  const entitlements = await listCurrentNativeEntitlements();
+  let entitlements = await listCurrentNativeEntitlements();
+  if (entitlements.length === 0 && platform === "ios") {
+    entitlements = await listNativeSubscriptionStoreEntitlements();
+  }
+  if (entitlements.length === 0) return null;
   const matching = entitlements.find(
     (item) => tierForIapProductId(item.productId) === me.subscription?.tier,
   );

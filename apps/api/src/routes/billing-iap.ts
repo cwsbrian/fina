@@ -277,9 +277,24 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
       const clientNativeTier = parsed.data.nativeProductId
         ? tierForIapProductId(parsed.data.nativeProductId)
         : null;
-      const verifiedNativeTier =
-        (await authoritativeNativeTier(parsed.data.platform, parsed.data.receipt)) ??
-        clientNativeTier;
+      let verifiedNativeTier = clientNativeTier;
+      if (parsed.data.receipt) {
+        try {
+          verifiedNativeTier =
+            (await authoritativeNativeTier(parsed.data.platform, parsed.data.receipt)) ??
+            clientNativeTier;
+        } catch (e) {
+          app.log.warn(
+            {
+              err: e,
+              route: "/billing/iap/integrity-check",
+              platform: parsed.data.platform,
+              nativeProductId: parsed.data.nativeProductId,
+            },
+            "iap_integrity_receipt_verification_failed_using_client_product",
+          );
+        }
+      }
       const result =
         primary && verifiedNativeTier && primary.tier === verifiedNativeTier
           ? "matched"
@@ -305,7 +320,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         result,
         primary,
       });
-      return await buildMeBody(session.userId, meRuntimeEnv());
+      return await buildMeBody(session.userId, meRuntimeEnv(), client.platform);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       app.log.error({ err: e, route: "/billing/iap/integrity-check" }, "iap_integrity_failed");

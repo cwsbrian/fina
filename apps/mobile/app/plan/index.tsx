@@ -33,7 +33,11 @@ import {
 } from "../../src/billing/recovery-ui";
 import { IapPurchaseError } from "../../src/iap/client";
 import { nativeBillingUnavailableMessage, openManageBilling } from "../../src/iap/manage";
-import { presentNativeSubscriptionStoreAndSync } from "../../src/iap/native-subscription-store";
+import {
+  hasNativeSubscriptionStoreEntitlementReader,
+  listNativeSubscriptionStoreEntitlements,
+  presentNativeSubscriptionStoreAndSync,
+} from "../../src/iap/native-subscription-store";
 import { usesNativeSubscriptionSurface } from "../../src/iap/plan-mode";
 import {
   checkoutNativeSubscription,
@@ -45,6 +49,15 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import type { SubscriptionSource } from "@fina/shared";
 
 type BusyState = PaidTier | "manage" | "restore" | null;
+
+const PLAN_DEBUG_MARKER = "plan-debug-2026-06-18-storekit-entitlements";
+
+type NativeDebugState = {
+  available: boolean;
+  checkedAt: string;
+  entitlements: Awaited<ReturnType<typeof listNativeSubscriptionStoreEntitlements>> | null;
+  error: string | null;
+};
 
 const IAP_ERROR_MESSAGES = {
   user_mismatch:
@@ -111,6 +124,7 @@ export default function PlanScreen() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [busy, setBusy] = useState<BusyState>(null);
+  const [nativeDebug, setNativeDebug] = useState<NativeDebugState | null>(null);
   const busyRef = useRef<BusyState>(null);
   const nativeSource: SubscriptionSource =
     Platform.OS === "ios" ? "iap_apple" : "iap_google";
@@ -152,6 +166,34 @@ export default function PlanScreen() {
       void loadMe();
     }, [loadMe]),
   );
+
+  useEffect(() => {
+    if (!__DEV__ || Platform.OS !== "ios") return;
+    let cancelled = false;
+    const available = hasNativeSubscriptionStoreEntitlementReader();
+    const checkedAt = new Date().toISOString();
+    setNativeDebug({ available, checkedAt, entitlements: null, error: null });
+    if (!available) return;
+
+    listNativeSubscriptionStoreEntitlements()
+      .then((entitlements) => {
+        if (cancelled) return;
+        setNativeDebug({ available, checkedAt, entitlements, error: null });
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setNativeDebug({
+          available,
+          checkedAt,
+          entitlements: null,
+          error: e instanceof Error ? e.message : String(e),
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [me?.user.id]);
 
   useEffect(() => {
     if (me && isBillingLocked(me)) {
@@ -212,6 +254,11 @@ export default function PlanScreen() {
     } catch (e: any) {
       if (isApiError(e) && e.code === "user_mismatch") {
         await loadMe();
+        router.replace("/billing/recovery" as never);
+        return;
+      }
+      const nextMe = await loadMe();
+      if (nextMe && isBillingLocked(nextMe)) {
         router.replace("/billing/recovery" as never);
         return;
       }
@@ -341,6 +388,51 @@ export default function PlanScreen() {
             <Text style={styles.currentSource}>via {subscriptionSourceLabel(sub.source)}</Text>
           )}
         </View>
+
+        {__DEV__ && (
+          <View style={styles.debugBox}>
+            <Text style={styles.debugTitle}>Plan debug</Text>
+            <Text style={styles.debugText}>marker: {PLAN_DEBUG_MARKER}</Text>
+            <Text style={styles.debugText}>user: {me.user.email} / {me.user.id}</Text>
+            <Text style={styles.debugText}>
+              me: {me.tier}, trial: {String(me.trial.active)}
+            </Text>
+            <Text style={styles.debugText}>
+              sub: {sub ? `${sub.source}/${sub.tier}/${sub.status}` : "null"}
+            </Text>
+            <Text style={styles.debugText}>
+              billingRecovery:{" "}
+              {JSON.stringify({
+                locked: me.billingRecovery.locked,
+                action: me.billingRecovery.action,
+                source: me.billingRecovery.source,
+                reason: me.billingRecovery.reason,
+                lastCheckedAt: me.billingRecovery.lastCheckedAt,
+              })}
+            </Text>
+            <Text style={styles.debugText}>
+              iapIntegrity:{" "}
+              {JSON.stringify({
+                isPlanMismatch: me.iapIntegrity.isPlanMismatch,
+                requiresCheck: me.iapIntegrity.requiresCheck,
+                lastCheckedAt: me.iapIntegrity.lastCheckedAt,
+              })}
+            </Text>
+            <Text style={styles.debugText}>
+              nativeEntitlementReader:{" "}
+              {nativeDebug ? String(nativeDebug.available) : "null"}
+            </Text>
+            <Text style={styles.debugText}>
+              nativeCheckedAt: {nativeDebug?.checkedAt ?? "null"}
+            </Text>
+            <Text style={styles.debugText}>
+              nativeEntitlements: {JSON.stringify(nativeDebug?.entitlements ?? null)}
+            </Text>
+            <Text style={styles.debugText}>
+              nativeError: {nativeDebug?.error ?? "null"}
+            </Text>
+          </View>
+        )}
 
         {usesNativeSurface && (
           <View style={styles.nativeCard}>
@@ -632,6 +724,16 @@ const styles = StyleSheet.create({
   currentName: { ...type$.titleMd, color: colors.ink },
   currentMeta: { ...type$.bodySm, color: colors.body },
   currentSource: { ...type$.bodySm, color: colors.muted },
+  debugBox: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: 12,
+    padding: space.sm,
+    gap: 4,
+    backgroundColor: colors.surfaceSoft,
+  },
+  debugTitle: { ...type$.captionStrong, color: colors.ink },
+  debugText: { ...type$.caption, color: colors.muted },
   restoreButton: {
     marginTop: space.xs,
     flexDirection: "row",

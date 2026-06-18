@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   present: vi.fn(),
+  currentEntitlements: vi.fn(),
   openManageBilling: vi.fn(),
   postIAPCheckout: vi.fn(),
 }));
@@ -11,6 +12,7 @@ vi.mock("react-native", () => ({
   NativeModules: {
     FinaNativeSubscriptionStore: {
       present: mocks.present,
+      currentEntitlements: mocks.currentEntitlements,
     },
   },
 }));
@@ -21,7 +23,11 @@ vi.mock("./manage", () => ({ openManageBilling: mocks.openManageBilling }));
 vi.mock("./products", () => ({ productIdsForPlatform: () => ["pro_monthly", "max_monthly"] }));
 vi.mock("./binding", () => ({ deriveAppleToken: () => "apple-token" }));
 
-import { presentNativeSubscriptionStoreAndSync } from "./native-subscription-store";
+import {
+  hasNativeSubscriptionStoreEntitlementReader,
+  listNativeSubscriptionStoreEntitlements,
+  presentNativeSubscriptionStoreAndSync,
+} from "./native-subscription-store";
 
 describe("native subscription store", () => {
   beforeEach(() => {
@@ -55,5 +61,22 @@ describe("native subscription store", () => {
       productId: "pro_monthly",
       receipt: "signed.transaction.jws",
     });
+  });
+
+  it("reads current StoreKit entitlements from the native subscription module", async () => {
+    const entitlement = {
+      platform: "ios",
+      productId: "max_monthly",
+      receipt: "current.entitlement.jws",
+    };
+    mocks.currentEntitlements.mockResolvedValue([entitlement]);
+
+    await expect(listNativeSubscriptionStoreEntitlements()).resolves.toEqual([entitlement]);
+
+    expect(mocks.currentEntitlements).toHaveBeenCalledWith(["pro_monthly", "max_monthly"]);
+  });
+
+  it("reports when the native entitlement reader is available", () => {
+    expect(hasNativeSubscriptionStoreEntitlementReader()).toBe(true);
   });
 });

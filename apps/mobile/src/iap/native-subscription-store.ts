@@ -17,6 +17,7 @@ type FinaNativeSubscriptionStoreModule = {
     productIds: string[],
     appAccountToken: string,
   ): Promise<NativeSubscriptionPurchase | null>;
+  currentEntitlements?(productIds: string[]): Promise<NativeSubscriptionPurchase[]>;
 };
 
 function nativeSubscriptionStoreModule(): FinaNativeSubscriptionStoreModule | null {
@@ -28,6 +29,12 @@ function nativeSubscriptionStoreModule(): FinaNativeSubscriptionStoreModule | nu
 
 export function nativeSubscriptionProductIds(): string[] {
   return productIdsForPlatform("ios");
+}
+
+export function hasNativeSubscriptionStoreEntitlementReader(): boolean {
+  if (Platform.OS !== "ios" || isExpoGo) return false;
+  const mod = nativeSubscriptionStoreModule();
+  return typeof mod?.currentEntitlements === "function";
 }
 
 export async function presentNativeSubscriptionStore(
@@ -58,4 +65,13 @@ export async function presentNativeSubscriptionStoreAndSync(
     productId: purchase.productId,
     receipt: purchase.receipt,
   });
+}
+
+export async function listNativeSubscriptionStoreEntitlements(): Promise<
+  NativeSubscriptionPurchase[]
+> {
+  if (Platform.OS !== "ios") return [];
+  const mod = nativeSubscriptionStoreModule();
+  if (!mod?.currentEntitlements || isExpoGo) return [];
+  return await mod.currentEntitlements(nativeSubscriptionProductIds());
 }

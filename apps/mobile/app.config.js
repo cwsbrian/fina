@@ -105,6 +105,33 @@ class FinaNativeSubscriptionStore: NSObject {
     true
   }
 
+  @objc(currentEntitlements:resolver:rejecter:)
+  func currentEntitlements(
+    _ productIds: [String],
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    guard #available(iOS 15.0, *) else {
+      resolve([])
+      return
+    }
+
+    let ids = Set(productIds.filter { !$0.isEmpty })
+    Task {
+      var entitlements: [[String: String]] = []
+      for await result in Transaction.currentEntitlements {
+        guard case .verified(let transaction) = result else { continue }
+        guard ids.contains(transaction.productID) else { continue }
+        entitlements.append([
+          "platform": "ios",
+          "productId": transaction.productID,
+          "receipt": result.jwsRepresentation,
+        ])
+      }
+      resolve(entitlements)
+    }
+  }
+
   @objc(present:appAccountToken:resolver:rejecter:)
   func present(
     _ productIds: [String],
@@ -196,6 +223,10 @@ class FinaNativeSubscriptionStore: NSObject {
 const NATIVE_SUBSCRIPTION_STORE_BRIDGE = `#import <React/RCTBridgeModule.h>
 
 @interface RCT_EXTERN_MODULE(FinaNativeSubscriptionStore, NSObject)
+
+RCT_EXTERN_METHOD(currentEntitlements:(NSArray *)productIds
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(present:(NSArray *)productIds
                   appAccountToken:(NSString *)appAccountToken

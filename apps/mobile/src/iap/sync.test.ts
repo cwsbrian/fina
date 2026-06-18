@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   listAvailablePurchases: vi.fn(),
   listCurrentNativeEntitlements: vi.fn(),
   postIAPRestore: vi.fn(),
+  postIAPIntegrityCheck: vi.fn(),
+  apiFetch: vi.fn(),
+  listNativeSubscriptionStoreEntitlements: vi.fn(),
 }));
 
 vi.mock("react-native", () => ({
@@ -36,26 +39,35 @@ vi.mock("./client", () => ({
 
 vi.mock("../api/billing", () => ({
   postIAPCheckout: vi.fn(),
-  postIAPIntegrityCheck: vi.fn(),
+  postIAPIntegrityCheck: mocks.postIAPIntegrityCheck,
   postIAPRestore: mocks.postIAPRestore,
 }));
 
 vi.mock("../api/client", () => ({
-  apiFetch: vi.fn(),
+  apiFetch: mocks.apiFetch,
 }));
 
 vi.mock("../billing/recovery-ui", () => ({
   isBillingLocked: () => false,
 }));
 
+vi.mock("./native-subscription-store", () => ({
+  listNativeSubscriptionStoreEntitlements: mocks.listNativeSubscriptionStoreEntitlements,
+}));
+
 import {
+  fetchMeWithNativeSubscriptionSync,
   restoreCurrentNativeSubscriptions,
   syncCurrentNativeSubscriptions,
 } from "./sync";
 
 describe("native subscription sync", () => {
+  let now = 1_000_000;
+
   beforeEach(() => {
     vi.clearAllMocks();
+    now += 60_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
   });
 
   it("uses silent current entitlements for background sync", async () => {
@@ -87,5 +99,60 @@ describe("native subscription sync", () => {
 
     expect(mocks.listAvailablePurchases).toHaveBeenCalledTimes(1);
     expect(mocks.finishPurchase).toHaveBeenCalledWith(purchase);
+  });
+
+  it("checks silent native entitlements even when the Fina account is still trial-only", async () => {
+    const trialMe = {
+      subscription: null,
+      iapIntegrity: { requiresCheck: false, isPlanMismatch: false },
+      billingRecovery: { locked: false },
+    };
+    const recoveryMe = {
+      ...trialMe,
+      iapIntegrity: { requiresCheck: false, isPlanMismatch: true },
+      billingRecovery: { locked: true },
+    };
+    mocks.apiFetch.mockResolvedValue(trialMe);
+    mocks.listCurrentNativeEntitlements.mockResolvedValue([
+      { platform: "ios", productId: "max_monthly", receipt: "silent-max-jws" },
+    ]);
+    mocks.postIAPIntegrityCheck.mockResolvedValue(recoveryMe);
+
+    await expect(fetchMeWithNativeSubscriptionSync()).resolves.toBe(recoveryMe);
+
+    expect(mocks.postIAPIntegrityCheck).toHaveBeenCalledWith({
+      platform: "ios",
+      result: "mismatched",
+      nativeProductId: "max_monthly",
+      receipt: "silent-max-jws",
+    });
+  });
+
+  it("falls back to StoreKit native entitlements when react-native-iap sees none", async () => {
+    const trialMe = {
+      subscription: null,
+      iapIntegrity: { requiresCheck: false, isPlanMismatch: false },
+      billingRecovery: { locked: false },
+    };
+    const recoveryMe = {
+      ...trialMe,
+      iapIntegrity: { requiresCheck: false, isPlanMismatch: true },
+      billingRecovery: { locked: true },
+    };
+    mocks.apiFetch.mockResolvedValue(trialMe);
+    mocks.listCurrentNativeEntitlements.mockResolvedValue([]);
+    mocks.listNativeSubscriptionStoreEntitlements.mockResolvedValue([
+      { platform: "ios", productId: "max_monthly", receipt: "storekit-max-jws" },
+    ]);
+    mocks.postIAPIntegrityCheck.mockResolvedValue(recoveryMe);
+
+    await expect(fetchMeWithNativeSubscriptionSync()).resolves.toBe(recoveryMe);
+
+    expect(mocks.postIAPIntegrityCheck).toHaveBeenCalledWith({
+      platform: "ios",
+      result: "mismatched",
+      nativeProductId: "max_monthly",
+      receipt: "storekit-max-jws",
+    });
   });
 });

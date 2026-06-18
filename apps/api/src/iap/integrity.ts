@@ -116,7 +116,41 @@ export async function recordIapIntegrityResult(input: {
   const now = new Date();
   const expectedSource = sourceForNativePlatform(input.client.platform);
   if (!input.primary || input.primary.source !== expectedSource) {
-    await touchNativeIapDevice(input.userId, input.client);
+    const deviceWrite = prisma.userDevice.upsert({
+      where: {
+        userId_clientDeviceId: {
+          userId: input.userId,
+          clientDeviceId: input.client.clientDeviceId,
+        },
+      },
+      create: {
+        userId: input.userId,
+        clientDeviceId: input.client.clientDeviceId,
+        platform: input.client.platform,
+        lastSeenAt: now,
+        lastIapIntegrityCheckedAt: now,
+        lastIapIntegrityResult: input.result,
+        lastIapIntegritySubscriptionUpdatedAt: input.primary?.updatedAt ?? null,
+      },
+      update: {
+        platform: input.client.platform,
+        lastSeenAt: now,
+        lastIapIntegrityCheckedAt: now,
+        lastIapIntegrityResult: input.result,
+        lastIapIntegritySubscriptionUpdatedAt: input.primary?.updatedAt ?? null,
+      },
+    });
+    if (input.result === "mismatched") {
+      await prisma.$transaction([
+        deviceWrite,
+        prisma.user.update({
+          where: { id: input.userId },
+          data: { isPlanMismatch: true },
+        }),
+      ]);
+      return;
+    }
+    await deviceWrite;
     return;
   }
 
