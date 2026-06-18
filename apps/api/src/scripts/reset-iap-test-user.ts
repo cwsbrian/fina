@@ -4,6 +4,7 @@ export type ResetIapTestUserResult = {
   id: string;
   email: string;
   deletedNativeSubscriptions: number;
+  clearedIapDeviceStates: number;
 };
 
 function parseEmail(argv: string[]): string | null {
@@ -32,6 +33,15 @@ export async function resetIapTestUser(email: string): Promise<ResetIapTestUserR
       },
     });
 
+    const clearedDevices = await tx.userDevice.updateMany({
+      where: { userId: user.id },
+      data: {
+        lastIapIntegrityCheckedAt: null,
+        lastIapIntegrityResult: null,
+        lastIapIntegritySubscriptionUpdatedAt: null,
+      },
+    });
+
     const updated = await tx.user.update({
       where: { id: user.id },
       data: {
@@ -46,6 +56,7 @@ export async function resetIapTestUser(email: string): Promise<ResetIapTestUserR
       id: updated.id,
       email: updated.email,
       deletedNativeSubscriptions: deleted.count,
+      clearedIapDeviceStates: clearedDevices.count,
     };
   });
 }

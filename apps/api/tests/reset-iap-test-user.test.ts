@@ -45,6 +45,16 @@ describe("resetIapTestUser", () => {
         },
       ],
     });
+    await prisma.userDevice.create({
+      data: {
+        userId: "tester-1",
+        clientDeviceId: "device-1",
+        platform: "ios",
+        lastIapIntegrityCheckedAt: new Date(),
+        lastIapIntegrityResult: "mismatched",
+        lastIapIntegritySubscriptionUpdatedAt: new Date(),
+      },
+    });
 
     const result = await resetIapTestUser(" Tester@Test.Com ");
 
@@ -52,6 +62,7 @@ describe("resetIapTestUser", () => {
       id: "tester-1",
       email: "tester@test.com",
       deletedNativeSubscriptions: 1,
+      clearedIapDeviceStates: 1,
     });
     await expect(
       prisma.user.findUniqueOrThrow({ where: { id: "tester-1" } }),
@@ -66,6 +77,13 @@ describe("resetIapTestUser", () => {
     await expect(
       prisma.subscription.findFirstOrThrow({ where: { userId: "tester-1" } }),
     ).resolves.toMatchObject({ source: "stripe", sourceSubscriptionId: "stripe-sub" });
+    await expect(
+      prisma.userDevice.findFirstOrThrow({ where: { userId: "tester-1" } }),
+    ).resolves.toMatchObject({
+      lastIapIntegrityCheckedAt: null,
+      lastIapIntegrityResult: null,
+      lastIapIntegritySubscriptionUpdatedAt: null,
+    });
   });
 
   it("prints a JSON result from positional CLI args", async () => {
@@ -83,7 +101,12 @@ describe("resetIapTestUser", () => {
 
     expect(log).toHaveBeenCalledWith(
       JSON.stringify(
-        { id: "tester-2", email: "tester2@test.com", deletedNativeSubscriptions: 0 },
+        {
+          id: "tester-2",
+          email: "tester2@test.com",
+          deletedNativeSubscriptions: 0,
+          clearedIapDeviceStates: 0,
+        },
         null,
         2,
       ),
