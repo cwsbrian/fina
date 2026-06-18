@@ -19,7 +19,7 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.withfina.app",
-      "buildNumber": "15",
+      "buildNumber": "17",
       "infoPlist": {
         "NSUserNotificationsUsageDescription": "Fina sends a daily morning brief notification.",
         "ITSAppUsesNonExemptEncryption": false

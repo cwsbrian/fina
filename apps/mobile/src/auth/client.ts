@@ -43,6 +43,7 @@ type MobileAuthClient = {
     email: (input: { email: string; password: string; name: string }) => AuthResult;
   };
   signOut: () => AuthResult;
+  deleteUser: (input: Record<string, never>) => AuthResult;
   changePassword: (input: {
     currentPassword: string;
     newPassword: string;

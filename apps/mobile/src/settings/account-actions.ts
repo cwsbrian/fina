@@ -7,12 +7,14 @@ export type AccountSettingsActionKey =
   | "edit-profile"
   | "reset-password"
   | "export-data"
+  | "delete-account"
   | "sign-out";
 
 export type AccountSettingsAction = {
   key: AccountSettingsActionKey;
   icon: IoniconName;
   title: string;
+  danger?: boolean;
 };
 
 export function getAccountSettingsActions(): AccountSettingsAction[] {
@@ -31,6 +33,12 @@ export function getAccountSettingsActions(): AccountSettingsAction[] {
       key: "export-data",
       icon: "download-outline",
       title: "Export data",
+    },
+    {
+      key: "delete-account",
+      icon: "trash-outline",
+      title: "Delete account",
+      danger: true,
     },
     {
       key: "sign-out",

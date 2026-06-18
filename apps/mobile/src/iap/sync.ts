@@ -60,7 +60,7 @@ export async function restoreCurrentNativeSubscriptions(): Promise<MeDTO | null>
 }
 
 export async function syncCurrentNativeSubscriptions(): Promise<MeDTO | null> {
-  if (Platform.OS === "ios") return null;
+  if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
   return await restoreCurrentNativeSubscriptions();
 }
 
@@ -120,12 +120,10 @@ export async function checkoutNativeSubscription(
     purchase = await requestSubscriptionPurchase(tier, userId);
   } catch (e) {
     if (isAlreadyOwnedError(e)) {
-      if (Platform.OS === "ios") {
-        const current = await apiFetch<MeDTO>("/me");
-        if (current.subscription) return current;
-      }
       const synced = await restoreCurrentNativeSubscriptions();
       if (synced) return synced;
+      const current = await apiFetch<MeDTO>("/me");
+      if (current.subscription) return current;
     }
     throw e;
   }

@@ -21,6 +21,8 @@ import {
   tierLabel,
   trialDaysLeft,
   trialRevertsTo,
+  isApiError,
+  type ApiErrorCode,
   type MeDTO as Me,
   type PaidTier,
 } from "@fina/shared";
@@ -34,6 +36,8 @@ import {
 } from "../../src/billing/recovery-ui";
 import { IapPurchaseError } from "../../src/iap/client";
 import { nativeBillingUnavailableMessage, openManageBilling } from "../../src/iap/manage";
+import { presentNativeSubscriptionStoreAndSync } from "../../src/iap/native-subscription-store";
+import { usesNativeSubscriptionSurface } from "../../src/iap/plan-mode";
 import {
   checkoutNativeSubscription,
   fetchMeWithNativeSubscriptionSync,
@@ -45,6 +49,31 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import type { SubscriptionSource } from "@fina/shared";
 
 type BusyState = PaidTier | "manage" | "restore" | null;
+
+const IAP_ERROR_MESSAGES = {
+  user_mismatch:
+    "This App Store sandbox subscription is already tied to another Fina account. Sign in with that Fina account, or use a fresh Sandbox Tester Apple ID.",
+  already_subscribed_iap: "This App Store account already has an active Fina subscription.",
+  already_subscribed_stripe: "This Fina account is already subscribed through web billing.",
+  invalid_receipt: "The App Store receipt could not be verified. Try again.",
+  expired_receipt: "The App Store subscription is expired.",
+  product_mismatch: "The App Store returned a different subscription product than expected.",
+  iap_not_configured: "In-app purchases are not fully configured on the server.",
+  platform_unavailable: "In-app purchases are temporarily unavailable.",
+} satisfies Partial<Record<ApiErrorCode, string>>;
+
+function purchaseErrorMessage(e: unknown): string {
+  if (e instanceof IapPurchaseError) return `[${e.code}] ${e.message}`;
+  if (isApiError(e)) {
+    const message =
+      (IAP_ERROR_MESSAGES as Record<string, string | undefined>)[e.code] ??
+      e.message ??
+      "Try again.";
+    return `[${e.code}] ${message}`;
+  }
+  if (e instanceof Error) return e.message;
+  return "Try again.";
+}
 
 const PLAN_COPY: Record<
   PaidTier,
@@ -90,6 +119,7 @@ export default function PlanScreen() {
   const nativeSource: SubscriptionSource =
     Platform.OS === "ios" ? "iap_apple" : "iap_google";
   const storeName = Platform.OS === "ios" ? "the App Store" : "Google Play";
+  const usesNativeSurface = usesNativeSubscriptionSurface(Platform.OS);
 
   const goHome = useCallback(() => {
     router.replace("/(tabs)" as never);
@@ -155,7 +185,7 @@ export default function PlanScreen() {
 
   const openNativeManagement = useCallback(async () => {
     if (busy) return;
-    if (!me?.subscription && Platform.OS === "android") return;
+    if (!usesNativeSurface && !me?.subscription && Platform.OS === "android") return;
     const unavailable = nativeBillingUnavailableMessage(me?.subscription?.source);
     if (unavailable) {
       Alert.alert("Manage subscription", unavailable);
@@ -163,14 +193,23 @@ export default function PlanScreen() {
     }
     setBusy("manage");
     try {
+      if (usesNativeSurface) {
+        const nextMe = await presentNativeSubscriptionStoreAndSync();
+        if (nextMe) {
+          setMe(nextMe);
+          return;
+        }
+        await loadMe();
+        return;
+      }
       await openManageBilling(me?.subscription?.tier, me?.subscription?.source);
-      void loadMe();
+      await loadMe();
     } catch (e: any) {
       Alert.alert("Couldn't open store billing", e?.message ?? "Try again.");
     } finally {
       setBusy(null);
     }
-  }, [busy, loadMe, me?.subscription]);
+  }, [busy, loadMe, me?.subscription, usesNativeSurface]);
 
   const recoverBilling = useCallback(async () => {
     if (busy || !me) return;
@@ -213,6 +252,33 @@ export default function PlanScreen() {
     }
   }, [busy, goHome, loadMe, me, storeName]);
 
+  const restoreNativePurchases = useCallback(async () => {
+    if (busy) return;
+    const unavailable = nativeBillingUnavailableMessage(me?.subscription?.source);
+    if (unavailable) {
+      Alert.alert("Restore purchases", unavailable);
+      return;
+    }
+    setBusy("restore");
+    try {
+      const nextMe = await restoreCurrentNativeSubscriptions();
+      if (!nextMe) {
+        Alert.alert(
+          "No subscription found",
+          `No active Fina subscription was found in ${storeName}.`,
+        );
+        await loadMe();
+        return;
+      }
+      setMe(nextMe);
+    } catch (e: any) {
+      Alert.alert("Restore failed", purchaseErrorMessage(e));
+      void loadMe();
+    } finally {
+      setBusy(null);
+    }
+  }, [busy, loadMe, me?.subscription?.source, storeName]);
+
   const startNativeCheckout = useCallback(
     async (tier: PaidTier) => {
       if (busy || !me?.user.id) return;
@@ -226,6 +292,13 @@ export default function PlanScreen() {
         const nextMe = await checkoutNativeSubscription(tier, me.user.id);
         setMe(nextMe);
       } catch (e: any) {
+        const message = purchaseErrorMessage(e);
+        console.warn("[iap.checkout] failed", {
+          tier,
+          code: e instanceof IapPurchaseError || isApiError(e) ? e.code : e?.code,
+          message: e?.message,
+          error: e,
+        });
         if (e instanceof IapPurchaseError && e.code === "E_USER_CANCELLED") {
           void loadMe();
           return;
@@ -233,10 +306,10 @@ export default function PlanScreen() {
         if (e instanceof IapPurchaseError && e.code === "E_PURCHASE_FLOW_TIMEOUT") {
           const nextMe = await refreshNativeState();
           if (nextMe?.subscription) return;
-          Alert.alert("Couldn't confirm subscription", e.message);
+          Alert.alert("Couldn't confirm subscription", message);
           return;
         }
-        Alert.alert("Couldn't start subscription", e?.message ?? "Try again.");
+        Alert.alert("Couldn't start subscription", message);
         void loadMe();
       } finally {
         setBusy(null);
@@ -268,7 +341,7 @@ export default function PlanScreen() {
   }
 
   const sub = me.subscription;
-  const canManageInStore = sub?.source === nativeSource;
+  const canManageInStore = !usesNativeSurface && sub?.source === nativeSource;
   const isPlanMismatch = isBillingLocked(me);
 
   return (
@@ -316,7 +389,55 @@ export default function PlanScreen() {
           </View>
         )}
 
-        {!isPlanMismatch && (
+        {!isPlanMismatch && usesNativeSurface && (
+          <View style={styles.nativeCard}>
+            <View style={styles.nativeIcon}>
+              <Ionicons name="logo-apple" size={22} color={colors.primary} />
+            </View>
+            <Text style={styles.nativeTitle}>App Store subscription</Text>
+            <Text style={styles.nativeCopy}>
+              Start, change, or cancel your Fina subscription in the App Store.
+            </Text>
+            <Pressable
+              style={({ pressed }) => [
+                styles.restoreButton,
+                pressed && !busy && { opacity: 0.78 },
+                busy && styles.buttonDisabled,
+              ]}
+              onPress={openNativeManagement}
+              disabled={Boolean(busy)}
+            >
+              {busy === "manage" ? (
+                <ActivityIndicator size="small" color={colors.onPrimary} />
+              ) : (
+                <>
+                  <Text style={styles.restoreButtonText}>Open App Store</Text>
+                  <Ionicons name="open-outline" size={16} color={colors.onPrimary} />
+                </>
+              )}
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.nativeSecondaryButton,
+                pressed && !busy && { opacity: 0.78 },
+                busy && styles.buttonDisabled,
+              ]}
+              onPress={restoreNativePurchases}
+              disabled={Boolean(busy)}
+            >
+              {busy === "restore" ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <>
+                  <Text style={styles.nativeSecondaryText}>Restore purchases</Text>
+                  <Ionicons name="refresh" size={16} color={colors.primary} />
+                </>
+              )}
+            </Pressable>
+          </View>
+        )}
+
+        {!isPlanMismatch && !usesNativeSurface && (
           <>
             <View style={styles.sectionHead}>
               <Text style={styles.sectionTitle}>Choose a plan</Text>
@@ -588,6 +709,37 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   restoreButtonText: { ...type$.button, color: colors.onPrimary },
+  nativeCard: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    borderRadius: 16,
+    padding: space.lg,
+    alignItems: "center",
+    gap: space.sm,
+  },
+  nativeIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  nativeTitle: { ...type$.titleMd, color: colors.ink, textAlign: "center" },
+  nativeCopy: { ...type$.bodySm, color: colors.body, textAlign: "center" },
+  nativeSecondaryButton: {
+    flexDirection: "row",
+    gap: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    alignSelf: "stretch",
+    borderRadius: 999,
+    paddingVertical: 13,
+    backgroundColor: colors.canvas,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  nativeSecondaryText: { ...type$.button, color: colors.primary },
   sectionHead: { gap: 4, paddingTop: space.sm },
   sectionTitle: { ...type$.titleMd, color: colors.ink },
   sectionSub: { ...type$.bodySm, color: colors.muted },

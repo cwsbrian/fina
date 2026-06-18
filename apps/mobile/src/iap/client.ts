@@ -8,9 +8,15 @@ import { Platform } from "react-native";
 import { isExpoGo } from "../env";
 import type { IAPProductId, PaidTier } from "@fina/shared";
 import { deriveAppleToken, deriveGoogleToken } from "./binding";
+import {
+  itemUnavailableMessage,
+  productIdsForPlatform,
+  productIdsForTier,
+  purchaseFlowTimeoutMessage,
+  type NativeIapPlatform,
+} from "./products";
 
-const SKUS: IAPProductId[] =
-  Platform.OS === "ios" ? ["fina_pro_monthly", "max_monthly"] : ["pro_monthly", "max_monthly"];
+const SKUS: IAPProductId[] = productIdsForPlatform(Platform.OS === "ios" ? "ios" : "android");
 const PURCHASE_FLOW_TIMEOUT_MS = 90_000;
 
 /** Error class surfaced to callers so the UI can map react-native-iap's
@@ -115,7 +121,9 @@ function toIapError(e: any): IapPurchaseError {
     return new IapPurchaseError(
       "E_ITEM_UNAVAILABLE",
       false,
-      "This subscription is not available for purchase in the current Google Play test setup.",
+      Platform.OS === "ios"
+        ? "This subscription is not available for purchase in the current App Store Connect setup."
+        : "This subscription is not available for purchase in the current Google Play test setup.",
     );
   }
   if (code === "E_SERVICE_ERROR") return new IapPurchaseError(code, true, "Service unavailable");
@@ -129,16 +137,6 @@ function receiptForPurchase(purchase: Purchase, platform: "ios" | "android"): st
       ? (p.purchaseToken ?? p.jwsRepresentationIOS ?? p.transactionReceipt)
       : (p.purchaseToken ?? p.purchaseTokenAndroid);
   return typeof receipt === "string" && receipt.length > 0 ? receipt : null;
-}
-
-function productIdForTier(tier: PaidTier): IAPProductId {
-  if (tier === "max") return "max_monthly";
-  return Platform.OS === "ios" ? "fina_pro_monthly" : "pro_monthly";
-}
-
-function productIdsForAndroidTier(tier: PaidTier): IAPProductId[] {
-  if (tier === "max") return ["max_monthly"];
-  return ["pro_monthly", "fina_pro_monthly"];
 }
 
 /** Call ONLY after server returns 2xx — protects against
@@ -216,7 +214,7 @@ async function resolveAndroidSubscriptionProduct(
   iap: RnIap,
   tier: PaidTier,
 ): Promise<{ productId: IAPProductId; subscriptionOffers: Array<{ sku: string; offerToken: string }> }> {
-  const candidates = productIdsForAndroidTier(tier);
+  const candidates = productIdsForTier(tier, "android");
   const products = await iap.fetchProducts({ skus: candidates, type: "subs" });
   const product = candidates
     .map((candidate) =>
@@ -231,7 +229,7 @@ async function resolveAndroidSubscriptionProduct(
     throw new IapPurchaseError(
       "E_ITEM_UNAVAILABLE",
       false,
-      "This subscription product is not available in Google Play for this build.",
+      itemUnavailableMessage("android", candidates),
     );
   }
 
@@ -258,6 +256,29 @@ async function resolveAndroidSubscriptionProduct(
   return { productId, subscriptionOffers: [{ sku: productId, offerToken }] };
 }
 
+async function resolveIOSSubscriptionProduct(iap: RnIap, tier: PaidTier): Promise<IAPProductId> {
+  const candidates = productIdsForTier(tier, "ios");
+  const products = await iap.fetchProducts({ skus: candidates, type: "subs" });
+  const product = candidates
+    .map((candidate) =>
+      (products ?? []).find((item: any) => {
+        const id = item?.id ?? item?.productId;
+        return id === candidate;
+      }),
+    )
+    .find(Boolean) as any;
+
+  if (!product) {
+    throw new IapPurchaseError(
+      "E_ITEM_UNAVAILABLE",
+      false,
+      itemUnavailableMessage("ios", candidates),
+    );
+  }
+
+  return (product.id ?? product.productId) as IAPProductId;
+}
+
 export async function requestSubscriptionPurchase(
   tier: PaidTier,
   userId: string,
@@ -267,13 +288,15 @@ export async function requestSubscriptionPurchase(
     throw new IapPurchaseError("E_RN_IAP_UNAVAILABLE", false, "Unsupported platform.");
   }
 
-  const platform: "ios" | "android" = Platform.OS === "ios" ? "ios" : "android";
-  let productId = productIdForTier(tier);
+  const platform: NativeIapPlatform = Platform.OS === "ios" ? "ios" : "android";
+  let productId = productIdsForTier(tier, platform)[0]!;
   let subscriptionOffers: Array<{ sku: string; offerToken: string }> | undefined;
   let androidReplacement:
     | { oldProductId: string; replacementMode: "with-time-proration" | "deferred" }
     | undefined;
-  if (platform === "android") {
+  if (platform === "ios") {
+    productId = await resolveIOSSubscriptionProduct(iap, tier);
+  } else {
     const resolved = await resolveAndroidSubscriptionProduct(iap, tier);
     productId = resolved.productId;
     subscriptionOffers = resolved.subscriptionOffers;
@@ -323,7 +346,7 @@ export async function requestSubscriptionPurchase(
           new IapPurchaseError(
             "E_PURCHASE_FLOW_TIMEOUT",
             true,
-            "Google Play did not return a purchase result. Your current subscription was refreshed; try again if nothing changed.",
+            purchaseFlowTimeoutMessage(platform),
           ),
         ),
       );

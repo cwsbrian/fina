@@ -6,7 +6,6 @@ import {
   Pressable,
   ScrollView,
   Alert,
-  ActivityIndicator,
   Animated,
   Platform,
 } from "react-native";
@@ -30,16 +29,20 @@ import {
   type BankAccountDTO,
   type MeDTO as Me,
 } from "@fina/shared";
-import { useSession, signOut } from "../../src/auth/client";
+import { authClient, useSession, signOut } from "../../src/auth/client";
 import { unregisterForPushNotifications } from "../../src/api/push";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
-import { nativeBillingUnavailableMessage, openManageBilling } from "../../src/iap/manage";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
-import { getAccountSettingsActions } from "../../src/settings/account-actions";
+import { presentNativeSubscriptionStoreAndSync } from "../../src/iap/native-subscription-store";
+import { planEntryAction } from "../../src/iap/plan-mode";
+import {
+  getAccountSettingsActions,
+  type AccountSettingsActionKey,
+} from "../../src/settings/account-actions";
 
 type PlaidItemSummary = {
   status: string;
@@ -57,7 +60,6 @@ export default function More() {
   const [me, setMe] = useState<Me | null>(null);
   const [activeWs, setActiveWs] = useState<ActiveWorkspace | null>(null);
   const [banks, setBanks] = useState<PlaidItemSummary[] | null>(null);
-  const [openingBilling, setOpeningBilling] = useState(false);
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
 
   const loadMe = useCallback(() => {
@@ -151,35 +153,84 @@ export default function More() {
     ]);
   };
 
-  const onManageBilling = useCallback(async () => {
-    if (openingBilling) return;
-    if (!me?.subscription && Platform.OS === "android") {
-      router.push("/plan" as never);
-      return;
-    }
-    const unavailable = nativeBillingUnavailableMessage(me?.subscription?.source);
-    if (unavailable) {
-      Alert.alert("Manage subscription", unavailable);
-      return;
-    }
-    setOpeningBilling(true);
-    try {
-      await openManageBilling(me?.subscription?.tier, me?.subscription?.source);
-      loadMe();
-    } catch (e: any) {
-      Alert.alert("Couldn't open store billing", e?.message ?? "Try again.");
-    } finally {
-      setOpeningBilling(false);
-    }
-  }, [loadMe, openingBilling, me?.subscription]);
+  const onDeleteAccount = () => {
+    Alert.alert(
+      "Delete account",
+      "Permanently delete your Fina account and all data? This cannot be undone. Active subscriptions must be cancelled separately in the App Store or Google Play.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete account",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await unregisterForPushNotifications();
+              const result = await authClient.deleteUser({});
+              if (result.error) {
+                Alert.alert(
+                  "Couldn't delete account",
+                  result.error.message ?? "Try again in a moment.",
+                );
+                return;
+              }
+              await clearActiveWorkspaceId();
+              router.replace("/(auth)/sign-in");
+            } catch (e) {
+              Alert.alert(
+                "Couldn't delete account",
+                e instanceof Error ? e.message : "Try again in a moment.",
+              );
+            }
+          },
+        },
+      ],
+    );
+  };
 
   const comingSoon = (label: string) => () =>
     Alert.alert("Coming soon", `${label} screen is on the way.`);
 
-  const accountActionHandlers = {
+  const openPlanEntry = useCallback(() => {
+    const action = planEntryAction(Platform.OS, me?.subscription?.source);
+    if (action === "web-billing") {
+      Alert.alert(
+        "Plan",
+        "Your subscription is managed on withfina.com. Open the website to make changes.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Open website",
+            onPress: () => WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`),
+          },
+        ],
+      );
+      return;
+    }
+    if (action === "native-subscriptions") {
+      void presentNativeSubscriptionStoreAndSync()
+        .then((nextMe) => {
+          if (nextMe) {
+            setMe(nextMe);
+            return;
+          }
+          loadMe();
+        })
+        .catch((e) => {
+          Alert.alert(
+            "Couldn't open App Store",
+            e instanceof Error ? e.message : "Try again.",
+          );
+        });
+      return;
+    }
+    router.push("/plan" as never);
+  }, [loadMe, me?.subscription?.source, me?.subscription?.tier]);
+
+  const accountActionHandlers: Record<AccountSettingsActionKey, () => void> = {
     "edit-profile": () => router.push("/profile/edit" as never),
     "reset-password": () => router.push("/profile/reset-password" as never),
     "export-data": comingSoon("Export"),
+    "delete-account": onDeleteAccount,
     "sign-out": onSignOut,
   };
 
@@ -389,20 +440,6 @@ export default function More() {
 
         {/* Subscription */}
         {(() => {
-          const sub = me?.subscription;
-          const isStripeOwned = sub?.source === "stripe";
-          const onStripeManagedTap = (label: string) =>
-            Alert.alert(
-              label,
-              "Your subscription is managed on withfina.com. Open the website to make changes.",
-              [
-                { text: "Cancel", style: "cancel" },
-                {
-                  text: "Open website",
-                  onPress: () => WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`),
-                },
-              ],
-            );
           return (
             <>
               <GroupLabel>Subscription</GroupLabel>
@@ -411,38 +448,9 @@ export default function More() {
                   icon="star-outline"
                   title="Plan"
                   detail={me ? tierLabel(me.tier, me.trial.active) : "—"}
-                  onPress={
-                    isStripeOwned
-                      ? () => onStripeManagedTap("Plan")
-                      : Platform.OS === "android"
-                        ? () => router.push("/plan" as never)
-                        : onManageBilling
-                  }
+                  onPress={openPlanEntry}
+                  last
                 />
-                {isStripeOwned ? (
-                  <SettingsRow
-                    icon="card-outline"
-                    title="Billing"
-                    onPress={() => onStripeManagedTap("Billing")}
-                    last
-                  />
-                ) : (
-                  <SettingsRow
-                    icon="card-outline"
-                    title={sub ? "Manage billing" : "Subscribe"}
-                    detail={
-                      openingBilling ? (
-                        <ActivityIndicator size="small" color={colors.primary} />
-                      ) : undefined
-                    }
-                    onPress={
-                      Platform.OS === "android" && !sub
-                        ? () => router.push("/plan" as never)
-                        : onManageBilling
-                    }
-                    last
-                  />
-                )}
               </Group>
             </>
           );
@@ -483,6 +491,7 @@ export default function More() {
               icon={action.icon}
               title={action.title}
               onPress={accountActionHandlers[action.key]}
+              danger={Boolean(action.danger)}
               last={index === actions.length - 1}
             />
           ))}
