@@ -26,6 +26,7 @@ import {
   type MeDTO as Me,
   type PaidTier,
 } from "@fina/shared";
+import { isUnsyncedIAPPurchaseError } from "../../src/api/billing";
 import { apiFetch } from "../../src/api/client";
 import {
   billingRecoveryFootnote,
@@ -44,6 +45,7 @@ import {
   checkoutNativeSubscription,
   fetchMeWithNativeSubscriptionSync,
   restoreCurrentNativeSubscriptions,
+  syncCurrentNativeSubscriptions,
 } from "../../src/iap/sync";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { colors, space, type as type$ } from "../../src/design/tokens";
@@ -286,11 +288,19 @@ export default function PlanScreen() {
         router.replace("/billing/recovery" as never);
         return;
       }
+      if (isUnsyncedIAPPurchaseError(e)) {
+        const synced = await syncCurrentNativeSubscriptions().catch(() => null);
+        if (synced?.subscription) {
+          setMe(synced);
+          return;
+        }
+      }
       const nextMe = await loadMe();
       if (nextMe && isBillingLocked(nextMe)) {
         router.replace("/billing/recovery" as never);
         return;
       }
+      if (nextMe?.subscription) return;
       Alert.alert("Couldn't update subscription", purchaseErrorMessage(e));
     } finally {
       setBusy(null);
@@ -368,8 +378,20 @@ export default function PlanScreen() {
           router.replace("/billing/recovery" as never);
           return;
         }
+        if (isUnsyncedIAPPurchaseError(e)) {
+          const synced = await syncCurrentNativeSubscriptions().catch(() => null);
+          if (synced?.subscription) {
+            setMe(synced);
+            return;
+          }
+        }
+        const nextMe = await loadMe();
+        if (nextMe && isBillingLocked(nextMe)) {
+          router.replace("/billing/recovery" as never);
+          return;
+        }
+        if (nextMe?.subscription) return;
         Alert.alert("Couldn't start subscription", message);
-        void loadMe();
       } finally {
         setBusy(null);
       }

@@ -12,6 +12,13 @@ function requireSyncedSubscription(result: MeDTO): MeDTO {
   throw new Error("Purchase was found, but the server did not sync an active subscription.");
 }
 
+export function isUnsyncedIAPPurchaseError(e: unknown): boolean {
+  return (
+    e instanceof Error &&
+    e.message === "Purchase was found, but the server did not sync an active subscription."
+  );
+}
+
 function receiptMeta(receipt: string): {
   receiptLength: number;
   dotCount: number;

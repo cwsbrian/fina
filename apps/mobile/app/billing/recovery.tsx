@@ -151,7 +151,7 @@ export default function BillingRecoveryScreen() {
 
   useEffect(() => {
     if (!me || isBillingLocked(me)) return;
-    router.replace("/plan" as never);
+    router.replace("/(tabs)" as never);
   }, [me, router]);
 
   useEffect(() => {
@@ -197,7 +197,7 @@ export default function BillingRecoveryScreen() {
         );
         return;
       }
-      router.replace("/plan" as never);
+      router.replace("/(tabs)" as never);
     } catch (e) {
       setLastRecoveryError(e);
       Alert.alert("Recovery failed", purchaseErrorMessage(e));
@@ -244,14 +244,7 @@ export default function BillingRecoveryScreen() {
     ]);
   }, [busy, router]);
 
-  const header = (
-    <>
-      <Stack.Screen options={{ headerShown: false }} />
-      <View style={styles.head}>
-        <Text style={styles.title}>Billing recovery</Text>
-      </View>
-    </>
-  );
+  const header = <Stack.Screen options={{ headerShown: false }} />;
 
   if (!me) {
     return (
@@ -383,13 +376,6 @@ export default function BillingRecoveryScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
-  head: {
-    height: 56,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: space.base,
-  },
-  title: { ...type$.titleMd, color: colors.ink },
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   scroll: {
     padding: space.base,

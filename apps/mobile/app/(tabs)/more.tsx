@@ -34,11 +34,15 @@ import {
 import { authClient, useSession, signOut } from "../../src/auth/client";
 import { unregisterForPushNotifications } from "../../src/api/push";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
+import { isUnsyncedIAPPurchaseError } from "../../src/api/billing";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
-import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
+import {
+  fetchMeWithNativeSubscriptionSync,
+  syncCurrentNativeSubscriptions,
+} from "../../src/iap/sync";
 import {
   copyTextToClipboard,
   hasNativeSubscriptionStoreEntitlementReader,
@@ -318,19 +322,25 @@ export default function More() {
           }
           loadMe();
         })
-        .catch((e) => {
+        .catch(async (e) => {
           if (isApiError(e) && e.code === "user_mismatch") {
-            loadMe();
+            await loadMe();
             router.push("/billing/recovery" as never);
             return;
           }
-          void loadMe().then((nextMe) => {
-            if (nextMe && isBillingLocked(nextMe)) return;
-            Alert.alert(
-              "Couldn't update subscription",
-              iapErrorMessage(e),
-            );
-          });
+          if (isUnsyncedIAPPurchaseError(e)) {
+            const synced = await syncCurrentNativeSubscriptions().catch(() => null);
+            if (synced?.subscription) {
+              setMe(synced);
+              return;
+            }
+          }
+          const nextMe = await loadMe();
+          if (nextMe && (isBillingLocked(nextMe) || nextMe.subscription)) return;
+          Alert.alert(
+            "Couldn't update subscription",
+            iapErrorMessage(e),
+          );
           return;
         });
       return;

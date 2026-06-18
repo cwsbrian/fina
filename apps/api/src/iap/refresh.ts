@@ -2,6 +2,7 @@ import type { SubscriptionStatus } from "@prisma/client";
 import { tierForIapProductId } from "@fina/shared";
 import { prisma } from "../db.js";
 import { filterEnvironmentRows } from "../billing/precedence.js";
+import { HttpError } from "../auth/context.js";
 import { requireAppleIapEnv, requireGoogleReceiptIapEnv } from "./env-guard.js";
 import { AppleClient } from "./apple-client.js";
 import { GoogleClient } from "./google-client.js";
@@ -20,6 +21,14 @@ function runtimeBillingEnv(): "sandbox" | "production" {
 
 type AppleRefreshClient = Pick<AppleClient, "getSubscriptionStatus">;
 type GoogleRefreshClient = Pick<GoogleClient, "fetchAndNormalize" | "acknowledgeIfPending">;
+
+function isMissingAppleTransactionError(e: unknown): boolean {
+  return (
+    e instanceof HttpError &&
+    e.code === "invalid_receipt" &&
+    /asc no transaction/i.test(e.message)
+  );
+}
 
 export type RefreshDueIapOptions = {
   now?: Date;
@@ -54,7 +63,21 @@ export async function refreshDueIapSubscriptionsForUser(
   for (const row of rows) {
     if (row.source === "iap_apple") {
       appleClient ??= new AppleClient(requireAppleIapEnv(process.env));
-      const status = await appleClient.getSubscriptionStatus(row.sourceSubscriptionId);
+      const status = await appleClient.getSubscriptionStatus(row.sourceSubscriptionId).catch(async (e) => {
+        if (!isMissingAppleTransactionError(e)) throw e;
+        await prisma.subscription.update({
+          where: { id: row.id },
+          data: {
+            status: "canceled",
+            currentPeriodEnd: now,
+            cancelAtPeriodEnd: false,
+            pendingTier: null,
+            pendingTierAt: null,
+          },
+        });
+        return null;
+      });
+      if (!status) continue;
       const tier = tierForIapProductId(status.productId);
       const pendingTier = status.pendingProductId
         ? tierForIapProductId(status.pendingProductId)

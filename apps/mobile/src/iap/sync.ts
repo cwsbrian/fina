@@ -42,6 +42,13 @@ function shouldCheckNativeIntegrity(me: MeDTO): boolean {
 }
 
 export async function restoreCurrentNativeSubscriptions(): Promise<MeDTO | null> {
+  if (Platform.OS === "ios") {
+    const entitlements = await listNativeSubscriptionStoreEntitlements();
+    if (entitlements.length > 0) {
+      return await syncNativePurchaseProofs(entitlements);
+    }
+  }
+
   const purchases = await listAvailablePurchases();
   if (purchases.length === 0) return null;
 
@@ -58,10 +65,10 @@ export async function syncCurrentNativeSubscriptions(): Promise<MeDTO | null> {
   const platform = Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : null;
   if (!platform) return null;
 
-  let entitlements = await listCurrentNativeEntitlements();
-  if (entitlements.length === 0 && platform === "ios") {
-    entitlements = await listNativeSubscriptionStoreEntitlements();
-  }
+  let entitlements =
+    platform === "ios"
+      ? await listNativeSubscriptionStoreEntitlements()
+      : await listCurrentNativeEntitlements();
   if (entitlements.length === 0) return null;
   return await syncNativePurchaseProofs(entitlements);
 }
@@ -83,11 +90,20 @@ async function checkNativeIapIntegrity(me: MeDTO): Promise<MeDTO | null> {
   const platform = Platform.OS === "ios" ? "ios" : Platform.OS === "android" ? "android" : null;
   if (!platform) return null;
 
-  let entitlements = await listCurrentNativeEntitlements();
-  if (entitlements.length === 0 && platform === "ios") {
-    entitlements = await listNativeSubscriptionStoreEntitlements();
-  }
+  let entitlements =
+    platform === "ios"
+      ? await listNativeSubscriptionStoreEntitlements()
+      : await listCurrentNativeEntitlements();
   if (entitlements.length === 0) return null;
+
+  if (!me.subscription) {
+    try {
+      return await syncNativePurchaseProofs(entitlements);
+    } catch (e) {
+      console.warn("[iap.integrity] native entitlement restore failed", e);
+    }
+  }
+
   const matching = entitlements.find(
     (item) => tierForIapProductId(item.productId) === me.subscription?.tier,
   );
