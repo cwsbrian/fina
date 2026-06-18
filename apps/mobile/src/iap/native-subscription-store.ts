@@ -4,7 +4,7 @@ import type { MeDTO } from "@fina/shared";
 import { isExpoGo } from "../env";
 import { openManageBilling } from "./manage";
 import { productIdsForPlatform } from "./products";
-import { restoreCurrentNativeSubscriptions } from "./sync";
+import { syncCurrentNativeSubscriptions } from "./sync";
 
 type FinaNativeSubscriptionStoreModule = {
   present(productIds: string[]): Promise<boolean>;
@@ -37,5 +37,5 @@ export async function presentNativeSubscriptionStore(): Promise<void> {
 
 export async function presentNativeSubscriptionStoreAndSync(): Promise<MeDTO | null> {
   await presentNativeSubscriptionStore();
-  return await restoreCurrentNativeSubscriptions().catch(() => null);
+  return await syncCurrentNativeSubscriptions().catch(() => null);
 }

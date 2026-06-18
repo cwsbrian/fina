@@ -90,7 +90,12 @@ RUN printf '%s\n' \
   '#!/bin/sh' \
   'exec pnpm exec tsx /app/src/scripts/set-user-role.ts "$@"' \
   > /usr/local/bin/fina-admin-set-role \
-  && chmod +x /usr/local/bin/fina-admin-set-role
+  && chmod +x /usr/local/bin/fina-admin-set-role \
+  && printf '%s\n' \
+  '#!/bin/sh' \
+  'exec pnpm exec tsx /app/src/scripts/reset-iap-test-user.ts "$@"' \
+  > /usr/local/bin/fina-admin-reset-iap-test-user \
+  && chmod +x /usr/local/bin/fina-admin-reset-iap-test-user
 
 # Non-root. The official node image ships uid 1000 `node`.
 USER node

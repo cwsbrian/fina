@@ -44,13 +44,7 @@ export async function restoreCurrentNativeSubscriptions(): Promise<MeDTO | null>
   const purchases = await listAvailablePurchases();
   if (purchases.length === 0) return null;
 
-  const nextMe = await postIAPRestore({
-    platform: purchases[0]!.platform,
-    purchases: purchases.map((p) => ({
-      productId: p.productId,
-      receipt: p.receipt,
-    })),
-  });
+  const nextMe = await syncNativePurchaseProofs(purchases);
 
   await Promise.allSettled(
     purchases.filter((p) => p.purchase).map((p) => finishPurchase(p.purchase!)),
@@ -61,7 +55,21 @@ export async function restoreCurrentNativeSubscriptions(): Promise<MeDTO | null>
 
 export async function syncCurrentNativeSubscriptions(): Promise<MeDTO | null> {
   if (Platform.OS !== "ios" && Platform.OS !== "android") return null;
-  return await restoreCurrentNativeSubscriptions();
+  const entitlements = await listCurrentNativeEntitlements();
+  if (entitlements.length === 0) return null;
+  return await syncNativePurchaseProofs(entitlements);
+}
+
+async function syncNativePurchaseProofs(
+  purchases: Awaited<ReturnType<typeof listAvailablePurchases>>,
+): Promise<MeDTO> {
+  return await postIAPRestore({
+    platform: purchases[0]!.platform,
+    purchases: purchases.map((p) => ({
+      productId: p.productId,
+      receipt: p.receipt,
+    })),
+  });
 }
 
 async function checkNativeIapIntegrity(me: MeDTO): Promise<MeDTO | null> {
