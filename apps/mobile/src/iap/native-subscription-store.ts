@@ -1,4 +1,4 @@
-import { NativeModules, Platform } from "react-native";
+import { NativeModules, Platform, Share } from "react-native";
 import type { IAPProductId, MeDTO } from "@fina/shared";
 
 import { postIAPCheckout } from "../api/billing";
@@ -17,6 +17,7 @@ type FinaNativeSubscriptionStoreModule = {
     productIds: string[],
     appAccountToken: string,
   ): Promise<NativeSubscriptionPurchase | null>;
+  copyText?(text: string): Promise<boolean>;
   currentEntitlements?(productIds: string[]): Promise<NativeSubscriptionPurchase[]>;
 };
 
@@ -35,6 +36,17 @@ export function hasNativeSubscriptionStoreEntitlementReader(): boolean {
   if (Platform.OS !== "ios" || isExpoGo) return false;
   const mod = nativeSubscriptionStoreModule();
   return typeof mod?.currentEntitlements === "function";
+}
+
+export async function copyTextToClipboard(text: string): Promise<"clipboard" | "share"> {
+  const mod = nativeSubscriptionStoreModule();
+  if (Platform.OS === "ios" && !isExpoGo && typeof mod?.copyText === "function") {
+    await mod.copyText(text);
+    return "clipboard";
+  }
+
+  await Share.share({ message: text });
+  return "share";
 }
 
 export async function presentNativeSubscriptionStore(

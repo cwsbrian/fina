@@ -3,6 +3,7 @@ import { syncSubscriptionFromIAP } from "../../src/iap/sync-sub.js";
 import { prisma } from "../../src/db.js";
 import { truncateAll } from "../helpers/db.js";
 import { deriveAppleToken, deriveGoogleToken } from "../../src/iap/binding.js";
+import { HttpError } from "../../src/auth/context.js";
 
 const fakeAppleClient: any = {
   verifyAndDecodeTransaction: vi.fn(),
@@ -330,6 +331,45 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
     expect(user.iapAppleAccountToken).toBeNull();
     expect(user.trialConsumed).toBe(true);
     expect(user.trialEndsAt!.getTime()).toBeLessThan(futureTrialEnd.getTime());
+  });
+
+  it("falls back to the verified Apple transaction when ASC status is unavailable during restore", async () => {
+    const expiresDate = new Date(Date.now() + 30 * 86400_000);
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: null,
+      productId: "fina_pro_monthly",
+      originalTransactionId: "OT-asc-unavailable-restore",
+      transactionId: "T-asc-unavailable-restore",
+      raw: { expiresDate: expiresDate.getTime() },
+    });
+    fakeAppleClient.getSubscriptionStatus.mockRejectedValue(
+      new HttpError(502, "platform_unavailable", "asc api: status=401"),
+    );
+
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "native-restore-jws",
+        userId: "u1",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+        context: "restore",
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+
+    const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
+    expect(sub).toMatchObject({
+      source: "iap_apple",
+      sourceSubscriptionId: "OT-asc-unavailable-restore",
+      tier: "pro",
+      status: "active",
+      environment: "Sandbox",
+    });
+    expect(sub!.currentPeriodEnd.getTime()).toBe(expiresDate.getTime());
   });
 });
 

@@ -2,16 +2,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   present: vi.fn(),
+  copyText: vi.fn(),
   currentEntitlements: vi.fn(),
   openManageBilling: vi.fn(),
   postIAPCheckout: vi.fn(),
+  share: vi.fn(),
 }));
 
 vi.mock("react-native", () => ({
   Platform: { OS: "ios" },
+  Share: { share: mocks.share },
   NativeModules: {
     FinaNativeSubscriptionStore: {
       present: mocks.present,
+      copyText: mocks.copyText,
       currentEntitlements: mocks.currentEntitlements,
     },
   },
@@ -24,6 +28,7 @@ vi.mock("./products", () => ({ productIdsForPlatform: () => ["pro_monthly", "max
 vi.mock("./binding", () => ({ deriveAppleToken: () => "apple-token" }));
 
 import {
+  copyTextToClipboard,
   hasNativeSubscriptionStoreEntitlementReader,
   listNativeSubscriptionStoreEntitlements,
   presentNativeSubscriptionStoreAndSync,
@@ -78,5 +83,14 @@ describe("native subscription store", () => {
 
   it("reports when the native entitlement reader is available", () => {
     expect(hasNativeSubscriptionStoreEntitlementReader()).toBe(true);
+  });
+
+  it("copies debug text through the native pasteboard helper", async () => {
+    mocks.copyText.mockResolvedValue(true);
+
+    await expect(copyTextToClipboard("debug payload")).resolves.toBe("clipboard");
+
+    expect(mocks.copyText).toHaveBeenCalledWith("debug payload");
+    expect(mocks.share).not.toHaveBeenCalled();
   });
 });

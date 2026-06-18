@@ -34,6 +34,7 @@ import {
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { env } from "../../src/env";
 import { IapPurchaseError } from "../../src/iap/client";
+import { copyTextToClipboard } from "../../src/iap/native-subscription-store";
 import {
   fetchMeWithNativeSubscriptionSync,
   restoreCurrentNativeSubscriptions,
@@ -69,11 +70,57 @@ function purchaseErrorMessage(e: unknown): string {
   return "Try again.";
 }
 
+function errorDebugPayload(e: unknown): unknown {
+  if (e instanceof IapPurchaseError) {
+    return { type: "iap", code: e.code, recoverable: e.recoverable, message: e.message };
+  }
+  if (isApiError(e)) {
+    return { type: "api", status: e.status, code: e.code, message: e.message ?? null };
+  }
+  if (e instanceof Error) return { type: "error", message: e.message };
+  return e;
+}
+
+function buildRecoveryDebugPayload(
+  me: Me | null,
+  lastLoadedAt: string | null,
+  lastRecoveryError: unknown,
+): string {
+  return JSON.stringify(
+    {
+      marker: RECOVERY_DEBUG_MARKER,
+      copiedAt: new Date().toISOString(),
+      loadedAt: lastLoadedAt,
+      api: env.EXPO_PUBLIC_API_URL,
+      user: me ? { id: me.user.id, email: me.user.email } : null,
+      me: me
+        ? {
+            tier: me.tier,
+            trialActive: me.trial.active,
+            subscription: me.subscription
+              ? {
+                  source: me.subscription.source,
+                  tier: me.subscription.tier,
+                  status: me.subscription.status,
+                }
+              : null,
+            billingRecovery: me.billingRecovery,
+            iapIntegrity: me.iapIntegrity,
+          }
+        : null,
+      lastRecoveryError: errorDebugPayload(lastRecoveryError),
+    },
+    null,
+    2,
+  );
+}
+
 export default function BillingRecoveryScreen() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [busy, setBusy] = useState<BusyState>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
+  const [lastRecoveryError, setLastRecoveryError] = useState<unknown>(null);
   const busyRef = useRef<BusyState>(null);
   const storeName = Platform.OS === "ios" ? "the App Store" : "Google Play";
 
@@ -127,6 +174,7 @@ export default function BillingRecoveryScreen() {
     }
 
     setBusy("restore");
+    setLastRecoveryError(null);
     try {
       const nextMe =
         action === "sync_stripe"
@@ -151,12 +199,24 @@ export default function BillingRecoveryScreen() {
       }
       router.replace("/plan" as never);
     } catch (e) {
+      setLastRecoveryError(e);
       Alert.alert("Recovery failed", purchaseErrorMessage(e));
       void loadMe();
     } finally {
       setBusy(null);
     }
   }, [busy, loadMe, me, router, storeName]);
+
+  const copyRecoveryDebug = useCallback(async () => {
+    try {
+      const mode = await copyTextToClipboard(
+        buildRecoveryDebugPayload(me, lastLoadedAt, lastRecoveryError),
+      );
+      if (mode === "clipboard") Alert.alert("Debug copied", "Recovery debug copied to clipboard.");
+    } catch (e) {
+      Alert.alert("Couldn't copy debug", e instanceof Error ? e.message : "Try again.");
+    }
+  }, [lastLoadedAt, lastRecoveryError, me]);
 
   const useAnotherAccount = useCallback(() => {
     if (busy) return;
@@ -235,8 +295,12 @@ export default function BillingRecoveryScreen() {
           </View>
 
           {__DEV__ && (
-            <View style={styles.debugBox}>
+            <Pressable
+              style={({ pressed }) => [styles.debugBox, pressed && { opacity: 0.72 }]}
+              onPress={copyRecoveryDebug}
+            >
               <Text style={styles.debugTitle}>Recovery debug</Text>
+              <Text style={styles.debugText}>tap: copy debug payload</Text>
               <Text style={styles.debugText}>marker: {RECOVERY_DEBUG_MARKER}</Text>
               <Text style={styles.debugText}>loadedAt: {lastLoadedAt ?? "null"}</Text>
               <Text style={styles.debugText}>api: {env.EXPO_PUBLIC_API_URL}</Text>
@@ -264,7 +328,10 @@ export default function BillingRecoveryScreen() {
                   lastCheckedAt: me.iapIntegrity.lastCheckedAt,
                 })}
               </Text>
-            </View>
+              <Text style={styles.debugText}>
+                lastRecoveryError: {JSON.stringify(errorDebugPayload(lastRecoveryError))}
+              </Text>
+            </Pressable>
           )}
 
           <Pressable

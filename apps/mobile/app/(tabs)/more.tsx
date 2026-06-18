@@ -40,6 +40,7 @@ import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 import {
+  copyTextToClipboard,
   hasNativeSubscriptionStoreEntitlementReader,
   listNativeSubscriptionStoreEntitlements,
   presentNativeSubscriptionStoreAndSync,
@@ -69,6 +70,34 @@ type NativeDebugState = {
   entitlements: Awaited<ReturnType<typeof listNativeSubscriptionStoreEntitlements>> | null;
   error: string | null;
 };
+
+function buildMorePlanDebugPayload(me: Me | null, nativeDebug: NativeDebugState | null): string {
+  return JSON.stringify(
+    {
+      marker: MORE_PLAN_DEBUG_MARKER,
+      copiedAt: new Date().toISOString(),
+      user: me ? { id: me.user.id, email: me.user.email } : null,
+      me: me
+        ? {
+            tier: me.tier,
+            trialActive: me.trial.active,
+            subscription: me.subscription
+              ? {
+                  source: me.subscription.source,
+                  tier: me.subscription.tier,
+                  status: me.subscription.status,
+                }
+              : null,
+            billingRecovery: me.billingRecovery,
+            iapIntegrity: me.iapIntegrity,
+          }
+        : null,
+      nativeDebug,
+    },
+    null,
+    2,
+  );
+}
 
 const IAP_ERROR_MESSAGES = {
   user_mismatch:
@@ -309,6 +338,15 @@ export default function More() {
     router.push("/plan" as never);
   }, [loadMe, me?.subscription?.source, me?.subscription?.tier, me?.user.id]);
 
+  const copyPlanDebug = useCallback(async () => {
+    try {
+      const mode = await copyTextToClipboard(buildMorePlanDebugPayload(me, nativeDebug));
+      if (mode === "clipboard") Alert.alert("Debug copied", "Plan debug copied to clipboard.");
+    } catch (e) {
+      Alert.alert("Couldn't copy debug", e instanceof Error ? e.message : "Try again.");
+    }
+  }, [me, nativeDebug]);
+
   const accountActionHandlers: Record<AccountSettingsActionKey, () => void> = {
     "edit-profile": () => router.push("/profile/edit" as never),
     "reset-password": () => router.push("/profile/reset-password" as never),
@@ -536,8 +574,12 @@ export default function More() {
                 />
               </Group>
               {__DEV__ && (
-                <View style={styles.debugBox}>
+                <Pressable
+                  style={({ pressed }) => [styles.debugBox, pressed && { opacity: 0.72 }]}
+                  onPress={copyPlanDebug}
+                >
                   <Text style={styles.debugTitle}>Plan debug</Text>
+                  <Text style={styles.debugText}>tap: copy debug payload</Text>
                   <Text style={styles.debugText}>marker: {MORE_PLAN_DEBUG_MARKER}</Text>
                   <Text style={styles.debugText}>
                     user: {me ? `${me.user.email} / ${me.user.id}` : "null"}
@@ -590,7 +632,7 @@ export default function More() {
                   <Text style={styles.debugText}>
                     nativeError: {nativeDebug?.error ?? "null"}
                   </Text>
-                </View>
+                </Pressable>
               )}
             </>
           );

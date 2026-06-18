@@ -105,6 +105,18 @@ class FinaNativeSubscriptionStore: NSObject {
     true
   }
 
+  @objc(copyText:resolver:rejecter:)
+  func copyText(
+    _ text: String,
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    DispatchQueue.main.async {
+      UIPasteboard.general.string = text
+      resolve(true)
+    }
+  }
+
   @objc(currentEntitlements:resolver:rejecter:)
   func currentEntitlements(
     _ productIds: [String],
@@ -223,6 +235,10 @@ class FinaNativeSubscriptionStore: NSObject {
 const NATIVE_SUBSCRIPTION_STORE_BRIDGE = `#import <React/RCTBridgeModule.h>
 
 @interface RCT_EXTERN_MODULE(FinaNativeSubscriptionStore, NSObject)
+
+RCT_EXTERN_METHOD(copyText:(NSString *)text
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(currentEntitlements:(NSArray *)productIds
                   resolver:(RCTPromiseResolveBlock)resolve

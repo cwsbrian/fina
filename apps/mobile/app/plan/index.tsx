@@ -34,6 +34,7 @@ import {
 import { IapPurchaseError } from "../../src/iap/client";
 import { nativeBillingUnavailableMessage, openManageBilling } from "../../src/iap/manage";
 import {
+  copyTextToClipboard,
   hasNativeSubscriptionStoreEntitlementReader,
   listNativeSubscriptionStoreEntitlements,
   presentNativeSubscriptionStoreAndSync,
@@ -58,6 +59,34 @@ type NativeDebugState = {
   entitlements: Awaited<ReturnType<typeof listNativeSubscriptionStoreEntitlements>> | null;
   error: string | null;
 };
+
+function buildPlanDebugPayload(me: Me | null, nativeDebug: NativeDebugState | null): string {
+  return JSON.stringify(
+    {
+      marker: PLAN_DEBUG_MARKER,
+      copiedAt: new Date().toISOString(),
+      user: me ? { id: me.user.id, email: me.user.email } : null,
+      me: me
+        ? {
+            tier: me.tier,
+            trialActive: me.trial.active,
+            subscription: me.subscription
+              ? {
+                  source: me.subscription.source,
+                  tier: me.subscription.tier,
+                  status: me.subscription.status,
+                }
+              : null,
+            billingRecovery: me.billingRecovery,
+            iapIntegrity: me.iapIntegrity,
+          }
+        : null,
+      nativeDebug,
+    },
+    null,
+    2,
+  );
+}
 
 const IAP_ERROR_MESSAGES = {
   user_mismatch:
@@ -268,6 +297,15 @@ export default function PlanScreen() {
     }
   }, [busy, loadMe, me?.subscription, me?.user.id, router, usesNativeSurface]);
 
+  const copyPlanDebug = useCallback(async () => {
+    try {
+      const mode = await copyTextToClipboard(buildPlanDebugPayload(me, nativeDebug));
+      if (mode === "clipboard") Alert.alert("Debug copied", "Plan debug copied to clipboard.");
+    } catch (e) {
+      Alert.alert("Couldn't copy debug", e instanceof Error ? e.message : "Try again.");
+    }
+  }, [me, nativeDebug]);
+
   const restoreNativePurchases = useCallback(async () => {
     if (busy) return;
     const unavailable = nativeBillingUnavailableMessage(me?.subscription?.source);
@@ -390,8 +428,12 @@ export default function PlanScreen() {
         </View>
 
         {__DEV__ && (
-          <View style={styles.debugBox}>
+          <Pressable
+            style={({ pressed }) => [styles.debugBox, pressed && { opacity: 0.72 }]}
+            onPress={copyPlanDebug}
+          >
             <Text style={styles.debugTitle}>Plan debug</Text>
+            <Text style={styles.debugText}>tap: copy debug payload</Text>
             <Text style={styles.debugText}>marker: {PLAN_DEBUG_MARKER}</Text>
             <Text style={styles.debugText}>user: {me.user.email} / {me.user.id}</Text>
             <Text style={styles.debugText}>
@@ -431,7 +473,7 @@ export default function PlanScreen() {
             <Text style={styles.debugText}>
               nativeError: {nativeDebug?.error ?? "null"}
             </Text>
-          </View>
+          </Pressable>
         )}
 
         {usesNativeSurface && (

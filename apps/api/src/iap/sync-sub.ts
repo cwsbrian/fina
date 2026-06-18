@@ -58,6 +58,29 @@ function consumeTrialForActiveIapStatus(
   return { trialEndsAt: new Date(), trialConsumed: true };
 }
 
+function fallbackAppleStatusFromTransaction(verified: {
+  productId: string;
+  raw: Record<string, unknown>;
+}): {
+  expiresDate: Date;
+  productId: string;
+  pendingProductId: string | null;
+  pendingAt: Date | null;
+  mapped: { status: "active" | "canceled"; cancelAtPeriodEnd: boolean };
+} {
+  const expiresMs = Number(verified.raw.expiresDate ?? 0);
+  const expiresDate = new Date(expiresMs);
+  const revoked = Number(verified.raw.revocationDate ?? 0) > 0;
+  const active = Number.isFinite(expiresMs) && expiresMs > Date.now() && !revoked;
+  return {
+    expiresDate,
+    productId: verified.productId,
+    pendingProductId: null,
+    pendingAt: null,
+    mapped: { status: active ? "active" : "canceled", cancelAtPeriodEnd: false },
+  };
+}
+
 async function syncApple(
   _cfg: Partial<IapConfig>,
   args: SyncArgsApple,
@@ -86,7 +109,16 @@ async function syncApple(
   const verifiedTier = tierForIapProductId(verified.productId);
   if (!verifiedTier)
     throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
-  const status = await deps.appleClient!.getSubscriptionStatus(verified.originalTransactionId);
+  let status: Awaited<ReturnType<NonNullable<SyncDeps["appleClient"]>["getSubscriptionStatus"]>>;
+  try {
+    status = await deps.appleClient!.getSubscriptionStatus(verified.originalTransactionId);
+  } catch (e) {
+    if (e instanceof HttpError && e.code === "platform_unavailable") {
+      status = fallbackAppleStatusFromTransaction(verified);
+    } else {
+      throw e;
+    }
+  }
   // Restore/already-owned paths can hand us an older transaction JWS. ASC is
   // the source of truth for the subscription group's current product.
   const tier = tierForIapProductId(status.productId);
