@@ -1,13 +1,22 @@
 import { NativeModules, Platform } from "react-native";
-import type { MeDTO } from "@fina/shared";
+import type { IAPProductId, MeDTO } from "@fina/shared";
 
+import { postIAPCheckout } from "../api/billing";
 import { isExpoGo } from "../env";
-import { openManageBilling } from "./manage";
+import { deriveAppleToken } from "./binding";
 import { productIdsForPlatform } from "./products";
-import { syncCurrentNativeSubscriptions } from "./sync";
+
+type NativeSubscriptionPurchase = {
+  platform: "ios";
+  productId: IAPProductId;
+  receipt: string;
+};
 
 type FinaNativeSubscriptionStoreModule = {
-  present(productIds: string[]): Promise<boolean>;
+  present(
+    productIds: string[],
+    appAccountToken: string,
+  ): Promise<NativeSubscriptionPurchase | null>;
 };
 
 function nativeSubscriptionStoreModule(): FinaNativeSubscriptionStoreModule | null {
@@ -21,21 +30,32 @@ export function nativeSubscriptionProductIds(): string[] {
   return productIdsForPlatform("ios");
 }
 
-export async function presentNativeSubscriptionStore(): Promise<void> {
+export async function presentNativeSubscriptionStore(
+  userId: string,
+): Promise<NativeSubscriptionPurchase | null> {
   if (Platform.OS !== "ios") {
     throw new Error("Native App Store subscriptions are only available on iOS.");
   }
 
   const mod = nativeSubscriptionStoreModule();
   if (!mod || isExpoGo) {
-    await openManageBilling(undefined, "iap_apple");
-    return;
+    throw new Error(
+      "Native App Store subscription selection is not available in this build. Rebuild the iOS dev client and try again.",
+    );
   }
 
-  await mod.present(nativeSubscriptionProductIds());
+  return await mod.present(nativeSubscriptionProductIds(), deriveAppleToken(userId));
 }
 
-export async function presentNativeSubscriptionStoreAndSync(): Promise<MeDTO | null> {
-  await presentNativeSubscriptionStore();
-  return await syncCurrentNativeSubscriptions().catch(() => null);
+export async function presentNativeSubscriptionStoreAndSync(
+  userId: string,
+): Promise<MeDTO | null> {
+  const purchase = await presentNativeSubscriptionStore(userId);
+  if (!purchase) return null;
+
+  return await postIAPCheckout({
+    platform: purchase.platform,
+    productId: purchase.productId,
+    receipt: purchase.receipt,
+  });
 }

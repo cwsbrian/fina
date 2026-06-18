@@ -11,7 +11,7 @@ import {
   ScrollView,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Stack, useRouter } from "expo-router";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
   IAP_PRICING,
@@ -26,12 +26,9 @@ import {
   type MeDTO as Me,
   type PaidTier,
 } from "@fina/shared";
-import { postBillingSync } from "../../src/api/billing";
 import { apiFetch } from "../../src/api/client";
 import {
-  billingRecoveryButtonLabel,
   billingRecoveryFootnote,
-  billingRecoveryLockCopy,
   isBillingLocked,
 } from "../../src/billing/recovery-ui";
 import { IapPurchaseError } from "../../src/iap/client";
@@ -42,7 +39,6 @@ import {
   checkoutNativeSubscription,
   fetchMeWithNativeSubscriptionSync,
   restoreCurrentNativeSubscriptions,
-  syncCurrentNativeSubscriptions,
 } from "../../src/iap/sync";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { colors, space, type as type$ } from "../../src/design/tokens";
@@ -151,29 +147,34 @@ export default function PlanScreen() {
     }
   }, []);
 
+  useFocusEffect(
+    useCallback(() => {
+      void loadMe();
+    }, [loadMe]),
+  );
+
   useEffect(() => {
-    void loadMe();
-  }, [loadMe]);
+    if (me && isBillingLocked(me)) {
+      router.replace("/billing/recovery" as never);
+    }
+  }, [me, router]);
 
   const refreshNativeState = useCallback(async (): Promise<Me | null> => {
-    if (Platform.OS === "ios" || Platform.OS === "android") {
-      const synced = await syncCurrentNativeSubscriptions().catch(() => null);
-      if (synced) {
-        setMe(synced);
-        return synced;
-      }
-    }
     return await loadMe();
   }, [loadMe]);
 
   useEffect(() => {
     if (Platform.OS !== "ios" && Platform.OS !== "android") return;
     const sub = AppState.addEventListener("change", (state) => {
-      if (state !== "active" || !busyRef.current) return;
-      void refreshNativeState().finally(() => setBusy(null));
+      if (state !== "active") return;
+      if (busyRef.current) {
+        void refreshNativeState().finally(() => setBusy(null));
+        return;
+      }
+      void loadMe();
     });
     return () => sub.remove();
-  }, [refreshNativeState]);
+  }, [loadMe, refreshNativeState]);
 
   useEffect(() => {
     if ((Platform.OS !== "ios" && Platform.OS !== "android") || !busy) return;
@@ -194,7 +195,11 @@ export default function PlanScreen() {
     setBusy("manage");
     try {
       if (usesNativeSurface) {
-        const nextMe = await presentNativeSubscriptionStoreAndSync();
+        if (!me?.user.id) {
+          Alert.alert("Couldn't open App Store", "Sign in again and try again.");
+          return;
+        }
+        const nextMe = await presentNativeSubscriptionStoreAndSync(me.user.id);
         if (nextMe) {
           setMe(nextMe);
           return;
@@ -205,52 +210,16 @@ export default function PlanScreen() {
       await openManageBilling(me?.subscription?.tier, me?.subscription?.source);
       await loadMe();
     } catch (e: any) {
-      Alert.alert("Couldn't open store billing", e?.message ?? "Try again.");
-    } finally {
-      setBusy(null);
-    }
-  }, [busy, loadMe, me?.subscription, usesNativeSurface]);
-
-  const recoverBilling = useCallback(async () => {
-    if (busy || !me) return;
-    const action = me.billingRecovery?.action ?? null;
-    if (!action) {
-      Alert.alert(
-        "Recovery unavailable",
-        "We could not determine where this subscription is managed. Contact support.",
-      );
-      return;
-    }
-    setBusy("restore");
-    try {
-      const nextMe =
-        action === "sync_stripe"
-          ? await postBillingSync()
-          : await restoreCurrentNativeSubscriptions();
-      if (!nextMe) {
-        Alert.alert(
-          "No subscription found",
-          `No active Fina subscription was found in ${storeName}.`,
-        );
+      if (isApiError(e) && e.code === "user_mismatch") {
         await loadMe();
+        router.replace("/billing/recovery" as never);
         return;
       }
-      setMe(nextMe);
-      if (isBillingLocked(nextMe)) {
-        Alert.alert(
-          "Recovery incomplete",
-          "We could not confirm that this Fina account and billing provider match yet.",
-        );
-        return;
-      }
-      goHome();
-    } catch (e: any) {
-      Alert.alert("Recovery failed", e?.message ?? "Try again.");
-      void loadMe();
+      Alert.alert("Couldn't update subscription", purchaseErrorMessage(e));
     } finally {
       setBusy(null);
     }
-  }, [busy, goHome, loadMe, me, storeName]);
+  }, [busy, loadMe, me?.subscription, me?.user.id, router, usesNativeSurface]);
 
   const restoreNativePurchases = useCallback(async () => {
     if (busy) return;
@@ -309,13 +278,18 @@ export default function PlanScreen() {
           Alert.alert("Couldn't confirm subscription", message);
           return;
         }
+        if (isApiError(e) && e.code === "user_mismatch") {
+          await loadMe();
+          router.replace("/billing/recovery" as never);
+          return;
+        }
         Alert.alert("Couldn't start subscription", message);
         void loadMe();
       } finally {
         setBusy(null);
       }
     },
-    [busy, loadMe, me?.subscription?.source, me?.user.id, refreshNativeState],
+    [busy, loadMe, me?.subscription?.source, me?.user.id, refreshNativeState, router],
   );
 
   const header = (
@@ -344,6 +318,17 @@ export default function PlanScreen() {
   const canManageInStore = !usesNativeSurface && sub?.source === nativeSource;
   const isPlanMismatch = isBillingLocked(me);
 
+  if (isPlanMismatch) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        {header}
+        <View style={styles.iosCenter}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       {header}
@@ -357,39 +342,7 @@ export default function PlanScreen() {
           )}
         </View>
 
-        {isPlanMismatch && (
-          <View style={styles.lockCard}>
-            <View style={styles.lockIcon}>
-              <Ionicons name="lock-closed-outline" size={22} color={colors.primary} />
-            </View>
-            <Text style={styles.lockTitle}>Recovery required</Text>
-            <Text style={styles.lockCopy}>
-              {billingRecoveryLockCopy(me)}
-            </Text>
-            <Pressable
-              style={({ pressed }) => [
-                styles.restoreButton,
-                pressed && !busy && { opacity: 0.78 },
-                busy && styles.buttonDisabled,
-              ]}
-              onPress={recoverBilling}
-              disabled={Boolean(busy)}
-            >
-              {busy === "restore" ? (
-                <ActivityIndicator size="small" color={colors.onPrimary} />
-              ) : (
-                <>
-                  <Text style={styles.restoreButtonText}>
-                    {billingRecoveryButtonLabel(me)}
-                  </Text>
-                  <Ionicons name="refresh" size={16} color={colors.onPrimary} />
-                </>
-              )}
-            </Pressable>
-          </View>
-        )}
-
-        {!isPlanMismatch && usesNativeSurface && (
+        {usesNativeSurface && (
           <View style={styles.nativeCard}>
             <View style={styles.nativeIcon}>
               <Ionicons name="logo-apple" size={22} color={colors.primary} />
@@ -437,7 +390,7 @@ export default function PlanScreen() {
           </View>
         )}
 
-        {!isPlanMismatch && !usesNativeSurface && (
+        {!usesNativeSurface && (
           <>
             <View style={styles.sectionHead}>
               <Text style={styles.sectionTitle}>Choose a plan</Text>
@@ -679,24 +632,6 @@ const styles = StyleSheet.create({
   currentName: { ...type$.titleMd, color: colors.ink },
   currentMeta: { ...type$.bodySm, color: colors.body },
   currentSource: { ...type$.bodySm, color: colors.muted },
-  lockCard: {
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    borderRadius: 16,
-    padding: space.lg,
-    alignItems: "center",
-    gap: space.sm,
-  },
-  lockIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: colors.surfaceSoft,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  lockTitle: { ...type$.titleMd, color: colors.ink, textAlign: "center" },
-  lockCopy: { ...type$.bodySm, color: colors.body, textAlign: "center" },
   restoreButton: {
     marginTop: space.xs,
     flexDirection: "row",

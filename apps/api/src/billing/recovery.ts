@@ -4,6 +4,7 @@ import type { BillingRecoveryDTO, SubscriptionDTO } from "@fina/shared";
 type RecoverySub = Pick<Subscription, "source"> | null;
 type RecoveryUser = Pick<User, "isPlanMismatch">;
 type RecoveryDevice = Pick<UserDevice, "lastIapIntegrityCheckedAt"> | null;
+type RecoveryPlatform = "ios" | "android" | null;
 
 function recoveryActionForSource(
   source: SubscriptionDTO["source"] | null,
@@ -17,8 +18,15 @@ export function billingRecoveryForMe(
   user: RecoveryUser,
   primary: RecoverySub,
   device: RecoveryDevice,
+  platform: RecoveryPlatform = null,
 ): BillingRecoveryDTO {
-  const source = (primary?.source ?? null) as SubscriptionDTO["source"] | null;
+  const inferredNativeSource =
+    !primary && platform === "ios"
+      ? "iap_apple"
+      : !primary && platform === "android"
+        ? "iap_google"
+        : null;
+  const source = (primary?.source ?? inferredNativeSource) as SubscriptionDTO["source"] | null;
   const lastCheckedAt = device?.lastIapIntegrityCheckedAt?.toISOString() ?? null;
 
   if (!user.isPlanMismatch) {

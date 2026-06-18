@@ -171,7 +171,7 @@ export default function Home() {
       if (runId !== loadRunId.current) return;
       setMe(meData);
       if (isBillingLocked(meData)) {
-        router.replace("/plan" as never);
+        router.replace("/billing/recovery" as never);
         return;
       }
       const wsId = await bootstrapActiveWorkspace();

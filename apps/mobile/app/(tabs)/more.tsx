@@ -26,6 +26,8 @@ import {
   trialDaysLeft,
   trialRevertsTo,
   formatShortDate,
+  isApiError,
+  type ApiErrorCode,
   type BankAccountDTO,
   type MeDTO as Me,
 } from "@fina/shared";
@@ -55,6 +57,30 @@ type ActiveWorkspace = {
   role: "owner" | "editor" | "viewer";
 };
 
+const IAP_ERROR_MESSAGES = {
+  user_mismatch:
+    "This App Store subscription is already tied to another Fina account. Sign in with that Fina account, or use a fresh Sandbox Tester Apple ID.",
+  already_subscribed_iap: "This App Store account already has an active Fina subscription.",
+  already_subscribed_stripe: "This Fina account is already subscribed through web billing.",
+  invalid_receipt: "The App Store receipt could not be verified. Try again.",
+  expired_receipt: "The App Store subscription is expired.",
+  product_mismatch: "The App Store returned a different subscription product than expected.",
+  iap_not_configured: "In-app purchases are not fully configured on the server.",
+  platform_unavailable: "In-app purchases are temporarily unavailable.",
+} satisfies Partial<Record<ApiErrorCode, string>>;
+
+function iapErrorMessage(e: unknown): string {
+  if (isApiError(e)) {
+    return (
+      (IAP_ERROR_MESSAGES as Record<string, string | undefined>)[e.code] ??
+      e.message ??
+      "Try again."
+    );
+  }
+  if (e instanceof Error) return e.message;
+  return "Try again.";
+}
+
 export default function More() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
@@ -67,7 +93,7 @@ export default function More() {
       .then((nextMe) => {
         setMe(nextMe);
         if (isBillingLocked(nextMe)) {
-          router.push("/plan" as never);
+          router.push("/billing/recovery" as never);
         }
       })
       .catch(() => {});
@@ -207,7 +233,11 @@ export default function More() {
       return;
     }
     if (action === "native-subscriptions") {
-      void presentNativeSubscriptionStoreAndSync()
+      if (!me?.user.id) {
+        Alert.alert("Couldn't open App Store", "Sign in again and try again.");
+        return;
+      }
+      void presentNativeSubscriptionStoreAndSync(me.user.id)
         .then((nextMe) => {
           if (nextMe) {
             setMe(nextMe);
@@ -216,15 +246,20 @@ export default function More() {
           loadMe();
         })
         .catch((e) => {
+          if (isApiError(e) && e.code === "user_mismatch") {
+            loadMe();
+            router.push("/billing/recovery" as never);
+            return;
+          }
           Alert.alert(
-            "Couldn't open App Store",
-            e instanceof Error ? e.message : "Try again.",
+            "Couldn't update subscription",
+            iapErrorMessage(e),
           );
         });
       return;
     }
     router.push("/plan" as never);
-  }, [loadMe, me?.subscription?.source, me?.subscription?.tier]);
+  }, [loadMe, me?.subscription?.source, me?.subscription?.tier, me?.user.id]);
 
   const accountActionHandlers: Record<AccountSettingsActionKey, () => void> = {
     "edit-profile": () => router.push("/profile/edit" as never),

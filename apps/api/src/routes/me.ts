@@ -90,7 +90,7 @@ function toMeDTO(
     tier: t.tier,
     trial: { active: t.trialActive, endsAt: t.trialEndsAt?.toISOString() ?? null },
     subscription,
-    billingRecovery: billingRecoveryForMe(user, primary, iapDevice),
+    billingRecovery: billingRecoveryForMe(user, primary, iapDevice, iapPlatform),
     iapIntegrity: iapIntegrityForMe(user, primary, iapPlatform, iapDevice),
   };
 }

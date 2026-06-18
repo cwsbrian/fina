@@ -26,13 +26,27 @@ import UIKit
 @available(iOS 17.0, *)
 private struct FinaSubscriptionStoreSheet: View {
   let productIds: [String]
+  let appAccountToken: UUID
   let onClose: () -> Void
+  let onPurchaseCompleted: (FinaSubscriptionPurchaseResult) -> Void
 
   var body: some View {
     NavigationStack {
       SubscriptionStoreView(productIDs: productIds)
         .subscriptionStoreButtonLabel(.multiline)
-        .storeButton(.visible, for: .restorePurchases)
+        .storeButton(.hidden, for: .restorePurchases)
+        .inAppPurchaseOptions { _ in
+          [.appAccountToken(appAccountToken)]
+        }
+        .onInAppPurchaseCompletion { product, result in
+          guard case .success(.success(let verification)) = result else { return }
+          onPurchaseCompleted(
+            FinaSubscriptionPurchaseResult(
+              productId: product.id,
+              jwsRepresentation: verification.jwsRepresentation
+            )
+          )
+        }
         .toolbar {
           ToolbarItem(placement: .cancellationAction) {
             Button("Done") {
@@ -42,6 +56,11 @@ private struct FinaSubscriptionStoreSheet: View {
         }
     }
   }
+}
+
+private struct FinaSubscriptionPurchaseResult {
+  let productId: String
+  let jwsRepresentation: String
 }
 
 private final class FinaSubscriptionPresentationDelegate: NSObject, UIAdaptivePresentationControllerDelegate {
@@ -61,10 +80,18 @@ private final class FinaSubscriptionPresentationDelegate: NSObject, UIAdaptivePr
     finish()
   }
 
-  func finish() {
+  func finish(_ purchase: FinaSubscriptionPurchaseResult? = nil) {
     guard !didFinish else { return }
     didFinish = true
-    resolve(true)
+    if let purchase {
+      resolve([
+        "platform": "ios",
+        "productId": purchase.productId,
+        "receipt": purchase.jwsRepresentation,
+      ])
+    } else {
+      resolve(NSNull())
+    }
     onFinish()
   }
 }
@@ -78,9 +105,10 @@ class FinaNativeSubscriptionStore: NSObject {
     true
   }
 
-  @objc(present:resolver:rejecter:)
+  @objc(present:appAccountToken:resolver:rejecter:)
   func present(
     _ productIds: [String],
+    appAccountToken: String,
     resolver resolve: @escaping RCTPromiseResolveBlock,
     rejecter reject: @escaping RCTPromiseRejectBlock
   ) {
@@ -93,6 +121,11 @@ class FinaNativeSubscriptionStore: NSObject {
       let ids = productIds.filter { !$0.isEmpty }
       guard !ids.isEmpty else {
         reject("E_NO_PRODUCTS", "No App Store subscription products were provided.", nil)
+        return
+      }
+
+      guard let accountToken = UUID(uuidString: appAccountToken) else {
+        reject("E_INVALID_APP_ACCOUNT_TOKEN", "The App Store account token is invalid.", nil)
         return
       }
 
@@ -110,13 +143,27 @@ class FinaNativeSubscriptionStore: NSObject {
         self?.presentationDelegate = nil
       }
       let controller = UIHostingController(
-        rootView: FinaSubscriptionStoreSheet(productIds: ids, onClose: {})
+        rootView: FinaSubscriptionStoreSheet(
+          productIds: ids,
+          appAccountToken: accountToken,
+          onClose: {},
+          onPurchaseCompleted: { _ in }
+        )
       )
-      controller.rootView = FinaSubscriptionStoreSheet(productIds: ids) { [weak controller, weak delegate] in
-        controller?.dismiss(animated: true) {
-          delegate?.finish()
+      controller.rootView = FinaSubscriptionStoreSheet(
+        productIds: ids,
+        appAccountToken: accountToken,
+        onClose: { [weak controller, weak delegate] in
+          controller?.dismiss(animated: true) {
+            delegate?.finish()
+          }
+        },
+        onPurchaseCompleted: { [weak controller, weak delegate] purchase in
+          controller?.dismiss(animated: true) {
+            delegate?.finish(purchase)
+          }
         }
-      }
+      )
       self.presentationDelegate = delegate
       controller.modalPresentationStyle = .formSheet
       controller.presentationController?.delegate = delegate
@@ -151,6 +198,7 @@ const NATIVE_SUBSCRIPTION_STORE_BRIDGE = `#import <React/RCTBridgeModule.h>
 @interface RCT_EXTERN_MODULE(FinaNativeSubscriptionStore, NSObject)
 
 RCT_EXTERN_METHOD(present:(NSArray *)productIds
+                  appAccountToken:(NSString *)appAccountToken
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 

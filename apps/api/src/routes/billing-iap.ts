@@ -82,8 +82,10 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
   };
 
   app.post("/billing/iap/checkout", async (req, reply) => {
+    let userId: string | null = null;
     try {
       const session = await requireSession(req, app);
+      userId = session.userId;
       const parsed = IAPCheckoutBody.safeParse(req.body);
       if (!parsed.success) {
         const body = req.body as { platform?: unknown; productId?: unknown; receipt?: unknown };
@@ -99,8 +101,6 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         );
         return reply.code(400).send({ error: "invalid_body" });
       }
-
-      const userId = session.userId;
 
       const active = await prisma.subscription.findMany({
         where: {
@@ -142,6 +142,16 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
       if (e instanceof HttpError) {
+        if (e.code === "user_mismatch" && userId) {
+          await prisma.user
+            .update({
+              where: { id: userId },
+              data: { isPlanMismatch: true },
+            })
+            .catch((err) => {
+              app.log.error({ err, userId }, "iap_checkout_mark_mismatch_failed");
+            });
+        }
         app.log.warn(
           { err: e, route: "/billing/iap/checkout", code: e.code },
           "iap_checkout_rejected",
