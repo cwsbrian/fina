@@ -243,41 +243,54 @@ export class AppleClient {
     const status = await this.asc.getAllSubscriptionStatuses(originalTransactionId).catch((e) => {
       throw new HttpError(502, "platform_unavailable", `asc api: ${describeAppleApiError(e)}`);
     });
-    const item = status.data?.[0]?.lastTransactions?.[0];
-    if (!item) throw new HttpError(400, "invalid_receipt", "asc no transaction");
+    const items = (status.data ?? []).flatMap((group) => group.lastTransactions ?? []);
+    if (items.length === 0) throw new HttpError(400, "invalid_receipt", "asc no transaction");
 
     // Decode each inner JWS through its DEDICATED Apple SDK verifier —
     // signedTransactionInfo through the transaction verifier (which
     // re-runs root/bundle/environment/signedDate checks), and
     // signedRenewalInfo through the renewal-info verifier (different
     // payload shape: autoRenewStatus, offerType, autoRenewProductId).
-    const verifiedTx = await this.verifyAndDecodeTransaction(item.signedTransactionInfo!, {
-      context: "asc-api",
-    });
-    const renewal = await this.verifyAndDecodeRenewalInfo(item.signedRenewalInfo!);
-
-    const autoRenewStatus = (renewal.autoRenewStatus as 0 | 1) ?? 1;
-    const autoRenewProductId =
-      typeof renewal.autoRenewProductId === "string" && renewal.autoRenewProductId.length > 0
-        ? renewal.autoRenewProductId
-        : null;
-    const expiresDate = new Date(Number(verifiedTx.raw.expiresDate ?? 0));
-    const pendingProductId =
-      autoRenewStatus === 1 && autoRenewProductId && autoRenewProductId !== verifiedTx.productId
-        ? autoRenewProductId
-        : null;
-
-    const mapped = mapAppleStatus({
-      subscriptionStatus: appleStatusFromCode(item.status as number),
-      offerType: (renewal.offerType as number | null) ?? null,
-      autoRenewStatus,
-    });
+    const decoded = await Promise.all(
+      items.map(async (item) => {
+        const verifiedTx = await this.verifyAndDecodeTransaction(item.signedTransactionInfo!, {
+          context: "asc-api",
+        });
+        const renewal = await this.verifyAndDecodeRenewalInfo(item.signedRenewalInfo!);
+        const autoRenewStatus = (renewal.autoRenewStatus as 0 | 1) ?? 1;
+        const autoRenewProductId =
+          typeof renewal.autoRenewProductId === "string" && renewal.autoRenewProductId.length > 0
+            ? renewal.autoRenewProductId
+            : null;
+        const expiresDate = new Date(Number(verifiedTx.raw.expiresDate ?? 0));
+        const purchaseDate = new Date(
+          Number(verifiedTx.raw.purchaseDate ?? verifiedTx.signedDate ?? 0),
+        );
+        const pendingProductId =
+          autoRenewStatus === 1 && autoRenewProductId && autoRenewProductId !== verifiedTx.productId
+            ? autoRenewProductId
+            : null;
+        const mapped = mapAppleStatus({
+          subscriptionStatus: appleStatusFromCode(item.status as number),
+          offerType: (renewal.offerType as number | null) ?? null,
+          autoRenewStatus,
+        });
+        return { verifiedTx, renewal, expiresDate, purchaseDate, pendingProductId, mapped };
+      }),
+    );
+    const activeDecoded = decoded.filter((item) => item.mapped.status === "active");
+    const candidates = activeDecoded.length > 0 ? activeDecoded : decoded;
+    const selected = candidates.sort((a, b) => {
+      const purchaseDiff = b.purchaseDate.getTime() - a.purchaseDate.getTime();
+      if (purchaseDiff !== 0) return purchaseDiff;
+      return b.expiresDate.getTime() - a.expiresDate.getTime();
+    })[0]!;
     return {
-      expiresDate,
-      productId: verifiedTx.productId,
-      pendingProductId,
-      pendingAt: pendingProductId ? expiresDate : null,
-      mapped,
+      expiresDate: selected.expiresDate,
+      productId: selected.verifiedTx.productId,
+      pendingProductId: selected.pendingProductId,
+      pendingAt: selected.pendingProductId ? selected.expiresDate : null,
+      mapped: selected.mapped,
     };
   }
 }

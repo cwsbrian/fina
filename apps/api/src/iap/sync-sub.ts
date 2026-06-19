@@ -81,6 +81,16 @@ function fallbackAppleStatusFromTransaction(verified: {
   };
 }
 
+function hasExplicitAppleExpiresDate(raw: Record<string, unknown>): boolean {
+  const expiresMs = Number(raw.expiresDate ?? 0);
+  return Number.isFinite(expiresMs) && expiresMs > 0;
+}
+
+function logAppleSyncDebug(event: string, payload: Record<string, unknown>): void {
+  if (process.env.NODE_ENV === "test") return;
+  console.info(`[iap.apple.sync] ${event}`, JSON.stringify(payload));
+}
+
 async function syncApple(
   _cfg: Partial<IapConfig>,
   args: SyncArgsApple,
@@ -96,16 +106,6 @@ async function syncApple(
     verified.appAccountToken &&
     args.expectedAppAccountToken !== verified.appAccountToken,
   );
-  const allowUnboundNativeRestore = isRestore && !verified.appAccountToken;
-  if (
-    args.expectedAppAccountToken &&
-    args.expectedAppAccountToken !== verified.appAccountToken &&
-    !allowUnboundNativeRestore &&
-    !isRestore
-  ) {
-    throw new HttpError(403, "user_mismatch", "appAccountToken mismatch");
-  }
-
   const verifiedTier = tierForIapProductId(verified.productId);
   if (!verifiedTier)
     throw new HttpError(400, "product_mismatch", `unknown productId ${verified.productId}`);
@@ -119,6 +119,47 @@ async function syncApple(
       throw e;
     }
   }
+  const transactionStatus = fallbackAppleStatusFromTransaction(verified);
+  const checkoutTransactionMatchesRequest =
+    !args.productId || args.productId === verified.productId;
+  logAppleSyncDebug("status_candidates", {
+    context,
+    requestedProductId: args.productId ?? null,
+    verifiedProductId: verified.productId,
+    transactionId: verified.transactionId,
+    originalTransactionId: verified.originalTransactionId,
+    transactionExpiresDate: transactionStatus.expiresDate.toISOString(),
+    transactionStatus: transactionStatus.mapped.status,
+    ascProductId: status.productId,
+    ascExpiresDate: status.expiresDate.toISOString(),
+    ascStatus: status.mapped.status,
+    ascPendingProductId: status.pendingProductId,
+    checkoutTransactionMatchesRequest,
+  });
+  if (
+    context === "checkout" &&
+    checkoutTransactionMatchesRequest &&
+    hasExplicitAppleExpiresDate(verified.raw) &&
+    !ACTIVE_IAP_STATUSES.has(transactionStatus.mapped.status)
+  ) {
+    throw new HttpError(400, "expired_receipt", "checkout transaction is not active");
+  }
+  if (
+    context === "checkout" &&
+    checkoutTransactionMatchesRequest &&
+    ACTIVE_IAP_STATUSES.has(transactionStatus.mapped.status) &&
+    (!ACTIVE_IAP_STATUSES.has(status.mapped.status) || status.productId !== verified.productId)
+  ) {
+    status = transactionStatus;
+  }
+  logAppleSyncDebug("status_selected", {
+    context,
+    selectedProductId: status.productId,
+    selectedStatus: status.mapped.status,
+    selectedExpiresDate: status.expiresDate.toISOString(),
+    selectedPendingProductId: status.pendingProductId,
+  });
+  const allowUnboundNativeRestore = isRestore && !verified.appAccountToken;
   // Restore/already-owned paths can hand us an older transaction JWS. ASC is
   // the source of truth for the subscription group's current product.
   const tier = tierForIapProductId(status.productId);
@@ -148,6 +189,19 @@ async function syncApple(
     if (existingSub && existingSub.userId !== args.userId) {
       throw new HttpError(403, "user_mismatch", "subscription belongs to another user");
     }
+    const sameUserExistingSubscription = Boolean(existingSub && existingSub.userId === args.userId);
+    if (
+      args.expectedAppAccountToken &&
+      args.expectedAppAccountToken !== verified.appAccountToken &&
+      !allowUnboundNativeRestore &&
+      !isRestore &&
+      !sameUserExistingSubscription
+    ) {
+      if (!ACTIVE_IAP_STATUSES.has(status.mapped.status)) {
+        throw new HttpError(400, "expired_receipt", "inactive transaction appAccountToken mismatch");
+      }
+      throw new HttpError(403, "user_mismatch", "appAccountToken mismatch");
+    }
     await tx.subscription.upsert({
       where: {
         source_sourceSubscriptionId: {
@@ -171,6 +225,7 @@ async function syncApple(
       },
       update: {
         tier,
+        ...(verified.appAccountToken ? { sourceCustomerId: verified.appAccountToken } : {}),
         status: status.mapped.status,
         currentPeriodEnd: status.expiresDate,
         cancelAtPeriodEnd: status.mapped.cancelAtPeriodEnd,

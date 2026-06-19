@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   present: vi.fn(),
   copyText: vi.fn(),
   currentEntitlements: vi.fn(),
+  products: vi.fn(),
   openManageBilling: vi.fn(),
   postIAPCheckout: vi.fn(),
   share: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("react-native", () => ({
       present: mocks.present,
       copyText: mocks.copyText,
       currentEntitlements: mocks.currentEntitlements,
+      products: mocks.products,
     },
   },
 }));
@@ -30,6 +32,7 @@ vi.mock("./binding", () => ({ deriveAppleToken: () => "apple-token" }));
 import {
   copyTextToClipboard,
   hasNativeSubscriptionStoreEntitlementReader,
+  listNativeSubscriptionStoreProducts,
   listNativeSubscriptionStoreEntitlements,
   presentNativeSubscriptionStoreAndSync,
 } from "./native-subscription-store";
@@ -79,6 +82,21 @@ describe("native subscription store", () => {
     await expect(listNativeSubscriptionStoreEntitlements()).resolves.toEqual([entitlement]);
 
     expect(mocks.currentEntitlements).toHaveBeenCalledWith(["pro_monthly", "max_monthly"]);
+  });
+
+  it("reads StoreKit product metadata from the native subscription module", async () => {
+    const product = {
+      productId: "max_monthly",
+      displayName: "Fina Max",
+      displayPrice: "$12.99",
+      price: "12.99",
+      currencyCode: "USD",
+    };
+    mocks.products.mockResolvedValue([product]);
+
+    await expect(listNativeSubscriptionStoreProducts()).resolves.toEqual([product]);
+
+    expect(mocks.products).toHaveBeenCalledWith(["pro_monthly", "max_monthly"]);
   });
 
   it("reports when the native entitlement reader is available", () => {

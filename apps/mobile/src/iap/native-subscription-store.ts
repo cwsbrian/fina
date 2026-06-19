@@ -9,7 +9,27 @@ import { productIdsForPlatform } from "./products";
 type NativeSubscriptionPurchase = {
   platform: "ios";
   productId: IAPProductId;
+  selectedProductId?: string;
+  originalTransactionId?: string;
+  transactionId?: string;
   receipt: string;
+};
+
+export type NativeSubscriptionProduct = {
+  productId: string;
+  displayName: string;
+  displayPrice: string;
+  price: string;
+  currencyCode: string | null;
+  subscriptionPeriod?: { unit: string; value: number };
+  introductoryOffer?: {
+    displayPrice: string;
+    price: string;
+    period: { unit: string; value: number };
+    periodCount: number;
+    paymentMode: string;
+    type: string;
+  } | null;
 };
 
 type FinaNativeSubscriptionStoreModule = {
@@ -19,6 +39,7 @@ type FinaNativeSubscriptionStoreModule = {
   ): Promise<NativeSubscriptionPurchase | null>;
   copyText?(text: string): Promise<boolean>;
   currentEntitlements?(productIds: string[]): Promise<NativeSubscriptionPurchase[]>;
+  products?(productIds: string[]): Promise<NativeSubscriptionProduct[]>;
 };
 
 function nativeSubscriptionStoreModule(): FinaNativeSubscriptionStoreModule | null {
@@ -72,6 +93,15 @@ export async function presentNativeSubscriptionStoreAndSync(
   const purchase = await presentNativeSubscriptionStore(userId);
   if (!purchase) return null;
 
+  console.info("[iap.nativeStore] completed", {
+    productId: purchase.productId,
+    selectedProductId: purchase.selectedProductId ?? null,
+    originalTransactionId: purchase.originalTransactionId ?? null,
+    transactionId: purchase.transactionId ?? null,
+    receiptLength: purchase.receipt.length,
+    dotCount: purchase.receipt.split(".").length - 1,
+  });
+
   return await postIAPCheckout({
     platform: purchase.platform,
     productId: purchase.productId,
@@ -86,4 +116,13 @@ export async function listNativeSubscriptionStoreEntitlements(): Promise<
   const mod = nativeSubscriptionStoreModule();
   if (!mod?.currentEntitlements || isExpoGo) return [];
   return await mod.currentEntitlements(nativeSubscriptionProductIds());
+}
+
+export async function listNativeSubscriptionStoreProducts(): Promise<
+  NativeSubscriptionProduct[]
+> {
+  if (Platform.OS !== "ios") return [];
+  const mod = nativeSubscriptionStoreModule();
+  if (!mod?.products || isExpoGo) return [];
+  return await mod.products(nativeSubscriptionProductIds());
 }

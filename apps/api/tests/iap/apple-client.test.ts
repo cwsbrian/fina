@@ -194,4 +194,49 @@ describe("AppleClient.getSubscriptionStatus", () => {
     expect(out.pendingProductId).toBe("fina_pro_monthly");
     expect(out.pendingAt?.getTime()).toBe(expiresDate);
   });
+
+  it("chooses the newest active lastTransaction when Apple returns multiple products", async () => {
+    const c = new AppleClient(cfg);
+    const proPurchaseDate = Date.now() - 60_000;
+    const maxPurchaseDate = Date.now();
+    const proExpiresDate = Date.now() + 5 * 60_000;
+    const maxExpiresDate = Date.now() + 10 * 60_000;
+    (c as any).asc = {
+      getAllSubscriptionStatuses: vi.fn().mockResolvedValue({
+        data: [
+          {
+            lastTransactions: [
+              { status: 1, signedTransactionInfo: "pro-tx-jws", signedRenewalInfo: "pro-renewal-jws" },
+              { status: 1, signedTransactionInfo: "max-tx-jws", signedRenewalInfo: "max-renewal-jws" },
+            ],
+          },
+        ],
+      }),
+    };
+    vi.spyOn(c, "verifyAndDecodeTransaction").mockImplementation(async (jws) => {
+      if (jws === "pro-tx-jws") {
+        return {
+          ...makeTx({ productId: "fina_pro_monthly" }),
+          bundleId: "com.fina.app",
+          environment: "Sandbox",
+          raw: { expiresDate: proExpiresDate, purchaseDate: proPurchaseDate },
+        } as any;
+      }
+      return {
+        ...makeTx({ productId: "max_monthly" }),
+        bundleId: "com.fina.app",
+        environment: "Sandbox",
+        raw: { expiresDate: maxExpiresDate, purchaseDate: maxPurchaseDate },
+      } as any;
+    });
+    vi.spyOn(c, "verifyAndDecodeRenewalInfo").mockResolvedValue({
+      autoRenewStatus: 1,
+      autoRenewProductId: "max_monthly",
+    });
+
+    const out = await c.getSubscriptionStatus("OT-1");
+
+    expect(out.productId).toBe("max_monthly");
+    expect(out.expiresDate.getTime()).toBe(maxExpiresDate);
+  });
 });

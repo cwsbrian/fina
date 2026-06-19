@@ -131,6 +131,13 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
       transactionId: "T-1",
       raw: {},
     });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      productId: "max_monthly",
+      pendingProductId: null,
+      pendingAt: null,
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
 
     await expect(
       syncSubscriptionFromIAP(
@@ -144,6 +151,46 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
         { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
       ),
     ).rejects.toMatchObject({ code: "user_mismatch", statusCode: 403 });
+  });
+
+  it("does not report user_mismatch for an expired transaction tied to another appAccountToken", async () => {
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: deriveAppleToken("OTHER-USER"),
+      productId: "fina_pro_monthly",
+      originalTransactionId: "OT-expired-other-user",
+      transactionId: "T-expired-other-user",
+      raw: { expiresDate: Date.now() - 5 * 60_000 },
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() - 5 * 60_000),
+      productId: "fina_pro_monthly",
+      pendingProductId: null,
+      pendingAt: null,
+      mapped: { status: "canceled", cancelAtPeriodEnd: false },
+    });
+
+    await expect(
+      syncSubscriptionFromIAP(
+        cfg,
+        {
+          platform: "ios",
+          receipt: "expired-other-user-jws",
+          userId: "u1",
+          productId: "fina_pro_monthly",
+          expectedAppAccountToken: deriveAppleToken("u1"),
+          context: "checkout",
+        },
+        { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+      ),
+    ).rejects.toMatchObject({ code: "expired_receipt", statusCode: 400 });
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: "u1" } });
+    expect(user.iapAppleAccountToken).toBeNull();
+    const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
+    expect(sub).toBeNull();
   });
 
   it("derives tier from latest ASC status productId, not stale receipt or request body", async () => {
@@ -176,6 +223,215 @@ describe("syncSubscriptionFromIAP — Apple checkout path", () => {
 
     const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
     expect(sub!.tier).toBe("max");
+  });
+
+  it("uses a fresh active checkout transaction when ASC still returns an expired stale status", async () => {
+    const expiresDate = new Date(Date.now() + 5 * 60_000);
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: deriveAppleToken("u1"),
+      productId: "fina_pro_monthly",
+      originalTransactionId: "OT-stale-asc",
+      transactionId: "T-stale-asc",
+      raw: { expiresDate: expiresDate.getTime() },
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() - 5 * 60_000),
+      productId: "max_monthly",
+      pendingProductId: null,
+      pendingAt: null,
+      mapped: { status: "canceled", cancelAtPeriodEnd: false },
+    });
+
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "fresh-checkout-jws",
+        userId: "u1",
+        productId: "fina_pro_monthly",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+        context: "checkout",
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+
+    const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
+    expect(sub).toMatchObject({
+      source: "iap_apple",
+      sourceSubscriptionId: "OT-stale-asc",
+      tier: "pro",
+      status: "active",
+      environment: "Sandbox",
+    });
+    expect(sub!.currentPeriodEnd.getTime()).toBe(expiresDate.getTime());
+  });
+
+  it("uses a fresh active checkout transaction when ASC still returns a different active product", async () => {
+    const expiresDate = new Date(Date.now() + 5 * 60_000);
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: deriveAppleToken("u1"),
+      productId: "fina_pro_monthly",
+      originalTransactionId: "OT-active-stale-product",
+      transactionId: "T-active-stale-product",
+      raw: { expiresDate: expiresDate.getTime() },
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 5 * 60_000),
+      productId: "max_monthly",
+      pendingProductId: null,
+      pendingAt: null,
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "fresh-checkout-jws",
+        userId: "u1",
+        productId: "fina_pro_monthly",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+        context: "checkout",
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+
+    const sub = await prisma.subscription.findFirst({ where: { userId: "u1" } });
+    expect(sub).toMatchObject({
+      source: "iap_apple",
+      sourceSubscriptionId: "OT-active-stale-product",
+      tier: "pro",
+      status: "active",
+      environment: "Sandbox",
+    });
+    expect(sub!.currentPeriodEnd.getTime()).toBe(expiresDate.getTime());
+  });
+
+  it("allows Apple checkout upgrade when the original transaction already belongs to the same user", async () => {
+    const oldAppleToken = deriveAppleToken("old-local-user-id");
+    await prisma.user.update({
+      where: { id: "u1" },
+      data: { iapAppleAccountToken: deriveAppleToken("u1") },
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: "u1",
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-upgrade-same-user",
+        sourceCustomerId: oldAppleToken,
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 5 * 60_000),
+        environment: "Sandbox",
+      },
+    });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: oldAppleToken,
+      productId: "max_monthly",
+      originalTransactionId: "OT-upgrade-same-user",
+      transactionId: "T-upgrade-same-user",
+      raw: { expiresDate: Date.now() + 10 * 60_000 },
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 10 * 60_000),
+      productId: "max_monthly",
+      pendingProductId: null,
+      pendingAt: null,
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await syncSubscriptionFromIAP(
+      cfg,
+      {
+        platform: "ios",
+        receipt: "upgrade-jws",
+        userId: "u1",
+        productId: "max_monthly",
+        expectedAppAccountToken: deriveAppleToken("u1"),
+        context: "checkout",
+      },
+      { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+    );
+
+    const sub = await prisma.subscription.findUniqueOrThrow({
+      where: {
+        source_sourceSubscriptionId: {
+          source: "iap_apple",
+          sourceSubscriptionId: "OT-upgrade-same-user",
+        },
+      },
+    });
+    expect(sub.tier).toBe("max");
+
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: "u1" } });
+    expect(user.iapAppleAccountToken).toBe(oldAppleToken);
+  });
+
+  it("rejects stale checkout transactions even when ASC still has an active different product", async () => {
+    const oldAppleToken = deriveAppleToken("old-local-user-id");
+    await prisma.subscription.create({
+      data: {
+        userId: "u1",
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-stale-checkout-upgrade",
+        sourceCustomerId: oldAppleToken,
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 5 * 60_000),
+        environment: "Sandbox",
+      },
+    });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      bundleId: "com.fina.app",
+      environment: "Sandbox",
+      signedDate: Date.now(),
+      appAccountToken: oldAppleToken,
+      productId: "max_monthly",
+      originalTransactionId: "OT-stale-checkout-upgrade",
+      transactionId: "T-stale-checkout-upgrade",
+      raw: { expiresDate: Date.now() - 5 * 60_000 },
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      expiresDate: new Date(Date.now() + 5 * 60_000),
+      productId: "fina_pro_monthly",
+      pendingProductId: null,
+      pendingAt: null,
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+    });
+
+    await expect(
+      syncSubscriptionFromIAP(
+        cfg,
+        {
+          platform: "ios",
+          receipt: "stale-max-upgrade-jws",
+          userId: "u1",
+          productId: "max_monthly",
+          expectedAppAccountToken: deriveAppleToken("u1"),
+          context: "checkout",
+        },
+        { appleClient: fakeAppleClient, googleClient: fakeGoogleClient },
+      ),
+    ).rejects.toMatchObject({ code: "expired_receipt", statusCode: 400 });
+
+    const sub = await prisma.subscription.findUniqueOrThrow({
+      where: {
+        source_sourceSubscriptionId: {
+          source: "iap_apple",
+          sourceSubscriptionId: "OT-stale-checkout-upgrade",
+        },
+      },
+    });
+    expect(sub.tier).toBe("pro");
   });
 
   it("uses restore verification context for Apple restore", async () => {

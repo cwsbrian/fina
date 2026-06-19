@@ -38,9 +38,13 @@ private struct FinaSubscriptionStoreSheet: View {
       }
       .onInAppPurchaseCompletion { product, result in
         guard case .success(.success(let verification)) = result else { return }
+        guard case .verified(let transaction) = verification else { return }
         onPurchaseCompleted(
           FinaSubscriptionPurchaseResult(
-            productId: product.id,
+            selectedProductId: product.id,
+            productId: transaction.productID,
+            originalTransactionId: String(transaction.originalID),
+            transactionId: String(transaction.id),
             jwsRepresentation: verification.jwsRepresentation
           )
         )
@@ -49,7 +53,10 @@ private struct FinaSubscriptionStoreSheet: View {
 }
 
 private struct FinaSubscriptionPurchaseResult {
+  let selectedProductId: String
   let productId: String
+  let originalTransactionId: String
+  let transactionId: String
   let jwsRepresentation: String
 }
 
@@ -77,6 +84,9 @@ private final class FinaSubscriptionPresentationDelegate: NSObject, UIAdaptivePr
       resolve([
         "platform": "ios",
         "productId": purchase.productId,
+        "selectedProductId": purchase.selectedProductId,
+        "originalTransactionId": purchase.originalTransactionId,
+        "transactionId": purchase.transactionId,
         "receipt": purchase.jwsRepresentation,
       ])
     } else {
@@ -131,6 +141,62 @@ class FinaNativeSubscriptionStore: NSObject {
         ])
       }
       resolve(entitlements)
+    }
+  }
+
+  @objc(products:resolver:rejecter:)
+  func products(
+    _ productIds: [String],
+    resolver resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    guard #available(iOS 15.0, *) else {
+      resolve([])
+      return
+    }
+
+    let ids = productIds.filter { !$0.isEmpty }
+    Task {
+      do {
+        let products = try await Product.products(for: ids)
+        let rows = products.map { product -> [String: Any] in
+          var row: [String: Any] = [
+            "productId": product.id,
+            "displayName": product.displayName,
+            "displayPrice": product.displayPrice,
+            "price": NSDecimalNumber(decimal: product.price).stringValue,
+            "currencyCode": NSNull(),
+          ]
+          if #available(iOS 16.0, *) {
+            row["currencyCode"] = product.priceFormatStyle.currencyCode
+          }
+          if let subscription = product.subscription {
+            row["subscriptionPeriod"] = [
+              "unit": String(describing: subscription.subscriptionPeriod.unit),
+              "value": subscription.subscriptionPeriod.value,
+            ]
+            if let offer = subscription.introductoryOffer {
+              row["introductoryOffer"] = [
+                "displayPrice": offer.displayPrice,
+                "price": NSDecimalNumber(decimal: offer.price).stringValue,
+                "period": [
+                  "unit": String(describing: offer.period.unit),
+                  "value": offer.period.value,
+                ],
+                "periodCount": offer.periodCount,
+                "paymentMode": String(describing: offer.paymentMode),
+                "type": String(describing: offer.type),
+              ]
+            } else {
+              row["introductoryOffer"] = NSNull()
+            }
+          }
+          return row
+        }
+        resolve(rows)
+      } catch {
+        reject("E_PRODUCTS", "Could not load App Store subscription products.", error)
+      }
     }
   }
 
@@ -225,6 +291,10 @@ RCT_EXTERN_METHOD(copyText:(NSString *)text
                   rejecter:(RCTPromiseRejectBlock)reject)
 
 RCT_EXTERN_METHOD(currentEntitlements:(NSArray *)productIds
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(products:(NSArray *)productIds
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 

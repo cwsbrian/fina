@@ -1,8 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { productIdsForPlatform, productIdsForTier, purchaseFlowTimeoutMessage } from "./products";
 
 describe("IAP client helpers", () => {
+  afterEach(() => {
+    vi.resetModules();
+    vi.doUnmock("react-native");
+    vi.doUnmock("react-native-iap");
+    vi.doUnmock("../env");
+  });
+
   it("checks both known iOS Pro product ids, preferring the current App Store id", () => {
     expect(productIdsForTier("pro", "ios")).toEqual(["fina_pro_monthly", "pro_monthly"]);
   });
@@ -19,5 +26,61 @@ describe("IAP client helpers", () => {
   it("uses platform-specific timeout copy", () => {
     expect(purchaseFlowTimeoutMessage("ios")).toContain("App Store");
     expect(purchaseFlowTimeoutMessage("android")).toContain("Google Play");
+  });
+
+  it("does not turn stale iOS transaction JWS values into restorable purchases", async () => {
+    const mockIap = {
+      currentEntitlementIOS: vi.fn().mockResolvedValue(null),
+      getTransactionJwsIOS: vi.fn().mockResolvedValue("expired.transaction.jws"),
+    };
+    vi.doMock("react-native", () => ({ Platform: { OS: "ios" } }));
+    vi.doMock("../env", () => ({ isExpoGo: false }));
+    vi.doMock("./binding", () => ({
+      deriveAppleToken: () => "apple-token",
+      deriveGoogleToken: () => "google-token",
+    }));
+    const { __private } = await import("./client");
+    const out: any[] = [];
+
+    await __private.collectCurrentIOSEntitlements(mockIap as any, out, new Set());
+
+    expect(out).toEqual([]);
+    expect(mockIap.getTransactionJwsIOS).not.toHaveBeenCalled();
+  });
+
+  it("accepts RN-IAP iOS purchases whose id is the transaction id", async () => {
+    const mockIap = {
+      currentEntitlementIOS: vi.fn().mockResolvedValue({
+        id: "2000001191010188",
+        productId: "fina_pro_monthly",
+        purchaseToken: "signed.transaction.jws",
+        originalTransactionIdentifierIOS: "2000001191010188",
+      }),
+      getTransactionJwsIOS: vi.fn().mockResolvedValue(null),
+    };
+    vi.doMock("react-native", () => ({ Platform: { OS: "ios" } }));
+    vi.doMock("../env", () => ({ isExpoGo: false }));
+    vi.doMock("./binding", () => ({
+      deriveAppleToken: () => "apple-token",
+      deriveGoogleToken: () => "google-token",
+    }));
+    const { __private } = await import("./client");
+    const out: any[] = [];
+
+    await __private.collectCurrentIOSEntitlements(mockIap as any, out, new Set());
+
+    expect(out).toEqual([
+      {
+        platform: "ios",
+        productId: "fina_pro_monthly",
+        receipt: "signed.transaction.jws",
+        purchase: {
+          id: "2000001191010188",
+          productId: "fina_pro_monthly",
+          purchaseToken: "signed.transaction.jws",
+          originalTransactionIdentifierIOS: "2000001191010188",
+        },
+      },
+    ]);
   });
 });

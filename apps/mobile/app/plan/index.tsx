@@ -38,6 +38,7 @@ import {
   copyTextToClipboard,
   hasNativeSubscriptionStoreEntitlementReader,
   listNativeSubscriptionStoreEntitlements,
+  listNativeSubscriptionStoreProducts,
   presentNativeSubscriptionStoreAndSync,
 } from "../../src/iap/native-subscription-store";
 import { usesNativeSubscriptionSurface } from "../../src/iap/plan-mode";
@@ -59,6 +60,7 @@ type NativeDebugState = {
   available: boolean;
   checkedAt: string;
   entitlements: Awaited<ReturnType<typeof listNativeSubscriptionStoreEntitlements>> | null;
+  products: Awaited<ReturnType<typeof listNativeSubscriptionStoreProducts>> | null;
   error: string | null;
 };
 
@@ -113,6 +115,10 @@ function purchaseErrorMessage(e: unknown): string {
   }
   if (e instanceof Error) return e.message;
   return "Try again.";
+}
+
+function isExpiredReceiptError(e: unknown): boolean {
+  return isApiError(e) && e.code === "expired_receipt";
 }
 
 const PLAN_COPY: Record<
@@ -203,13 +209,16 @@ export default function PlanScreen() {
     let cancelled = false;
     const available = hasNativeSubscriptionStoreEntitlementReader();
     const checkedAt = new Date().toISOString();
-    setNativeDebug({ available, checkedAt, entitlements: null, error: null });
+    setNativeDebug({ available, checkedAt, entitlements: null, products: null, error: null });
     if (!available) return;
 
-    listNativeSubscriptionStoreEntitlements()
-      .then((entitlements) => {
+    Promise.all([
+      listNativeSubscriptionStoreEntitlements(),
+      listNativeSubscriptionStoreProducts(),
+    ])
+      .then(([entitlements, products]) => {
         if (cancelled) return;
-        setNativeDebug({ available, checkedAt, entitlements, error: null });
+        setNativeDebug({ available, checkedAt, entitlements, products, error: null });
       })
       .catch((e) => {
         if (cancelled) return;
@@ -217,6 +226,7 @@ export default function PlanScreen() {
           available,
           checkedAt,
           entitlements: null,
+          products: null,
           error: e instanceof Error ? e.message : String(e),
         });
       });
@@ -286,6 +296,10 @@ export default function PlanScreen() {
       if (isApiError(e) && e.code === "user_mismatch") {
         await loadMe();
         router.replace("/billing/recovery" as never);
+        return;
+      }
+      if (isExpiredReceiptError(e)) {
+        await loadMe();
         return;
       }
       if (isUnsyncedIAPPurchaseError(e)) {
@@ -376,6 +390,10 @@ export default function PlanScreen() {
         if (isApiError(e) && e.code === "user_mismatch") {
           await loadMe();
           router.replace("/billing/recovery" as never);
+          return;
+        }
+        if (isExpiredReceiptError(e)) {
+          await loadMe();
           return;
         }
         if (isUnsyncedIAPPurchaseError(e)) {
@@ -491,6 +509,9 @@ export default function PlanScreen() {
             </Text>
             <Text style={styles.debugText}>
               nativeEntitlements: {JSON.stringify(nativeDebug?.entitlements ?? null)}
+            </Text>
+            <Text style={styles.debugText}>
+              nativeProducts: {JSON.stringify(nativeDebug?.products ?? null)}
             </Text>
             <Text style={styles.debugText}>
               nativeError: {nativeDebug?.error ?? "null"}

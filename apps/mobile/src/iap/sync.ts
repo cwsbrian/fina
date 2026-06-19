@@ -10,6 +10,7 @@ import { apiFetch } from "../api/client";
 import { isBillingLocked } from "../billing/recovery-ui";
 import { listNativeSubscriptionStoreEntitlements } from "./native-subscription-store";
 import {
+  clearPendingNativeTransactions,
   finishPurchase,
   IapPurchaseError,
   isIapAvailable,
@@ -22,9 +23,20 @@ import {
 let nativeIntegrityInFlight: Promise<MeDTO | null> | null = null;
 let lastNativeIntegrityAttemptAt = 0;
 const NATIVE_INTEGRITY_RETRY_COOLDOWN_MS = 30_000;
+const NATIVE_CHECKOUT_STALE_PURCHASE_RETRY_LIMIT = 20;
+const NATIVE_CHECKOUT_DUPLICATE_RETRY_LIMIT = 2;
 
 function isAlreadyOwnedError(e: unknown): boolean {
   return e instanceof IapPurchaseError && e.code === "E_ALREADY_OWNED";
+}
+
+function isExpiredReceiptError(e: unknown): boolean {
+  return (
+    typeof e === "object" &&
+    e !== null &&
+    "code" in e &&
+    (e as { code?: unknown }).code === "expired_receipt"
+  );
 }
 
 function nativeSubscriptionSource(): SubscriptionSource | null {
@@ -148,30 +160,61 @@ export async function checkoutNativeSubscription(
   tier: PaidTier,
   userId: string,
 ): Promise<MeDTO> {
-  let purchase: Awaited<ReturnType<typeof requestSubscriptionPurchase>>;
-  try {
-    purchase = await requestSubscriptionPurchase(tier, userId);
-  } catch (e) {
-    if (isAlreadyOwnedError(e)) {
-      const synced = await restoreCurrentNativeSubscriptions();
-      if (synced) return synced;
-      const current = await apiFetch<MeDTO>("/me");
-      if (current.subscription) return current;
+  let lastExpiredReceiptError: unknown = null;
+  let duplicateRetries = 0;
+  for (let attempt = 0; attempt < NATIVE_CHECKOUT_STALE_PURCHASE_RETRY_LIMIT; attempt += 1) {
+    let purchase: Awaited<ReturnType<typeof requestSubscriptionPurchase>>;
+    try {
+      purchase = await requestSubscriptionPurchase(tier, userId);
+    } catch (e) {
+      if (isAlreadyOwnedError(e)) {
+        if (Platform.OS === "ios" && duplicateRetries < NATIVE_CHECKOUT_DUPLICATE_RETRY_LIMIT) {
+          duplicateRetries += 1;
+          await Promise.resolve(clearPendingNativeTransactions()).catch((clearError) => {
+            console.warn("[iap.checkout] failed to clear pending iOS transactions", clearError);
+          });
+          console.info("[iap.checkout] cleared pending iOS transactions after duplicate", {
+            attempt: duplicateRetries,
+            tier,
+          });
+          continue;
+        }
+        const synced = await restoreCurrentNativeSubscriptions();
+        if (synced) return synced;
+        const current = await apiFetch<MeDTO>("/me");
+        if (current.subscription) return current;
+      }
+      throw e;
     }
-    throw e;
+
+    try {
+      const nextMe = await postIAPCheckout({
+        platform: purchase.platform,
+        productId: purchase.productId,
+        receipt: purchase.receipt,
+      });
+
+      if (purchase.purchase) {
+        await finishPurchase(purchase.purchase);
+      }
+
+      return nextMe;
+    } catch (e) {
+      if (purchase.purchase && isExpiredReceiptError(e)) {
+        lastExpiredReceiptError = e;
+        await Promise.resolve(finishPurchase(purchase.purchase)).catch((finishError) => {
+          console.warn("[iap.checkout] failed to finish expired purchase", finishError);
+        });
+        console.info("[iap.checkout] finished stale expired purchase", {
+          attempt: attempt + 1,
+          productId: purchase.productId,
+        });
+        continue;
+      }
+      throw e;
+    }
   }
-
-  const nextMe = await postIAPCheckout({
-    platform: purchase.platform,
-    productId: purchase.productId,
-    receipt: purchase.receipt,
-  });
-
-  if (purchase.purchase) {
-    await finishPurchase(purchase.purchase);
-  }
-
-  return nextMe;
+  throw lastExpiredReceiptError ?? new Error("No active App Store purchase was returned.");
 }
 
 export async function syncNativeSubscriptionManagement(): Promise<MeDTO> {

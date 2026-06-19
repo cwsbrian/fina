@@ -17,7 +17,8 @@ import {
 } from "./products";
 
 const SKUS: IAPProductId[] = productIdsForPlatform(Platform.OS === "ios" ? "ios" : "android");
-const PURCHASE_FLOW_TIMEOUT_MS = 90_000;
+const IS_DEV = typeof __DEV__ !== "undefined" ? __DEV__ : process.env.NODE_ENV !== "production";
+const PURCHASE_FLOW_TIMEOUT_MS = IS_DEV ? 20_000 : 90_000;
 
 /** Error class surfaced to callers so the UI can map react-native-iap's
  *  string codes to user-friendly messaging. The code is the canonical
@@ -147,6 +148,15 @@ export async function finishPurchase(p: Purchase): Promise<void> {
   await iap.finishTransaction({ purchase: p as any, isConsumable: false });
 }
 
+export async function clearPendingNativeTransactions(): Promise<void> {
+  if (Platform.OS !== "ios") return;
+  const iap = getIap();
+  if (!iap) return;
+  const clear = (iap as any).clearTransactionIOS;
+  if (typeof clear !== "function") return;
+  await clear();
+}
+
 export type RestorablePurchase = {
   productId: IAPProductId;
   receipt: string;
@@ -160,7 +170,7 @@ function pushRestorablePurchase(
   purchase: Purchase,
   platform: "ios" | "android",
 ): void {
-  const id = (purchase as any).id ?? (purchase as any).productId;
+  const id = (purchase as any).productId ?? (purchase as any).id;
   if (id !== "pro_monthly" && id !== "fina_pro_monthly" && id !== "max_monthly") return;
   const receipt = receiptForPurchase(purchase, platform);
   if (!receipt) return;
@@ -258,7 +268,17 @@ async function resolveAndroidSubscriptionProduct(
 
 async function resolveIOSSubscriptionProduct(iap: RnIap, tier: PaidTier): Promise<IAPProductId> {
   const candidates = productIdsForTier(tier, "ios");
+  console.info("[iap.rn] fetchProducts start", { platform: "ios", tier, candidates });
   const products = await iap.fetchProducts({ skus: candidates, type: "subs" });
+  console.info("[iap.rn] fetchProducts result", {
+    platform: "ios",
+    tier,
+    products: (products ?? []).map((item: any) => ({
+      id: item?.id ?? item?.productId ?? null,
+      title: item?.title ?? item?.displayName ?? null,
+      price: item?.displayPrice ?? item?.localizedPrice ?? item?.price ?? null,
+    })),
+  });
   const product = candidates
     .map((candidate) =>
       (products ?? []).find((item: any) => {
@@ -283,6 +303,7 @@ export async function requestSubscriptionPurchase(
   tier: PaidTier,
   userId: string,
 ): Promise<RestorablePurchase> {
+  console.info("[iap.rn] checkout start", { tier, platform: Platform.OS });
   const iap = await ensureConnected();
   if (Platform.OS !== "ios" && Platform.OS !== "android") {
     throw new IapPurchaseError("E_RN_IAP_UNAVAILABLE", false, "Unsupported platform.");
@@ -334,10 +355,38 @@ export async function requestSubscriptionPurchase(
     };
 
     purchaseSub = iap.purchaseUpdatedListener((purchase) => {
+      console.info("[iap.rn] purchaseUpdated", {
+        platform,
+        expectedProductId: productId,
+        purchase: Array.isArray(purchase)
+          ? purchase.map((item: any) => ({
+              id: item?.id ?? item?.productId ?? null,
+              productId: item?.productId ?? item?.id ?? null,
+              transactionIdIOS: item?.transactionIdIOS ?? null,
+              originalTransactionIdentifierIOS: item?.originalTransactionIdentifierIOS ?? null,
+              hasToken: Boolean(item?.purchaseToken ?? item?.jwsRepresentationIOS ?? item?.transactionReceipt),
+            }))
+          : {
+              id: (purchase as any)?.id ?? (purchase as any)?.productId ?? null,
+              productId: (purchase as any)?.productId ?? (purchase as any)?.id ?? null,
+              transactionIdIOS: (purchase as any)?.transactionIdIOS ?? null,
+              originalTransactionIdentifierIOS:
+                (purchase as any)?.originalTransactionIdentifierIOS ?? null,
+              hasToken: Boolean(
+                (purchase as any)?.purchaseToken ??
+                  (purchase as any)?.jwsRepresentationIOS ??
+                  (purchase as any)?.transactionReceipt,
+              ),
+            },
+      });
       const next = purchaseFromNativeResult(purchase, productId, platform);
       if (next) settle(() => resolve(next));
     });
     errorSub = iap.purchaseErrorListener((error) => {
+      console.warn("[iap.rn] purchaseError", {
+        code: (error as any)?.code ?? null,
+        message: (error as any)?.message ?? null,
+      });
       settle(() => reject(toIapError(error)));
     });
     timeout = setTimeout(() => {
@@ -354,6 +403,7 @@ export async function requestSubscriptionPurchase(
 
     void (async () => {
       try {
+        console.info("[iap.rn] requestPurchase start", { platform, productId });
         const result =
           platform === "ios"
             ? await iap.requestPurchase({
@@ -379,9 +429,39 @@ export async function requestSubscriptionPurchase(
                 },
                 type: "subs",
               });
+        console.info("[iap.rn] requestPurchase result", {
+          platform,
+          productId,
+          result: Array.isArray(result)
+            ? result.map((item: any) => ({
+                id: item?.id ?? item?.productId ?? null,
+                productId: item?.productId ?? item?.id ?? null,
+                transactionIdIOS: item?.transactionIdIOS ?? null,
+                originalTransactionIdentifierIOS: item?.originalTransactionIdentifierIOS ?? null,
+                hasToken: Boolean(item?.purchaseToken ?? item?.jwsRepresentationIOS ?? item?.transactionReceipt),
+              }))
+            : result
+              ? {
+                  id: (result as any)?.id ?? (result as any)?.productId ?? null,
+                  productId: (result as any)?.productId ?? (result as any)?.id ?? null,
+                  transactionIdIOS: (result as any)?.transactionIdIOS ?? null,
+                  originalTransactionIdentifierIOS:
+                    (result as any)?.originalTransactionIdentifierIOS ?? null,
+                  hasToken: Boolean(
+                    (result as any)?.purchaseToken ??
+                      (result as any)?.jwsRepresentationIOS ??
+                      (result as any)?.transactionReceipt,
+                  ),
+                }
+              : null,
+        });
         const next = purchaseFromNativeResult(result, productId, platform);
         if (next) settle(() => resolve(next));
       } catch (e) {
+        console.warn("[iap.rn] requestPurchase throw", {
+          code: (e as any)?.code ?? null,
+          message: (e as any)?.message ?? null,
+        });
         settle(() => reject(toIapError(e)));
       }
     })();
@@ -398,19 +478,16 @@ async function collectCurrentIOSEntitlements(
       const entitlement = await iap.currentEntitlementIOS(sku);
       if (entitlement) {
         pushRestorablePurchase(out, seen, entitlement as Purchase, "ios");
-        if (out.some((p) => p.productId === sku)) continue;
       }
-    } catch {
-      // Fall back to transaction JWS below.
-    }
-    try {
-      const jws = await iap.getTransactionJwsIOS(sku);
-      pushRestorableReceipt(out, seen, sku, jws, "ios", jws);
     } catch {
       // Some products simply have no current entitlement.
     }
   }
 }
+
+export const __private = {
+  collectCurrentIOSEntitlements,
+};
 
 export async function listCurrentNativeEntitlements(): Promise<RestorablePurchase[]> {
   const iap = getIap();

@@ -26,28 +26,22 @@ import {
   trialDaysLeft,
   trialRevertsTo,
   formatShortDate,
-  isApiError,
-  type ApiErrorCode,
   type BankAccountDTO,
   type MeDTO as Me,
 } from "@fina/shared";
 import { authClient, useSession, signOut } from "../../src/auth/client";
 import { unregisterForPushNotifications } from "../../src/api/push";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
-import { isUnsyncedIAPPurchaseError } from "../../src/api/billing";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
-import {
-  fetchMeWithNativeSubscriptionSync,
-  syncCurrentNativeSubscriptions,
-} from "../../src/iap/sync";
+import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 import {
   copyTextToClipboard,
   hasNativeSubscriptionStoreEntitlementReader,
   listNativeSubscriptionStoreEntitlements,
-  presentNativeSubscriptionStoreAndSync,
+  listNativeSubscriptionStoreProducts,
 } from "../../src/iap/native-subscription-store";
 import { planEntryAction } from "../../src/iap/plan-mode";
 import {
@@ -72,6 +66,7 @@ type NativeDebugState = {
   available: boolean;
   checkedAt: string;
   entitlements: Awaited<ReturnType<typeof listNativeSubscriptionStoreEntitlements>> | null;
+  products: Awaited<ReturnType<typeof listNativeSubscriptionStoreProducts>> | null;
   error: string | null;
 };
 
@@ -101,30 +96,6 @@ function buildMorePlanDebugPayload(me: Me | null, nativeDebug: NativeDebugState 
     null,
     2,
   );
-}
-
-const IAP_ERROR_MESSAGES = {
-  user_mismatch:
-    "This App Store subscription is already tied to another Fina account. Sign in with that Fina account, or use a fresh Sandbox Tester Apple ID.",
-  already_subscribed_iap: "This App Store account already has an active Fina subscription.",
-  already_subscribed_stripe: "This Fina account is already subscribed through web billing.",
-  invalid_receipt: "The App Store receipt could not be verified. Try again.",
-  expired_receipt: "The App Store subscription is expired.",
-  product_mismatch: "The App Store returned a different subscription product than expected.",
-  iap_not_configured: "In-app purchases are not fully configured on the server.",
-  platform_unavailable: "In-app purchases are temporarily unavailable.",
-} satisfies Partial<Record<ApiErrorCode, string>>;
-
-function iapErrorMessage(e: unknown): string {
-  if (isApiError(e)) {
-    return (
-      (IAP_ERROR_MESSAGES as Record<string, string | undefined>)[e.code] ??
-      e.message ??
-      "Try again."
-    );
-  }
-  if (e instanceof Error) return e.message;
-  return "Try again.";
 }
 
 export default function More() {
@@ -214,13 +185,16 @@ export default function More() {
     let cancelled = false;
     const available = hasNativeSubscriptionStoreEntitlementReader();
     const checkedAt = new Date().toISOString();
-    setNativeDebug({ available, checkedAt, entitlements: null, error: null });
+    setNativeDebug({ available, checkedAt, entitlements: null, products: null, error: null });
     if (!available) return;
 
-    listNativeSubscriptionStoreEntitlements()
-      .then((entitlements) => {
+    Promise.all([
+      listNativeSubscriptionStoreEntitlements(),
+      listNativeSubscriptionStoreProducts(),
+    ])
+      .then(([entitlements, products]) => {
         if (cancelled) return;
-        setNativeDebug({ available, checkedAt, entitlements, error: null });
+        setNativeDebug({ available, checkedAt, entitlements, products, error: null });
       })
       .catch((e) => {
         if (cancelled) return;
@@ -228,6 +202,7 @@ export default function More() {
           available,
           checkedAt,
           entitlements: null,
+          products: null,
           error: e instanceof Error ? e.message : String(e),
         });
       });
@@ -309,44 +284,8 @@ export default function More() {
       );
       return;
     }
-    if (action === "native-subscriptions") {
-      if (!me?.user.id) {
-        Alert.alert("Couldn't open App Store", "Sign in again and try again.");
-        return;
-      }
-      void presentNativeSubscriptionStoreAndSync(me.user.id)
-        .then((nextMe) => {
-          if (nextMe) {
-            setMe(nextMe);
-            return;
-          }
-          loadMe();
-        })
-        .catch(async (e) => {
-          if (isApiError(e) && e.code === "user_mismatch") {
-            await loadMe();
-            router.push("/billing/recovery" as never);
-            return;
-          }
-          if (isUnsyncedIAPPurchaseError(e)) {
-            const synced = await syncCurrentNativeSubscriptions().catch(() => null);
-            if (synced?.subscription) {
-              setMe(synced);
-              return;
-            }
-          }
-          const nextMe = await loadMe();
-          if (nextMe && (isBillingLocked(nextMe) || nextMe.subscription)) return;
-          Alert.alert(
-            "Couldn't update subscription",
-            iapErrorMessage(e),
-          );
-          return;
-        });
-      return;
-    }
     router.push("/plan" as never);
-  }, [loadMe, me?.subscription?.source, me?.subscription?.tier, me?.user.id]);
+  }, [me?.subscription?.source, router]);
 
   const copyPlanDebug = useCallback(async () => {
     try {
@@ -638,6 +577,9 @@ export default function More() {
                   </Text>
                   <Text style={styles.debugText}>
                     nativeEntitlements: {JSON.stringify(nativeDebug?.entitlements ?? null)}
+                  </Text>
+                  <Text style={styles.debugText}>
+                    nativeProducts: {JSON.stringify(nativeDebug?.products ?? null)}
                   </Text>
                   <Text style={styles.debugText}>
                     nativeError: {nativeDebug?.error ?? "null"}
