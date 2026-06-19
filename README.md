@@ -173,6 +173,10 @@ larger explorations, ER diagrams, or managing multiple environments side-by-side
 7. Visit `http://localhost:3100/settings/plan`, click Upgrade. Use Stripe's
    test card `4242 4242 4242 4242`, any future expiry, any CVC, any postal.
 
+
+## Reset Test User
+fina-admin-reset-iap-test-user tester@test.com
+
 ## Status — 2026-05-11
 
 - ✅ Plan 1 complete: Nx monorepo, Postgres, Fastify API + Better Auth (email/password + magic link), workspace bootstrap with 30-day Pro trial via post-create hook, Expo mobile + Next.js web both rendering /me, CI workflow ready.

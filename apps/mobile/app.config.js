@@ -27,34 +27,24 @@ import UIKit
 private struct FinaSubscriptionStoreSheet: View {
   let productIds: [String]
   let appAccountToken: UUID
-  let onClose: () -> Void
   let onPurchaseCompleted: (FinaSubscriptionPurchaseResult) -> Void
 
   var body: some View {
-    NavigationStack {
-      SubscriptionStoreView(productIDs: productIds)
-        .subscriptionStoreButtonLabel(.multiline)
-        .storeButton(.hidden, for: .restorePurchases)
-        .inAppPurchaseOptions { _ in
-          [.appAccountToken(appAccountToken)]
-        }
-        .onInAppPurchaseCompletion { product, result in
-          guard case .success(.success(let verification)) = result else { return }
-          onPurchaseCompleted(
-            FinaSubscriptionPurchaseResult(
-              productId: product.id,
-              jwsRepresentation: verification.jwsRepresentation
-            )
+    SubscriptionStoreView(productIDs: productIds)
+      .subscriptionStoreButtonLabel(.multiline)
+      .storeButton(.hidden, for: .restorePurchases)
+      .inAppPurchaseOptions { _ in
+        [.appAccountToken(appAccountToken)]
+      }
+      .onInAppPurchaseCompletion { product, result in
+        guard case .success(.success(let verification)) = result else { return }
+        onPurchaseCompleted(
+          FinaSubscriptionPurchaseResult(
+            productId: product.id,
+            jwsRepresentation: verification.jwsRepresentation
           )
-        }
-        .toolbar {
-          ToolbarItem(placement: .cancellationAction) {
-            Button("Done") {
-              onClose()
-            }
-          }
-        }
-    }
+        )
+      }
   }
 }
 
@@ -185,18 +175,12 @@ class FinaNativeSubscriptionStore: NSObject {
         rootView: FinaSubscriptionStoreSheet(
           productIds: ids,
           appAccountToken: accountToken,
-          onClose: {},
           onPurchaseCompleted: { _ in }
         )
       )
       controller.rootView = FinaSubscriptionStoreSheet(
         productIds: ids,
         appAccountToken: accountToken,
-        onClose: { [weak controller, weak delegate] in
-          controller?.dismiss(animated: true) {
-            delegate?.finish()
-          }
-        },
         onPurchaseCompleted: { [weak controller, weak delegate] purchase in
           controller?.dismiss(animated: true) {
             delegate?.finish(purchase)
