@@ -19,7 +19,6 @@
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.withfina.app",
-      "buildNumber": "17",
       "infoPlist": {
         "NSUserNotificationsUsageDescription": "Fina sends a daily morning brief notification.",
         "ITSAppUsesNonExemptEncryption": false
@@ -27,7 +26,6 @@
     },
     "android": {
       "package": "com.withfina.app",
-      "versionCode": 16,
       "adaptiveIcon": {
         "foregroundImage": "./assets/fina-adaptive-icon.png",
         "backgroundColor": "#071F1D"
