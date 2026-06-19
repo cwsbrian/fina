@@ -19,6 +19,7 @@ describe("resetIapTestUser", () => {
         email: "tester@test.com",
         name: "Tester",
         isPlanMismatch: true,
+        planMismatchAccountEmailMasked: "c******n@gmail.com",
         iapAppleAccountToken: "apple-token",
         iapGoogleObfuscatedId: "google-token",
       },
@@ -68,6 +69,7 @@ describe("resetIapTestUser", () => {
       prisma.user.findUniqueOrThrow({ where: { id: "tester-1" } }),
     ).resolves.toMatchObject({
       isPlanMismatch: false,
+      planMismatchAccountEmailMasked: null,
       iapAppleAccountToken: null,
       iapGoogleObfuscatedId: null,
     });

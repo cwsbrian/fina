@@ -46,6 +46,7 @@ export async function resetIapTestUser(email: string): Promise<ResetIapTestUserR
       where: { id: user.id },
       data: {
         isPlanMismatch: false,
+        planMismatchAccountEmailMasked: null,
         iapAppleAccountToken: null,
         iapGoogleObfuscatedId: null,
       },

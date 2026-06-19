@@ -275,6 +275,14 @@ export default function BillingRecoveryScreen() {
               <Text style={styles.detailLabel}>Signed in</Text>
               <Text style={styles.detailValue}>{me.user.email}</Text>
             </View>
+            {me.billingRecovery.boundAccountEmailMasked ? (
+              <View style={styles.detailRow}>
+                <Text style={styles.detailLabel}>Subscription linked to</Text>
+                <Text style={styles.detailValue}>
+                  {me.billingRecovery.boundAccountEmailMasked}
+                </Text>
+              </View>
+            ) : null}
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Current plan</Text>
               <Text style={styles.detailValue}>{tierLabel(me.tier, me.trial.active)}</Text>
@@ -311,6 +319,7 @@ export default function BillingRecoveryScreen() {
                   source: me.billingRecovery.source,
                   reason: me.billingRecovery.reason,
                   lastCheckedAt: me.billingRecovery.lastCheckedAt,
+                  boundAccountEmailMasked: me.billingRecovery.boundAccountEmailMasked ?? null,
                 })}
               </Text>
               <Text style={styles.debugText}>

@@ -1,6 +1,7 @@
 import { prisma } from "../db.js";
 import { HttpError } from "../auth/context.js";
 import { ACTIVE_SUBSCRIPTION_STATUSES, tierForIapProductId } from "@fina/shared";
+import { maskBillingRecoveryEmail } from "../billing/recovery.js";
 import type { AppleClient } from "./apple-client.js";
 import type { GoogleClient } from "./google-client.js";
 import type { IapConfig } from "./env-guard.js";
@@ -171,10 +172,12 @@ async function syncApple(
     if (appAccountTokenMismatch && verified.appAccountToken) {
       const boundUser = await tx.user.findUnique({
         where: { iapAppleAccountToken: verified.appAccountToken },
-        select: { id: true },
+        select: { id: true, email: true },
       });
       if (boundUser && boundUser.id !== args.userId) {
-        throw new HttpError(403, "user_mismatch", "appAccountToken belongs to another user");
+        throw new HttpError(403, "user_mismatch", "appAccountToken belongs to another user", {
+          boundAccountEmailMasked: maskBillingRecoveryEmail(boundUser.email),
+        });
       }
     }
     const existingSub = await tx.subscription.findUnique({
@@ -184,10 +187,12 @@ async function syncApple(
           sourceSubscriptionId: verified.originalTransactionId,
         },
       },
-      select: { userId: true },
+      select: { userId: true, user: { select: { email: true } } },
     });
     if (existingSub && existingSub.userId !== args.userId) {
-      throw new HttpError(403, "user_mismatch", "subscription belongs to another user");
+      throw new HttpError(403, "user_mismatch", "subscription belongs to another user", {
+        boundAccountEmailMasked: maskBillingRecoveryEmail(existingSub.user.email),
+      });
     }
     const sameUserExistingSubscription = Boolean(existingSub && existingSub.userId === args.userId);
     if (
@@ -260,7 +265,17 @@ async function syncGoogle(
     args.expectedObfuscatedAccountId &&
     args.expectedObfuscatedAccountId !== v2.obfuscatedExternalAccountId
   ) {
-    throw new HttpError(403, "user_mismatch", "obfuscatedExternalAccountId mismatch");
+    const boundUser = v2.obfuscatedExternalAccountId
+      ? await prisma.user.findUnique({
+          where: { iapGoogleObfuscatedId: v2.obfuscatedExternalAccountId },
+          select: { id: true, email: true },
+        })
+      : null;
+    throw new HttpError(403, "user_mismatch", "obfuscatedExternalAccountId mismatch", {
+      ...(boundUser && boundUser.id !== args.userId
+        ? { boundAccountEmailMasked: maskBillingRecoveryEmail(boundUser.email) }
+        : {}),
+    });
   }
 
   const tier = tierForIapProductId(v2.productId);

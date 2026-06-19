@@ -421,6 +421,68 @@ describe("POST /billing/iap/integrity-check", () => {
     expect(device.lastIapIntegrityResult).toBe("mismatched");
   });
 
+  it("includes the masked Fina account email bound to the active Apple entitlement", async () => {
+    const { userId: ownerUserId } = await signUpAndGetCookie(app, {
+      email: "cwsbrian@gmail.com",
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: ownerUserId,
+        tier: "pro",
+        source: "iap_apple",
+        sourceSubscriptionId: "OT-bound-to-owner",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86400_000),
+        environment: "Sandbox",
+      },
+    });
+    const { cookie, userId } = await signUpAndGetCookie(app, { email: "tester@test.com" });
+    fakeAppleClient.verifyAndDecodeTransaction.mockResolvedValue({
+      productId: "fina_pro_monthly",
+      originalTransactionId: "OT-bound-to-owner",
+      transactionId: "T-bound-to-owner",
+      environment: "Sandbox",
+      raw: {},
+    });
+    fakeAppleClient.getSubscriptionStatus.mockResolvedValue({
+      productId: "fina_pro_monthly",
+      pendingProductId: null,
+      pendingAt: null,
+      expiresDate: new Date(Date.now() + 30 * 86400_000),
+      mapped: { status: "active", cancelAtPeriodEnd: false },
+      raw: {},
+    });
+
+    const res = await app.inject({
+      method: "POST",
+      url: "/billing/iap/integrity-check",
+      headers: {
+        cookie,
+        [CLIENT_DEVICE_ID_HEADER]: "ios-device-integrity-bound-owner",
+        [CLIENT_PLATFORM_HEADER]: "ios",
+      },
+      payload: {
+        platform: "ios",
+        result: "mismatched",
+        nativeProductId: "fina_pro_monthly",
+        receipt: "owner-bound-current-entitlement-jws",
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().billingRecovery).toMatchObject({
+      locked: true,
+      reason: "plan_mismatch",
+      source: "iap_apple",
+      action: "restore_iap",
+      boundAccountEmailMasked: "c******n@gmail.com",
+    });
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: userId } })).resolves.toMatchObject({
+      isPlanMismatch: true,
+      planMismatchAccountEmailMasked: "c******n@gmail.com",
+    });
+  });
+
   it("maps a Google plan mismatch to restore_iap", async () => {
     const { cookie, userId } = await signUpAndGetCookie(app, { email: "u11@test.com" });
     await prisma.subscription.create({

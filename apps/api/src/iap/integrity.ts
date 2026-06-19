@@ -112,6 +112,7 @@ export async function recordIapIntegrityResult(input: {
   client: { clientDeviceId: string; platform: NativeIapPlatform };
   result: "matched" | "mismatched";
   primary: PrimarySub;
+  boundAccountEmailMasked?: string | null;
 }): Promise<void> {
   const now = new Date();
   const expectedSource = sourceForNativePlatform(input.client.platform);
@@ -145,7 +146,10 @@ export async function recordIapIntegrityResult(input: {
         deviceWrite,
         prisma.user.update({
           where: { id: input.userId },
-          data: { isPlanMismatch: true },
+          data: {
+            isPlanMismatch: true,
+            planMismatchAccountEmailMasked: input.boundAccountEmailMasked ?? null,
+          },
         }),
       ]);
       return;
@@ -183,7 +187,10 @@ export async function recordIapIntegrityResult(input: {
       ? [
           prisma.user.update({
             where: { id: input.userId },
-            data: { isPlanMismatch: true },
+            data: {
+              isPlanMismatch: true,
+              planMismatchAccountEmailMasked: input.boundAccountEmailMasked ?? null,
+            },
           }),
         ]
       : []),

@@ -10,6 +10,7 @@ export type BillingRecoveryDTO = {
   source: SubscriptionDTO["source"] | null;
   action: "restore_iap" | "sync_stripe" | null;
   lastCheckedAt: string | null;
+  boundAccountEmailMasked?: string | null;
 };
 
 /** Response of `GET /me`. Use this everywhere — never re-declare. */

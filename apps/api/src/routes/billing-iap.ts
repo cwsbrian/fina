@@ -17,6 +17,7 @@ import { GoogleClient } from "../iap/google-client.js";
 import { buildMeBody } from "./billing.js";
 import { reconcilePlaidItemsForUser } from "../plaid/reconcile.js";
 import { filterEnvironmentRows, pickPrimarySub } from "../billing/precedence.js";
+import { maskBillingRecoveryEmail } from "../billing/recovery.js";
 import {
   readNativeIapClient,
   recordIapIntegrityResult,
@@ -64,21 +65,93 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
   const meRuntimeEnv = (): "sandbox" | "production" =>
     process.env.APPLE_ENV === "production" ? "production" : "sandbox";
 
-  const authoritativeNativeTier = async (
+  function boundAccountEmailFromError(e: unknown): string | null {
+    if (!(e instanceof HttpError)) return null;
+    const value = e.details?.boundAccountEmailMasked;
+    return typeof value === "string" && value.length > 0 ? value : null;
+  }
+
+  const findAppleBoundAccountEmail = async (
+    originalTransactionId: string,
+    appAccountToken: string | null | undefined,
+    currentUserId: string,
+  ): Promise<string | null> => {
+    const sub = await prisma.subscription.findUnique({
+      where: {
+        source_sourceSubscriptionId: {
+          source: "iap_apple",
+          sourceSubscriptionId: originalTransactionId,
+        },
+      },
+      select: { userId: true, user: { select: { email: true } } },
+    });
+    if (sub && sub.userId !== currentUserId) return maskBillingRecoveryEmail(sub.user.email);
+    if (!appAccountToken) return null;
+    const user = await prisma.user.findUnique({
+      where: { iapAppleAccountToken: appAccountToken },
+      select: { id: true, email: true },
+    });
+    return user && user.id !== currentUserId ? maskBillingRecoveryEmail(user.email) : null;
+  };
+
+  const findGoogleBoundAccountEmail = async (
+    purchaseToken: string,
+    linkedPurchaseToken: string | null | undefined,
+    obfuscatedAccountId: string | null | undefined,
+    currentUserId: string,
+  ): Promise<string | null> => {
+    const tokens = [purchaseToken, linkedPurchaseToken].filter(
+      (token): token is string => typeof token === "string" && token.length > 0,
+    );
+    const sub = tokens.length
+      ? await prisma.subscription.findFirst({
+          where: { source: "iap_google", sourceSubscriptionId: { in: tokens } },
+          select: { userId: true, user: { select: { email: true } } },
+        })
+      : null;
+    if (sub && sub.userId !== currentUserId) return maskBillingRecoveryEmail(sub.user.email);
+    if (!obfuscatedAccountId) return null;
+    const user = await prisma.user.findUnique({
+      where: { iapGoogleObfuscatedId: obfuscatedAccountId },
+      select: { id: true, email: true },
+    });
+    return user && user.id !== currentUserId ? maskBillingRecoveryEmail(user.email) : null;
+  };
+
+  const authoritativeNativeState = async (
     platform: "ios" | "android",
     receipt: string | null | undefined,
-  ): Promise<ReturnType<typeof tierForIapProductId> | null> => {
+    currentUserId: string,
+  ): Promise<{
+    tier: ReturnType<typeof tierForIapProductId> | null;
+    boundAccountEmailMasked: string | null;
+  } | null> => {
     if (!receipt) return null;
     if (platform === "ios") {
       const { client: appleClient } = resolveApple();
       const tx = await appleClient.verifyAndDecodeTransaction(receipt, { context: "restore" });
       const status = await appleClient.getSubscriptionStatus(tx.originalTransactionId);
-      return tierForIapProductId(status.productId);
+      return {
+        tier: tierForIapProductId(status.productId),
+        boundAccountEmailMasked: await findAppleBoundAccountEmail(
+          tx.originalTransactionId,
+          tx.appAccountToken,
+          currentUserId,
+        ),
+      };
     }
 
     const { client: googleClient } = resolveGoogle();
     const purchase = await googleClient.fetchAndNormalize(receipt);
-    return tierForIapProductId(purchase.productId);
+    return {
+      tier: tierForIapProductId(purchase.productId),
+      boundAccountEmailMasked: await findGoogleBoundAccountEmail(
+        receipt,
+        purchase.linkedPurchaseToken,
+        purchase.obfuscatedExternalAccountId,
+        currentUserId,
+      ),
+    };
   };
 
   app.post("/billing/iap/checkout", async (req, reply) => {
@@ -136,7 +209,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
 
       await prisma.user.update({
         where: { id: userId },
-        data: { isPlanMismatch: false },
+        data: { isPlanMismatch: false, planMismatchAccountEmailMasked: null },
       });
       await reconcilePlaidItemsForUser(app.fina.env, userId);
       return await buildMeBody(userId, meRuntimeEnv());
@@ -146,7 +219,10 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
           await prisma.user
             .update({
               where: { id: userId },
-              data: { isPlanMismatch: true },
+              data: {
+                isPlanMismatch: true,
+                planMismatchAccountEmailMasked: boundAccountEmailFromError(e),
+              },
             })
             .catch((err) => {
               app.log.error({ err, userId }, "iap_checkout_mark_mismatch_failed");
@@ -236,13 +312,29 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
       if (syncedAny) {
         await prisma.user.update({
           where: { id: userId },
-          data: { isPlanMismatch: false },
+          data: { isPlanMismatch: false, planMismatchAccountEmailMasked: null },
         });
         await reconcilePlaidItemsForUser(app.fina.env, userId);
       }
       return await buildMeBody(userId, meRuntimeEnv());
     } catch (e) {
       if (e instanceof HttpError) {
+        if (e.code === "user_mismatch") {
+          const session = await requireSession(req, app).catch(() => null);
+          if (session) {
+            await prisma.user
+              .update({
+                where: { id: session.userId },
+                data: {
+                  isPlanMismatch: true,
+                  planMismatchAccountEmailMasked: boundAccountEmailFromError(e),
+                },
+              })
+              .catch((err) => {
+                app.log.error({ err, userId: session.userId }, "iap_restore_mark_mismatch_failed");
+              });
+          }
+        }
         app.log.warn(
           { err: e, route: "/billing/iap/restore", code: e.code },
           "iap_restore_rejected",
@@ -278,11 +370,16 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         ? tierForIapProductId(parsed.data.nativeProductId)
         : null;
       let verifiedNativeTier = clientNativeTier;
+      let boundAccountEmailMasked: string | null = null;
       if (parsed.data.receipt) {
         try {
-          verifiedNativeTier =
-            (await authoritativeNativeTier(parsed.data.platform, parsed.data.receipt)) ??
-            clientNativeTier;
+          const nativeState = await authoritativeNativeState(
+            parsed.data.platform,
+            parsed.data.receipt,
+            session.userId,
+          );
+          verifiedNativeTier = nativeState?.tier ?? clientNativeTier;
+          boundAccountEmailMasked = nativeState?.boundAccountEmailMasked ?? null;
         } catch (e) {
           app.log.warn(
             {
@@ -319,6 +416,7 @@ export async function billingIapRoutes(app: FastifyInstance): Promise<void> {
         client,
         result,
         primary,
+        boundAccountEmailMasked,
       });
       return await buildMeBody(session.userId, meRuntimeEnv(), client.platform);
     } catch (e) {

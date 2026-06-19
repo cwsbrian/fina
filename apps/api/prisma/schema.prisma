@@ -48,6 +48,7 @@ model User {
   iapAppleAccountToken    String?  @unique
   iapGoogleObfuscatedId   String?  @unique
   isPlanMismatch          Boolean  @default(false)
+  planMismatchAccountEmailMasked String?
 
   /// Per-type push notification preferences. Shape:
   ///   { morningBrief, bankReconnect, workspaceInvites, trialExpiring,

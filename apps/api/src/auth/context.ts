@@ -6,10 +6,17 @@ import { assertMembership, MembershipError, type AssertedMembership } from "./me
 export class HttpError extends Error {
   readonly statusCode: number;
   readonly code: string;
-  constructor(statusCode: number, code: string, message?: string) {
+  readonly details: Record<string, unknown> | null;
+  constructor(
+    statusCode: number,
+    code: string,
+    message?: string,
+    details: Record<string, unknown> | null = null,
+  ) {
     super(message ?? code);
     this.statusCode = statusCode;
     this.code = code;
+    this.details = details;
   }
 }
 
