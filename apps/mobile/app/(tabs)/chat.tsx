@@ -5,11 +5,11 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useLocalSearchParams, router, useNavigation } from "expo-router";
 import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
 import { ThreadView } from "../../src/chat/ThreadView";
-import { ThreadActionsSheet } from "../../src/chat/ThreadActionsSheet";
 import { apiFetch } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+import { useThreadActionsSheet } from "../../src/chat/ThreadActionsSheetHost";
 
 const HEADER_HEIGHT = 58;
 
@@ -21,6 +21,7 @@ export default function ChatTab() {
   const navigation = useNavigation();
   const tabBarHeight = useBottomTabBarHeight();
   const insets = useSafeAreaInsets();
+  const threadActions = useThreadActionsSheet();
   const totalHeader = insets.top + HEADER_HEIGHT;
   const header = useCollapsingHeader(HEADER_HEIGHT);
   // null = pending; a real id appears only when /chats explicitly
@@ -39,7 +40,6 @@ export default function ChatTab() {
     id: string;
     title: string | null;
   } | null>(null);
-  const [actionsVisible, setActionsVisible] = useState(false);
 
   useEffect(() => {
     if (params.thread) {
@@ -64,7 +64,6 @@ export default function ChatTab() {
     setCurrentThreadId(null);
     setResetKey((k) => k + 1);
     setHeaderThread(null);
-    setActionsVisible(false);
     header.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -110,7 +109,16 @@ export default function ChatTab() {
             onPress={() => {
               if (!headerThread) return;
               Keyboard.dismiss();
-              setActionsVisible(true);
+              threadActions.open({
+                threadId: headerThread.id,
+                currentTitle: headerThread.title,
+                workspaceName: headerWorkspace,
+                onRenamed: (newTitle) =>
+                  setHeaderThread((prev) =>
+                    prev ? { ...prev, title: newTitle } : prev,
+                  ),
+                onDeleted: onNewChat,
+              });
             }}
             hitSlop={8}
           >
@@ -142,21 +150,6 @@ export default function ChatTab() {
         </View>
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
-      {headerThread ? (
-        <ThreadActionsSheet
-          visible={actionsVisible}
-          threadId={headerThread.id}
-          currentTitle={headerThread.title}
-          workspaceName={headerWorkspace}
-          onRenamed={(newTitle) =>
-            setHeaderThread((prev) =>
-              prev ? { ...prev, title: newTitle } : prev,
-            )
-          }
-          onDeleted={onNewChat}
-          onClose={() => setActionsVisible(false)}
-        />
-      ) : null}
     </View>
   );
 }

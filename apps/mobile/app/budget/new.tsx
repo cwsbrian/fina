@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -8,12 +8,18 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Stack, router } from "expo-router";
+import { Stack, router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import BottomSheet, {
+  BottomSheetBackdrop,
+  BottomSheetFlatList,
+  type BottomSheetBackdropProps,
+} from "@gorhom/bottom-sheet";
 import type { CategoryDTO, MeDTO as Me } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
@@ -46,19 +52,34 @@ type CurrentResp = {
   plan: Plan | null;
 };
 
+type PlaidItemsResp = {
+  plaidItems: Array<{ id: string }>;
+};
+
 export default function NewBudget() {
+  const categorySheetRef = useRef<BottomSheet>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [categories, setCategories] = useState<CategoryDTO[]>([]);
   const [defaultPlan, setDefaultPlan] = useState<Plan | null>(null);
   const [monthPlan, setMonthPlan] = useState<Plan | null>(null);
   const [recentAvg, setRecentAvg] = useState<number | null>(null);
+  const [bankCount, setBankCount] = useState<number | null>(null);
   const [scope, setScope] = useState<Scope>("month");
   const [total, setTotal] = useState("");
   const [allocs, setAllocs] = useState<Allocation[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [suggesting, setSuggesting] = useState(false);
+  const [deciding, setDeciding] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [suggestNotice, setSuggestNotice] = useState<string | null>(null);
+  const [categorySheetOpen, setCategorySheetOpen] = useState(false);
+  const categorySnapPoints = useMemo(() => ["88%"], []);
+
+  const loadCategories = useCallback(async (workspaceId: string) => {
+    const data = await apiFetch<{ categories: CategoryDTO[] }>(
+      `/workspaces/${workspaceId}/categories?type=expense`,
+    );
+    setCategories(data.categories.filter((c) => !c.archivedAt));
+  }, []);
 
   // Hydrate the form whenever the scope flips so the user always sees
   // the values for the scope they're editing.
@@ -85,21 +106,17 @@ export default function NewBudget() {
         const wsId =
           (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
         if (!wsId) return;
-        const [catResp, defResp, curResp] = await Promise.all([
-          // Budgets are spend goals — only expense categories make sense
-          // here. Excluding income keeps Salary/Refund/etc. out of the
-          // picker.
-          apiFetch<{ categories: CategoryDTO[] }>(
-            `/workspaces/${wsId}/categories?type=expense`,
-          ),
+        const [defResp, curResp, plaidResp] = await Promise.all([
           apiFetch<{ plan: Plan | null; recentMonthlyAvgSpend?: number }>(
             `/workspaces/${wsId}/budget-plans/default`,
           ),
           apiFetch<CurrentResp>(`/workspaces/${wsId}/budget-plans/current`),
+          apiFetch<PlaidItemsResp>(`/workspaces/${wsId}/plaid-items`),
         ]);
-        setCategories(catResp.categories.filter((c) => !c.archivedAt));
+        await loadCategories(wsId);
         setDefaultPlan(defResp.plan);
         setMonthPlan(curResp.plan);
+        setBankCount(plaidResp.plaidItems.length);
         if (typeof defResp.recentMonthlyAvgSpend === "number") {
           setRecentAvg(defResp.recentMonthlyAvgSpend);
         }
@@ -107,15 +124,25 @@ export default function NewBudget() {
         // load failures non-fatal
       }
     })();
-  }, []);
+  }, [loadCategories]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!categorySheetOpen) return;
+      (async () => {
+        const wsId =
+          (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+        if (wsId) await loadCategories(wsId);
+      })().catch(() => {});
+    }, [categorySheetOpen, loadCategories]),
+  );
 
   const isPro = (me?.tier === "pro" || me?.tier === "max" || me?.trial.active) ?? false;
 
-  const onSuggest = useCallback(async () => {
-    const totalNum = Number(total);
-    if (!Number.isFinite(totalNum) || totalNum <= 0 || suggesting) return;
-    setSuggesting(true);
-    setSuggestNotice(null);
+  const suggestSplit = useCallback(async (
+    totalAmount: number,
+    opts?: { fillTotal?: boolean },
+  ) => {
     try {
       const wsId = await getActiveWorkspaceId();
       if (!wsId) throw new Error("no_workspace");
@@ -123,18 +150,35 @@ export default function NewBudget() {
         `/workspaces/${wsId}/budget-plans/suggest-split`,
         {
           method: "POST",
-          body: JSON.stringify({ totalAmount: totalNum }),
+          body: JSON.stringify({ totalAmount }),
         },
       );
       if (r.allocations.length > 0) {
+        if (opts?.fillTotal) setTotal(totalAmount.toFixed(2));
         setAllocs(
           r.allocations.map((a) => ({
             categoryId: a.categoryId,
             amount: a.amount.toFixed(2),
           })),
         );
+        Keyboard.dismiss();
+        setCategorySheetOpen(true);
       } else if (r.notice) {
-        setSuggestNotice(r.notice);
+        Alert.alert(
+          "Three months of history needed",
+          `${r.notice} You can still save a total-only budget for now.`,
+          bankCount === 0
+            ? [
+                { text: "OK", style: "cancel" },
+                {
+                  text: "Connect bank",
+                  style: "default",
+                  isPreferred: true,
+                  onPress: () => router.push("/banks" as never),
+                },
+              ]
+            : [{ text: "OK", style: "cancel" }],
+        );
       }
     } catch (e) {
       const code = (e as { code?: string }).code ?? "error";
@@ -144,10 +188,52 @@ export default function NewBudget() {
           ? "Pro tier is required for auto-split."
           : `Try again (${code}).`,
       );
+    }
+  }, [bankCount]);
+
+  const onSuggest = useCallback(async () => {
+    const totalNum = Number(total);
+    if (!Number.isFinite(totalNum) || totalNum <= 0 || suggesting) return;
+    setSuggesting(true);
+    try {
+      await suggestSplit(totalNum);
     } finally {
       setSuggesting(false);
     }
-  }, [total, suggesting]);
+  }, [total, suggesting, suggestSplit]);
+
+  const onDecide = useCallback(async () => {
+    if (deciding) return;
+    if (!isPro) {
+      Alert.alert("Upgrade required", "Pro tier is required for Fina to decide a budget.");
+      return;
+    }
+    if (recentAvg === null || recentAvg <= 0) {
+      Alert.alert(
+        "Three months of history needed",
+        "Fina needs about three months of spending history before it can decide a budget.",
+        bankCount === 0
+          ? [
+              { text: "OK", style: "cancel" },
+              {
+                text: "Connect bank",
+                style: "default",
+                isPreferred: true,
+                onPress: () => router.push("/banks" as never),
+              },
+            ]
+          : [{ text: "OK", style: "cancel" }],
+      );
+      return;
+    }
+    setDeciding(true);
+    const nextTotal = Math.round(recentAvg);
+    try {
+      await suggestSplit(nextTotal, { fillTotal: true });
+    } finally {
+      setDeciding(false);
+    }
+  }, [deciding, isPro, recentAvg, bankCount, suggestSplit]);
 
   const doSave = useCallback(
     async (target: "month_only" | "default_only" | "both") => {
@@ -232,21 +318,36 @@ export default function NewBudget() {
       }
     };
 
-    // Sanity-warn before save: if their chosen total is well below their
-    // last-90-day average, surface it once. They can still save anyway.
-    if (recentAvg != null && recentAvg > 0 && totalNum < recentAvg * 0.6) {
+    const afterCategoryCheck = () => {
+      // Sanity-warn before save: if their chosen total is well below their
+      // last-90-day average, surface it once. They can still save anyway.
+      if (recentAvg != null && recentAvg > 0 && totalNum < recentAvg * 0.6) {
+        Alert.alert(
+          "Budget below recent spending",
+          `You've averaged about $${recentAvg.toLocaleString()}/mo over the last 90 days. A $${totalNum.toLocaleString()} target will likely run over fast unless you cut spending significantly. Save anyway?`,
+          [
+            { text: "Cancel", style: "cancel" },
+            { text: "Save anyway", onPress: proceed },
+          ],
+        );
+        return;
+      }
+      proceed();
+    };
+
+    if (!allocs.some((a) => (Number(a.amount) || 0) > 0)) {
       Alert.alert(
-        "Budget below recent spending",
-        `You've averaged about $${recentAvg.toLocaleString()}/mo over the last 90 days. A $${totalNum.toLocaleString()} target will likely run over fast unless you cut spending significantly. Save anyway?`,
+        "Save without category budgets?",
+        "Category budgets help Fina give better analysis. Are you sure you want to save only the monthly total?",
         [
           { text: "Cancel", style: "cancel" },
-          { text: "Save anyway", onPress: proceed },
+          { text: "Save total-only", onPress: afterCategoryCheck },
         ],
       );
       return;
     }
-    proceed();
-  }, [scope, total, defaultPlan, doSave, submitting, recentAvg]);
+    afterCategoryCheck();
+  }, [scope, total, defaultPlan, doSave, submitting, recentAvg, allocs]);
 
   const setAlloc = (categoryId: string, amount: string) => {
     if (!/^\d*\.?\d{0,2}$/.test(amount)) return;
@@ -264,8 +365,22 @@ export default function NewBudget() {
     (s, a) => s + (Number(a.amount) || 0),
     0,
   );
+  const allocCount = allocs.filter((a) => (Number(a.amount) || 0) > 0).length;
   const canSubmit =
     !submitting && Number.isFinite(totalNum) && totalNum > 0;
+  const canSetCategories = canSubmit;
+  const renderBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        opacity={0.35}
+        pressBehavior="close"
+      />
+    ),
+    [],
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -343,6 +458,24 @@ export default function NewBudget() {
             </>
           )}
 
+          <Pressable
+            onPress={onDecide}
+            disabled={submitting || deciding || suggesting}
+            style={({ pressed }) => [
+              styles.decideBtn,
+              (pressed || deciding) && { opacity: 0.6 },
+            ]}
+          >
+            {deciding ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : (
+              <>
+                <Ionicons name="sparkles-outline" size={14} color={colors.primary} />
+                <Text style={styles.suggestText}>Let Fina Decide</Text>
+              </>
+            )}
+          </Pressable>
+
           <Text style={styles.label}>Monthly total</Text>
           <View style={styles.amountRow}>
             <Text style={styles.amountCurrency}>$</Text>
@@ -360,58 +493,157 @@ export default function NewBudget() {
             />
           </View>
 
-          {/* Pro-only auto-split */}
-          {isPro && totalNum > 0 && (
-            <Pressable
-              onPress={onSuggest}
-              disabled={suggesting}
-              style={({ pressed }) => [
-                styles.suggestBtn,
-                (pressed || suggesting) && { opacity: 0.6 },
-              ]}
-            >
-              {suggesting ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
-                <>
-                  <Ionicons
-                    name="sparkles-outline"
-                    size={14}
-                    color={colors.primary}
-                  />
-                  <Text style={styles.suggestText}>
-                    {allocs.length > 0
-                      ? "Re-suggest split"
-                      : "Let Fina split this for you"}
-                  </Text>
-                </>
-              )}
-            </Pressable>
-          )}
-          {suggestNotice && (
-            <Text style={styles.notice}>{suggestNotice}</Text>
-          )}
-
-          {/* Category breakdown */}
-          <View style={styles.catLabelRow}>
-            <Text style={styles.label}>By category (optional)</Text>
-            {totalNum > 0 && allocSum > 0 && (
-              <Text
-                style={[
-                  styles.allocSum,
-                  allocSum > totalNum && { color: colors.down },
-                ]}
-              >
-                ${allocSum.toFixed(2)} / ${totalNum.toFixed(2)}
+          <Pressable
+            onPress={() => {
+              Keyboard.dismiss();
+              setCategorySheetOpen(true);
+            }}
+            disabled={!canSetCategories}
+            style={({ pressed }) => [
+              styles.categoryButton,
+              !canSetCategories && { opacity: 0.45 },
+              pressed && { opacity: 0.7 },
+            ]}
+          >
+            <View style={styles.categoryButtonCopy}>
+              <Text style={styles.categoryButtonTitle}>
+                Set category budgets
               </Text>
-            )}
-          </View>
+              <Text style={styles.categoryButtonSub}>
+                {!canSetCategories
+                  ? "Enter a monthly total first"
+                  : allocCount > 0
+                    ? `${allocCount} set · $${allocSum.toFixed(2)} / $${totalNum.toFixed(2)}`
+                    : "Recommended for better analysis"}
+              </Text>
+            </View>
+            <View style={styles.categoryButtonIcons}>
+              {canSetCategories && allocCount === 0 && (
+                <Ionicons
+                  name="warning-outline"
+                  size={18}
+                  color={colors.accentYellow}
+                />
+              )}
+              <Ionicons name="chevron-up" size={18} color={colors.muted} />
+            </View>
+          </Pressable>
 
-          {categories.map((c) => {
+          {err && <Text style={styles.error}>{err}</Text>}
+
+          <Text style={styles.helper}>
+            Category budgets unlock better analysis. If Fina doesn't have
+            enough history yet, you can save total-only for now.
+          </Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
+      <BottomSheet
+        ref={categorySheetRef}
+        snapPoints={categorySnapPoints}
+        enableDynamicSizing={false}
+        index={categorySheetOpen ? 0 : -1}
+        backdropComponent={renderBackdrop}
+        onClose={() => {
+          Keyboard.dismiss();
+          setCategorySheetOpen(false);
+        }}
+        handleIndicatorStyle={styles.grabber}
+        backgroundStyle={styles.sheetBackground}
+        enablePanDownToClose
+        keyboardBehavior="interactive"
+        keyboardBlurBehavior="restore"
+      >
+        <BottomSheetFlatList
+          data={categories}
+          keyExtractor={(c) => c.id}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.sheetList}
+          ListHeaderComponent={
+            <>
+              <View style={styles.sheetHead}>
+                <Pressable
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    categorySheetRef.current?.close();
+                  }}
+                  hitSlop={8}
+                >
+                  <Text style={styles.cancel}>Cancel</Text>
+                </Pressable>
+                <View style={styles.sheetTitleWrap}>
+                  <Text style={styles.title}>Category budgets</Text>
+                  <Text style={styles.sheetSub}>
+                    ${allocSum.toFixed(2)} / ${totalNum.toFixed(2)}
+                  </Text>
+                </View>
+                <Pressable
+                  onPress={() => {
+                    Keyboard.dismiss();
+                    if (allocSum > 0) setTotal(allocSum.toFixed(2));
+                    categorySheetRef.current?.close();
+                  }}
+                  hitSlop={8}
+                >
+                  <Text style={styles.save}>Done</Text>
+                </Pressable>
+              </View>
+              {isPro && totalNum > 0 && (
+                <Pressable
+                  onPress={onSuggest}
+                  disabled={suggesting}
+                  style={({ pressed }) => [
+                    styles.suggestBtn,
+                    (pressed || suggesting) && { opacity: 0.6 },
+                  ]}
+                >
+                  {suggesting ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <>
+                      <Ionicons
+                        name="sparkles-outline"
+                        size={14}
+                        color={colors.primary}
+                      />
+                      <Text style={styles.suggestText}>
+                        {allocs.length > 0
+                          ? "Re-suggest split"
+                          : "Let Fina split this for you"}
+                      </Text>
+                    </>
+                  )}
+                </Pressable>
+              )}
+            </>
+          }
+          ListEmptyComponent={
+            <Text style={styles.emptyCats}>No expense categories yet.</Text>
+          }
+          ListFooterComponent={
+            <Pressable
+              style={({ pressed }) => [
+                styles.addCatRow,
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => {
+                Keyboard.dismiss();
+                router.push("/categories/new?type=expense" as never);
+              }}
+            >
+              <View style={[styles.catGlyph, { backgroundColor: colors.surfaceSoft }]}>
+                <Ionicons name="add" size={18} color={colors.ink} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.catName}>Add category</Text>
+                <Text style={styles.addCatSub}>Create an expense category</Text>
+              </View>
+            </Pressable>
+          }
+          renderItem={({ item: c }) => {
             const meta = categoryMeta(c);
             const a = allocs.find((x) => x.categoryId === c.id);
             return (
-              <View key={c.id} style={styles.catRow}>
+              <View style={styles.catRow}>
                 <View style={[styles.catGlyph, { backgroundColor: meta.bg }]}>
                   <Ionicons name={meta.icon} size={16} color={meta.fg} />
                 </View>
@@ -432,16 +664,9 @@ export default function NewBudget() {
                 </View>
               </View>
             );
-          })}
-
-          {err && <Text style={styles.error}>{err}</Text>}
-
-          <Text style={styles.helper}>
-            Categories are optional. Set caps on the ones you want to track,
-            leave the rest blank. Fina shows progress against whatever is set.
-          </Text>
-        </ScrollView>
-      </KeyboardAvoidingView>
+          }}
+        />
+      </BottomSheet>
     </SafeAreaView>
   );
 }
@@ -506,9 +731,21 @@ const styles = StyleSheet.create({
   amountInput: {
     flex: 1,
     fontSize: 32,
+    lineHeight: 40,
     fontWeight: "500",
     color: colors.ink,
+    textAlignVertical: "center",
     paddingVertical: 0,
+  },
+  decideBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 12,
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 999,
+    marginBottom: space.lg,
   },
   suggestBtn: {
     flexDirection: "row",
@@ -521,14 +758,59 @@ const styles = StyleSheet.create({
     marginBottom: space.base,
   },
   suggestText: { ...type$.bodyMd, color: colors.primary, fontWeight: "600" },
-  notice: { ...type$.bodySm, color: colors.muted, marginBottom: space.base },
-  catLabelRow: {
+  categoryButton: {
     flexDirection: "row",
+    alignItems: "center",
     justifyContent: "space-between",
-    alignItems: "flex-end",
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 14,
+    padding: space.base,
     marginTop: space.sm,
+    marginBottom: space.base,
   },
-  allocSum: { ...type$.bodySm, color: colors.muted, marginBottom: space.xs },
+  categoryButtonCopy: { flex: 1 },
+  categoryButtonTitle: {
+    ...type$.bodyMd,
+    color: colors.ink,
+    fontWeight: "600",
+  },
+  categoryButtonSub: {
+    ...type$.bodySm,
+    color: colors.muted,
+    marginTop: 2,
+  },
+  categoryButtonIcons: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.xs,
+  },
+  sheetBackground: {
+    backgroundColor: colors.canvas,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  grabber: { backgroundColor: colors.mutedSoft, width: 36, height: 4 },
+  sheetList: {
+    paddingHorizontal: space.lg,
+    paddingBottom: space.xl,
+  },
+  sheetHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingTop: space.xs,
+    paddingBottom: space.base,
+    backgroundColor: colors.canvas,
+  },
+  sheetTitleWrap: {
+    alignItems: "center",
+    flex: 1,
+  },
+  sheetSub: {
+    ...type$.caption,
+    color: colors.muted,
+    marginTop: 2,
+  },
   catRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -537,6 +819,15 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.hairlineSoft,
   },
+  addCatRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    borderTopColor: colors.hairlineSoft,
+  },
+  addCatSub: { ...type$.caption, color: colors.muted, marginTop: 2 },
   catGlyph: {
     width: 32,
     height: 32,
@@ -562,6 +853,7 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
     paddingVertical: 0,
   },
+  emptyCats: { ...type$.bodyMd, color: colors.muted, textAlign: "center", padding: space.lg },
   error: { ...type$.bodySm, color: colors.down, marginTop: space.sm },
   helper: {
     ...type$.bodySm,

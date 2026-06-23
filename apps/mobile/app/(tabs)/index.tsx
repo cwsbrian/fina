@@ -472,15 +472,6 @@ export default function Home() {
     });
   }
 
-  if (budgetCurrent !== null && !hasBudget) {
-    actionItems.push({
-      key: "ob-budget",
-      icon: "wallet-outline",
-      title: "Set a monthly budget",
-      subtitle: "Pick a total. Fina tracks every spend.",
-      href: "/budget",
-    });
-  }
   // Connect a bank — gated to Pro+ (Free tier can't connect Plaid items).
   if (plaidItems !== null && bankCount === 0 && canConnectBanks) {
     actionItems.push({
@@ -489,6 +480,15 @@ export default function Home() {
       title: "Connect a bank",
       subtitle: "Plaid securely imports your transactions.",
       href: "/banks",
+    });
+  }
+  if (budgetCurrent !== null && !hasBudget) {
+    actionItems.push({
+      key: "ob-budget",
+      icon: "wallet-outline",
+      title: "Set a monthly budget",
+      subtitle: "Pick a total. Fina tracks every spend.",
+      href: "/budget",
     });
   }
   // Try chatting with Fina — Pro feature; hides once the user has typed

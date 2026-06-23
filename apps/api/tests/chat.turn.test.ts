@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
+import { chatGeminiMock, lastChatLlmRequest, resetGeminiMock } from "./helpers/gemini-mock.js";
 
 const { geminiMockFactory: hoistedGeminiMockFactory } = await vi.hoisted(
   async () => await import("./helpers/gemini-mock.js"),
@@ -36,6 +36,16 @@ describe("processChatTurn", () => {
     const r = await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
     expect(r.assistantText).toBe("Hello!");
     expect(r.toolCalls).toHaveLength(0);
+  });
+
+  it("persona prompt treats Fina as the assistant, not a separate account", async () => {
+    chatGeminiMock.responses.push({ text: "Want me to check your budget?" });
+    await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
+    const req = lastChatLlmRequest() as { messages?: Array<{ role?: string; content?: string | null }> };
+    const system = req.messages?.find((m) => m.role === "system")?.content ?? "";
+    expect(system).toContain("Treat \"Fina\" as your own assistant name");
+    expect(system).not.toContain("your Fina account");
+    expect(system).not.toContain("your Fina money");
   });
 
   it("single function call → dispatched → final text", async () => {

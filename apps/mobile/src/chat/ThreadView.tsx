@@ -342,6 +342,7 @@ export function ThreadView({
       // thread read so it doesn't show as unread on Home / chats list
       // when they navigate away.
       markRead(id);
+      if ((thread?.title ?? null) === null) refreshThreadTitle(id, setThread);
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setDraft(body);
@@ -590,6 +591,23 @@ function isCardBlock(b: Block): boolean {
  *  slow or unreachable. */
 function markRead(threadId: string): void {
   apiFetch(`/chat/threads/${threadId}/read`, { method: "POST" }).catch(() => {});
+}
+
+function refreshThreadTitle(
+  threadId: string,
+  setThread: (update: (prev: ChatThreadDTO | null) => ChatThreadDTO | null) => void,
+  tries = 3,
+): void {
+  setTimeout(() => {
+    apiFetch<GetThreadResp>(`/chat/threads/${threadId}`)
+      .then((data) => {
+        setThread((prev) => prev ? { ...prev, title: data.thread.title } : prev);
+        if (!data.thread.title && tries > 1) {
+          refreshThreadTitle(threadId, setThread, tries - 1);
+        }
+      })
+      .catch(() => {});
+  }, 900);
 }
 
 /** Surface a clear message when an intent consume is rejected because the

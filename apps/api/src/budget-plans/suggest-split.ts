@@ -48,7 +48,7 @@ type SpendByCategory = {
 
 async function recentMonthlySpend(
   workspaceId: string,
-): Promise<SpendByCategory[]> {
+): Promise<{ spend: SpendByCategory[]; monthCount: number }> {
   const since = new Date(Date.now() - 90 * 86400_000);
   const rows = await prisma.transactionAllocation.findMany({
     where: {
@@ -65,23 +65,29 @@ async function recentMonthlySpend(
       amount: true,
       categoryId: true,
       category: { select: { name: true } },
+      transaction: { select: { occurredAt: true } },
     },
   });
   const totals = new Map<
     string,
     { name: string; total: number }
   >();
+  const months = new Set<string>();
   for (const r of rows) {
     if (!r.categoryId || !r.category) continue;
+    months.add(r.transaction.occurredAt.toISOString().slice(0, 7));
     const cur = totals.get(r.categoryId) ?? { name: r.category.name, total: 0 };
     cur.total += Number(r.amount);
     totals.set(r.categoryId, cur);
   }
-  return Array.from(totals, ([categoryId, v]) => ({
-    categoryId,
-    categoryName: v.name,
-    monthlyAvgCAD: Math.round((v.total / 3) * 100) / 100,
-  })).sort((a, b) => b.monthlyAvgCAD - a.monthlyAvgCAD);
+  return {
+    monthCount: months.size,
+    spend: Array.from(totals, ([categoryId, v]) => ({
+      categoryId,
+      categoryName: v.name,
+      monthlyAvgCAD: Math.round((v.total / 3) * 100) / 100,
+    })).sort((a, b) => b.monthlyAvgCAD - a.monthlyAvgCAD),
+  };
 }
 
 function stripCodeFences(s: string): string {
@@ -188,12 +194,19 @@ export async function suggestBudgetSplit(
   workspaceId: string,
   totalAmount: number,
 ): Promise<SuggestResult> {
-  const spend = await recentMonthlySpend(workspaceId);
+  const { spend, monthCount } = await recentMonthlySpend(workspaceId);
   if (spend.length === 0) {
     return {
       allocations: [],
       notice:
         "Connect a bank or log a few transactions first so I have something to split against.",
+    };
+  }
+  if (monthCount < 3) {
+    return {
+      allocations: [],
+      notice:
+        "Fina needs about three months of categorized spending history before it can suggest a reliable split.",
     };
   }
 

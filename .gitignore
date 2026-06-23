@@ -33,6 +33,7 @@ android/app/build/
 
 # Local scratch folders
 /tmp/
+/.tmp/
 
 # Mobile build artifacts (never commit — produced by eas build / local builds)
 *.apk

@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { DateRangeSheetHost } from "../src/datetime/DateRangeSheetHost";
 import { DatePickerSheetHost } from "../src/datetime/DatePickerSheetHost";
+import { ThreadActionsSheetHost } from "../src/chat/ThreadActionsSheetHost";
 import {
   registerForPushNotifications,
   setupForegroundNotificationHandler,
@@ -52,7 +53,9 @@ export default function RootLayout() {
         <BottomSheetModalProvider>
           <DateRangeSheetHost>
             <DatePickerSheetHost>
-              <Stack screenOptions={{ headerShown: false }} />
+              <ThreadActionsSheetHost>
+                <Stack screenOptions={{ headerShown: false }} />
+              </ThreadActionsSheetHost>
             </DatePickerSheetHost>
           </DateRangeSheetHost>
         </BottomSheetModalProvider>
