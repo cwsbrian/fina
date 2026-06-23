@@ -93,6 +93,11 @@ RUN printf '%s\n' \
   && chmod +x /usr/local/bin/fina-admin-set-role \
   && printf '%s\n' \
   '#!/bin/sh' \
+  'exec pnpm exec tsx /app/src/scripts/grant-pro-trial.ts "$@"' \
+  > /usr/local/bin/fina-admin-grant-pro-trial \
+  && chmod +x /usr/local/bin/fina-admin-grant-pro-trial \
+  && printf '%s\n' \
+  '#!/bin/sh' \
   'exec pnpm exec tsx /app/src/scripts/reset-iap-test-user.ts "$@"' \
   > /usr/local/bin/fina-admin-reset-iap-test-user \
   && chmod +x /usr/local/bin/fina-admin-reset-iap-test-user

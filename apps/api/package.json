@@ -10,6 +10,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "admin:set-role": "tsx src/scripts/set-user-role.ts",
+    "admin:grant-pro-trial": "tsx src/scripts/grant-pro-trial.ts",
     "prod:list-plaid-items": "tsx src/scripts/list-production-plaid-items.ts",
     "prod:reset-iap-test-user": "tsx src/scripts/reset-iap-test-user.ts",
     "prod:reset-internal-test": "tsx src/scripts/reset-production-for-internal-test.ts"

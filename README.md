@@ -174,8 +174,44 @@ larger explorations, ER diagrams, or managing multiple environments side-by-side
    test card `4242 4242 4242 4242`, any future expiry, any CVC, any postal.
 
 
-## Reset Test User
+## Production admin commands
+
+Run these inside the production API container.
+
+```bash
+# Make an existing user an admin.
+fina-admin-set-role cwsbrian@gmail.com admin
+
+# Let an existing user use Pro without subscribing. Default is lifetime.
+fina-admin-grant-pro-trial family@example.com
+# Expiring/free-state testing.
+fina-admin-grant-pro-trial family@example.com --days 3
+fina-admin-grant-pro-trial family@example.com --until 2026-07-01
+
+# Clear native IAP state for the review/test account.
 fina-admin-reset-iap-test-user tester@test.com
+```
+
+Equivalent local monorepo commands:
+
+```bash
+pnpm --filter @fina/api admin:set-role -- --email cwsbrian@gmail.com --role admin
+pnpm --filter @fina/api admin:grant-pro-trial -- family@example.com
+pnpm --filter @fina/api admin:grant-pro-trial -- family@example.com --days 3
+pnpm --filter @fina/api admin:grant-pro-trial -- family@example.com --until 2026-07-01
+pnpm --filter @fina/api prod:reset-iap-test-user -- tester@test.com
+```
+
+Production reset:
+
+```bash
+NODE_ENV=production PLAID_ENV=production pnpm --filter @fina/api prod:list-plaid-items
+
+CONFIRM_PROD_RESET=WIPE_WITHFINA_PRODUCTION \
+TESTER_EMAIL=tester@test.com \
+TESTER_PASSWORD='12+ char password' \
+pnpm --filter @fina/api prod:reset-internal-test
+```
 
 ## Status — 2026-05-11
 
