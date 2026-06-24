@@ -5,6 +5,7 @@ import {
 } from "../budget-plans/service.js";
 import { serverNow } from "../dev-clock.js";
 import { logger } from "../logger.js";
+import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
 
 const DEBUG_GOAL_SAVINGS = process.env.DEBUG_GOAL_SAVINGS === "1";
 
@@ -65,15 +66,12 @@ async function categorySpendInDateRange(
   }
   const rows = await prisma.transactionAllocation.findMany({
     where: {
-      amount: { gt: 0 },
-      categoryId: { not: null },
-      transaction: {
+      ...budgetExpenseAllocationWhere({
         workspaceId,
-        removedAt: null,
         pending: false,
         occurredAt: { gte: from, lt: to },
-        amount: { gt: 0 },
-      },
+      }),
+      categoryId: { not: null },
     },
     select: { amount: true, categoryId: true },
   });

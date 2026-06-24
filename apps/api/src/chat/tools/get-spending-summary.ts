@@ -5,6 +5,7 @@ import { prisma } from "../../db.js";
 import { customRange, dateKeyInTz, resolveUserTz, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
 import type { ToolDef } from "./types.js";
+import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../../transactions/budget-impact.js";
 
 const Args = z.object({
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
@@ -57,14 +58,10 @@ export const getSpendingSummary: ToolDef<Args, Result> = {
     if (groupBy === "category") {
       const allocRows = await prisma.transactionAllocation.groupBy({
         by: ["categoryId"],
-        where: {
-          amount: { gt: 0 },
-          transaction: {
+        where: budgetExpenseAllocationWhere({
             workspaceId: ctx.workspaceId,
-            removedAt: null,
             occurredAt: { gte, lt },
-          },
-        },
+        }),
         _sum: { amount: true },
         _count: { _all: true },
       });
@@ -89,7 +86,7 @@ export const getSpendingSummary: ToolDef<Args, Result> = {
       rowLabels.set("uncategorized", "Uncategorized");
     } else {
       const rows = await prisma.transaction.findMany({
-        where: { workspaceId: ctx.workspaceId, removedAt: null, occurredAt: { gte, lt } },
+        where: budgetExpenseTransactionWhere({ workspaceId: ctx.workspaceId, occurredAt: { gte, lt } }),
         select: { amount: true, merchantNormalized: true, occurredAt: true },
       });
       const buckets = new Map<string, { total: Prisma.Decimal; count: number }>();

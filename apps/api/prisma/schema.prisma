@@ -1,5 +1,5 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
   // nativeDistinct: Prisma's default `distinct` is applied client-side after fetching all rows,
   // which is unbounded for the GET /chat/threads first-message-preview query (N threads × M
   // messages each). Enabling this preview feature makes `distinct` translate to native
@@ -45,9 +45,9 @@ model User {
   // doesn't yet exist (first-purchase race, Android resubscribe).
   // Written on first successful /billing/iap/checkout. Identifiers,
   // not authenticators — see spec §3.
-  iapAppleAccountToken    String?  @unique
-  iapGoogleObfuscatedId   String?  @unique
-  isPlanMismatch          Boolean  @default(false)
+  iapAppleAccountToken           String? @unique
+  iapGoogleObfuscatedId          String? @unique
+  isPlanMismatch                 Boolean @default(false)
   planMismatchAccountEmailMasked String?
 
   /// Per-type push notification preferences. Shape:
@@ -67,15 +67,15 @@ model User {
 
   // Fina relations
   memberships     Membership[]
-  invitesSent     Invite[]     @relation("InvitesSent")
-  invitesAccepted Invite[]     @relation("InvitesAccepted")
+  invitesSent     Invite[]       @relation("InvitesSent")
+  invitesAccepted Invite[]       @relation("InvitesAccepted")
   plaidItems      PlaidItem[]
   actionIntents   ActionIntent[]
   chatThreads     ChatThread[]
   subscriptions   Subscription[]
   briefs          Brief[]
-  devices UserDevice[]
-  llmCallLogs LlmCallLog[]
+  devices         UserDevice[]
+  llmCallLogs     LlmCallLog[]
 
   @@map("users")
 }
@@ -135,25 +135,25 @@ model Verification {
 
 // ----- Fina core -----
 model Workspace {
-  id           String        @id @default(cuid())
-  name         String
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
-  currency           String        @default("CAD")
-  memberships        Membership[]
-  invites            Invite[]
-  plaidItems         PlaidItem[]
-  bankAccounts       BankAccount[]
-  transactions       Transaction[]
-  categories         Category[]
-  merchantMappings   MerchantMapping[]
-  chatThreads        ChatThread[]
-  recurringExpenses  RecurringExpense[]
-  actionIntents      ActionIntent[]
-  auditEvents        AuditEvent[]
-  scheduledSpends    ScheduledSpend[]
-  goals              Goal[]
-  budgetPlans        BudgetPlan[]
+  id                String             @id @default(cuid())
+  name              String
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  currency          String             @default("CAD")
+  memberships       Membership[]
+  invites           Invite[]
+  plaidItems        PlaidItem[]
+  bankAccounts      BankAccount[]
+  transactions      Transaction[]
+  categories        Category[]
+  merchantMappings  MerchantMapping[]
+  chatThreads       ChatThread[]
+  recurringExpenses RecurringExpense[]
+  actionIntents     ActionIntent[]
+  auditEvents       AuditEvent[]
+  scheduledSpends   ScheduledSpend[]
+  goals             Goal[]
+  budgetPlans       BudgetPlan[]
 
   @@map("workspaces")
 }
@@ -229,12 +229,12 @@ model PlaidItem {
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
-  workspace       Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace     Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // SetNull so workspace data survives if the connecting user leaves/is deleted.
-  user            User?                  @relation(fields: [connectedBy], references: [id], onDelete: SetNull)
-  bankAccounts    BankAccount[]
-  transactions    Transaction[]
-  webhookEvents   PlaidWebhookEvent[]    @relation("PlaidItemWebhookEvents")
+  user          User?               @relation(fields: [connectedBy], references: [id], onDelete: SetNull)
+  bankAccounts  BankAccount[]
+  transactions  Transaction[]
+  webhookEvents PlaidWebhookEvent[] @relation("PlaidItemWebhookEvents")
 
   @@index([workspaceId])
   @@index([connectedBy])
@@ -257,10 +257,10 @@ enum SubscriptionStatus {
   active
   past_due
   canceled
-  unpaid               // final state after Smart Retries exhausted
-  incomplete           // first invoice never settled
-  incomplete_expired   // Checkout abandoned, auto-canceled by Stripe
-  paused               // admin-paused; rare
+  unpaid // final state after Smart Retries exhausted
+  incomplete // first invoice never settled
+  incomplete_expired // Checkout abandoned, auto-canceled by Stripe
+  paused // admin-paused; rare
 }
 
 // Source-agnostic per design spec §13.7. Only `stripe` populated in
@@ -272,22 +272,22 @@ enum SubscriptionSource {
 }
 
 model PlaidWebhookEvent {
-  id            String    @id @default(cuid())
+  id           String    @id @default(cuid())
   // NULL when item_id is not in our DB (disconnected item, stale Plaid delivery).
-  plaidItemId   String?
-  webhookType   String    // e.g. "TRANSACTIONS"
-  webhookCode   String    // e.g. "SYNC_UPDATES_AVAILABLE"
+  plaidItemId  String?
+  webhookType  String // e.g. "TRANSACTIONS"
+  webhookCode  String // e.g. "SYNC_UPDATES_AVAILABLE"
   // Raw Plaid body — audit trail. No unique constraint:
   // SYNC_UPDATES_AVAILABLE bodies are identical across deliveries once
   // initial_update_complete=true; body-hash dedup would silently drop
   // legitimate events. Sync's cursor + row-level lock handles duplicates.
-  body          Json
-  receivedAt    DateTime  @default(now())
+  body         Json
+  receivedAt   DateTime  @default(now())
   // Set by detached dispatchWebhookSync after sync+categorize completes (or fails).
   // NULL while in-flight, when webhook type wasn't dispatched, OR when sync hit lock_held
   // (so 1B-cron can retry — competing sync may have started before this delta existed).
-  processedAt   DateTime?
-  processError  String?   // ≤500 chars; full stack to structured log.
+  processedAt  DateTime?
+  processError String? // ≤500 chars; full stack to structured log.
 
   plaidItem PlaidItem? @relation("PlaidItemWebhookEvents", fields: [plaidItemId], references: [id], onDelete: SetNull)
 
@@ -335,50 +335,53 @@ enum AccountStatus {
 }
 
 model Transaction {
-  id                        String            @id @default(cuid())
+  id                        String             @id @default(cuid())
   workspaceId               String
   accountId                 String
   plaidItemId               String?
   plaidTransactionId        String?
   plaidPendingTransactionId String?
-  amount                    Decimal           @db.Decimal(14, 2)
+  amount                    Decimal            @db.Decimal(14, 2)
   merchantRaw               String
   merchantNormalized        String?
   occurredAt                DateTime
   postedAt                  DateTime?
-  pending                   Boolean           @default(false)
-  source                    TransactionSource @default(plaid)
+  pending                   Boolean            @default(false)
+  source                    TransactionSource  @default(plaid)
   rawData                   Json
   note                      String?
   removedAt                 DateTime?
-  createdAt                 DateTime          @default(now())
-  updatedAt                 DateTime          @updatedAt
-  needsReclassification     Boolean           @default(false)
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+  needsReclassification     Boolean            @default(false)
+  budgetImpact              BudgetImpact       @default(expense)
+  budgetImpactSource        BudgetImpactSource @default(auto)
 
-  workspace   Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace        Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // FK column kept as `accountId` (not `bankAccountId`) so URL/query filters
   // and prior plan-2 code that exposes accountId in API responses don't churn.
   // The Prisma model is BankAccount but the field name is unchanged.
-  account     BankAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  plaidItem   PlaidItem?  @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
+  account          BankAccount             @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  plaidItem        PlaidItem?              @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
   allocations      TransactionAllocation[]
-  matchedSchedules ScheduledSpend[] @relation("ScheduledSpendMatch")
+  matchedSchedules ScheduledSpend[]        @relation("ScheduledSpendMatch")
 
   @@index([workspaceId, occurredAt(sort: Desc)])
+  @@index([workspaceId, budgetImpact, occurredAt(sort: Desc)])
   @@index([workspaceId, accountId, occurredAt(sort: Desc)])
   @@map("transactions")
 }
 
 model TransactionAllocation {
-  id            String                @id @default(cuid())
-  transactionId String
-  categoryId    String?
-  amount        Decimal               @db.Decimal(14, 2)
-  source        CategorizationSource?
-  needsConfirmation Boolean   @default(false)
+  id                String                @id @default(cuid())
+  transactionId     String
+  categoryId        String?
+  amount            Decimal               @db.Decimal(14, 2)
+  source            CategorizationSource?
+  needsConfirmation Boolean               @default(false)
   dismissedUntil    DateTime?
-  createdAt     DateTime              @default(now())
-  updatedAt     DateTime              @updatedAt
+  createdAt         DateTime              @default(now())
+  updatedAt         DateTime              @updatedAt
 
   transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
   category    Category?   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
@@ -417,6 +420,16 @@ enum TransactionSource {
   csv
 }
 
+enum BudgetImpact {
+  expense
+  excluded
+}
+
+enum BudgetImpactSource {
+  auto
+  user
+}
+
 enum CategoryType {
   expense
   income
@@ -437,14 +450,14 @@ model Category {
   archivedAt  DateTime?
   createdAt   DateTime     @default(now())
 
-  workspace          Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  parent             Category?         @relation("CategoryTree", fields: [parentId], references: [id])
-  children           Category[]        @relation("CategoryTree")
-  allocations        TransactionAllocation[]
-  scheduledSpends    ScheduledSpend[]
-  merchantMappings   MerchantMapping[]
-  recurringExpenses  RecurringExpense[]
-  goalAllocations    GoalAllocation[]
+  workspace         Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parent            Category?               @relation("CategoryTree", fields: [parentId], references: [id])
+  children          Category[]              @relation("CategoryTree")
+  allocations       TransactionAllocation[]
+  scheduledSpends   ScheduledSpend[]
+  merchantMappings  MerchantMapping[]
+  recurringExpenses RecurringExpense[]
+  goalAllocations   GoalAllocation[]
 
   @@index([workspaceId, type])
   @@map("categories")
@@ -478,30 +491,30 @@ model BudgetPlan {
 /// `icon` + `color` mirror the Category styling pattern so the UI can
 /// render a consistent badge.
 model Goal {
-  id            String    @id @default(cuid())
-  workspaceId   String
-  title         String
-  description   String?
-  targetAmount  Decimal   @db.Decimal(14, 2)
-  savedAmount   Decimal   @default(0) @db.Decimal(14, 2)
-  dueDate       DateTime  @db.Date
-  icon          String?
-  color         String?
+  id               String    @id @default(cuid())
+  workspaceId      String
+  title            String
+  description      String?
+  targetAmount     Decimal   @db.Decimal(14, 2)
+  savedAmount      Decimal   @default(0) @db.Decimal(14, 2)
+  dueDate          DateTime  @db.Date
+  icon             String?
+  color            String?
   /// LLM-generated metadata for the savings plan: { generatedAt: ISO,
   /// notice?: string }. Per-category allocations live in GoalAllocation
   /// with proper FKs — this column is only for the generator's notice
   /// + timestamp.
-  strategy      Json?
+  strategy         Json?
   /// Highest savings-milestone (25/50/75/100) we've already pushed for.
   /// Cron compares current pct against this and only sends when we cross
   /// upward; never re-fires when savings dip back below the line.
   lastMilestonePct Int?
-  archivedAt    DateTime?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+  archivedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  allocations   GoalAllocation[]
+  workspace   Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  allocations GoalAllocation[]
 
   @@index([workspaceId, dueDate])
   @@map("goals")
@@ -538,17 +551,17 @@ enum RecurringCadence {
 }
 
 model RecurringExpense {
-  id                  String           @id @default(cuid())
-  workspaceId         String
-  name                String
-  nameNormalized      String
-  amount              Decimal          @db.Decimal(10, 2)
-  categoryId          String?
-  merchantNormalized  String?
-  cadence             RecurringCadence
-  nextOccurrenceDate  DateTime         @db.Date
-  createdAt           DateTime         @default(now())
-  updatedAt           DateTime         @updatedAt
+  id                 String           @id @default(cuid())
+  workspaceId        String
+  name               String
+  nameNormalized     String
+  amount             Decimal          @db.Decimal(10, 2)
+  categoryId         String?
+  merchantNormalized String?
+  cadence            RecurringCadence
+  nextOccurrenceDate DateTime         @db.Date
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   category  Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
@@ -570,28 +583,28 @@ model ActionIntent {
   createdAt   DateTime  @default(now())
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId],      references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([workspaceId, userId, expiresAt])
   @@map("action_intents")
 }
 
 model MerchantMapping {
-  id                  String         @id @default(cuid())
-  workspaceId         String
+  id                 String        @id @default(cuid())
+  workspaceId        String
   // Lowercased, stripped of store IDs/state codes/city qualifiers.
   // E.g. "STARBUCKS #1234 TORONTO ON" → "starbucks".
   // See apps/api/src/categorize/normalize.ts for the exact rules.
-  merchantNormalized  String
-  categoryId          String
+  merchantNormalized String
+  categoryId         String
   // 0.00 – 1.00. Manual confirms = 1.00. Reserved for confidence-weighted
   // UI (Phase 2) — stored but not consumed in Plan 1B.
-  confidence          Decimal        @default(1.00) @db.Decimal(3, 2)
-  source              MappingSource
-  createdAt           DateTime       @default(now())
+  confidence         Decimal       @default(1.00) @db.Decimal(3, 2)
+  source             MappingSource
+  createdAt          DateTime      @default(now())
 
-  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  category   Category  @relation(fields: [categoryId],  references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  category  Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@unique([workspaceId, merchantNormalized])
   @@index([workspaceId])
@@ -687,18 +700,18 @@ model Subscription {
   // "lite" | "pro" — String not Prisma enum because it must match
   // @fina/shared Tier union (free|lite|pro) exactly. Validated by
   // tierForPriceId() at write boundaries; free never appears here.
-  tier   String
-  source SubscriptionSource
+  tier                 String
+  source               SubscriptionSource
   // Stripe "sub_..."
   sourceSubscriptionId String
   // Stripe "cus_..."; mirrors User.stripeCustomerId for query convenience.
-  sourceCustomerId String?
+  sourceCustomerId     String?
 
   status            SubscriptionStatus
   currentPeriodEnd  DateTime
-  cancelAtPeriodEnd Boolean @default(false)
+  cancelAtPeriodEnd Boolean            @default(false)
   // "monthly" | "annual" — annual deferred to v1.5+ per spec.
-  billingPeriod String @default("monthly")
+  billingPeriod     String             @default("monthly")
 
   // When a downgrade or upgrade is scheduled at the end of the current
   // billing period (via stripe.subscriptionSchedules or Portal's
@@ -714,7 +727,7 @@ model Subscription {
   /// effectiveTier filter out rows where this disagrees with the
   /// runtime APPLE_ENV / google env to prevent stale sandbox rows
   /// from granting prod entitlement.
-  environment       String   @default("Production")
+  environment String @default("Production")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -727,16 +740,16 @@ model Subscription {
 // Stores enough to dedupe; no body retained (PII + volume).
 model WebhookEvent {
   // Stripe event.id ("evt_...") — also serves as idempotency key.
-  id          String   @id
-  source      String
-  type        String
-  receivedAt  DateTime @default(now())
+  id         String   @id
+  source     String
+  type       String
+  receivedAt DateTime @default(now())
 
   /// Optional structured payload for forensic event types
   /// (unattributable_after_delete / unattributable_giveup / etc.).
   /// Existing Stripe dedup rows leave this null. PII fields covered
   /// by Pino redact list (Task 0).
-  body  Json?
+  body Json?
 
   @@index([source, type])
   @@map("webhook_events")
@@ -771,26 +784,26 @@ model Brief {
 }
 
 model UserDevice {
-  id              String    @id @default(cuid())
-  userId          String
+  id                                    String    @id @default(cuid())
+  userId                                String
   /// Stable app-install id generated by the mobile app. Used for per-device
   /// IAP integrity throttling even when push notifications are disabled.
-  clientDeviceId  String?
+  clientDeviceId                        String?
   /// Expo's "ExponentPushToken[xxx]" format string. Opaque to us; Expo
   /// translates to APNs (iOS) or FCM (Android) device tokens internally.
-  expoPushToken   String?
+  expoPushToken                         String?
   /// "ios" or "android". TEXT not enum so non-target platforms (future
   /// web push, desktop, etc.) can be added without a Prisma migration.
-  platform        String
+  platform                              String
   /// Updated on every register/refresh call (per app foreground / launch).
-  lastSeenAt      DateTime  @default(now())
-  lastIapIntegrityCheckedAt DateTime?
-  lastIapIntegrityResult    String?
+  lastSeenAt                            DateTime  @default(now())
+  lastIapIntegrityCheckedAt             DateTime?
+  lastIapIntegrityResult                String?
   lastIapIntegritySubscriptionUpdatedAt DateTime?
-  createdAt       DateTime  @default(now())
+  createdAt                             DateTime  @default(now())
 
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tickets         PushTicket[]
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tickets PushTicket[]
 
   @@unique([userId, expoPushToken])
   @@unique([userId, clientDeviceId])
@@ -799,20 +812,20 @@ model UserDevice {
 }
 
 model PushTicket {
-  id              String       @id @default(cuid())
+  id           String    @id @default(cuid())
   /// Expo가 반환하는 ticket id (e.g., "019e5181-c4e6-7488..."). UNIQUE
   /// — 같은 ticket을 2번 저장 시도하면 conflict (방어용).
-  expoTicketId    String       @unique
-  userDeviceId    String
-  sentAt          DateTime     @default(now())
+  expoTicketId String    @unique
+  userDeviceId String
+  sentAt       DateTime  @default(now())
   /// null = 아직 poll 안 함. Polling 성공 시 now(). 7일 후 cleanup-events 정리.
-  polledAt        DateTime?
+  polledAt     DateTime?
   /// null | "ok" | "error". status="error"일 때 errorCode 동반.
-  status          String?
+  status       String?
   /// "DeviceNotRegistered" | "InvalidCredentials" | "MessageTooBig" 등.
-  errorCode       String?
+  errorCode    String?
 
-  userDevice      UserDevice   @relation(fields: [userDeviceId], references: [id], onDelete: Cascade)
+  userDevice UserDevice @relation(fields: [userDeviceId], references: [id], onDelete: Cascade)
 
   @@index([polledAt, sentAt])
   @@map("push_tickets")
@@ -824,7 +837,7 @@ model PushTicket {
 /// by /me or any user-facing route.
 model IapDeletedBinding {
   id         String   @id @default(cuid())
-  source     String   // "iap_apple" | "iap_google"
+  source     String // "iap_apple" | "iap_google"
   /// SHA-256 of the binding token. Hashed so the deleted-user
   /// identifier is not recoverable from this table.
   tokenHash  String
@@ -845,13 +858,13 @@ model IapDeletedBinding {
 /// MAX_UNKNOWN_RETRIES (5) the webhook returns 200 with a forensic
 /// WebhookEvent so the store stops retrying.
 model IapRetryCounter {
-  id         String   @id @default(cuid())
-  source     String   // "iap_apple" | "iap_google"
+  id        String   @id @default(cuid())
+  source    String // "iap_apple" | "iap_google"
   /// SHA-256 of the binding token (appAccountToken / obfuscatedExternalAccountId).
-  tokenHash  String
-  attempts   Int      @default(0)
-  firstAt    DateTime @default(now())
-  lastAt     DateTime @default(now())
+  tokenHash String
+  attempts  Int      @default(0)
+  firstAt   DateTime @default(now())
+  lastAt    DateTime @default(now())
 
   @@unique([source, tokenHash])
   @@map("iap_retry_counters")

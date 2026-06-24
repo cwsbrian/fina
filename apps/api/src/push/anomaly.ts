@@ -2,6 +2,7 @@ import { prisma } from "../db.js";
 import { logError } from "../logger.js";
 import type { Env } from "../env.js";
 import { sendLargeChargePush } from "./send.js";
+import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
 
 /** Minimum tx amount worth notifying about. Avoids spamming users
  *  whose $4 coffee just doubled to $8. */
@@ -52,15 +53,12 @@ export async function checkLargeChargeAndPush(
     const since = new Date(Date.now() - 90 * 86_400_000);
     const recent = await prisma.transactionAllocation.findMany({
       where: {
-        categoryId,
-        amount: { gt: 0 },
-        transactionId: { not: args.transactionId },
-        transaction: {
+        ...budgetExpenseAllocationWhere({
           workspaceId: args.workspaceId,
-          removedAt: null,
           occurredAt: { gte: since },
-          amount: { gt: 0 },
-        },
+        }),
+        categoryId,
+        transactionId: { not: args.transactionId },
       },
       select: { amount: true },
     });

@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { monthlyEquivalent, occurrencesInRange } from "../recurring/occurrences.js";
 import { serverNow } from "../dev-clock.js";
+import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../transactions/budget-impact.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
@@ -200,14 +201,11 @@ export async function monthlySpendByCategory(
   );
   const rows = await prisma.transactionAllocation.findMany({
     where: {
-      amount: { gt: 0 },
-      categoryId: { not: null },
-      transaction: {
+      ...budgetExpenseAllocationWhere({
         workspaceId,
-        removedAt: null,
         occurredAt: { gte: from, lt: to },
-        amount: { gt: 0 },
-      },
+      }),
+      categoryId: { not: null },
     },
     select: {
       amount: true,
@@ -237,12 +235,10 @@ export async function recentMonthlyAvgSpend(
 ): Promise<number> {
   const since = new Date(serverNow().getTime() - 90 * 86_400_000);
   const agg = await prisma.transaction.aggregate({
-    where: {
+    where: budgetExpenseTransactionWhere({
       workspaceId,
-      removedAt: null,
       occurredAt: { gte: since },
-      amount: { gt: 0 },
-    },
+    }),
     _sum: { amount: true },
   });
   // Total over ~3 months → monthly average. Round to whole dollars for
@@ -416,12 +412,10 @@ export async function monthlyTotalSpend(
     month1to12 === 12 ? 1 : month1to12 + 1,
   );
   const agg = await prisma.transaction.aggregate({
-    where: {
+    where: budgetExpenseTransactionWhere({
       workspaceId,
-      removedAt: null,
       occurredAt: { gte: from, lt: spendUpperBound(to) },
-      amount: { gt: 0 },
-    },
+    }),
     _sum: { amount: true },
   });
   return Number(agg._sum.amount ?? 0);
@@ -531,14 +525,12 @@ export async function recentTypicalAmountByCategory(
 
   const rows = await prisma.transactionAllocation.findMany({
     where: {
-      categoryId: { in: categoryIds },
-      transaction: {
+      ...budgetExpenseAllocationWhere({
         workspaceId,
-        removedAt: null,
         pending: false,
         occurredAt: { gte: since },
-      },
-      amount: { gt: 0 },
+      }),
+      categoryId: { in: categoryIds },
     },
     select: { amount: true, categoryId: true },
   });
@@ -581,13 +573,12 @@ export async function recentDiscretionaryDailyByCategory(
 
   const rows = await prisma.transactionAllocation.findMany({
     where: {
-      categoryId: { in: categoryIds },
-      transaction: {
+      transaction: budgetExpenseTransactionWhere({
         workspaceId,
-        removedAt: null,
         pending: false,
         occurredAt: { gte: since },
-      },
+      }),
+      categoryId: { in: categoryIds },
     },
     select: { amount: true, categoryId: true },
   });

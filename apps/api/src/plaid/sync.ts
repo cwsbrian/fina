@@ -9,6 +9,7 @@ import { withWorkspaceLock } from "../locks/workspace.js";
 import { clearScheduleMatch } from "../schedules/cleanup.js";
 import { logWarn } from "../logger.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
+import { classifyPlaidBudgetImpact } from "../transactions/budget-impact.js";
 
 // `skipped` carries the partial counters from any pages that DID commit
 // before the lock was lost (final-tx race) — the page-level commits are
@@ -53,6 +54,10 @@ type PlaidTxLike = {
   merchant_name?: string | null;
   name?: string | null;
   iso_currency_code?: string | null;
+  personal_finance_category?: {
+    primary?: string | null;
+    detailed?: string | null;
+  } | null;
 };
 
 type PlaidPageData = {
@@ -185,6 +190,8 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
       throw e;
     }
 
+    await excludeMatchedOwnTransfers(workspaceId, newTxIds);
+
     return { added, modified, removed, newTxIds };
   } catch (e) {
     // Persist status in a SEPARATE short tx so it survives the rethrow.
@@ -275,6 +282,55 @@ function candidateReconnectMerchantNormalized(candidate: {
   return normalized ? normalized : normalizeMerchant(candidate.merchantRaw);
 }
 
+function looksLikeOwnTransfer(rawData: unknown, fallback: string): boolean {
+  const name =
+    typeof rawData === "object" && rawData !== null && "name" in rawData && typeof rawData.name === "string"
+      ? rawData.name
+      : fallback;
+  return /\bTFR-(TO|FR)\b/i.test(name);
+}
+
+async function excludeMatchedOwnTransfers(workspaceId: string, ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const rows = await prisma.transaction.findMany({
+    where: {
+      id: { in: ids },
+      workspaceId,
+      budgetImpactSource: "auto",
+      removedAt: null,
+      amount: { gt: 0 },
+    },
+    select: { id: true, accountId: true, amount: true, occurredAt: true, merchantRaw: true, rawData: true },
+  });
+
+  for (const row of rows) {
+    if (!looksLikeOwnTransfer(row.rawData, row.merchantRaw)) continue;
+    const dayStart = new Date(row.occurredAt);
+    dayStart.setUTCHours(0, 0, 0, 0);
+    const dayEnd = new Date(dayStart);
+    dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+    const match = await prisma.transaction.findFirst({
+      where: {
+        workspaceId,
+        accountId: { not: row.accountId },
+        removedAt: null,
+        amount: new Prisma.Decimal(row.amount).negated(),
+        occurredAt: { gte: dayStart, lt: dayEnd },
+        rawData: {
+          path: ["personal_finance_category", "detailed"],
+          equals: "TRANSFER_IN_ACCOUNT_TRANSFER",
+        },
+      },
+      select: { id: true },
+    });
+    if (!match) continue;
+    await prisma.transaction.updateMany({
+      where: { id: row.id, budgetImpactSource: "auto" },
+      data: { budgetImpact: "excluded" },
+    });
+  }
+}
+
 export async function upsertAdded(
   tx: Prisma.TransactionClient,
   t: PlaidTxLike,
@@ -292,6 +348,7 @@ export async function upsertAdded(
     });
     if (promotion) {
       const newAmount = new Prisma.Decimal(t.amount);
+      const budgetImpact = classifyPlaidBudgetImpact(t);
       // Paranoid check: pending tx must have N=1 allocation (cannot_split_pending
       // blocks user splits). If N != 1, log + skip the allocation update.
       if (promotion.allocations.length === 1) {
@@ -317,6 +374,7 @@ export async function upsertAdded(
           merchantRaw: plaidMerchantRaw(t),
           rawData: t as unknown as Prisma.InputJsonValue,
           removedAt: null, // promote restores any earlier soft-removal
+          ...(promotion.budgetImpactSource === "auto" ? { budgetImpact } : {}),
         },
       });
       return { kind: "updated", localId: promotion.id };
@@ -337,6 +395,7 @@ export async function upsertAdded(
   });
   if (existing) {
     const newAmount = new Prisma.Decimal(t.amount);
+    const budgetImpact = classifyPlaidBudgetImpact(t);
     const amountChanged = !existing.amount.equals(newAmount);
     const N = existing.allocations.length;
 
@@ -366,6 +425,7 @@ export async function upsertAdded(
         postedAt: plaidPostedAt(t),
         pending: t.pending,
         rawData: t as unknown as Prisma.InputJsonValue,
+        ...(existing.budgetImpactSource === "auto" ? { budgetImpact } : {}),
         ...(amountChanged && N >= 2 ? { needsReclassification: true } : {}),
       },
     });
@@ -422,6 +482,8 @@ export async function upsertAdded(
             merchantNormalized,
             rawData: t as unknown as Prisma.InputJsonValue,
             removedAt: null,
+            budgetImpact: classifyPlaidBudgetImpact(t),
+            budgetImpactSource: "auto",
           },
         });
         return { kind: "updated", localId: strongMatches[0]!.id };
@@ -441,6 +503,7 @@ export async function upsertAdded(
       postedAt: plaidPostedAt(t),
       pending: t.pending,
       rawData: t as unknown as Prisma.InputJsonValue,
+      budgetImpact: classifyPlaidBudgetImpact(t),
     },
     select: { id: true, amount: true },
   });
@@ -470,6 +533,7 @@ export async function upsertModified(
 
   const oldAmount = existing.amount;
   const newAmount = new Prisma.Decimal(t.amount);
+  const budgetImpact = classifyPlaidBudgetImpact(t);
   const amountChanged = !oldAmount.equals(newAmount);
   const newMerchantRaw = plaidMerchantRaw(t);
   const merchantChanged = existing.merchantRaw !== newMerchantRaw;
@@ -482,6 +546,7 @@ export async function upsertModified(
     postedAt: plaidPostedAt(t),
     pending: t.pending,
     rawData: t as unknown as Prisma.InputJsonValue,
+    ...(existing.budgetImpactSource === "auto" ? { budgetImpact } : {}),
   };
 
   if (N >= 2 && (amountChanged || merchantChanged)) {

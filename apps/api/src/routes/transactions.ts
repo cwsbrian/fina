@@ -37,6 +37,7 @@ const PatchTxBody = z
     merchantRaw: z.string().optional(),
     occurredAt: z.string().optional(),
     note: z.string().nullable().optional(),
+    budgetImpact: z.enum(["expense", "excluded"]).optional(),
     categoryId: z.string().nullable().optional(),
     allocations: z
       .array(z.object({
@@ -66,6 +67,7 @@ const QuerySchema = z.object({
   includeRemoved: BoolFlag,
   uncategorizedOnly: BoolFlag,
   needsReview: BoolFlag,
+  budgetImpact: z.enum(["expense", "excluded"]).optional().default("expense"),
   categoryId: z.string().optional(),
   /** Free-text search across merchantRaw + merchantNormalized
    *  (case-insensitive substring). 1-character min keeps trivial
@@ -132,6 +134,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return {};
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
+        budgetImpact: q.budgetImpact,
         ...(q.q
           ? {
               OR: [
@@ -216,6 +219,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           note: t.note,
           removedAt: t.removedAt?.toISOString() ?? null,
           needsReclassification: t.needsReclassification,
+          budgetImpact: t.budgetImpact,
+          budgetImpactSource: t.budgetImpactSource,
           allocations: t.allocations.map((a) => ({
             id: a.id,
             categoryId: a.categoryId,
@@ -280,6 +285,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             note: t.note,
             removedAt: t.removedAt?.toISOString() ?? null,
             needsReclassification: t.needsReclassification,
+            budgetImpact: t.budgetImpact,
+            budgetImpactSource: t.budgetImpactSource,
             allocations: t.allocations.map((a) => ({
               id: a.id,
               categoryId: a.categoryId,
@@ -520,6 +527,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         if (d.merchantRaw  !== undefined) input.merchantRaw  = d.merchantRaw;
         if (d.occurredAt   !== undefined) input.occurredAt   = d.occurredAt;
         if (d.note         !== undefined) input.note         = d.note;
+        if (d.budgetImpact !== undefined) input.budgetImpact = d.budgetImpact;
         if (d.accountId    !== undefined) input.accountId    = d.accountId;
         if (flags.categoryIdProvided)     input.categoryId   = d.categoryId ?? null;
         if (flags.allocationsProvided)    input.allocations  = d.allocations ?? [];

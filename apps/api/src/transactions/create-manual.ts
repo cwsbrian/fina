@@ -10,6 +10,7 @@ import {
   parseOccurredAt as parseOccurredAtShared,
 } from "./validators.js";
 import { applyAllocations } from "./allocations.js";
+import { budgetImpactForAmount } from "./budget-impact.js";
 
 export type CreateManualTxInput = {
   merchantRaw: string;
@@ -35,6 +36,8 @@ export type CreateManualTxResult = {
     note: string | null;
     removedAt: null;
     needsReclassification: false;
+    budgetImpact: "expense" | "excluded";
+    budgetImpactSource: "auto" | "user";
     createdAt: string;
     updatedAt: string;
     allocations: Array<{
@@ -177,6 +180,7 @@ export async function createManualTransactionService(
         source: "manual",
         rawData: {} as Prisma.InputJsonValue,
         note,
+        budgetImpact: budgetImpactForAmount(input.amount),
       },
     });
 
@@ -211,6 +215,8 @@ export async function createManualTransactionService(
         note: row.note,
         removedAt: null,                    // invariant: freshly created
         needsReclassification: false,
+        budgetImpact: row.budgetImpact,
+        budgetImpactSource: row.budgetImpactSource,
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
         allocations: allocs.map((a) => ({

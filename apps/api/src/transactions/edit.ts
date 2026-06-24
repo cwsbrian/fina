@@ -23,6 +23,7 @@ export type EditTxInput = {
   allocations?: Array<{ categoryId: string | null; amount: number }>;
   // NEW: reassign the tx to a different (manual) account.
   accountId?: string;
+  budgetImpact?: "expense" | "excluded";
 };
 
 // Type signal that the caller used the categoryId field (the route layer
@@ -48,6 +49,8 @@ export type EditTxResult = {
     note: string | null;
     removedAt: null;
     needsReclassification: boolean;
+    budgetImpact: "expense" | "excluded";
+    budgetImpactSource: "auto" | "user";
     createdAt: string;
     updatedAt: string;
     allocations: Array<{
@@ -99,6 +102,8 @@ const TX_SELECT = {
   occurredAt: true, pending: true,
   source: true, note: true, removedAt: true,
   needsReclassification: true,
+  budgetImpact: true,
+  budgetImpactSource: true,
   createdAt: true, updatedAt: true,
   allocations: {
     select: { id: true, categoryId: true, amount: true, source: true },
@@ -124,6 +129,8 @@ function shape(
     note: row.note,
     removedAt: null,
     needsReclassification: row.needsReclassification,
+    budgetImpact: row.budgetImpact,
+    budgetImpactSource: row.budgetImpactSource,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     allocations: row.allocations.map((a) => ({
@@ -213,6 +220,10 @@ export async function editTransactionService(
     }
     if (parsedOccurredAt !== undefined) data.occurredAt = parsedOccurredAt;
     if (noteProvided) data.note = normalizedNote;
+    if (input.budgetImpact !== undefined) {
+      data.budgetImpact = input.budgetImpact;
+      data.budgetImpactSource = "user";
+    }
     if (input.accountId !== undefined) {
       // Only manual accounts in this workspace are valid reassign targets —
       // mirrors create-manual's MANUAL_WHERE rule.

@@ -6,6 +6,7 @@ import { normalizeMerchant } from "../../categorize/normalize.js";
 import type { ToolDef } from "./types.js";
 import { customRange, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
+import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../../transactions/budget-impact.js";
 
 const Args = z.object({
   current_since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(
@@ -127,15 +128,10 @@ async function bucketizeByAllocation(
 ): Promise<{ map: Map<string, Bucket>; total: Prisma.Decimal }> {
   const allocRows = await prisma.transactionAllocation.groupBy({
     by: ["categoryId"],
-    where: {
-      amount: { gt: 0 },
-      transaction: {
+    where: budgetExpenseAllocationWhere({
         workspaceId,
-        removedAt: null,
-        amount: { gt: 0 },
         occurredAt: { gte, lt },
-      },
-    },
+    }),
     _sum: { amount: true },
     _count: { _all: true },
   });
@@ -205,21 +201,17 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
       };
       const [currentRows, comparisonRows] = await Promise.all([
         prisma.transaction.findMany({
-          where: {
+          where: budgetExpenseTransactionWhere({
             workspaceId: ctx.workspaceId,
-            removedAt: null,
-            amount: { gt: 0 },
             occurredAt: { gte: currentRange.gte, lt: currentRange.lt },
-          },
+          }),
           select: selectSpec,
         }),
         prisma.transaction.findMany({
-          where: {
+          where: budgetExpenseTransactionWhere({
             workspaceId: ctx.workspaceId,
-            removedAt: null,
-            amount: { gt: 0 },
             occurredAt: { gte: comparisonRange.gte, lt: comparisonRange.lt },
-          },
+          }),
           select: selectSpec,
         }),
       ]);

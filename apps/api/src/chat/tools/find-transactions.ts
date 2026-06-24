@@ -10,6 +10,7 @@ import {
 } from "./tx-row-helpers.js";
 import type { ToolDef } from "./types.js";
 import { loadTransactionDetail } from "./get-transaction-details.js";
+import { budgetExpenseTransactionWhere } from "../../transactions/budget-impact.js";
 
 const Args = z.object({
   merchant_query: z
@@ -206,10 +207,7 @@ export const findTransactions: ToolDef<Args, Result> = {
       occurredAt.lt = localMidnightToUtc(y!, m!, d! + 1, tz);
     }
 
-    const where: Prisma.TransactionWhereInput = {
-      workspaceId: ctx.workspaceId,
-      removedAt: null,
-    };
+    const where: Prisma.TransactionWhereInput = budgetExpenseTransactionWhere({ workspaceId: ctx.workspaceId });
     if (categoryIds) where.allocations = { some: { categoryId: { in: categoryIds } } };
     if (accountIds) where.accountId = { in: accountIds };
     if (occurredAt.gte || occurredAt.lt) where.occurredAt = occurredAt;

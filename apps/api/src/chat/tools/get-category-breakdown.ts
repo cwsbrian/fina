@@ -5,6 +5,7 @@ import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
 import { customRange, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
+import { budgetExpenseAllocationWhere } from "../../transactions/budget-impact.js";
 
 const Args = z.object({
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
@@ -63,13 +64,10 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
     ]);
 
     const allocWhere: Prisma.TransactionAllocationWhereInput = {
-      amount: { gt: 0 },
-      transaction: {
+      ...budgetExpenseAllocationWhere({
         workspaceId: ctx.workspaceId,
-        removedAt: null,
-        amount: { gt: 0 },
         occurredAt: { gte, lt },
-      },
+      }),
     };
     if (!includeUncat) allocWhere.categoryId = { not: null };
 

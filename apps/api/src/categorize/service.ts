@@ -51,6 +51,7 @@ export async function categorizeNewTransactions(
       id: { in: newTxIds },
       workspaceId,
       removedAt: null,  // don't categorize soft-removed tx
+      budgetImpact: "expense",
       allocations: { some: {}, every: { categoryId: null, source: null } },
     },
     select: {
@@ -129,6 +130,7 @@ export async function categorizeNewTransactions(
           workspaceId,
           merchantNormalized: t.merchantNormalized,
           removedAt: null,
+          budgetImpact: "expense",
           allocations: { some: {}, every: { categoryId: null, source: null } },
         },
         include: { allocations: { select: { id: true } } },

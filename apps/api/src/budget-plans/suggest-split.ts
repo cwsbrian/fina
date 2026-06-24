@@ -2,6 +2,7 @@ import { logLlmCall } from "../llm/budget.js";
 import { prisma } from "../db.js";
 import type { Env as FinaEnv } from "../env.js";
 import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
+import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
 
 export type SuggestedAllocation = {
   categoryId: string;
@@ -52,14 +53,11 @@ async function recentMonthlySpend(
   const since = new Date(Date.now() - 90 * 86400_000);
   const rows = await prisma.transactionAllocation.findMany({
     where: {
-      amount: { gt: 0 },
-      categoryId: { not: null },
-      transaction: {
+      ...budgetExpenseAllocationWhere({
         workspaceId,
-        removedAt: null,
         occurredAt: { gte: since },
-        amount: { gt: 0 },
-      },
+      }),
+      categoryId: { not: null },
     },
     select: {
       amount: true,

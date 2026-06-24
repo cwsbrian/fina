@@ -1,4 +1,5 @@
 import { prisma } from "../db.js";
+import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../transactions/budget-impact.js";
 
 export type CategorySpend = {
   categoryId: string;
@@ -68,12 +69,10 @@ async function monthFlows(
   // mirrored in our manual-tx form).
   const [spendAgg, incomeAgg] = await Promise.all([
     prisma.transaction.aggregate({
-      where: {
+      where: budgetExpenseTransactionWhere({
         workspaceId,
-        removedAt: null,
         occurredAt: { gte: from, lt: to },
-        amount: { gt: 0 },
-      },
+      }),
       _sum: { amount: true },
     }),
     prisma.transaction.aggregate({
@@ -101,14 +100,11 @@ async function spendByCategory(
   const { from, to } = monthRange(year, month);
   const rows = await prisma.transactionAllocation.findMany({
     where: {
-      amount: { gt: 0 },
-      categoryId: { not: null },
-      transaction: {
+      ...budgetExpenseAllocationWhere({
         workspaceId,
-        removedAt: null,
         occurredAt: { gte: from, lt: to },
-        amount: { gt: 0 },
-      },
+      }),
+      categoryId: { not: null },
     },
     select: {
       amount: true,
@@ -214,7 +210,7 @@ export async function getLatestAnalysis(
   fallbackMonth: number,
 ): Promise<AnalysisResult> {
   const latest = await prisma.transaction.findFirst({
-    where: { workspaceId, removedAt: null },
+    where: budgetExpenseTransactionWhere({ workspaceId }),
     orderBy: { occurredAt: "desc" },
     select: { occurredAt: true },
   });

@@ -6,6 +6,7 @@ import { normalizeMerchant } from "../../categorize/normalize.js";
 import { createIntentService } from "../../intents/service.js";
 import type { ToolDef } from "./types.js";
 import { lookbackMonthStart } from "./periods.js";
+import { budgetExpenseTransactionWhere } from "../../transactions/budget-impact.js";
 
 const Args = z.object({
   lookback_months: z
@@ -115,12 +116,10 @@ export const detectRecurringMerchants: ToolDef<Args, Result> = {
     const lookbackStart = await lookbackMonthStart(ctx.userId, lookbackMonths);
 
     const rows = await prisma.transaction.findMany({
-      where: {
+      where: budgetExpenseTransactionWhere({
         workspaceId: ctx.workspaceId,
-        removedAt: null,
-        amount: { gt: 0 },
         occurredAt: { gte: lookbackStart },
-      },
+      }),
       select: {
         id: true,
         amount: true,

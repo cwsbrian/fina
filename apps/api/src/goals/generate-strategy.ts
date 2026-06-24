@@ -5,6 +5,7 @@ import type { Env as FinaEnv } from "../env.js";
 import { monthlyEquivalent } from "../recurring/occurrences.js";
 import { DEFAULT_PERIOD } from "../budget-plans/service.js";
 import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
+import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
 
 /** One row in a generated savings plan. */
 export type GoalStrategyItem = {
@@ -94,13 +95,10 @@ async function analyzeCategories(workspaceId: string): Promise<CategoryAnalysis[
   const [allocations, recurring, defaultPlan] = await Promise.all([
     prisma.transactionAllocation.findMany({
       where: {
-        amount: { gt: 0 },
-        transaction: {
+        ...budgetExpenseAllocationWhere({
           workspaceId,
-          removedAt: null,
           occurredAt: { gte: since },
-          amount: { gt: 0 },
-        },
+        }),
         categoryId: { not: null },
       },
       select: {
