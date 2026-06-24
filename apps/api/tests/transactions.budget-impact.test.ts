@@ -47,4 +47,59 @@ describe("budget impact", () => {
       },
     })).toBe("excluded");
   });
+
+  it("excludes transfer rows with registered or investment account signals", () => {
+    for (const name of [
+      "TRANSFER TO TFSA",
+      "ROTH IRA CONTRIBUTION",
+      "PAYROLL 401K TRANSFER",
+      "VANGUARD BROKERAGE",
+    ]) {
+      expect(classifyPlaidBudgetImpact({
+        amount: 250,
+        name,
+        merchant_name: null,
+        personal_finance_category: {
+          primary: "TRANSFER_OUT",
+          detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER",
+        },
+      })).toBe("excluded");
+    }
+  });
+
+  it("excludes strong registered account signals even when Plaid miscategorizes them", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: 150,
+      name: "TD MHA PPP RSP",
+      merchant_name: null,
+      personal_finance_category: {
+        primary: "GENERAL_SERVICES",
+        detailed: "GENERAL_SERVICES_INSURANCE",
+      },
+    })).toBe("excluded");
+  });
+
+  it("does not exclude investment-like words on non-transfer purchases", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: 40,
+      name: "ROTH BOOKSTORE",
+      merchant_name: null,
+      personal_finance_category: {
+        primary: "GENERAL_MERCHANDISE",
+        detailed: "GENERAL_MERCHANDISE_BOOKSTORES_AND_NEWSSTANDS",
+      },
+    })).toBe("expense");
+  });
+
+  it("does not match investment keywords inside longer words", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: 40,
+      name: "TRANSFER TO MIRACLE SHOP",
+      merchant_name: null,
+      personal_finance_category: {
+        primary: "TRANSFER_OUT",
+        detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER",
+      },
+    })).toBe("expense");
+  });
 });
