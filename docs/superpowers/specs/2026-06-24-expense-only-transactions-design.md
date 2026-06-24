@@ -39,13 +39,15 @@ Migration behavior:
 New synced transactions should default to:
 
 - `expense` when the transaction is an outgoing purchase-like amount.
-- `excluded` when the transaction is a card payment, transfer, investment movement, or other non-budget activity.
+- `excluded` when the transaction is a connected-card payment, own-account transfer, investment movement, or other non-budget activity.
 
-The initial auto rules can be conservative:
+The initial auto rules should be conservative:
 
-- Plaid `personal_finance_category.primary` / `detailed` transfer or payment categories become `excluded`.
-- Account metadata (`type`, `subtype`) and transaction `name` / `merchant_name` can exclude clear credit card payments and investment transfers.
-- Internal account-to-account movement becomes `excluded` when both sides can be identified by connected accounts, amount, and nearby date.
+- Clear credit card payments become `excluded` when the corresponding card activity is likely connected.
+- Investment transfers become `excluded`.
+- Internal account-to-account movement becomes `excluded` when both sides can be identified by connected accounts, amount, nearby date, or bank-specific `TFR-TO` / `TFR-FR` style names.
+- Outgoing E-Transfers stay `expense` by default. They are too ambiguous to auto-exclude from Plaid category alone.
+- ATM withdrawals, mortgage payments, loan payments, BNPL, and bank fees stay `expense`.
 - Unknown outgoing activity stays `expense` so real spending is less likely to disappear.
 
 Manual user changes always win over future auto classification. Plaid sync may recompute `budgetImpact` only while `budgetImpactSource = "auto"`. Pending-to-posted promotion, modified transactions, reconnect dedupe, and replay updates must preserve `user` overrides.
@@ -97,7 +99,7 @@ The transaction update endpoint accepts `budgetImpact` and returns it in the tra
 
 ## Production Categorization Note
 
-The production issue where most records are uncategorized appears separate from this design. The likely cause is that the initial Plaid exchange can time out before the categorize step receives the inserted transaction ids. A later production fix should make categorization resumable for existing uncategorized transactions, but the expense/excluded model should not depend on that fix.
+The local production-key test showed a categorization failure unrelated to Plaid sync: DeepSeek rejected JSON mode because the categorize prompt did not include the word `json`. A later production fix should make categorization resumable for existing uncategorized transactions, but the expense/excluded model should not depend on that fix.
 
 ## Local Validation
 

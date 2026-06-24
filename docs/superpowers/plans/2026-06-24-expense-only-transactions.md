@@ -20,7 +20,8 @@
 - Modify `apps/api/src/transactions/create-manual.ts`: mark manual negative rows excluded.
 - Modify `apps/api/src/plaid/sync.ts`: assign impact on insert/update only when source is `auto`.
 - Create `apps/api/src/scripts/backfill-budget-impact.ts`: one-off admin backfill for existing Plaid rows.
-- Modify `apps/api/package.json`: add `admin:backfill-budget-impact`.
+- Modify `apps/api/package.json`: add admin scripts for budget-impact reconciliation and categorization backfill.
+- Modify `apps/api/src/categorize/llm.ts`: fix DeepSeek JSON-mode prompt.
 - Modify `apps/api/src/routes/transactions.ts`: default list filter, excluded filter, DTO fields, PATCH support.
 - Modify aggregate call sites to use the shared predicate:
   - `apps/api/src/analysis/service.ts`
@@ -162,28 +163,56 @@ describe("budget impact", () => {
     })).toBe("expense");
   });
 
-  it("excludes clear credit card payments", () => {
+  it("keeps credit card payments in budget until connected-card evidence exists", () => {
     expect(classifyPlaidBudgetImpact({
       amount: 3000,
       name: "PAYMENT TO CREDIT CARD",
       merchant_name: null,
       personal_finance_category: { primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT" },
-    })).toBe("excluded");
+    })).toBe("expense");
   });
 
-  it("excludes transfers and investment movement", () => {
+  it("keeps outgoing e-transfer as an expense", () => {
     expect(classifyPlaidBudgetImpact({
-      amount: 500,
-      name: "ONLINE TRANSFER",
+      amount: 270,
+      name: "SEND E-TFR ***K5P",
       merchant_name: null,
       personal_finance_category: { primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER" },
-    })).toBe("excluded");
+    })).toBe("expense");
+  });
+
+  it("keeps same-bank transfer names in budget until matched to another connected account", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: 500,
+      name: "WQ062 TFR-TO 6911127",
+      merchant_name: null,
+      personal_finance_category: { primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER" },
+    })).toBe("expense");
+  });
+
+  it("excludes investment movement", () => {
     expect(classifyPlaidBudgetImpact({
       amount: 250,
       name: "INVESTMENT TRANSFER",
       merchant_name: null,
       personal_finance_category: { primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_INVESTMENT_AND_RETIREMENT_FUNDS" },
     })).toBe("excluded");
+  });
+
+  it("keeps ATM, mortgage, BNPL, and bank fees as expenses", () => {
+    for (const tx of [
+      { name: "TD ATM W/D 008047", primary: "TRANSFER_OUT", detailed: "TRANSFER_OUT_WITHDRAWAL" },
+      { name: "TD MORTGAGE", primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_MORTGAGE_PAYMENT" },
+      { name: "FLEXITI Y4J4A8", primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_BNPL" },
+      { name: "MONTHLY ACCOUNT FEE", primary: "BANK_FEES", detailed: "BANK_FEES_OTHER_BANK_FEES" },
+    ]) {
+      expect(classifyPlaidBudgetImpact({
+        amount: 50,
+        name: tx.name,
+        merchant_name: null,
+        personal_finance_category: { primary: tx.primary, detailed: tx.detailed },
+      })).toBe("expense");
+    }
   });
 
   it("builds budget-visible Prisma predicates", () => {
@@ -266,15 +295,7 @@ export function classifyPlaidBudgetImpact(t: PlaidBudgetTx): BudgetImpactValue {
   const detailed = t.personal_finance_category?.detailed?.toUpperCase() ?? "";
   const text = `${t.name ?? ""} ${t.merchant_name ?? ""}`.toUpperCase();
 
-  if (primary.startsWith("TRANSFER")) return "excluded";
-  if (detailed.includes("CREDIT_CARD_PAYMENT")) return "excluded";
   if (detailed.includes("INVESTMENT") || detailed.includes("RETIREMENT")) return "excluded";
-  if (/\b(PAYMENT|PMT)\b/.test(text) && /\b(CREDIT|CARD|VISA|MASTERCARD|AMEX)\b/.test(text)) {
-    return "excluded";
-  }
-  if (/\b(E-?TRANSFER|TRANSFER TO|TRANSFER FROM|ONLINE TRANSFER)\b/.test(text)) {
-    return "excluded";
-  }
 
   return "expense";
 }
@@ -299,13 +320,14 @@ git commit -m "feat: add budget impact classifier"
 
 ---
 
-### Task 3: Wire Transaction Creation, Plaid Sync, and Backfill
+### Task 3: Wire Transaction Creation, Plaid Sync, Backfill, and Categorization Fix
 
 **Files:**
 - Modify: `apps/api/src/transactions/create-manual.ts`
 - Modify: `apps/api/src/plaid/sync.ts`
 - Create: `apps/api/src/scripts/backfill-budget-impact.ts`
 - Modify: `apps/api/package.json`
+- Modify: `apps/api/src/categorize/llm.ts`
 
 - [ ] **Step 1: Mark manual negative rows excluded**
 
@@ -440,15 +462,118 @@ console.log(`backfill-budget-impact changed=${changed} scanned=${rows.length}`);
 await prisma.$disconnect();
 ```
 
-- [ ] **Step 7: Add package script**
+- [ ] **Step 7: Add internal transfer reconciliation script**
+
+Create `apps/api/src/scripts/reconcile-budget-impact.ts`:
+
+```ts
+import { Prisma } from "@prisma/client";
+import { prisma } from "../db.js";
+
+function looksLikeOwnAccountTransfer(name: string): boolean {
+  return /\bTFR-(TO|FR)\b/i.test(name);
+}
+
+function looksLikeCreditCardPayment(name: string, detailed: string | null): boolean {
+  if (detailed === "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT") return true;
+  return /\b(PAYMENT|PYMT|PMT)\b/i.test(name) && /\b(CREDIT|CARD|VISA|MASTERCARD|AMEX)\b/i.test(name);
+}
+
+const rows = await prisma.transaction.findMany({
+  where: {
+    source: "plaid",
+    budgetImpactSource: "auto",
+    removedAt: null,
+    amount: { gt: 0 },
+  },
+  select: {
+    id: true,
+    workspaceId: true,
+    accountId: true,
+    amount: true,
+    occurredAt: true,
+    merchantRaw: true,
+    rawData: true,
+  },
+});
+
+let changed = 0;
+for (const row of rows) {
+  const raw = row.rawData as { name?: string | null } | null;
+  const detailed =
+    (row.rawData as { personal_finance_category?: { detailed?: string | null } } | null)
+      ?.personal_finance_category?.detailed ?? null;
+  const name = raw?.name ?? row.merchantRaw;
+
+  const dayStart = new Date(row.occurredAt);
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const dayEnd = new Date(dayStart);
+  dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+  const fiveDaysAfter = new Date(dayStart);
+  fiveDaysAfter.setUTCDate(fiveDaysAfter.getUTCDate() + 6);
+
+  const match = looksLikeOwnAccountTransfer(name)
+    ? await prisma.transaction.findFirst({
+        where: {
+          workspaceId: row.workspaceId,
+          accountId: { not: row.accountId },
+          removedAt: null,
+          amount: new Prisma.Decimal(row.amount).negated(),
+          occurredAt: { gte: dayStart, lt: dayEnd },
+          rawData: {
+            path: ["personal_finance_category", "detailed"],
+            equals: "TRANSFER_IN_ACCOUNT_TRANSFER",
+          },
+        },
+        select: { id: true },
+      })
+    : looksLikeCreditCardPayment(name, detailed)
+      ? await prisma.transaction.findFirst({
+          where: {
+            workspaceId: row.workspaceId,
+            accountId: { not: row.accountId },
+            account: { type: "credit" },
+            removedAt: null,
+            amount: new Prisma.Decimal(row.amount).negated(),
+            occurredAt: { gte: dayStart, lt: fiveDaysAfter },
+          },
+          select: { id: true },
+        })
+      : null;
+  if (!match) continue;
+
+  const result = await prisma.transaction.updateMany({
+    where: { id: row.id, budgetImpactSource: "auto" },
+    data: { budgetImpact: "excluded" },
+  });
+  changed += result.count;
+}
+
+console.log(`reconcile-budget-impact changed=${changed} scanned=${rows.length}`);
+await prisma.$disconnect();
+```
+
+- [ ] **Step 8: Fix DeepSeek JSON-mode categorization prompt**
+
+In `apps/api/src/categorize/llm.ts`, append this sentence to `systemInstruction`:
+
+```ts
+      "Return only valid JSON matching the requested schema.",
+```
+
+The literal word `JSON` is required because DeepSeek rejects `response_format: json_object` when no message contains `json`.
+
+- [ ] **Step 9: Add package scripts**
 
 In `apps/api/package.json` scripts, add:
 
 ```json
-"admin:backfill-budget-impact": "tsx src/scripts/backfill-budget-impact.ts"
+"admin:backfill-budget-impact": "tsx src/scripts/backfill-budget-impact.ts",
+"admin:reconcile-budget-impact": "tsx src/scripts/reconcile-budget-impact.ts",
+"admin:backfill-categorize": "tsx src/scripts/backfill-categorize-uncategorized.ts"
 ```
 
-- [ ] **Step 8: Typecheck**
+- [ ] **Step 10: Typecheck**
 
 Run:
 
@@ -458,10 +583,10 @@ pnpm nx typecheck api
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add apps/api/src/transactions/create-manual.ts apps/api/src/plaid/sync.ts apps/api/src/scripts/backfill-budget-impact.ts apps/api/package.json
+git add apps/api/src/transactions/create-manual.ts apps/api/src/plaid/sync.ts apps/api/src/scripts/backfill-budget-impact.ts apps/api/src/scripts/reconcile-budget-impact.ts apps/api/src/categorize/llm.ts apps/api/package.json
 git commit -m "feat: assign budget impact during plaid sync"
 ```
 
@@ -983,7 +1108,9 @@ pnpm smoke:mobile:lan
 
 Confirm:
 
-- Credit card payments and transfers appear in `Excluded transactions`.
+- Matched own-account transfers appear in `Excluded transactions`.
+- Connected-card credit card payments appear in `Excluded transactions`.
+- Outgoing E-Transfers remain in Activity as expenses.
 - Normal card purchases remain in Activity and budget totals.
 - `Add to budget` and `Exclude from budget` survive refresh.
 - Home and Analysis do not show non-expense copy.
