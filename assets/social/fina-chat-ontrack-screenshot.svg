@@ -1,0 +1,35 @@
+<svg width="1179" height="2556" viewBox="0 0 1179 2556" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      .font { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", Arial, sans-serif; }
+    </style>
+  </defs>
+
+  <image href="file:///Users/brianchoi/.codex/attachments/e9faa216-4379-490d-a93f-94c25d5c1e73/KakaoTalk_20260623_163854890.png" x="0" y="0" width="1179" height="2556"/>
+
+  <rect x="0" y="150" width="1179" height="200" fill="#FFFFFF"/>
+  <line x1="0" y1="349" x2="1179" y2="349" stroke="#ECEFEC" stroke-width="2"/>
+  <circle cx="99" cy="264" r="22" fill="none" stroke="#15201E" stroke-width="4"/>
+  <path d="M99 250V264L111 270" stroke="#15201E" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="590" y="247" text-anchor="middle" class="font" fill="#15201E" font-size="48" font-weight="700">Fina</text>
+  <text x="590" y="306" text-anchor="middle" class="font" fill="#6F7A76" font-size="40" font-weight="400">Personal finance assistant</text>
+  <path d="M790 252L804 266L818 252" stroke="#6F7A76" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="1058" y="250" width="32" height="32" rx="4" fill="none" stroke="#15201E" stroke-width="4"/>
+  <path d="M1084 239L1101 222M1092 222H1101V231" stroke="#15201E" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <rect x="0" y="390" width="1179" height="620" fill="#FFFFFF"/>
+
+  <g transform="translate(768 436)">
+    <rect x="0" y="0" width="342" height="144" rx="54" fill="#43B98E"/>
+    <text x="44" y="57" class="font" fill="#FFFFFF" font-size="40" font-weight="400">Am I on track</text>
+    <text x="44" y="107" class="font" fill="#FFFFFF" font-size="40" font-weight="400">this month?</text>
+  </g>
+
+  <g transform="translate(72 632)">
+    <rect x="0" y="0" width="862" height="318" rx="54" fill="#F3F5F3"/>
+    <text x="50" y="84" class="font" fill="#15201E" font-size="45" font-weight="500">You&apos;re on track.</text>
+    <text x="50" y="145" class="font" fill="#15201E" font-size="42" font-weight="400">Forecast: $143 left after bills</text>
+    <text x="50" y="202" class="font" fill="#15201E" font-size="42" font-weight="400">if you keep this pace.</text>
+    <text x="50" y="263" class="font" fill="#15201E" font-size="42" font-weight="400">Watch dining for the next 7 days.</text>
+  </g>
+</svg>

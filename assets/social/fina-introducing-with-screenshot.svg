@@ -1,0 +1,51 @@
+<svg width="1080" height="1350" viewBox="0 0 1080 1350" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1080" y2="1350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBFCFB"/>
+      <stop offset="0.58" stop-color="#F1F6F2"/>
+      <stop offset="1" stop-color="#E7F1EB"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="24" stdDeviation="26" flood-color="#15201E" flood-opacity="0.18"/>
+    </filter>
+    <clipPath id="screenClip">
+      <rect x="650" y="500" width="350" height="759" rx="48"/>
+    </clipPath>
+    <style>
+      .font { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", Arial, sans-serif; }
+      .smallCaps { letter-spacing: 3px; text-transform: uppercase; }
+    </style>
+  </defs>
+
+  <rect width="1080" height="1350" fill="url(#bg)"/>
+  <g opacity="0.22">
+    <path d="M36 240C144 176 258 154 382 174C506 194 594 264 704 250C814 236 896 166 1030 172" stroke="#7DD8B8" stroke-width="2"/>
+    <path d="M88 1038C214 1010 336 1028 462 1000C586 972 688 888 824 904C916 915 988 963 1040 1022" stroke="#8FB8E8" stroke-width="2"/>
+  </g>
+
+  <g transform="translate(80 74)">
+    <path d="M24 42C24 20 42 2 64 2C86 2 104 20 104 42" stroke="#8AA181" stroke-width="16" stroke-linecap="round"/>
+    <path d="M5 78C42 66 88 64 123 78" stroke="#8AA181" stroke-width="16" stroke-linecap="round"/>
+    <text x="154" y="75" class="font" fill="#15201E" font-size="64" font-weight="700">Fina</text>
+  </g>
+
+  <text x="80" y="258" class="font smallCaps" fill="#2E9577" font-size="22" font-weight="700">Now on App Store and Google Play</text>
+  <text x="80" y="350" class="font" fill="#15201E" font-size="82" font-weight="700">Introducing</text>
+  <text x="80" y="438" class="font" fill="#15201E" font-size="82" font-weight="700">Fina.</text>
+  <text x="80" y="520" class="font" fill="#4F5853" font-size="34" font-weight="500">Talk to your money like a friend.</text>
+  <text x="80" y="582" class="font" fill="#4F5853" font-size="30" font-weight="400">Ask for financial advice.</text>
+  <text x="80" y="624" class="font" fill="#4F5853" font-size="30" font-weight="400">See if your budget is still on track.</text>
+
+  <g transform="translate(80 694)">
+    <rect x="0" y="0" width="188" height="58" rx="29" fill="#15201E"/>
+    <text x="94" y="38" text-anchor="middle" class="font" fill="#FFFFFF" font-size="22" font-weight="700">Free to try</text>
+  </g>
+
+  <g filter="url(#shadow)">
+    <rect x="630" y="480" width="390" height="799" rx="64" fill="#15201E"/>
+    <rect x="650" y="500" width="350" height="759" rx="48" fill="#FFFFFF"/>
+    <image href="file:///Users/brianchoi/Documents/work/personal/fina/assets/social/fina-monthly-progress-anonymized.png" x="650" y="500" width="350" height="759" clip-path="url(#screenClip)" preserveAspectRatio="xMidYMid meet"/>
+  </g>
+
+  <text x="80" y="1276" class="font" fill="#6F7A76" font-size="24" font-weight="500">Ask. Forecast. Stay on track.</text>
+</svg>

@@ -1,0 +1,98 @@
+<svg width="1080" height="1350" viewBox="0 0 1080 1350" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1080" y2="1350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FBFCFB"/>
+      <stop offset="0.58" stop-color="#F1F6F2"/>
+      <stop offset="1" stop-color="#E7F1EB"/>
+    </linearGradient>
+    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="22" stdDeviation="26" flood-color="#15201E" flood-opacity="0.16"/>
+    </filter>
+    <style>
+      .font { font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Inter", "Helvetica Neue", Arial, sans-serif; }
+      .smallCaps { letter-spacing: 3px; text-transform: uppercase; }
+    </style>
+  </defs>
+
+  <rect width="1080" height="1350" fill="url(#bg)"/>
+
+  <g opacity="0.22">
+    <path d="M88 1038C214 1010 336 1028 462 1000C586 972 688 888 824 904C916 915 988 963 1040 1022" stroke="#8FB8E8" stroke-width="2"/>
+    <path d="M36 240C144 176 258 154 382 174C506 194 594 264 704 250C814 236 896 166 1030 172" stroke="#7DD8B8" stroke-width="2"/>
+  </g>
+
+  <g transform="translate(80 74)">
+    <path d="M24 42C24 20 42 2 64 2C86 2 104 20 104 42" stroke="#8AA181" stroke-width="16" stroke-linecap="round"/>
+    <path d="M5 78C42 66 88 64 123 78" stroke="#8AA181" stroke-width="16" stroke-linecap="round"/>
+    <text x="154" y="75" class="font" fill="#15201E" font-size="64" font-weight="700">Fina</text>
+  </g>
+
+  <text x="80" y="258" class="font smallCaps" fill="#2E9577" font-size="22" font-weight="700">Now on App Store and Google Play</text>
+  <text x="80" y="350" class="font" fill="#15201E" font-size="82" font-weight="700">Introducing</text>
+  <text x="80" y="438" class="font" fill="#15201E" font-size="82" font-weight="700">Fina.</text>
+  <text x="80" y="520" class="font" fill="#4F5853" font-size="34" font-weight="500">Talk to your money like a friend.</text>
+  <text x="80" y="582" class="font" fill="#4F5853" font-size="30" font-weight="400">Ask for financial advice, then see if your</text>
+  <text x="80" y="624" class="font" fill="#4F5853" font-size="30" font-weight="400">budget is still on track before month end.</text>
+
+  <g transform="translate(80 694)">
+    <rect x="0" y="0" width="188" height="58" rx="29" fill="#15201E"/>
+    <text x="94" y="38" text-anchor="middle" class="font" fill="#FFFFFF" font-size="22" font-weight="700">Free to try</text>
+  </g>
+
+  <g transform="translate(410 715)" filter="url(#shadow)">
+    <rect x="0" y="0" width="430" height="560" rx="58" fill="#15201E"/>
+    <rect x="16" y="16" width="398" height="528" rx="44" fill="#FBFCFB"/>
+
+    <g transform="translate(42 46)">
+      <text x="0" y="18" class="font" fill="#15201E" font-size="17" font-weight="700">4:38</text>
+      <rect x="266" y="7" width="8" height="11" rx="2" fill="#15201E" opacity="0.35"/>
+      <rect x="278" y="2" width="8" height="16" rx="2" fill="#15201E" opacity="0.45"/>
+      <path d="M300 8C310 0 322 0 332 8" stroke="#15201E" stroke-width="4" stroke-linecap="round"/>
+      <path d="M306 14C312 9 320 9 326 14" stroke="#15201E" stroke-width="4" stroke-linecap="round"/>
+      <rect x="344" y="2" width="26" height="15" rx="4" stroke="#15201E" stroke-width="2" opacity="0.45"/>
+      <rect x="348" y="5" width="17" height="9" rx="3" fill="#3EB38B"/>
+    </g>
+
+    <g transform="translate(38 91)">
+      <circle cx="0" cy="23" r="14" stroke="#15201E" stroke-width="3"/>
+      <path d="M0 14V23L7 27" stroke="#15201E" stroke-width="3" stroke-linecap="round"/>
+      <text x="166" y="21" text-anchor="middle" class="font" fill="#15201E" font-size="24" font-weight="700">On track check</text>
+      <text x="166" y="48" text-anchor="middle" class="font" fill="#6F7A76" font-size="18" font-weight="500">Brian Choi's workspace</text>
+      <path d="M304 12L314 2M309 2H314V7" stroke="#15201E" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="292" y="14" width="24" height="24" rx="3" stroke="#15201E" stroke-width="3"/>
+    </g>
+
+    <line x1="16" y1="157" x2="414" y2="157" stroke="#ECEFEC"/>
+
+    <g transform="translate(42 193)">
+      <g transform="translate(184 0)">
+        <rect x="0" y="0" width="164" height="74" rx="26" fill="#3EB38B"/>
+        <text x="24" y="31" class="font" fill="#FFFFFF" font-size="20" font-weight="500">Am I on track</text>
+        <text x="24" y="57" class="font" fill="#FFFFFF" font-size="20" font-weight="500">this month?</text>
+      </g>
+      <rect x="0" y="104" width="316" height="146" rx="26" fill="#F3F5F3"/>
+      <text x="24" y="141" class="font" fill="#15201E" font-size="21" font-weight="600">You are on track.</text>
+      <text x="24" y="172" class="font" fill="#15201E" font-size="19" font-weight="400">Forecast: $143 left after bills</text>
+      <text x="24" y="201" class="font" fill="#15201E" font-size="19" font-weight="400">if you keep this pace.</text>
+      <text x="24" y="231" class="font" fill="#4F5853" font-size="18" font-weight="400">Watch dining for the next 7 days.</text>
+    </g>
+
+    <line x1="16" y1="444" x2="414" y2="444" stroke="#ECEFEC"/>
+    <g transform="translate(42 459)">
+      <rect x="0" y="0" width="292" height="48" rx="24" fill="#F3F5F3"/>
+      <text x="22" y="31" class="font" fill="#6F7A76" font-size="20" font-weight="400">Message Fina...</text>
+      <circle cx="326" cy="24" r="24" fill="#BDE6D4"/>
+      <path d="M326 35V15M326 15L317 24M326 15L335 24" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+    </g>
+
+    <line x1="16" y1="521" x2="414" y2="521" stroke="#ECEFEC"/>
+    <g transform="translate(54 532)">
+      <text x="0" y="0" class="font" fill="#6F7A76" font-size="10" font-weight="700">Home</text>
+      <text x="82" y="0" class="font" fill="#6F7A76" font-size="10" font-weight="700">Activity</text>
+      <text x="185" y="0" class="font" fill="#3EB38B" font-size="10" font-weight="700">Chat</text>
+      <text x="270" y="0" class="font" fill="#6F7A76" font-size="10" font-weight="700">Goals</text>
+    </g>
+  </g>
+
+  <text x="80" y="1276" class="font" fill="#6F7A76" font-size="24" font-weight="500">Ask. Forecast. Stay on track.</text>
+</svg>
