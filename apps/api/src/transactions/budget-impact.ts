@@ -64,6 +64,35 @@ const SAFE_EXPENSE_DETAILED = [
   "BANK_FEES",
 ] as const;
 
+const PERSON_TRANSFER_MARKERS = [
+  "E-TRANSFER",
+  "E-TFR",
+  "INTERAC",
+  "ZELLE",
+  "VENMO",
+  "CASH APP",
+  "PAYPAL",
+] as const;
+
+const ACCOUNT_TRANSFER_MARKERS = [
+  "TFR-TO",
+  "TRANSFER TO",
+  "TRANSFER FROM",
+  "XFER TO",
+  "XFER FROM",
+  "XFR TO",
+  "XFR FROM",
+  "TRSF TO",
+  "TRSF FROM",
+  "TRNSFR TO",
+  "TRNSFR FROM",
+  "ONLINE TRANSFER",
+  "INTERNAL TRANSFER",
+  "ACCOUNT TRANSFER",
+  "BOOK TRANSFER",
+  "BETWEEN ACCOUNTS",
+] as const;
+
 const INVESTMENT_KEYWORDS = [
   ...INVESTMENT_GENERIC_KEYWORDS,
   ...INVESTMENT_PROVIDER_KEYWORDS,
@@ -107,14 +136,16 @@ export function classifyPlaidBudgetImpact(t: PlaidBudgetTx): BudgetImpactValue {
   const primary = t.personal_finance_category?.primary?.toUpperCase() ?? "";
   const detailed = t.personal_finance_category?.detailed?.toUpperCase() ?? "";
   const text = `${t.name ?? ""} ${t.merchant_name ?? ""}`.toUpperCase();
+  const isAccountTransfer = detailed.includes("ACCOUNT_TRANSFER");
 
   if (SAFE_EXPENSE_DETAILED.some((value) => detailed.startsWith(value))) return "expense";
+  if (PERSON_TRANSFER_MARKERS.some((marker) => hasKeyword(text, marker))) return "expense";
   if (detailed.includes("INVESTMENT") || detailed.includes("RETIREMENT")) return "excluded";
   if (detailed.includes("CREDIT_CARD_PAYMENT")) return "excluded";
   if (/\b(PAYMENT|PYMT|PMT)\b/.test(text) && /\b(CREDIT|CARD|VISA|MASTERCARD|AMEX)\b/.test(text)) {
     return "excluded";
   }
-  if (/\bTFR-TO\b/.test(text)) return "excluded";
+  if (isAccountTransfer && ACCOUNT_TRANSFER_MARKERS.some((marker) => hasKeyword(text, marker))) return "excluded";
   if (INVESTMENT_ACCOUNT_KEYWORDS.some((keyword) => hasKeyword(text, keyword))) {
     return "excluded";
   }

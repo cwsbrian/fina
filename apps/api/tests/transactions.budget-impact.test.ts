@@ -48,6 +48,31 @@ describe("budget impact", () => {
     })).toBe("excluded");
   });
 
+  it("excludes account-transfer rows with common own-account transfer markers", () => {
+    for (const name of [
+      "TRANSFER TO SAVINGS",
+      "XFER TO CHEQUING",
+      "XFR TO BROKERAGE",
+      "TRSF TO ACCOUNT",
+      "TRNSFR TO ACCOUNT",
+      "ONLINE TRANSFER",
+      "INTERNAL TRANSFER",
+      "ACCOUNT TRANSFER",
+      "BOOK TRANSFER",
+      "BETWEEN ACCOUNTS",
+    ]) {
+      expect(classifyPlaidBudgetImpact({
+        amount: 100,
+        name,
+        merchant_name: null,
+        personal_finance_category: {
+          primary: "TRANSFER_OUT",
+          detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER",
+        },
+      })).toBe("excluded");
+    }
+  });
+
   it("excludes investment movement", () => {
     expect(classifyPlaidBudgetImpact({
       amount: 250,
@@ -106,12 +131,33 @@ describe("budget impact", () => {
   it("does not match investment keywords inside longer words", () => {
     expect(classifyPlaidBudgetImpact({
       amount: 40,
-      name: "TRANSFER TO MIRACLE SHOP",
+      name: "MIRACLE SHOP PAYMENT",
       merchant_name: null,
       personal_finance_category: {
         primary: "TRANSFER_OUT",
         detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER",
       },
     })).toBe("expense");
+  });
+
+  it("does not exclude person-to-person transfer markers", () => {
+    for (const name of [
+      "INTERAC E-TRANSFER",
+      "SEND E-TFR ***K5P",
+      "ZELLE PAYMENT",
+      "VENMO CASHOUT",
+      "CASH APP TRANSFER",
+      "PAYPAL TRANSFER",
+    ]) {
+      expect(classifyPlaidBudgetImpact({
+        amount: 75,
+        name,
+        merchant_name: null,
+        personal_finance_category: {
+          primary: "TRANSFER_OUT",
+          detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER",
+        },
+      })).toBe("expense");
+    }
   });
 });
