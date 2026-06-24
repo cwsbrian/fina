@@ -36,6 +36,18 @@ describe("budget impact", () => {
     })).toBe("expense");
   });
 
+  it("excludes same-bank transfer-to rows even without a matched destination account", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: 400,
+      name: "WQ062 TFR-TO 6911127",
+      merchant_name: null,
+      personal_finance_category: {
+        primary: "TRANSFER_OUT",
+        detailed: "TRANSFER_OUT_ACCOUNT_TRANSFER",
+      },
+    })).toBe("excluded");
+  });
+
   it("excludes investment movement", () => {
     expect(classifyPlaidBudgetImpact({
       amount: 250,

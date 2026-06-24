@@ -190,8 +190,6 @@ export async function syncTransactions(env: Env, workspaceId: string, plaidItemI
       throw e;
     }
 
-    await excludeMatchedOwnTransfers(workspaceId, newTxIds);
-
     return { added, modified, removed, newTxIds };
   } catch (e) {
     // Persist status in a SEPARATE short tx so it survives the rethrow.
@@ -280,55 +278,6 @@ function candidateReconnectMerchantNormalized(candidate: {
   if (!raw || raw.toLowerCase() === "unknown") return null;
   const normalized = candidate.merchantNormalized?.trim();
   return normalized ? normalized : normalizeMerchant(candidate.merchantRaw);
-}
-
-function looksLikeOwnTransfer(rawData: unknown, fallback: string): boolean {
-  const name =
-    typeof rawData === "object" && rawData !== null && "name" in rawData && typeof rawData.name === "string"
-      ? rawData.name
-      : fallback;
-  return /\bTFR-(TO|FR)\b/i.test(name);
-}
-
-async function excludeMatchedOwnTransfers(workspaceId: string, ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
-  const rows = await prisma.transaction.findMany({
-    where: {
-      id: { in: ids },
-      workspaceId,
-      budgetImpactSource: "auto",
-      removedAt: null,
-      amount: { gt: 0 },
-    },
-    select: { id: true, accountId: true, amount: true, occurredAt: true, merchantRaw: true, rawData: true },
-  });
-
-  for (const row of rows) {
-    if (!looksLikeOwnTransfer(row.rawData, row.merchantRaw)) continue;
-    const dayStart = new Date(row.occurredAt);
-    dayStart.setUTCHours(0, 0, 0, 0);
-    const dayEnd = new Date(dayStart);
-    dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
-    const match = await prisma.transaction.findFirst({
-      where: {
-        workspaceId,
-        accountId: { not: row.accountId },
-        removedAt: null,
-        amount: new Prisma.Decimal(row.amount).negated(),
-        occurredAt: { gte: dayStart, lt: dayEnd },
-        rawData: {
-          path: ["personal_finance_category", "detailed"],
-          equals: "TRANSFER_IN_ACCOUNT_TRANSFER",
-        },
-      },
-      select: { id: true },
-    });
-    if (!match) continue;
-    await prisma.transaction.updateMany({
-      where: { id: row.id, budgetImpactSource: "auto" },
-      data: { budgetImpact: "excluded" },
-    });
-  }
 }
 
 export async function upsertAdded(
