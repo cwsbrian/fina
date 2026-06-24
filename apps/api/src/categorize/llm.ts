@@ -79,7 +79,8 @@ export async function callLlmCategorize(
       "Never cross types. Use exact category names from the matching list. " +
       "If a transaction includes plaid_hint (Plaid's personal_finance_category with primary/detailed/confidence), " +
       "treat HIGH/VERY_HIGH as a strong hint and MEDIUM/LOW as a weak hint when mapping into our category list. " +
-      "If genuinely unclear, use 'Other' from the matching type's list.",
+      "If genuinely unclear, use 'Other' from the matching type's list. " +
+      "Return only valid JSON matching the requested schema with a top-level results array.",
     contents: [
       { role: "user", parts: [{ text: JSON.stringify(userPayload) }] },
     ],
@@ -106,9 +107,10 @@ export async function callLlmCategorize(
   if (typeof text !== "string" || text.length === 0) {
     throw new Error("LLM returned no text");
   }
-  const parsed = JSON.parse(text) as { results?: LLMResult[] };
-  if (!Array.isArray(parsed.results)) {
+  const parsed = JSON.parse(text) as { results?: LLMResult[]; transactions?: LLMResult[] };
+  const results = Array.isArray(parsed.results) ? parsed.results : parsed.transactions;
+  if (!Array.isArray(results)) {
     throw new Error(`LLM response missing results array: ${text.slice(0, 200)}`);
   }
-  return parsed.results;
+  return results;
 }
