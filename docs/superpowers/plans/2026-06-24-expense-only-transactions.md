@@ -163,13 +163,13 @@ describe("budget impact", () => {
     })).toBe("expense");
   });
 
-  it("keeps credit card payments in budget until connected-card evidence exists", () => {
+  it("excludes clear credit card payments", () => {
     expect(classifyPlaidBudgetImpact({
       amount: 3000,
       name: "PAYMENT TO CREDIT CARD",
       merchant_name: null,
       personal_finance_category: { primary: "LOAN_PAYMENTS", detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT" },
-    })).toBe("expense");
+    })).toBe("excluded");
   });
 
   it("keeps outgoing e-transfer as an expense", () => {
@@ -296,6 +296,10 @@ export function classifyPlaidBudgetImpact(t: PlaidBudgetTx): BudgetImpactValue {
   const text = `${t.name ?? ""} ${t.merchant_name ?? ""}`.toUpperCase();
 
   if (detailed.includes("INVESTMENT") || detailed.includes("RETIREMENT")) return "excluded";
+  if (detailed.includes("CREDIT_CARD_PAYMENT")) return "excluded";
+  if (/\b(PAYMENT|PYMT|PMT)\b/.test(text) && /\b(CREDIT|CARD|VISA|MASTERCARD|AMEX)\b/.test(text)) {
+    return "excluded";
+  }
 
   return "expense";
 }
@@ -474,11 +478,6 @@ function looksLikeOwnAccountTransfer(name: string): boolean {
   return /\bTFR-(TO|FR)\b/i.test(name);
 }
 
-function looksLikeCreditCardPayment(name: string, detailed: string | null): boolean {
-  if (detailed === "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT") return true;
-  return /\b(PAYMENT|PYMT|PMT)\b/i.test(name) && /\b(CREDIT|CARD|VISA|MASTERCARD|AMEX)\b/i.test(name);
-}
-
 const rows = await prisma.transaction.findMany({
   where: {
     source: "plaid",
@@ -500,17 +499,12 @@ const rows = await prisma.transaction.findMany({
 let changed = 0;
 for (const row of rows) {
   const raw = row.rawData as { name?: string | null } | null;
-  const detailed =
-    (row.rawData as { personal_finance_category?: { detailed?: string | null } } | null)
-      ?.personal_finance_category?.detailed ?? null;
   const name = raw?.name ?? row.merchantRaw;
 
   const dayStart = new Date(row.occurredAt);
   dayStart.setUTCHours(0, 0, 0, 0);
   const dayEnd = new Date(dayStart);
   dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
-  const fiveDaysAfter = new Date(dayStart);
-  fiveDaysAfter.setUTCDate(fiveDaysAfter.getUTCDate() + 6);
 
   const match = looksLikeOwnAccountTransfer(name)
     ? await prisma.transaction.findFirst({
@@ -527,19 +521,7 @@ for (const row of rows) {
         },
         select: { id: true },
       })
-    : looksLikeCreditCardPayment(name, detailed)
-      ? await prisma.transaction.findFirst({
-          where: {
-            workspaceId: row.workspaceId,
-            accountId: { not: row.accountId },
-            account: { type: "credit" },
-            removedAt: null,
-            amount: new Prisma.Decimal(row.amount).negated(),
-            occurredAt: { gte: dayStart, lt: fiveDaysAfter },
-          },
-          select: { id: true },
-        })
-      : null;
+    : null;
   if (!match) continue;
 
   const result = await prisma.transaction.updateMany({
@@ -1109,7 +1091,7 @@ pnpm smoke:mobile:lan
 Confirm:
 
 - Matched own-account transfers appear in `Excluded transactions`.
-- Connected-card credit card payments appear in `Excluded transactions`.
+- Depository-side credit card payments appear in `Excluded transactions`.
 - Outgoing E-Transfers remain in Activity as expenses.
 - Normal card purchases remain in Activity and budget totals.
 - `Add to budget` and `Exclude from budget` survive refresh.

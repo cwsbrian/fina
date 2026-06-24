@@ -4,7 +4,7 @@
 
 Fina's core job is to help a user stay under a monthly expense budget. Bank feeds contain negative or non-spending activity that should not count against that budget, especially credit card payments, transfers between the user's own accounts, and investment transfers.
 
-When a connected credit card is also synced, a bank-side credit card payment can double count the same spending: once as the original card purchases, then again as the checking account payment. The product should make those payment and transfer records easy to audit without treating them as budget spending by default.
+A bank-side credit card payment usually reflects paying off earlier card spending, not new spending in the payment month. The product should make those payment and transfer records easy to audit without treating them as budget spending by default.
 
 ## Product Rule
 
@@ -39,11 +39,11 @@ Migration behavior:
 New synced transactions should default to:
 
 - `expense` when the transaction is an outgoing purchase-like amount.
-- `excluded` when the transaction is a connected-card payment, own-account transfer, investment movement, or other non-budget activity.
+- `excluded` when the transaction is a credit card payment, own-account transfer, investment movement, or other non-budget activity.
 
 The initial auto rules should be conservative:
 
-- Clear credit card payments become `excluded` when the corresponding card activity is likely connected.
+- Clear depository-side credit card payments become `excluded` by default because payment date usually does not equal expense month.
 - Investment transfers become `excluded`.
 - Internal account-to-account movement becomes `excluded` when both sides can be identified by connected accounts, amount, nearby date, or bank-specific `TFR-TO` / `TFR-FR` style names.
 - Outgoing E-Transfers stay `expense` by default. They are too ambiguous to auto-exclude from Plaid category alone.
@@ -105,9 +105,9 @@ The local production-key test showed a categorization failure unrelated to Plaid
 
 After implementation, validate locally with the production Plaid keys already configured:
 
-- Connect checking and credit card accounts.
-- Confirm checking-side credit card payments land in `Excluded transactions`.
-- Confirm actual credit card purchases remain budget expenses.
+- Connect checking and, when available, credit card accounts.
+- Confirm checking-side credit card payments land in `Excluded transactions` even if the card account is not connected.
+- Confirm actual credit card purchases remain budget expenses when card accounts are connected.
 - Confirm manual `Add to budget` and `Exclude from budget` survive refresh and later sync.
 - Confirm Home and Activity do not show excluded records in their default views.
 
@@ -115,5 +115,5 @@ After implementation, validate locally with the production Plaid keys already co
 
 - Building a full ledger view for every bank movement.
 - Making category-level budget inclusion rules.
-- Perfect automatic matching for every credit card payment in the first pass.
+- Allocating unconnected card payments back to the original purchase month.
 - Reworking the unrelated uncategorized production backfill script.
