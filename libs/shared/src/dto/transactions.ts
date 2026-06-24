@@ -35,6 +35,8 @@ export type TransactionDTO = {
   /** ISO 8601 timestamp; null when not soft-removed. */
   removedAt: string | null;
   needsReclassification: boolean;
+  budgetImpact: "expense" | "excluded";
+  budgetImpactSource: "auto" | "user";
   allocations: AllocationDTO[];
 };
 

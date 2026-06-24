@@ -40,6 +40,7 @@ export default function TransactionDetail() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [accountPickerOpen, setAccountPickerOpen] = useState(false);
+  const [savingBudgetImpact, setSavingBudgetImpact] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -146,6 +147,25 @@ export default function TransactionDetail() {
       load();
     } catch (e) {
       Alert.alert("Couldn't confirm", (e as { code?: string }).code ?? "Try again.");
+    }
+  }
+
+  async function toggleBudgetImpact() {
+    if (!tx || savingBudgetImpact) return;
+    const next = tx.budgetImpact === "excluded" ? "expense" : "excluded";
+    setSavingBudgetImpact(true);
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ budgetImpact: next }),
+      });
+      setTx({ ...tx, budgetImpact: next, budgetImpactSource: "user" });
+    } catch (e) {
+      Alert.alert("Couldn't update", (e as { code?: string }).code ?? "Try again.");
+    } finally {
+      setSavingBudgetImpact(false);
     }
   }
 
@@ -284,6 +304,19 @@ export default function TransactionDetail() {
               </Text>
             </View>
           )}
+        </View>
+
+        <Text style={styles.groupLabel}>Budget</Text>
+        <View style={styles.group}>
+          <DetailRow
+            label="Budget"
+            editable={!savingBudgetImpact}
+            onPress={toggleBudgetImpact}
+          >
+            <Text style={styles.rowValue}>
+              {tx.budgetImpact === "excluded" ? "Excluded" : "Included"}
+            </Text>
+          </DetailRow>
         </View>
 
         {/* Category */}

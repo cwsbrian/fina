@@ -262,13 +262,16 @@ export default function Activity() {
           />
         }
         ListHeaderComponent={
-          upcoming.count > 0 ? (
-            <UpcomingBanner
-              total={upcoming.total}
-              count={upcoming.count}
-              currency={currency}
-            />
-          ) : null
+          <View>
+            {upcoming.count > 0 ? (
+              <UpcomingBanner
+                total={upcoming.total}
+                count={upcoming.count}
+                currency={currency}
+              />
+            ) : null}
+            <ExcludedBanner />
+          </View>
         }
         renderSectionHeader={({ section }) => (
           <View style={styles.sectionHead}>
@@ -392,6 +395,30 @@ function UpcomingBanner({
       </Text>
       <Text style={styles.bannerAmount}>−{display}</Text>
       <Text style={styles.bannerCount}>· {count}</Text>
+      <Ionicons
+        name="chevron-forward"
+        size={14}
+        color={colors.mutedSoft}
+      />
+    </Pressable>
+  );
+}
+
+function ExcludedBanner() {
+  return (
+    <Pressable
+      style={({ pressed }) => [
+        styles.banner,
+        pressed && { opacity: 0.7 },
+      ]}
+      onPress={() => router.push("/transactions/excluded" as never)}
+    >
+      <View style={styles.bannerGlyph}>
+        <Ionicons name="eye-off-outline" size={13} color={colors.primary} />
+      </View>
+      <Text style={styles.bannerLabel} numberOfLines={1}>
+        Excluded transactions
+      </Text>
       <Ionicons
         name="chevron-forward"
         size={14}

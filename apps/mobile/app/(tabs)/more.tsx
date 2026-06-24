@@ -429,8 +429,14 @@ export default function More() {
           <SettingsRow
             icon="pricetag-outline"
             title="Categories"
-            subtitle="Expense + income labels for transactions"
+            subtitle="Labels for transactions"
             onPress={() => router.push("/categories" as never)}
+          />
+          <SettingsRow
+            icon="eye-off-outline"
+            title="Excluded transactions"
+            subtitle="Card payments and transfers"
+            onPress={() => router.push("/transactions/excluded" as never)}
           />
           <SettingsRow
             icon="calendar-outline"

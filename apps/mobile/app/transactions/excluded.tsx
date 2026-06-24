@@ -1,0 +1,250 @@
+import { useCallback, useState } from "react";
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList,
+  Pressable,
+  RefreshControl,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
+import { Stack, router, useFocusEffect } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import type { TransactionDTO } from "@fina/shared";
+import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
+import { getActiveWorkspaceId } from "../../src/workspace/active";
+import { formatMoney } from "../../src/format/money";
+import { HeaderIconButton } from "../../src/design/HeaderIconButton";
+import { colors, space, type as type$ } from "../../src/design/tokens";
+
+type TxListResp = {
+  transactions: TransactionDTO[];
+  nextCursor: string | null;
+};
+
+export default function ExcludedTransactions() {
+  const [txs, setTxs] = useState<TransactionDTO[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const wsId =
+        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      if (!wsId) throw new Error("no_workspace");
+      const data = await apiFetch<TxListResp>(
+        `/workspaces/${wsId}/transactions?budgetImpact=excluded&limit=100`,
+      );
+      setTxs(data.transactions);
+      setErr(null);
+    } catch (e) {
+      setErr((e as { code?: string }).code ?? "load_error");
+    }
+  }, []);
+
+  useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try { await load(); } finally { setRefreshing(false); }
+  }, [load]);
+
+  async function addToBudget(tx: TransactionDTO) {
+    if (savingId) return;
+    setSavingId(tx.id);
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ budgetImpact: "expense" }),
+      });
+      setTxs((cur) => (cur ?? []).filter((x) => x.id !== tx.id));
+    } catch (e) {
+      Alert.alert("Couldn't update", (e as { code?: string }).code ?? "Try again.");
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  return (
+    <SafeAreaView style={styles.safe} edges={["top"]}>
+      <Stack.Screen options={{ headerShown: false }} />
+      <View style={styles.head}>
+        <HeaderIconButton icon="chevron-back" onPress={() => router.back()} variant="plain" />
+        <Text style={styles.title}>Excluded transactions</Text>
+        <View style={{ width: 34 }} />
+      </View>
+
+      {txs === null && !err ? (
+        <View style={styles.fallback}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      ) : err ? (
+        <View style={styles.fallback}>
+          <Text style={styles.errTitle}>Couldn't load</Text>
+          <Text style={styles.errBody}>{err}</Text>
+          <Pressable style={styles.cta} onPress={load}>
+            <Text style={styles.ctaText}>Try again</Text>
+          </Pressable>
+        </View>
+      ) : (
+        <FlatList
+          data={txs ?? []}
+          keyExtractor={(tx) => tx.id}
+          contentContainerStyle={styles.list}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+              tintColor={colors.primary}
+            />
+          }
+          ListEmptyComponent={
+            <View style={styles.empty}>
+              <View style={styles.emptyIcon}>
+                <Ionicons name="eye-off-outline" size={32} color={colors.muted} />
+              </View>
+              <Text style={styles.emptyTitle}>Nothing excluded</Text>
+            </View>
+          }
+          renderItem={({ item }) => (
+            <ExcludedRow
+              tx={item}
+              saving={savingId === item.id}
+              onAdd={() => addToBudget(item)}
+            />
+          )}
+        />
+      )}
+    </SafeAreaView>
+  );
+}
+
+function ExcludedRow({
+  tx,
+  saving,
+  onAdd,
+}: {
+  tx: TransactionDTO;
+  saving: boolean;
+  onAdd: () => void;
+}) {
+  const money = formatMoney(tx.amount, tx.currency);
+  const merchant = tx.merchantNormalized || tx.merchantRaw || "-";
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
+      onPress={() => router.push(`/transactions/${tx.id}` as never)}
+    >
+      <View style={styles.rowGlyph}>
+        <Ionicons name="eye-off-outline" size={17} color={colors.muted} />
+      </View>
+      <View style={styles.rowMid}>
+        <Text style={styles.rowTitle} numberOfLines={1}>{merchant}</Text>
+        <Text style={styles.rowMeta}>{formatDate(tx.occurredAt)}</Text>
+      </View>
+      <View style={styles.rowRight}>
+        <Text style={[styles.rowAmount, money.isIncome && { color: colors.up }]}>
+          {money.isIncome ? "+" : "-"}{money.display}
+        </Text>
+        <Pressable
+          style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.65 }]}
+          onPress={(e) => {
+            e.stopPropagation();
+            onAdd();
+          }}
+          disabled={saving}
+        >
+          {saving ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <Text style={styles.addBtnText}>Add</Text>
+          )}
+        </Pressable>
+      </View>
+    </Pressable>
+  );
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+const styles = StyleSheet.create({
+  safe: { flex: 1, backgroundColor: colors.canvas },
+  head: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.base,
+    paddingVertical: space.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
+  },
+  title: { ...type$.titleSm, color: colors.ink },
+  fallback: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
+  errTitle: { ...type$.titleMd, color: colors.down, marginBottom: 4 },
+  errBody: { ...type$.bodyMd, color: colors.body, marginBottom: space.base },
+  cta: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: space.xl,
+    paddingVertical: 14,
+    borderRadius: 999,
+  },
+  ctaText: { ...type$.button, color: colors.onPrimary },
+  list: { padding: space.lg, flexGrow: 1 },
+  empty: { flex: 1, alignItems: "center", justifyContent: "center", paddingTop: 120 },
+  emptyIcon: {
+    width: 70,
+    height: 70,
+    borderRadius: 999,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: space.base,
+  },
+  emptyTitle: { ...type$.titleMd, color: colors.ink },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
+  },
+  rowGlyph: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  rowMid: { flex: 1, minWidth: 0 },
+  rowTitle: { ...type$.titleSm, color: colors.ink },
+  rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
+  rowRight: { alignItems: "flex-end", gap: 6 },
+  rowAmount: {
+    ...type$.bodyMd,
+    color: colors.ink,
+    fontWeight: "600",
+    fontVariant: ["tabular-nums"],
+  },
+  addBtn: {
+    minWidth: 48,
+    height: 28,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 999,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+  },
+  addBtnText: { ...type$.bodySm, color: colors.primary, fontWeight: "700" },
+});
