@@ -11,7 +11,7 @@ import {
   Platform,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { Stack, router, useLocalSearchParams } from "expo-router";
+import { Stack, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { CategoryDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
@@ -35,9 +35,7 @@ function chunk<T>(arr: ReadonlyArray<T>, size: number): T[][] {
 // /transactions/[id]/new-category.tsx this does NOT PATCH a transaction
 // after create; the user is just managing their category set.
 export default function NewCategory() {
-  const { type } = useLocalSearchParams<{ type?: "expense" | "income" }>();
-  const categoryType: "expense" | "income" =
-    type === "income" ? "income" : "expense";
+  const categoryType = "expense";
   const [name, setName] = useState("");
   const [icon, setIcon] = useState(DEFAULT_NEW_CATEGORY_ICON);
   const [color, setColor] = useState(() => pickRandomCategoryColor());
@@ -90,9 +88,7 @@ export default function NewCategory() {
         >
           <Text style={styles.cancel}>Cancel</Text>
         </Pressable>
-        <Text style={styles.title}>
-          {categoryType === "income" ? "Add income category" : "Add category"}
-        </Text>
+        <Text style={styles.title}>Add category</Text>
         <Pressable
           onPress={submit}
           disabled={submitting || name.trim().length === 0}

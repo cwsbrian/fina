@@ -46,10 +46,7 @@ type Props = {
   /** Select mode (no txId): fires with the chosen category (or null
    *  for Uncategorized). The sheet dismisses itself. */
   onSelect?: (cat: CategoryDTO | null) => void;
-  /** When set, the picker only loads categories of this type. The
-   *  Categorize Inbox passes "expense" for positive amounts and
-   *  "income" for negative amounts so refunds/payouts land in the
-   *  right list. Omit for the full list. */
+  /** When set, the picker only loads categories of this type. */
   categoryType?: "expense" | "income";
 };
 
@@ -78,6 +75,7 @@ export function CategoryPickerSheet({
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const effectiveCategoryType = "expense";
 
   const snapPoints = useMemo(() => ["90%"], []);
 
@@ -87,9 +85,7 @@ export function CategoryPickerSheet({
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const url = categoryType
-        ? `/workspaces/${wsId}/categories?type=${categoryType}`
-        : `/workspaces/${wsId}/categories`;
+      const url = `/workspaces/${wsId}/categories?type=${effectiveCategoryType}`;
       const data = await apiFetch<CategoriesResp>(url);
       setCats(
         data.categories
@@ -100,7 +96,7 @@ export function CategoryPickerSheet({
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
     }
-  }, [categoryType]);
+  }, []);
 
   useEffect(() => {
     if (visible) load();
@@ -159,15 +155,8 @@ export function CategoryPickerSheet({
     if (!txId) return;
     // Keep the sheet open so Cancel on the new-category screen lands
     // back on the same picker; useFocusEffect refreshes on return.
-    // Pass the current type so the new category is created in the
-    // matching bucket — otherwise it defaults to expense and an
-    // income-context user's "new income category" wouldn't show up
-    // in the refreshed (income-filtered) picker.
-    const href = categoryType
-      ? `/transactions/${txId}/new-category?type=${categoryType}`
-      : `/transactions/${txId}/new-category`;
-    router.push(href as never);
-  }, [txId, categoryType]);
+    router.push(`/transactions/${txId}/new-category?type=${effectiveCategoryType}` as never);
+  }, [txId]);
 
   const pick = async (cat: CategoryDTO | null) => {
     if (!txId) {

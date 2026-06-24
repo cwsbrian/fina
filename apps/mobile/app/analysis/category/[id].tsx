@@ -16,7 +16,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../../src/api/client";
 import { getActiveWorkspaceId } from "../../../src/workspace/active";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
-import { formatMoney, dateBucket } from "../../../src/format/money";
+import { formatMoney, dateBucket, isExpenseAmount } from "../../../src/format/money";
 import { categoryMeta } from "../../../src/categories/meta";
 
 const UNCATEGORIZED_ID = "__uncategorized__";
@@ -91,7 +91,7 @@ export default function CategoryAnalysisDetail() {
               `/workspaces/${wsId}/categories`,
             ),
       ]);
-      setTxs(txResp.transactions);
+      setTxs(txResp.transactions.filter((tx) => isExpenseAmount(tx.amount)));
       if (!isUncategorized) {
         const cat = catResp.categories.find((c) => c.id === id) ?? null;
         setCategory(cat);
@@ -248,15 +248,7 @@ function TxRow({ tx }: { tx: TransactionDTO }) {
         )}
       </View>
       <View style={styles.txRight}>
-        <Text
-          style={[
-            styles.txAmount,
-            money.isIncome && { color: colors.up },
-          ]}
-        >
-          {money.isIncome ? "+" : "−"}
-          {money.display}
-        </Text>
+        <Text style={styles.txAmount}>−{money.display}</Text>
         <Text style={styles.txTime}>{formatTime(tx.occurredAt)}</Text>
       </View>
     </Pressable>

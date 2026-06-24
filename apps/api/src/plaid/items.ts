@@ -93,6 +93,7 @@ export async function removeItemStrict(
   env: Env,
   workspaceId: string,
   plaidItemId: string,
+  opts: { deleteTransactions?: boolean } = {},
 ): Promise<void> {
   const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
 
@@ -120,6 +121,9 @@ export async function removeItemStrict(
           where: { plaidItemId },
           data: { archivedAt: new Date() },
         });
+        if (opts.deleteTransactions === true) {
+          await tx.transaction.deleteMany({ where: { workspaceId, plaidItemId } });
+        }
         await tx.plaidItem.delete({ where: { id: plaidItemId } });
       },
       { maxWait: 5_000, timeout: 35_000 },

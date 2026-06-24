@@ -33,12 +33,10 @@ function chunk<T>(arr: ReadonlyArray<T>, size: number): T[][] {
 }
 
 export default function NewCategory() {
-  const { id, type } = useLocalSearchParams<{
+  const { id } = useLocalSearchParams<{
     id: string;
-    type?: "expense" | "income";
   }>();
-  const categoryType: "expense" | "income" =
-    type === "income" ? "income" : "expense";
+  const categoryType = "expense";
   const [name, setName] = useState("");
   const [icon, setIcon] = useState(DEFAULT_NEW_CATEGORY_ICON);
   const [color, setColor] = useState(() => pickRandomCategoryColor());
@@ -98,9 +96,7 @@ export default function NewCategory() {
         >
           <Text style={styles.cancel}>Cancel</Text>
         </Pressable>
-        <Text style={styles.title}>
-          {categoryType === "income" ? "Add income category" : "Add category"}
-        </Text>
+        <Text style={styles.title}>Add category</Text>
         <Pressable
           onPress={submit}
           disabled={submitting || name.trim().length === 0}

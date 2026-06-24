@@ -33,15 +33,8 @@ import { MaintenanceScreen } from "../../src/api/MaintenanceScreen";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { ActionItemCard } from "../../src/home/ActionItemCard";
-import {
-  analysisGlanceTitle,
-  shouldShowAnalysisGlance,
-  type HomeAnalysisGlance,
-  parseYearMonthFromAnalysisLabel,
-} from "../../src/home/analysis-glance";
-import { analysisRequestPath } from "../../src/analysis/request";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
-import { formatMoney } from "../../src/format/money";
+import { formatMoney, isExpenseAmount } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 
@@ -153,7 +146,6 @@ export default function Home() {
   const [recentTxs, setRecentTxs] = useState<TransactionDTO[] | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [goals, setGoals] = useState<GoalSummary[]>([]);
-  const [analysis, setAnalysis] = useState<HomeAnalysisGlance | null>(null);
   const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
   const [unreadFina, setUnreadFina] = useState(0);
   const [latestUnreadThreadId, setLatestUnreadThreadId] = useState<string | null>(null);
@@ -247,21 +239,21 @@ export default function Home() {
             setGoals([]);
             setHasGoal(false);
           }),
-        apiFetch<{ transactions: unknown[] }>(
+        apiFetch<{ transactions: TransactionDTO[] }>(
           `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
         )
           .then((r) => {
             if (runId !== loadRunId.current) return;
-            setNeedsReviewCount(r.transactions.length);
+            setNeedsReviewCount(r.transactions.filter((tx) => isExpenseAmount(tx.amount)).length);
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
             setNeedsReviewCount(0);
           }),
-        apiFetch<{ transactions: TransactionDTO[] }>(`/workspaces/${wsId}/transactions?limit=3`)
+        apiFetch<{ transactions: TransactionDTO[] }>(`/workspaces/${wsId}/transactions?limit=10`)
           .then((r) => {
             if (runId !== loadRunId.current) return;
-            setRecentTxs(r.transactions);
+            setRecentTxs(r.transactions.filter((tx) => isExpenseAmount(tx.amount)).slice(0, 3));
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
@@ -275,38 +267,6 @@ export default function Home() {
           .catch(() => {
             if (runId !== loadRunId.current) return;
             setCategories({});
-          }),
-        apiFetch<{
-          current: {
-            year: number;
-            month: number;
-            label: string;
-            income: number;
-            spend: number;
-            net: number;
-          };
-          previous: { net: number } | null;
-        }>(
-          analysisRequestPath(wsId, {
-            year: now.getFullYear(),
-            month: now.getMonth() + 1,
-          }),
-        )
-          .then((r) => {
-            if (runId !== loadRunId.current) return;
-            setAnalysis({
-              year: r.current.year,
-              month: r.current.month,
-              label: r.current.label,
-              income: r.current.income,
-              spend: r.current.spend,
-              net: r.current.net,
-              prevNet: r.previous?.net ?? null,
-            });
-          })
-          .catch(() => {
-            if (runId !== loadRunId.current) return;
-            setAnalysis(null);
           }),
       ]);
     } catch (e) {
@@ -571,7 +531,14 @@ export default function Home() {
             {/* 2. Hero — month spending; only when there is actual spend */}
             {heroVisible && (
               <View style={styles.hero}>
-                <Text style={styles.heroLabel}>{monthLabel} spending</Text>
+                <View style={styles.heroHead}>
+                  <Text style={styles.heroLabel}>{monthLabel} spending</Text>
+                  {cap !== null && (
+                    <Pressable onPress={() => router.push("/budget" as never)}>
+                      <Text style={styles.heroCta}>See Budget →</Text>
+                    </Pressable>
+                  )}
+                </View>
                 <Text style={styles.heroValue}>
                   {spentSplit.dollars}
                   <Text style={styles.heroValueDecimal}>{spentSplit.cents}</Text>
@@ -714,79 +681,13 @@ export default function Home() {
               </Pressable>
             )}
 
-            {/* 5. Glance — Income + Net (from /analysis endpoint).
-                Hide on fresh accounts with no transactions this month. */}
-            {shouldShowAnalysisGlance(analysis) && (
-              <Pressable
-                style={({ pressed }) => [{ marginTop: space.lg }, pressed && { opacity: 0.85 }]}
-                onPress={() => {
-                  const fallback = analysis.label
-                    ? parseYearMonthFromAnalysisLabel(analysis.label)
-                    : null;
-                  const hrefYear = analysis.year ?? fallback?.year;
-                  const hrefMonth = analysis.month ?? fallback?.month;
-                  const href =
-                    hrefYear && hrefMonth
-                      ? ({
-                          pathname: "/analysis",
-                          params: { year: String(hrefYear), month: String(hrefMonth) },
-                        } as const)
-                      : ({ pathname: "/analysis" } as const);
-                  router.push(href as never);
-                }}
-              >
-                <View style={styles.eyebrowRow}>
-                  <Text style={styles.eyebrow}>{analysisGlanceTitle(analysis)}</Text>
-                  <Text style={styles.eyebrowAction}>See analysis →</Text>
-                </View>
-                <View style={styles.glanceGrid}>
-                  <View style={styles.glanceCard}>
-                    <Text style={styles.glanceLabel}>Income</Text>
-                    <Text
-                      style={[styles.glanceValue, { color: colors.up }]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.6}
-                    >
-                      {analysis.income > 0
-                        ? `+${formatMoney(analysis.income.toFixed(2), CURRENCY).display}`
-                        : formatMoney("0.00", CURRENCY).display}
-                    </Text>
-                  </View>
-                  <View style={styles.glanceCard}>
-                    <Text style={styles.glanceLabel}>Net</Text>
-                    <Text
-                      style={[
-                        styles.glanceValue,
-                        analysis.net < 0 && { color: colors.down },
-                        analysis.net > 0 && { color: colors.up },
-                      ]}
-                      numberOfLines={1}
-                      adjustsFontSizeToFit
-                      minimumFontScale={0.6}
-                    >
-                      {analysis.net >= 0 ? "+" : "−"}
-                      {formatMoney(Math.abs(analysis.net).toFixed(2), CURRENCY).display}
-                    </Text>
-                    {analysis.prevNet !== null && (
-                      <Text style={styles.glanceTrend}>
-                        vs {analysis.prevNet >= 0 ? "+" : "−"}
-                        {formatMoney(Math.abs(analysis.prevNet).toFixed(2), CURRENCY).display} last
-                        month
-                      </Text>
-                    )}
-                  </View>
-                </View>
-              </Pressable>
-            )}
-
             {/* 6. Top categories */}
             {topCategories.length > 0 && (
               <>
                 <View style={[styles.eyebrowRow, { marginTop: space.lg }]}>
                   <Text style={styles.eyebrow}>Top categories</Text>
-                  <Pressable onPress={() => router.push("/budget" as never)}>
-                    <Text style={styles.eyebrowAction}>See budget →</Text>
+                  <Pressable onPress={() => router.push("/analysis" as never)}>
+                    <Text style={styles.eyebrowAction}>See Analysis →</Text>
                   </Pressable>
                 </View>
                 <View style={styles.catList}>
@@ -893,10 +794,7 @@ export default function Home() {
                           </Text>
                         </View>
                         <View style={styles.txRight}>
-                          <Text style={[styles.txAmount, money.isIncome && { color: colors.up }]}>
-                            {money.isIncome ? "+" : "−"}
-                            {money.display}
-                          </Text>
+                          <Text style={styles.txAmount}>−{money.display}</Text>
                           <Text style={styles.txTime}>{formatTime(tx.occurredAt)}</Text>
                         </View>
                       </Pressable>
@@ -993,11 +891,16 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     marginBottom: space.base,
   },
+  heroHead: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    justifyContent: "space-between",
+    marginBottom: 4,
+  },
   heroLabel: {
     ...type$.captionStrong,
     color: colors.muted,
     textTransform: "uppercase",
-    marginBottom: 4,
   },
   heroValue: {
     fontSize: 40,
@@ -1028,7 +931,7 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     backgroundColor: colors.mutedSoft,
   },
-  heroCta: { ...type$.captionStrong, color: colors.primary, marginTop: 6 },
+  heroCta: { ...type$.captionStrong, color: colors.primary },
   heroBarTrack: {
     height: 6,
     borderRadius: 3,

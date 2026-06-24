@@ -44,6 +44,49 @@ describe("POST /workspaces/:id/transactions/:txId/confirm-category", () => {
     expect(alloc?.dismissedUntil).toBeNull();
   });
 
+  it("applies confirmed category to same-merchant review rows", async () => {
+    const { cookie, wsId, txId, catId, accountId } = await setup();
+    const otherCat = await prisma.category.create({ data: { workspaceId: wsId, name: "OtherConfirmCat" } });
+    const sibling = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId,
+        merchantRaw: "Starbucks Store", merchantNormalized: "starbucks",
+        amount: "6.00", occurredAt: new Date(),
+        source: "plaid", rawData: {},
+        allocations: { create: { amount: "6.00", categoryId: otherCat.id, source: "ai", needsConfirmation: true } },
+      },
+    });
+    const otherMerchant = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId,
+        merchantRaw: "Netflix", merchantNormalized: "netflix",
+        amount: "7.00", occurredAt: new Date(),
+        source: "plaid", rawData: {},
+        allocations: { create: { amount: "7.00", categoryId: otherCat.id, source: "ai", needsConfirmation: true } },
+      },
+    });
+
+    const r = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/transactions/${txId}/confirm-category`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+
+    expect(r.statusCode).toBe(200);
+    expect(r.json().affectedTransactionIds.sort()).toEqual([txId, sibling.id].sort());
+    const siblingAlloc = await prisma.transactionAllocation.findFirstOrThrow({
+      where: { transactionId: sibling.id },
+    });
+    expect(siblingAlloc.categoryId).toBe(catId);
+    expect(siblingAlloc.needsConfirmation).toBe(false);
+
+    const otherAlloc = await prisma.transactionAllocation.findFirstOrThrow({
+      where: { transactionId: otherMerchant.id },
+    });
+    expect(otherAlloc.categoryId).toBe(otherCat.id);
+    expect(otherAlloc.needsConfirmation).toBe(true);
+  });
+
   it("returns 404 for missing tx", async () => {
     const { cookie, wsId } = await setup();
     const r = await app.inject({

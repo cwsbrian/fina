@@ -23,7 +23,6 @@ import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
-import { txDirection } from "../../../src/categories/direction";
 import { DatePickerSheet } from "../../../src/datetime/DatePickerSheet";
 import { AccountPickerSheet } from "../../../src/accounts/AccountPickerSheet";
 
@@ -184,15 +183,7 @@ export default function TransactionDetail() {
               {merchant}
             </Text>
           </View>
-          <Text
-            style={[
-              styles.heroAmount,
-              money.isIncome && { color: colors.up },
-            ]}
-          >
-            {money.isIncome ? "+" : "−"}
-            {money.display}
-          </Text>
+          <Text style={styles.heroAmount}>−{money.display}</Text>
           <View style={styles.heroMetaRow}>
             <Text style={styles.heroMeta}>{formatDateTime(tx.occurredAt)}</Text>
             {isSplit && (
@@ -258,15 +249,7 @@ export default function TransactionDetail() {
               router.push(`/transactions/${tx.id}/edit-amount` as never)
             }
           >
-            <Text
-              style={[
-                styles.rowValue,
-                money.isIncome && { color: colors.up },
-              ]}
-            >
-              {money.isIncome ? "+" : "−"}
-              {money.display}
-            </Text>
+            <Text style={styles.rowValue}>−{money.display}</Text>
           </DetailRow>
           <DetailRow
             label="Date"
@@ -398,10 +381,7 @@ export default function TransactionDetail() {
                         {c?.name ?? "Uncategorized"}
                       </Text>
                     </View>
-                    <Text style={styles.allocAmount}>
-                      {m.isIncome ? "+" : "−"}
-                      {m.display}
-                    </Text>
+                    <Text style={styles.allocAmount}>−{m.display}</Text>
                   </View>
                 );
               })}
@@ -510,7 +490,7 @@ export default function TransactionDetail() {
         visible={pickerOpen}
         txId={tx.id}
         selectedId={firstAlloc?.categoryId ?? null}
-        categoryType={txDirection(tx.amount)}
+        categoryType="expense"
         onClose={() => setPickerOpen(false)}
         onChange={() => {
           setPickerOpen(false);

@@ -22,23 +22,30 @@ export async function maybeAutoPromote(
 
   if (count < 3) return { promoted: false, count };
 
-  const insert = await prisma.merchantMapping.createMany({
-    data: [{
+  const existing = await prisma.merchantMapping.findUnique({
+    where: { workspaceId_merchantNormalized: { workspaceId, merchantNormalized } },
+    select: { categoryId: true, source: true },
+  });
+  const promoted = existing === null;
+  if (existing?.categoryId === categoryId && existing.source === "auto") {
+    return { promoted: false, count };
+  }
+
+  await prisma.merchantMapping.upsert({
+    where: { workspaceId_merchantNormalized: { workspaceId, merchantNormalized } },
+    create: {
       workspaceId,
       merchantNormalized,
       categoryId,
       confidence: 1.0,
       source: "auto",
-    }],
-    skipDuplicates: true,
+    },
+    update: { categoryId, confidence: 1.0, source: "auto" },
   });
 
-  const promoted = insert.count > 0;
-  if (promoted) {
-    logInfo(
-      { workspaceId, merchantNormalized, categoryId, confirmCount: count },
-      "mapping.auto_promoted",
-    );
-  }
+  logInfo(
+    { workspaceId, merchantNormalized, categoryId, confirmCount: count },
+    "mapping.auto_promoted",
+  );
   return { promoted, count };
 }

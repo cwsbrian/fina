@@ -26,6 +26,38 @@ pnpm nx run-many -t dev --projects=api,mobile,web --parallel=3
 
 Run mobile deploy commands from `apps/mobile`.
 
+### iOS development build
+
+Use this when testing native modules such as IAP or Google login on a physical
+iPhone. Expo Go will not work for those flows.
+
+Build and install the development client:
+
+```bash
+cd /Users/brianchoi/Documents/work/personal/fina/apps/mobile
+
+pnpm dlx eas-cli@latest build \
+  --platform ios \
+  --profile development
+```
+
+Open the EAS install link on the iPhone. If iOS blocks the app, trust the
+developer profile in **Settings -> General -> VPN & Device Management**.
+
+Start the local API and Metro from the repo root:
+
+```bash
+cd /Users/brianchoi/Documents/work/personal/fina
+
+pnpm run smoke:api:lan
+pnpm run smoke:mobile:lan
+```
+
+Then open the installed Fina development build and connect to the Metro URL
+shown in the terminal, or enter `exp://192.168.30.164:8081` manually. Rebuild
+the development client only when native dependencies, config plugins, or iOS
+native settings change; ordinary JS changes reload through Metro.
+
 ### iOS TestFlight / App Store
 
 App Store Connect uploads currently require Xcode 26 or later with the iOS 26

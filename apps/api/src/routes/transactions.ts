@@ -365,6 +365,46 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         data: { needsConfirmation: false, dismissedUntil: null },
       });
 
+      const affectedTransactionIds = [tx.id];
+      const confirmedCategoryId = tx.allocations.length === 1 ? tx.allocations[0]?.categoryId : null;
+      if (tx.merchantNormalized && confirmedCategoryId) {
+        const reviewSiblings = await prisma.transaction.findMany({
+          where: {
+            workspaceId: ctx.membership.workspaceId,
+            id: { not: tx.id },
+            merchantNormalized: tx.merchantNormalized,
+            removedAt: null,
+            allocations: {
+              some: {
+                needsConfirmation: true,
+                categoryId: { not: null },
+                OR: [
+                  { dismissedUntil: null },
+                  { dismissedUntil: { lt: new Date() } },
+                ],
+              },
+            },
+          },
+          select: {
+            id: true,
+            allocations: { select: { id: true }, orderBy: { createdAt: "asc" } },
+          },
+        });
+
+        for (const sibling of reviewSiblings) {
+          if (sibling.allocations.length !== 1) continue;
+          const updated = await prisma.transactionAllocation.updateMany({
+            where: { id: sibling.allocations[0]!.id },
+            data: {
+              categoryId: confirmedCategoryId,
+              needsConfirmation: false,
+              dismissedUntil: null,
+            },
+          });
+          if (updated.count > 0) affectedTransactionIds.push(sibling.id);
+        }
+      }
+
       for (const a of tx.allocations) {
         const allocAfter = await prisma.transactionAllocation.findUnique({
           where: { id: a.id },
@@ -385,7 +425,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           }
         }
       }
-      return reply.code(200).send({ ok: true });
+      return reply.code(200).send({ ok: true, affectedTransactionIds });
     },
   );
 

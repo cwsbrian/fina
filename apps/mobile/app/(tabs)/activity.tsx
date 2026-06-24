@@ -17,7 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { CategoryDTO, TransactionDTO, Cadence } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
-import { formatMoney, dateBucket } from "../../src/format/money";
+import { formatMoney, dateBucket, isExpenseAmount } from "../../src/format/money";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { categoryMeta } from "../../src/categories/meta";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
@@ -26,6 +26,7 @@ import { type DateRange } from "../../src/datetime/DateRangeSheet";
 import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
 import { ConnectBankButton } from "../../src/plaid/ConnectBankButton";
 import { NeedsReviewDot } from "../../src/categorize/NeedsReviewPill";
+import { getSeenExcludedIds } from "../../src/transactions/excludedSeen";
 
 const HEADER_HEIGHT = 84;
 
@@ -49,7 +50,14 @@ type Recurring = {
 
 type UpcomingSummary = { total: number; count: number };
 
-type Section = { title: string; data: TransactionDTO[] };
+type Section = {
+  title: string;
+  data: TransactionDTO[];
+  monthLabel: string | null;
+  monthTotal: number;
+  midMonthLabel: string | null;
+  midMonthTotal: number;
+};
 
 function parseDateOnly(s: string): Date {
   const [y, m, d] = s.split("-").map(Number);
@@ -101,25 +109,99 @@ function computeUpcomingSummary(
 
 function groupByDate(txs: TransactionDTO[]): Section[] {
   const buckets = new Map<string, TransactionDTO[]>();
+  const monthTotals = new Map<string, number>();
+  const midMonthTotals = new Map<string, number>();
   for (const t of txs) {
     const key = dateBucket(t.occurredAt);
     const arr = buckets.get(key) ?? [];
     arr.push(t);
     buckets.set(key, arr);
+    const month = monthKey(t.occurredAt);
+    const amount = Number(t.amount);
+    if (month && amount > 0) {
+      monthTotals.set(month, (monthTotals.get(month) ?? 0) + amount);
+      if (dayOfMonth(t.occurredAt) <= 14) {
+        midMonthTotals.set(month, (midMonthTotals.get(month) ?? 0) + amount);
+      }
+    }
   }
-  return Array.from(buckets, ([title, data]) => ({ title, data }));
+  let lastMonth = "";
+  let lastDay = 32;
+  const today = new Date();
+  const currentMonth = monthKeyFromDate(today);
+  return Array.from(buckets, ([title, data], index) => {
+    const month = monthKey(data[0]?.occurredAt);
+    const day = dayOfMonth(data[0]?.occurredAt);
+    const isPastMonth = month !== "" && month !== currentMonth;
+    const midPeriodPassed = isPastMonth || today.getDate() > 14;
+    const monthLabel = isPastMonth && (index === 0 || month !== lastMonth)
+      ? formatMonthLabel(data[0]?.occurredAt)
+      : null;
+    const midMonthLabel = month && midPeriodPassed && month === lastMonth && lastDay > 14 && day <= 14
+      ? formatMidMonthLabel(data[0]?.occurredAt)
+      : null;
+    lastMonth = month || lastMonth;
+    lastDay = day || lastDay;
+    return {
+      title,
+      data,
+      monthLabel,
+      monthTotal: monthTotals.get(month) ?? 0,
+      midMonthLabel,
+      midMonthTotal: midMonthTotals.get(month) ?? 0,
+    };
+  });
+}
+
+function monthKey(iso?: string): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return monthKeyFromDate(date);
+}
+
+function monthKeyFromDate(date: Date): string {
+  return `${date.getFullYear()}-${date.getMonth()}`;
+}
+
+function dayOfMonth(iso?: string): number {
+  if (!iso) return 0;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 0;
+  return date.getDate();
+}
+
+function formatMonthLabel(iso?: string): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("en-CA", { month: "long" });
+}
+
+function formatMidMonthLabel(iso?: string): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return `Through ${date.toLocaleDateString("en-CA", { month: "short" })} 14`;
 }
 
 function sectionTotal(txs: TransactionDTO[], currency: string): string {
   const sum = txs.reduce((acc, t) => acc + Number(t.amount), 0);
-  const { display, isIncome } = formatMoney(sum.toString(), currency);
-  return `${isIncome ? "+" : "−"}${display}`;
+  const { display } = formatMoney(sum.toString(), currency);
+  return `−${display}`;
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  return d.toLocaleTimeString("en-CA", { hour: "2-digit", minute: "2-digit", hour12: false });
+function monthTotal(total: number, currency: string): string {
+  const { display } = formatMoney(total.toFixed(2), currency);
+  return `−${display}`;
+}
+
+function currentMonthRange(): { from: string; to: string } {
+  const now = new Date();
+  return {
+    from: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+    to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString(),
+  };
 }
 
 export default function Activity() {
@@ -129,6 +211,8 @@ export default function Activity() {
     total: 0,
     count: 0,
   });
+  const [excludedCount, setExcludedCount] = useState(0);
+  const [newExcludedCount, setNewExcludedCount] = useState(0);
   const [wsId, setWsId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -162,7 +246,12 @@ export default function Activity() {
       if (r.from) params.set("from", r.from);
       if (r.to) params.set("to", r.to);
       const qs = `?${params.toString()}`;
-      const [txResp, catResp, schedResp, recurResp] = await Promise.all([
+      const excludedParams = new URLSearchParams({
+        budgetImpact: "excluded",
+        limit: "100",
+        ...currentMonthRange(),
+      });
+      const [txResp, catResp, schedResp, recurResp, excludedResp, seenExcluded] = await Promise.all([
         apiFetch<TxListResp>(`/workspaces/${id}/transactions${qs}`),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
         apiFetch<{ schedules: Schedule[] }>(
@@ -171,8 +260,13 @@ export default function Activity() {
         apiFetch<{ recurring: Recurring[] }>(
           `/workspaces/${id}/recurring`,
         ).catch(() => ({ recurring: [] as Recurring[] })),
+        apiFetch<TxListResp>(`/workspaces/${id}/transactions?${excludedParams.toString()}`).catch(() => ({ transactions: [], nextCursor: null })),
+        getSeenExcludedIds(),
       ]);
-      setTxs(txResp.transactions);
+      setTxs(txResp.transactions.filter((t) => isExpenseAmount(t.amount)));
+      const visibleExcluded = excludedResp.transactions.filter((t) => isExpenseAmount(t.amount));
+      setExcludedCount(visibleExcluded.length);
+      setNewExcludedCount(visibleExcluded.filter((t) => !seenExcluded.has(t.id)).length);
       setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
       setUpcoming(
         computeUpcomingSummary(schedResp.schedules, recurResp.recurring),
@@ -270,15 +364,35 @@ export default function Activity() {
                 currency={currency}
               />
             ) : null}
-            <ExcludedBanner />
+            {excludedCount > 0 ? <ExcludedBanner hasNew={newExcludedCount > 0} /> : null}
           </View>
         }
         renderSectionHeader={({ section }) => (
-          <View style={styles.sectionHead}>
-            <Text style={styles.sectionHeadLabel}>{section.title}</Text>
-            <Text style={styles.sectionHeadAmount}>
-              {sectionTotal(section.data, currency)}
-            </Text>
+          <View>
+            {section.monthLabel ? (
+              <View style={styles.monthHead}>
+                <Text style={styles.monthHeadLabel}>{section.monthLabel}</Text>
+                <Text style={styles.monthHeadAmount}>
+                  {monthTotal(section.monthTotal, currency)}
+                </Text>
+              </View>
+            ) : null}
+            {section.midMonthLabel ? (
+              <View style={styles.midMonthHead}>
+                <Text style={styles.midMonthHeadLabel}>{section.midMonthLabel}</Text>
+                <Text style={styles.midMonthHeadAmount}>
+                  {monthTotal(section.midMonthTotal, currency)}
+                </Text>
+              </View>
+            ) : null}
+            <View style={styles.sectionHead}>
+              <Text style={styles.sectionHeadLabel}>{section.title}</Text>
+              {section.data.length > 1 && (
+                <Text style={styles.sectionHeadAmount}>
+                  {sectionTotal(section.data, currency)}
+                </Text>
+              )}
+            </View>
           </View>
         )}
         renderItem={({ item }) => (
@@ -404,7 +518,7 @@ function UpcomingBanner({
   );
 }
 
-function ExcludedBanner() {
+function ExcludedBanner({ hasNew }: { hasNew: boolean }) {
   return (
     <Pressable
       style={({ pressed }) => [
@@ -419,6 +533,7 @@ function ExcludedBanner() {
       <Text style={styles.bannerLabel} numberOfLines={1}>
         Excluded transactions
       </Text>
+      {hasNew && <View style={styles.bannerDot} />}
       <Ionicons
         name="chevron-forward"
         size={14}
@@ -530,13 +645,7 @@ function TxRow({
         </View>
       </View>
       <View style={styles.rowRight}>
-        <Text
-          style={[styles.rowAmount, money.isIncome && { color: colors.up }]}
-        >
-          {money.isIncome ? "+" : "−"}
-          {money.display}
-        </Text>
-        <Text style={styles.rowTime}>{formatTime(tx.occurredAt)}</Text>
+        <Text style={styles.rowAmount}>−{money.display}</Text>
       </View>
     </Pressable>
   );
@@ -653,12 +762,59 @@ const styles = StyleSheet.create({
     fontVariant: ["tabular-nums"],
   },
   bannerCount: { ...type$.bodySm, color: colors.muted },
+  bannerDot: { width: 8, height: 8, borderRadius: 999, backgroundColor: colors.primary },
   sectionHead: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "baseline",
     marginTop: space.base,
     marginBottom: 6,
+  },
+  monthHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    marginTop: space.lg,
+    marginHorizontal: -space.lg,
+    paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
+    backgroundColor: colors.surfaceSoft,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairline,
+  },
+  monthHeadLabel: {
+    ...type$.bodySm,
+    color: colors.ink,
+    fontWeight: "700",
+  },
+  monthHeadAmount: {
+    ...type$.bodySm,
+    color: colors.ink,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  midMonthHead: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    marginTop: space.base,
+    marginHorizontal: -space.lg,
+    paddingHorizontal: space.lg,
+    paddingVertical: 7,
+    backgroundColor: colors.canvas,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairline,
+  },
+  midMonthHeadLabel: {
+    ...type$.captionStrong,
+    color: colors.muted,
+  },
+  midMonthHeadAmount: {
+    ...type$.captionStrong,
+    color: colors.muted,
+    fontVariant: ["tabular-nums"],
   },
   sectionHeadLabel: {
     ...type$.captionStrong,
@@ -717,12 +873,6 @@ const styles = StyleSheet.create({
     ...type$.bodyMd,
     color: colors.ink,
     fontWeight: "600",
-    fontVariant: ["tabular-nums"],
-  },
-  rowTime: {
-    ...type$.caption,
-    color: colors.muted,
-    marginTop: 2,
     fontVariant: ["tabular-nums"],
   },
 });

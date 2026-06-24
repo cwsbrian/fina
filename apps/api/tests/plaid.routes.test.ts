@@ -222,6 +222,25 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
     await app.close();
   });
 
+  it("requests four months of transaction history", async () => {
+    const app = await buildApp(env);
+    const u = await signUpAndGetCookie(app, { email: "lt-days@x.com", name: "LD" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
+    plaidMock.linkTokenCreate.push({ data: { link_token: "lt-days", expiration: "2099-01-01" } });
+
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid/link-token`,
+      headers: { cookie: u.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(plaidMock.linkTokenCreateCalls[0][0]).toMatchObject({
+      transactions: { days_requested: 120 },
+    });
+    await app.close();
+  });
+
   it("omits webhook field when PLAID_WEBHOOK_URL is not set", async () => {
     const app = await buildApp(env); // env without PLAID_WEBHOOK_URL
     const u = await signUpAndGetCookie(app, { email: "wh-omit@x.com", name: "WO" });
@@ -523,6 +542,55 @@ describe("DELETE /workspaces/:id/plaid-items/:itemId", () => {
     const tx = await prisma.transaction.findFirstOrThrow({ where: { workspaceId: wsId } });
     expect(tx.plaidTransactionId).toBe("tkeep");
     expect(tx.plaidItemId).toBeNull();
+    await app.close();
+  });
+
+  it("deleteTransactions=true deletes transactions from that Plaid item", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "delete-tx@x.com", name: "D" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const deleteItemId = await connectAItem(app, owner, wsId, "_delete");
+    const keepItemId = await connectAItem(app, owner, wsId, "_keep");
+
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          { transaction_id: "tdelete", account_id: "acct_delete", amount: 1, date: "2026-05-10", authorized_date: null, authorized_datetime: null, datetime: null, pending: false, pending_transaction_id: null, merchant_name: "Delete Me", name: "Delete Me", iso_currency_code: "CAD" },
+        ],
+        modified: [], removed: [], next_cursor: "c-delete", has_more: false,
+      },
+    });
+    geminiMock.generateContent.push({ results: [] });
+    await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid-items/${deleteItemId}/sync`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          { transaction_id: "tkeep", account_id: "acct_keep", amount: 2, date: "2026-05-11", authorized_date: null, authorized_datetime: null, pending: false, pending_transaction_id: null, datetime: null, merchant_name: "Keep Me", name: "Keep Me", iso_currency_code: "CAD" },
+        ],
+        modified: [], removed: [], next_cursor: "c-keep", has_more: false,
+      },
+    });
+    geminiMock.generateContent.push({ results: [] });
+    await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/plaid-items/${keepItemId}/sync`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    plaidMock.itemRemove.push({ data: { request_id: "req" } });
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/workspaces/${wsId}/plaid-items/${deleteItemId}?deleteTransactions=true`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(await prisma.transaction.findFirst({ where: { plaidTransactionId: "tdelete" } })).toBeNull();
+    expect(await prisma.transaction.findFirst({ where: { plaidTransactionId: "tkeep" } })).not.toBeNull();
     await app.close();
   });
 

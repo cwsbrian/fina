@@ -75,30 +75,37 @@ export default function BanksScreen() {
     }
   };
 
+  const disconnectItem = async (itemId: string, deleteTransactions: boolean) => {
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      await apiFetch(
+        `/workspaces/${wsId}/plaid-items/${itemId}${deleteTransactions ? "?deleteTransactions=true" : ""}`,
+        { method: "DELETE" },
+      );
+      await load();
+    } catch (e) {
+      Alert.alert(
+        "Disconnect failed",
+        (e as { code?: string }).code ?? "Try again.",
+      );
+    }
+  };
+
   const onDisconnect = (itemId: string, name: string) => {
     Alert.alert(
       `Disconnect ${name}?`,
-      "This removes the connection and stops new transaction imports. Existing transactions stay on your activity.",
+      "This removes the connection and stops new transaction imports.",
       [
         { text: "Cancel", style: "cancel" },
         {
-          text: "Disconnect",
+          text: "Keep transactions",
+          onPress: () => void disconnectItem(itemId, false),
+        },
+        {
+          text: "Delete transactions",
           style: "destructive",
-          onPress: async () => {
-            try {
-              const wsId = await getActiveWorkspaceId();
-              if (!wsId) throw new Error("no_workspace");
-              await apiFetch(`/workspaces/${wsId}/plaid-items/${itemId}`, {
-                method: "DELETE",
-              });
-              await load();
-            } catch (e) {
-              Alert.alert(
-                "Disconnect failed",
-                (e as { code?: string }).code ?? "Try again.",
-              );
-            }
-          },
+          onPress: () => void disconnectItem(itemId, true),
         },
       ],
     );

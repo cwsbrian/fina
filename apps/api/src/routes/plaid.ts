@@ -107,6 +107,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
         user: { client_user_id: ctx.session.userId },
         client_name: "Fina",
         products: PLAID_PRODUCTS,
+        transactions: { days_requested: 120 },
         country_codes: PLAID_COUNTRY_CODES,
         language: "en",
         ...(app.fina.env.PLAID_WEBHOOK_URL ? { webhook: app.fina.env.PLAID_WEBHOOK_URL } : {}),

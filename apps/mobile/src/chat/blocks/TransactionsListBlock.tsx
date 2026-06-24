@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
-import { formatMoney } from "../../format/money";
+import { formatMoney, isExpenseAmount } from "../../format/money";
 import {
   BlockCard,
   BlockHeader,
@@ -23,6 +23,8 @@ type Props = { block: Block };
  *  chat context. */
 export function TransactionsListBlock({ block }: Props) {
   const currencySymbol = currencyToSymbol(block.currency);
+  const rows = block.rows.filter((row) => isExpenseAmount(row.amount));
+  const total = rows.reduce((sum, row) => sum + Number(row.amount), 0);
   return (
     <BlockCard>
       {block.period_label ? (
@@ -31,30 +33,30 @@ export function TransactionsListBlock({ block }: Props) {
         <BlockHeader title={block.title} />
       )}
 
-      {block.total_amount ? (
+      {rows.length > 0 ? (
         <Text style={styles.totalLine}>
           Total{" "}
           <Text style={styles.totalAmount}>
             {currencySymbol ?? ""}
-            {block.total_amount}
+            {total.toFixed(2)}
           </Text>{" "}
-          <Text style={styles.totalCount}>· {block.total_count} txs</Text>
+          <Text style={styles.totalCount}>· {rows.length} txs</Text>
         </Text>
       ) : (
         <Text style={styles.totalCountAlone}>
-          {block.total_count} {block.total_count === 1 ? "transaction" : "transactions"}
+          {rows.length} {rows.length === 1 ? "transaction" : "transactions"}
         </Text>
       )}
 
-      {block.rows.length === 0 ? (
+      {rows.length === 0 ? (
         <BlockEmpty text="No transactions match." />
       ) : (
         <View style={styles.rows}>
-          {block.rows.map((r, i) => (
+          {rows.map((r, i) => (
             <TxRow
               key={r.id}
               row={r}
-              isLast={i === block.rows.length - 1}
+              isLast={i === rows.length - 1}
             />
           ))}
         </View>
@@ -67,8 +69,8 @@ export function TransactionsListBlock({ block }: Props) {
 
 function TxRow({ row, isLast }: { row: Row; isLast: boolean }) {
   const money = formatMoney(row.amount, "CAD");
-  const amountColor = money.isIncome ? colors.up : colors.ink;
-  const amountText = money.isIncome ? `+${money.display}` : money.display;
+  const amountColor = colors.ink;
+  const amountText = money.display;
 
   return (
     <Pressable

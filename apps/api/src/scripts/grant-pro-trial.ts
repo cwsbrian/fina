@@ -61,7 +61,7 @@ export async function grantProTrialByEmail(
     throw new Error(`User not found: ${normalizedEmail}`);
   }
 
-  return await prisma.user.update({
+  const updated = await prisma.user.update({
     where: { id: existing.id },
     data: {
       trialEndsAt: until,
@@ -74,6 +74,8 @@ export async function grantProTrialByEmail(
       trialConsumed: true,
     },
   });
+  if (!updated.trialEndsAt) throw new Error("Failed to grant trial");
+  return { ...updated, trialEndsAt: updated.trialEndsAt };
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {

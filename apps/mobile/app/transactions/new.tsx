@@ -22,10 +22,7 @@ import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
 import { categoryMeta } from "../../src/categories/meta";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
 
-type Kind = "expense" | "income";
-
 export default function NewTransaction() {
-  const [kind, setKind] = useState<Kind>("expense");
   const [amount, setAmount] = useState("");
   const [merchant, setMerchant] = useState("");
   const [date, setDate] = useState<Date>(() => new Date());
@@ -46,10 +43,7 @@ export default function NewTransaction() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      // Plaid convention: amount positive = spend (expense), negative =
-      // credit (income). The activity formatter reads the sign to color
-      // and prefix the row.
-      const signed = kind === "income" ? -Math.abs(num) : Math.abs(num);
+      const signed = Math.abs(num);
       // ISO instant — backend's parseOccurredAt accepts either YYYY-MM-DD
       // (legacy) or a full ISO 8601 with tz, which preserves the time.
       const occurredAt = date.toISOString();
@@ -73,7 +67,7 @@ export default function NewTransaction() {
       );
       setSubmitting(false);
     }
-  }, [amount, merchant, kind, submitting]);
+  }, [amount, merchant, submitting]);
 
   const canSubmit =
     !submitting &&
@@ -107,75 +101,13 @@ export default function NewTransaction() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.body}
         >
-          {/* Type segmented */}
-          <View style={styles.seg}>
-            <Pressable
-              style={[styles.segOpt, kind === "expense" && styles.segActive]}
-              onPress={() => {
-                setKind("expense");
-                // Clear the picked category if it's not an expense — the
-                // expense picker would no longer show it and submit could
-                // attach a mismatched category to the tx.
-                if (category && category.type !== "expense") setCategory(null);
-              }}
-              disabled={submitting}
-            >
-              <Text
-                style={[
-                  styles.segText,
-                  kind === "expense" && styles.segTextActive,
-                ]}
-              >
-                Expense
-              </Text>
-            </Pressable>
-            <Pressable
-              style={[
-                styles.segOpt,
-                kind === "income" && [styles.segActive, styles.segActiveIncome],
-              ]}
-              onPress={() => {
-                setKind("income");
-                if (category && category.type !== "income") setCategory(null);
-              }}
-              disabled={submitting}
-            >
-              <Text
-                style={[
-                  styles.segText,
-                  kind === "income" && styles.segTextActive,
-                ]}
-              >
-                Income
-              </Text>
-            </Pressable>
-          </View>
-
           {/* Amount hero */}
           <View style={styles.amountRow}>
-            <Text
-              style={[
-                styles.amountAdornment,
-                kind === "income" && { color: colors.up },
-              ]}
-            >
-              {kind === "income" ? "+" : "−"}
-            </Text>
-            <Text
-              style={[
-                styles.amountAdornment,
-                kind === "income" && { color: colors.up },
-                { marginRight: 2 },
-              ]}
-            >
-              $
-            </Text>
+            <Text style={styles.amountAdornment}>−</Text>
+            <Text style={[styles.amountAdornment, { marginRight: 2 }]}>$</Text>
             <View style={styles.amountInputWrap}>
               <TextInput
-                style={[
-                  styles.amountInput,
-                  kind === "income" && { color: colors.up },
-                ]}
+                style={styles.amountInput}
                 value={amount}
                 onChangeText={(v) => {
                   // Allow digits + a single decimal point with up to 2 dp.
@@ -296,7 +228,7 @@ export default function NewTransaction() {
       <CategoryPickerSheet
         visible={categoryPickerOpen}
         selectedId={category?.id ?? null}
-        categoryType={kind}
+        categoryType="expense"
         onClose={() => setCategoryPickerOpen(false)}
         onSelect={(cat) => {
           setCategory(cat);
@@ -355,7 +287,6 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   segActive: { backgroundColor: colors.canvas },
-  segActiveIncome: {},
   segText: { ...type$.bodyMd, color: colors.muted, fontWeight: "600" },
   segTextActive: { color: colors.ink },
 

@@ -28,6 +28,7 @@ import {
   formatShortDate,
   type BankAccountDTO,
   type MeDTO as Me,
+  type TransactionDTO,
 } from "@fina/shared";
 import { authClient, useSession, signOut } from "../../src/auth/client";
 import { unregisterForPushNotifications } from "../../src/api/push";
@@ -36,6 +37,7 @@ import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { isExpenseAmount } from "../../src/format/money";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 import {
   copyTextToClipboard,
@@ -154,10 +156,10 @@ export default function More() {
     try {
       const wsId = await getActiveWorkspaceId();
       if (!wsId) return;
-      const r = await apiFetch<{ transactions: unknown[] }>(
+      const r = await apiFetch<{ transactions: TransactionDTO[] }>(
         `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
       );
-      setNeedsReviewCount(r.transactions.length);
+      setNeedsReviewCount(r.transactions.filter((tx) => isExpenseAmount(tx.amount)).length);
     } catch {
       // Non-fatal — Review queue row falls back to no count.
     }

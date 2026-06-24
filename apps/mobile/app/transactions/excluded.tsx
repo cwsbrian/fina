@@ -15,9 +15,10 @@ import { Ionicons } from "@expo/vector-icons";
 import type { TransactionDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
-import { formatMoney } from "../../src/format/money";
+import { formatMoney, isExpenseAmount } from "../../src/format/money";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { colors, space, type as type$ } from "../../src/design/tokens";
+import { getSeenExcludedIds, rememberSeenExcludedIds } from "../../src/transactions/excludedSeen";
 
 type TxListResp = {
   transactions: TransactionDTO[];
@@ -29,16 +30,23 @@ export default function ExcludedTransactions() {
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
 
   const load = useCallback(async () => {
     try {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
+      const { from, to } = currentMonthRange();
       const data = await apiFetch<TxListResp>(
-        `/workspaces/${wsId}/transactions?budgetImpact=excluded&limit=100`,
+        `/workspaces/${wsId}/transactions?budgetImpact=excluded&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=100`,
       );
-      setTxs(data.transactions);
+      const visible = data.transactions.filter((tx) => isExpenseAmount(tx.amount));
+      const seen = await getSeenExcludedIds();
+      const fresh = visible.filter((tx) => !seen.has(tx.id)).map((tx) => tx.id);
+      setTxs(visible);
+      setNewIds(new Set(fresh));
+      if (visible.length > 0) await rememberSeenExcludedIds(visible.map((tx) => tx.id));
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -114,6 +122,7 @@ export default function ExcludedTransactions() {
           renderItem={({ item }) => (
             <ExcludedRow
               tx={item}
+              isNew={newIds.has(item.id)}
               saving={savingId === item.id}
               onAdd={() => addToBudget(item)}
             />
@@ -126,10 +135,12 @@ export default function ExcludedTransactions() {
 
 function ExcludedRow({
   tx,
+  isNew,
   saving,
   onAdd,
 }: {
   tx: TransactionDTO;
+  isNew: boolean;
   saving: boolean;
   onAdd: () => void;
 }) {
@@ -144,13 +155,14 @@ function ExcludedRow({
         <Ionicons name="eye-off-outline" size={17} color={colors.muted} />
       </View>
       <View style={styles.rowMid}>
-        <Text style={styles.rowTitle} numberOfLines={1}>{merchant}</Text>
+        <View style={styles.rowTitleLine}>
+          <Text style={styles.rowTitle} numberOfLines={1}>{merchant}</Text>
+          {isNew && <View style={styles.newDot} />}
+        </View>
         <Text style={styles.rowMeta}>{formatDate(tx.occurredAt)}</Text>
       </View>
       <View style={styles.rowRight}>
-        <Text style={[styles.rowAmount, money.isIncome && { color: colors.up }]}>
-          {money.isIncome ? "+" : "-"}{money.display}
-        </Text>
+        <Text style={styles.rowAmount}>-{money.display}</Text>
         <Pressable
           style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.65 }]}
           onPress={(e) => {
@@ -174,6 +186,14 @@ function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function currentMonthRange(): { from: string; to: string } {
+  const now = new Date();
+  return {
+    from: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+    to: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString(),
+  };
 }
 
 const styles = StyleSheet.create({
@@ -227,7 +247,9 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   rowMid: { flex: 1, minWidth: 0 },
-  rowTitle: { ...type$.titleSm, color: colors.ink },
+  rowTitleLine: { flexDirection: "row", alignItems: "center", gap: 6, minWidth: 0 },
+  rowTitle: { ...type$.titleSm, color: colors.ink, flexShrink: 1 },
+  newDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: colors.primary },
   rowMeta: { ...type$.bodySm, color: colors.muted, marginTop: 2 },
   rowRight: { alignItems: "flex-end", gap: 6 },
   rowAmount: {

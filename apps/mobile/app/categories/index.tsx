@@ -18,12 +18,9 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { categoryMeta, withAlpha } from "../../src/categories/meta";
 
-type Tab = "expense" | "income";
-
 export default function CategoriesScreen() {
   const [cats, setCats] = useState<CategoryDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<Tab>("expense");
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async () => {
@@ -53,8 +50,8 @@ export default function CategoriesScreen() {
   }, [load]);
 
   const visible = useMemo(
-    () => (cats ?? []).filter((c) => c.type === tab),
-    [cats, tab],
+    () => (cats ?? []).filter((c) => c.type === "expense"),
+    [cats],
   );
 
   return (
@@ -66,33 +63,8 @@ export default function CategoriesScreen() {
         <HeaderIconButton
           icon="add"
           variant="plain"
-          onPress={() =>
-            router.push(`/categories/new?type=${tab}` as never)
-          }
+          onPress={() => router.push("/categories/new?type=expense" as never)}
         />
-      </View>
-
-      <View style={styles.tabs}>
-        <Pressable
-          style={[styles.tab, tab === "expense" && styles.tabActive]}
-          onPress={() => setTab("expense")}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: tab === "expense" }}
-        >
-          <Text style={[styles.tabText, tab === "expense" && styles.tabTextActive]}>
-            Expense
-          </Text>
-        </Pressable>
-        <Pressable
-          style={[styles.tab, tab === "income" && styles.tabActive]}
-          onPress={() => setTab("income")}
-          accessibilityRole="tab"
-          accessibilityState={{ selected: tab === "income" }}
-        >
-          <Text style={[styles.tabText, tab === "income" && styles.tabTextActive]}>
-            Income
-          </Text>
-        </Pressable>
       </View>
 
       {cats === null && !err && (
@@ -120,9 +92,7 @@ export default function CategoriesScreen() {
         >
           {visible.length === 0 ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>
-                No {tab} categories yet
-              </Text>
+              <Text style={styles.emptyTitle}>No categories yet</Text>
               <Text style={styles.emptyBody}>
                 Tap + to add your first one.
               </Text>
@@ -168,24 +138,6 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   title: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
-  tabs: {
-    flexDirection: "row",
-    backgroundColor: colors.surfaceSoft,
-    marginHorizontal: space.lg,
-    marginTop: space.base,
-    marginBottom: space.sm,
-    borderRadius: 12,
-    padding: 4,
-  },
-  tab: {
-    flex: 1,
-    paddingVertical: 8,
-    borderRadius: 9,
-    alignItems: "center",
-  },
-  tabActive: { backgroundColor: colors.canvas },
-  tabText: { ...type$.bodySm, color: colors.muted, fontWeight: "600" },
-  tabTextActive: { color: colors.ink },
   list: { paddingHorizontal: space.lg, paddingBottom: space.xl },
   row: {
     flexDirection: "row",

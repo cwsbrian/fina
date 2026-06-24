@@ -18,12 +18,10 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../../src/api/client";
 import { getActiveWorkspaceId } from "../../../src/workspace/active";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
 
-type Kind = "expense" | "income";
 type SingleTxResp = { transaction: TransactionDTO };
 
 export default function EditAmount() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [kind, setKind] = useState<Kind>("expense");
   const [amount, setAmount] = useState("");
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -42,7 +40,6 @@ export default function EditAmount() {
         );
         if (cancelled) return;
         const n = Number(data.transaction.amount);
-        setKind(n < 0 ? "income" : "expense");
         setAmount(Number.isFinite(n) ? Math.abs(n).toFixed(2) : "");
       } catch {
         if (!cancelled) {
@@ -62,7 +59,7 @@ export default function EditAmount() {
     if (!id) return;
     const num = Number(amount);
     if (!Number.isFinite(num) || num <= 0 || submitting) return;
-    const signed = kind === "income" ? -Math.abs(num) : Math.abs(num);
+    const signed = Math.abs(num);
     setSubmitting(true);
     setErr(null);
     try {
@@ -79,7 +76,7 @@ export default function EditAmount() {
       setErr(`Couldn't save: ${code}${status ? ` (HTTP ${status})` : ""}`);
       setSubmitting(false);
     }
-  }, [id, amount, kind, submitting]);
+  }, [id, amount, submitting]);
 
   const canSubmit =
     !submitting &&
@@ -120,60 +117,11 @@ export default function EditAmount() {
             keyboardShouldPersistTaps="handled"
             contentContainerStyle={styles.body}
           >
-            <View style={styles.seg}>
-              <Pressable
-                style={[styles.segOpt, kind === "expense" && styles.segActive]}
-                onPress={() => setKind("expense")}
-                disabled={submitting}
-              >
-                <Text
-                  style={[
-                    styles.segText,
-                    kind === "expense" && styles.segTextActive,
-                  ]}
-                >
-                  Expense
-                </Text>
-              </Pressable>
-              <Pressable
-                style={[styles.segOpt, kind === "income" && styles.segActive]}
-                onPress={() => setKind("income")}
-                disabled={submitting}
-              >
-                <Text
-                  style={[
-                    styles.segText,
-                    kind === "income" && styles.segTextActive,
-                  ]}
-                >
-                  Income
-                </Text>
-              </Pressable>
-            </View>
-
             <View style={styles.amountRow}>
-              <Text
-                style={[
-                  styles.adornment,
-                  kind === "income" && { color: colors.up },
-                ]}
-              >
-                {kind === "income" ? "+" : "−"}
-              </Text>
-              <Text
-                style={[
-                  styles.adornment,
-                  kind === "income" && { color: colors.up },
-                  { marginRight: 2 },
-                ]}
-              >
-                $
-              </Text>
+              <Text style={styles.adornment}>−</Text>
+              <Text style={[styles.adornment, { marginRight: 2 }]}>$</Text>
               <TextInput
-                style={[
-                  styles.amountInput,
-                  kind === "income" && { color: colors.up },
-                ]}
+                style={styles.amountInput}
                 value={amount}
                 onChangeText={(v) => {
                   if (/^\d*\.?\d{0,2}$/.test(v)) setAmount(v);

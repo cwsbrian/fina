@@ -7,12 +7,11 @@ import {
   ScrollView,
   ActivityIndicator,
   RefreshControl,
-  useWindowDimensions,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import Svg, { Circle, G, Line, Rect, Text as SvgText } from "react-native-svg";
+import Svg, { Circle, Text as SvgText } from "react-native-svg";
 import type { CategoryDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
@@ -221,7 +220,6 @@ export default function AnalysisScreen() {
                 )
               }
             />
-            <CashflowCard analysis={data.current} history={data.monthlyHistory} />
             <SectionLabel>Where it went</SectionLabel>
             <SpendBreakdown
               spend={data.current.spend}
@@ -314,111 +312,6 @@ function MonthStepper({
         <Ionicons name="chevron-forward" size={18} color={colors.muted} />
       </Pressable>
     </View>
-  );
-}
-
-function CashflowCard({
-  analysis,
-  history,
-}: {
-  analysis: MonthAnalysis;
-  history: CashflowPoint[];
-}) {
-  const { width: screenW } = useWindowDimensions();
-  const chartW = Math.max(280, screenW - space.lg * 2 - space.base * 2);
-  return (
-    <View style={styles.card}>
-      <Text style={styles.cardEyebrow}>Net cashflow</Text>
-      <Text
-        style={[
-          styles.cardValue,
-          { color: analysis.net >= 0 ? colors.up : colors.down },
-        ]}
-      >
-        {analysis.net >= 0 ? "+" : "−"}
-        {formatMoney(Math.abs(analysis.net).toFixed(2)).display}
-      </Text>
-      <View style={styles.cardMeta}>
-        <Text style={styles.cardMetaText}>
-          <Text style={{ color: colors.up, fontWeight: "600" }}>
-            +{formatMoney(analysis.income.toFixed(2)).display}
-          </Text>{" "}
-          income
-        </Text>
-        <View style={styles.cardMetaDot} />
-        <Text style={styles.cardMetaText}>
-          <Text style={{ color: colors.down, fontWeight: "600" }}>
-            −{formatMoney(analysis.spend.toFixed(2)).display}
-          </Text>{" "}
-          spend
-        </Text>
-      </View>
-      <CashflowChart points={history} width={chartW} />
-    </View>
-  );
-}
-
-function CashflowChart({ points, width }: { points: CashflowPoint[]; width: number }) {
-  const H = 140;
-  const pad = 14;
-  const maxRaw = Math.max(
-    1,
-    ...points.flatMap((p) => [p.income, p.spend]),
-  );
-  const barW = 9;
-  const gap = 4;
-  const groupW = barW * 2 + gap;
-  const cellW = (width - pad * 2) / Math.max(1, points.length);
-  const baselineY = H - 26;
-  const currentIdx = points.length - 1;
-
-  return (
-    <Svg width={width} height={H} viewBox={`0 0 ${width} ${H}`}>
-      <Line
-        x1={pad}
-        y1={baselineY}
-        x2={width - pad}
-        y2={baselineY}
-        stroke={colors.hairline}
-        strokeWidth={1}
-      />
-      {points.map((p, i) => {
-        const cx = pad + cellW * i + cellW / 2 - groupW / 2;
-        const inH = (p.income / maxRaw) * (H - 50);
-        const outH = (p.spend / maxRaw) * (H - 50);
-        const isCurrent = i === currentIdx;
-        return (
-          <G key={`${p.year}-${p.month}`}>
-            <Rect
-              x={cx}
-              y={baselineY - inH}
-              width={barW}
-              height={inH}
-              fill={isCurrent ? colors.up : "rgba(31, 138, 91, 0.4)"}
-              rx={2}
-            />
-            <Rect
-              x={cx + barW + gap}
-              y={baselineY - outH}
-              width={barW}
-              height={outH}
-              fill={isCurrent ? colors.down : "rgba(207, 32, 47, 0.4)"}
-              rx={2}
-            />
-            <SvgText
-              x={cx + groupW / 2}
-              y={H - 8}
-              fontSize={11}
-              fontWeight={isCurrent ? "600" : "400"}
-              fill={isCurrent ? colors.ink : colors.muted}
-              textAnchor="middle"
-            >
-              {p.label}
-            </SvgText>
-          </G>
-        );
-      })}
-    </Svg>
   );
 }
 

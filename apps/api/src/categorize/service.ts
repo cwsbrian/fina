@@ -61,6 +61,7 @@ export async function categorizeNewTransactions(
       amount: true,
       occurredAt: true,
       rawData: true,
+      plaidItem: { select: { createdAt: true } },
       allocations: { select: { id: true } },
     },
   });
@@ -81,6 +82,7 @@ export async function categorizeNewTransactions(
     amount: number;
     occurredAt: Date;
     rawData: unknown;
+    plaidItemCreatedAt: Date | null;
     allocationId: string;
   };
   const loaded: Loaded[] = [];
@@ -99,6 +101,7 @@ export async function categorizeNewTransactions(
       amount: Number(t.amount),
       occurredAt: t.occurredAt,
       rawData: t.rawData,
+      plaidItemCreatedAt: t.plaidItem?.createdAt ?? null,
       allocationId: t.allocations[0]!.id,
     });
   }
@@ -179,7 +182,9 @@ export async function categorizeNewTransactions(
     if (!hint || !hintCat) { stillUnmapped.push(t); continue; }
 
     const isOther = isOtherCategory({ name: hintCat.name, archivedAt: hintCat.archivedAt });
-    const needsConfirmation = computeNeedsConfirmation({
+    const isHistoricalPlaidImport =
+      t.plaidItemCreatedAt !== null && t.occurredAt < t.plaidItemCreatedAt;
+    const needsConfirmation = isHistoricalPlaidImport ? false : computeNeedsConfirmation({
       mode,
       source: "history",
       isOther,
@@ -290,7 +295,11 @@ export async function categorizeNewTransactions(
         select: { name: true, archivedAt: true },
       });
       const isOther = aiCat ? isOtherCategory({ name: aiCat.name, archivedAt: aiCat.archivedAt }) : false;
-      const needsConfirmation = computeNeedsConfirmation({ mode, source: "ai", isOther, priorNeedsConfirmation: null });
+      const isHistoricalPlaidImport =
+        txMeta.plaidItemCreatedAt !== null && txMeta.occurredAt < txMeta.plaidItemCreatedAt;
+      const needsConfirmation = isHistoricalPlaidImport
+        ? false
+        : computeNeedsConfirmation({ mode, source: "ai", isOther, priorNeedsConfirmation: null });
 
       const upd = await prisma.transactionAllocation.updateMany({
         where: { id: a.id, categoryId: null, source: null },

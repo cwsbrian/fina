@@ -25,6 +25,11 @@ export function formatMoney(amount: string, currency = "CAD"): MoneyFormat {
   return { display: intl.format(abs), isIncome };
 }
 
+export function isExpenseAmount(amount: string): boolean {
+  const n = Number(amount);
+  return Number.isFinite(n) && n > 0;
+}
+
 /** Bucket an ISO date into a section title for the Activity list. */
 export function dateBucket(iso: string, now = new Date()): string {
   const d = new Date(iso);

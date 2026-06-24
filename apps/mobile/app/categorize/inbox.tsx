@@ -8,9 +8,8 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
-import { formatMoney } from "../../src/format/money";
+import { formatMoney, isExpenseAmount } from "../../src/format/money";
 import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
-import { txDirection } from "../../src/categories/direction";
 
 type LoadResult = {
   txs: TransactionDTO[];
@@ -25,7 +24,6 @@ export default function CategorizeInbox() {
   const [busyTxId, setBusyTxId] = useState<string | null>(null);
   const [pickerTxId, setPickerTxId] = useState<string | null>(null);
   const [pickerSelectedId, setPickerSelectedId] = useState<string | null>(null);
-  const [pickerType, setPickerType] = useState<"expense" | "income">("expense");
 
   const load = useCallback(async () => {
     try {
@@ -37,7 +35,7 @@ export default function CategorizeInbox() {
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${wsId}/categories`),
       ]);
       setData({
-        txs: list.transactions,
+        txs: list.transactions.filter((tx) => isExpenseAmount(tx.amount)),
         categories: Object.fromEntries(cats.categories.map((c) => [c.id, c])),
         mode: me.user.categorizationMode,
         wsId,
@@ -55,7 +53,14 @@ export default function CategorizeInbox() {
     setBusyTxId(tx.id);
     setData({ ...data, txs: data.txs.filter((t) => t.id !== tx.id) });
     try {
-      await apiFetch(`/workspaces/${data.wsId}/transactions/${tx.id}/confirm-category`, { method: "POST" });
+      const result = await apiFetch<{ affectedTransactionIds?: string[] }>(
+        `/workspaces/${data.wsId}/transactions/${tx.id}/confirm-category`,
+        { method: "POST" },
+      );
+      const affected = new Set(result.affectedTransactionIds ?? [tx.id]);
+      setData((current) => current
+        ? { ...current, txs: current.txs.filter((t) => !affected.has(t.id)) }
+        : current);
     } catch (e) {
       Alert.alert("Couldn't confirm", (e as { code?: string }).code ?? "Try again.");
       load();
@@ -67,7 +72,6 @@ export default function CategorizeInbox() {
   function editRow(tx: TransactionDTO) {
     setPickerTxId(tx.id);
     setPickerSelectedId(tx.allocations[0]?.categoryId ?? null);
-    setPickerType(txDirection(tx.amount));
   }
 
   async function skipOrDismissRow(tx: TransactionDTO) {
@@ -117,53 +121,52 @@ export default function CategorizeInbox() {
             const cat = alloc.categoryId ? data.categories[alloc.categoryId] : null;
             const merchant = tx.merchantNormalized ?? tx.merchantRaw;
             const money = formatMoney(tx.amount, tx.currency);
+            const date = formatReviewDate(tx.occurredAt);
             const isOther = (cat?.name ?? "").trim().toLowerCase() === "other";
             return (
-              <View key={tx.id} style={styles.card}>
-                <Pressable
-                  accessibilityLabel={cancelLabel}
-                  style={({ pressed }) => [styles.dismissCorner, pressed && { opacity: 0.5 }]}
-                  onPress={() => skipOrDismissRow(tx)}
-                  disabled={busyTxId === tx.id}
-                  hitSlop={10}
-                >
-                  <Ionicons name="close" size={16} color={colors.muted} />
-                </Pressable>
-                <View style={styles.rowTop}>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={styles.merchant} numberOfLines={1}>{merchant}</Text>
-                    <View style={styles.rowMid}>
-                      <Text style={styles.catLabel}>{cat?.name ?? "Uncategorized"}</Text>
-                      {isOther && (
-                        <View style={styles.otherChip}>
-                          <Text style={styles.otherChipText}>Other</Text>
-                        </View>
-                      )}
-                    </View>
-                  </View>
-                  <Text style={[styles.amount, money.isIncome && { color: colors.up }]}>
-                    {money.isIncome ? "+" : "−"}{money.display}
-                  </Text>
+              <View key={tx.id} style={styles.row}>
+                <View style={styles.rowGlyph}>
+                  <Ionicons name="pricetag-outline" size={17} color={colors.muted} />
                 </View>
-                <View style={styles.actions}>
-                  <Pressable
-                    accessibilityLabel="Confirm category"
-                    style={({ pressed }) => [styles.confirmPill, pressed && { opacity: 0.7 }]}
-                    onPress={() => confirmRow(tx)}
-                    disabled={busyTxId === tx.id}
-                    hitSlop={6}
-                  >
-                    <Text style={styles.confirmPillText}>Confirm</Text>
-                  </Pressable>
-                  <Pressable
-                    accessibilityLabel="Change category"
-                    style={({ pressed }) => [styles.iconBtn, pressed && { opacity: 0.5 }]}
-                    onPress={() => editRow(tx)}
-                    disabled={busyTxId === tx.id}
-                    hitSlop={8}
-                  >
-                    <Ionicons name="pencil-outline" size={18} color={colors.muted} />
-                  </Pressable>
+                <View style={styles.rowBody}>
+                  <Text style={styles.merchant} numberOfLines={1}>{merchant}</Text>
+                  <View style={styles.rowMetaLine}>
+                    <Text style={styles.catLabel} numberOfLines={1}>{cat?.name ?? "Uncategorized"}</Text>
+                    {isOther && <View style={styles.otherDot} />}
+                    <Text style={styles.dateLabel}>· {date}</Text>
+                  </View>
+                </View>
+                <View style={styles.rowRight}>
+                  <Text style={styles.amount}>−{money.display}</Text>
+                  <View style={styles.actions}>
+                    <Pressable
+                      accessibilityLabel={cancelLabel}
+                      style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.55 }]}
+                      onPress={() => skipOrDismissRow(tx)}
+                      disabled={busyTxId === tx.id}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="close" size={18} color={colors.muted} />
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel="Change category"
+                      style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.55 }]}
+                      onPress={() => editRow(tx)}
+                      disabled={busyTxId === tx.id}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="pencil-outline" size={17} color={colors.muted} />
+                    </Pressable>
+                    <Pressable
+                      accessibilityLabel="Confirm category"
+                      style={({ pressed }) => [styles.actionBtn, pressed && { opacity: 0.55 }]}
+                      onPress={() => confirmRow(tx)}
+                      disabled={busyTxId === tx.id}
+                      hitSlop={8}
+                    >
+                      <Ionicons name="checkmark" size={18} color={colors.primary} />
+                    </Pressable>
+                  </View>
                 </View>
               </View>
             );
@@ -175,7 +178,7 @@ export default function CategorizeInbox() {
         visible={pickerTxId !== null}
         txId={pickerTxId ?? ""}
         selectedId={pickerSelectedId}
-        categoryType={pickerType}
+        categoryType="expense"
         onClose={() => setPickerTxId(null)}
         onChange={(affectedTransactionIds) => {
           setPickerTxId(null);
@@ -193,81 +196,64 @@ function Header() {
   return (
     <View style={styles.head}>
       <HeaderIconButton icon="chevron-back" onPress={() => router.back()} variant="plain" />
-      <Text style={styles.title}>Review queue</Text>
+      <Text style={styles.title}>Review Activities</Text>
+      <View style={{ width: 34 }} />
     </View>
   );
 }
 
+function formatReviewDate(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
+}
+
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
-  head: { flexDirection: "row", alignItems: "center", paddingHorizontal: space.base, gap: space.sm, height: 56 },
-  title: { ...type$.titleMd, color: colors.ink },
-  scroll: { padding: space.lg, gap: space.sm },
+  head: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: space.base,
+    paddingVertical: space.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
+  },
+  title: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+  scroll: { paddingHorizontal: space.lg, paddingBottom: space.xl, flexGrow: 1 },
   fallback: { flex: 1, alignItems: "center", justifyContent: "center" },
   errText: { ...type$.bodyMd, color: colors.down },
   emptyWrap: { alignItems: "center", paddingVertical: space.xxl, gap: space.sm },
   emptyTitle: { ...type$.titleMd, color: colors.ink, marginTop: space.base },
   emptySub: { ...type$.bodySm, color: colors.muted },
-  card: {
-    backgroundColor: colors.surfaceSoft,
-    borderRadius: 16,
-    padding: space.base,
-    marginBottom: space.sm,
-    marginTop: 10,
-    gap: 6,
-    position: "relative",
-    overflow: "visible",
-  },
-  dismissCorner: {
-    position: "absolute",
-    top: -10,
-    right: -10,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.canvas,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 3,
-    shadowColor: "#000",
-    shadowOpacity: 0.06,
-    shadowOffset: { width: 0, height: 1 },
-    shadowRadius: 3,
-    elevation: 2,
-  },
-  rowTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  merchant: { ...type$.titleSm, color: colors.ink, flex: 1, marginRight: space.sm },
-  amount: { ...type$.titleSm, color: colors.ink },
-  rowMid: { flexDirection: "row", alignItems: "center", gap: 6 },
-  catLabel: { ...type$.bodySm, color: colors.body },
-  otherChip: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, backgroundColor: "rgba(207, 32, 47, 0.10)" },
-  otherChipText: { fontSize: 10, color: colors.down, fontWeight: "600" },
-  actions: {
+  row: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    marginTop: space.sm,
+    gap: space.sm,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
   },
-  confirmPill: {
-    paddingHorizontal: 14,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.primary,
+  rowGlyph: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: colors.surfaceSoft,
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 4,
   },
-  confirmPillText: {
-    ...type$.bodySm,
-    color: colors.onPrimary,
-    fontWeight: "600",
-    fontSize: 13,
-  },
-  iconBtn: {
-    width: 32,
-    height: 32,
+  rowBody: { flex: 1, minWidth: 0 },
+  merchant: { ...type$.titleSm, color: colors.ink },
+  rowMetaLine: { flexDirection: "row", alignItems: "center", gap: 5, minWidth: 0, marginTop: 2 },
+  catLabel: { ...type$.bodySm, color: colors.muted, flexShrink: 1 },
+  dateLabel: { ...type$.bodySm, color: colors.muted, flexShrink: 0 },
+  otherDot: { width: 6, height: 6, borderRadius: 999, backgroundColor: colors.down, flexShrink: 0 },
+  rowRight: { alignItems: "flex-end", gap: 5 },
+  amount: { ...type$.bodyMd, color: colors.ink, fontWeight: "600", fontVariant: ["tabular-nums"] },
+  actions: { flexDirection: "row", alignItems: "center", gap: 2 },
+  actionBtn: {
+    width: 26,
+    height: 26,
     alignItems: "center",
     justifyContent: "center",
   },

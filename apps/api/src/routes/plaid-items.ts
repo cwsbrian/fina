@@ -86,6 +86,7 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
 
   app.delete("/workspaces/:id/plaid-items/:itemId", async (req, reply) => {
     const params = req.params as { id: string; itemId: string };
+    const query = req.query as { deleteTransactions?: string };
     try {
       // INTENTIONAL EXCEPTION to "all Plaid-mutating routes are Pro-gated":
       // disconnect must NOT require Pro tier. If a user's trial expires
@@ -97,7 +98,9 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      await removeItemStrict(app.fina.env, ctx.membership.workspaceId, params.itemId);
+      await removeItemStrict(app.fina.env, ctx.membership.workspaceId, params.itemId, {
+        deleteTransactions: query.deleteTransactions === "true",
+      });
       return reply.code(204).send();
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

@@ -59,6 +59,34 @@ async function categoryId(wsId: string, name: string): Promise<string> {
   return c.id;
 }
 
+async function makePlaidItemAndAccount(
+  wsId: string,
+  createdAt: Date,
+): Promise<{ plaidItemId: string; accountId: string }> {
+  const item = await prisma.plaidItem.create({
+    data: {
+      workspaceId: wsId,
+      connectedBy: null,
+      accessTokenCiphertext: Buffer.from([1]),
+      accessTokenIv: Buffer.from(new Array(12).fill(2)),
+      itemId: `item_${Math.random().toString(36).slice(2, 8)}`,
+      institutionId: "ins_test",
+      institutionName: "Test Bank",
+      createdAt,
+    },
+  });
+  const account = await prisma.bankAccount.create({
+    data: {
+      workspaceId: wsId,
+      plaidItemId: item.id,
+      plaidAccountId: `acct_${Math.random().toString(36).slice(2, 8)}`,
+      name: "Plaid Checking",
+      type: "depository",
+    },
+  });
+  return { plaidItemId: item.id, accountId: account.id };
+}
+
 // NOTE: `setupWorkspaceWithAccount()` signs up a user, which triggers bootstrap
 // and seeds all 11 default categories. Do NOT call prisma.category.createMany()
 // for seeded category names (Dining, Groceries, Transit, etc.) — those calls
@@ -586,6 +614,39 @@ describe("categorize pipeline — history step + needsConfirmation + PFC", () =>
     expect(alloc.source).toBe("ai");
     expect(alloc.categoryId).toBe(otherId);
     expect(alloc.needsConfirmation).toBe(true);
+  });
+
+  it("historical Plaid import before item creation does not need review", async () => {
+    const { wsId, userId } = await setupWorkspaceWithAccount();
+    await prisma.user.update({ where: { id: userId }, data: { categorizationMode: "auto" } });
+    const otherId = await categoryId(wsId, "Other");
+    const { plaidItemId, accountId } = await makePlaidItemAndAccount(
+      wsId,
+      new Date("2026-06-15T00:00:00Z"),
+    );
+    const tx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId,
+        plaidItemId,
+        plaidTransactionId: `historical_${Date.now()}`,
+        amount: "10",
+        merchantRaw: "Mystery Historical",
+        occurredAt: new Date("2026-05-10T12:00:00Z"),
+        rawData: {},
+      },
+    });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: null, amount: "10", source: null },
+    });
+    geminiMock.generateContent.push({ results: [{ tx_id: tx.id, category: "Other" }] });
+
+    await categorizeNewTransactions(env, wsId, [tx.id]);
+
+    const alloc = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: tx.id } });
+    expect(alloc.source).toBe("ai");
+    expect(alloc.categoryId).toBe(otherId);
+    expect(alloc.needsConfirmation).toBe(false);
   });
 
   it("LLM result non-Other + mode='auto' → needsConfirmation=false", async () => {
