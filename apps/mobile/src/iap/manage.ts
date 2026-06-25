@@ -9,7 +9,7 @@ export function nativeBillingUnavailableMessage(
 ): string | null {
   if (!source) return null;
   if (source === "stripe") {
-    return "This subscription is managed on withfina.com.";
+    return "This subscription is managed on the website.";
   }
   if (source === "iap_apple" && Platform.OS !== "ios") {
     return "This subscription was started in the App Store. Manage it from an iPhone, iPad, or your Apple account.";

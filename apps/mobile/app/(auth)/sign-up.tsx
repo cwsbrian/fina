@@ -2,14 +2,13 @@ import { useEffect, useState } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
-
-const WEB_URL = "https://withfina.com";
 import {
   passwordStrength,
   MIN_PASSWORD_LENGTH,
   meetsPasswordPolicy,
 } from "@fina/shared";
 import { signUp } from "../../src/auth/client";
+import { env } from "../../src/env";
 import { AuthScaffold } from "../../src/design/AuthScaffold";
 import { AuthField } from "../../src/design/AuthField";
 import { AuthCTA, SocialButton } from "../../src/design/AuthButtons";
@@ -147,14 +146,14 @@ export default function SignUpScreen() {
         By creating an account you agree to Fina&apos;s{" "}
         <Text
           style={styles.legalLink}
-          onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/terms`)}
+          onPress={() => WebBrowser.openBrowserAsync(`${env.EXPO_PUBLIC_WEB_URL}/terms`)}
         >
           Terms
         </Text>{" "}
         and{" "}
         <Text
           style={styles.legalLink}
-          onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/privacy`)}
+          onPress={() => WebBrowser.openBrowserAsync(`${env.EXPO_PUBLIC_WEB_URL}/privacy`)}
         >
           Privacy Policy
         </Text>

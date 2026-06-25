@@ -34,7 +34,7 @@
 
 ### Optional but recommended
 - [ ] `EXPO_ACCESS_TOKEN` — Expo Push rate limit 완화 + receipt polling 활성화. `https://expo.dev/accounts/[account]/settings/access-tokens` 발급
-- [ ] `EMAIL_FROM` — sender address (default `Fina <noreply@withfina.com>`)
+- [ ] `EMAIL_FROM` — sender address (default `Fina <no-reply@buildingintent.com>`)
 - [ ] `RESEND_API_KEY` — invite email + 기타 transactional. 없으면 silent no-op.
 
 ## 3. 데이터베이스 마이그레이션

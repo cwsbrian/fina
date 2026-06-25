@@ -11,9 +11,9 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
+import { env } from "../../src/env";
 
 const HEADER_HEIGHT = 84;
-const WEB_URL = "https://withfina.com";
 import { router, useFocusEffect } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -275,12 +275,12 @@ export default function More() {
     if (action === "web-billing") {
       Alert.alert(
         "Plan",
-        "Your subscription is managed on withfina.com. Open the website to make changes.",
+        "Your subscription is managed on the website. Open it to make changes.",
         [
           { text: "Cancel", style: "cancel" },
           {
             text: "Open website",
-            onPress: () => WebBrowser.openBrowserAsync(`${WEB_URL}/settings/plan`),
+            onPress: () => WebBrowser.openBrowserAsync(`${env.EXPO_PUBLIC_WEB_URL}/settings/plan`),
           },
         ],
       );
@@ -604,22 +604,22 @@ export default function More() {
           <SettingsRow
             icon="globe-outline"
             title="Visit website"
-            onPress={() => WebBrowser.openBrowserAsync(WEB_URL)}
+            onPress={() => WebBrowser.openBrowserAsync(env.EXPO_PUBLIC_WEB_URL)}
           />
           <SettingsRow
             icon="shield-checkmark-outline"
             title="Privacy policy"
-            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/privacy`)}
+            onPress={() => WebBrowser.openBrowserAsync(`${env.EXPO_PUBLIC_WEB_URL}/privacy`)}
           />
           <SettingsRow
             icon="document-text-outline"
             title="Terms of service"
-            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/terms`)}
+            onPress={() => WebBrowser.openBrowserAsync(`${env.EXPO_PUBLIC_WEB_URL}/terms`)}
           />
           <SettingsRow
             icon="lock-closed-outline"
             title="Security"
-            onPress={() => WebBrowser.openBrowserAsync(`${WEB_URL}/security`)}
+            onPress={() => WebBrowser.openBrowserAsync(`${env.EXPO_PUBLIC_WEB_URL}/security`)}
             last
           />
         </Group>
