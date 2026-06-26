@@ -48,6 +48,18 @@ describe("budget impact", () => {
     })).toBe("excluded");
   });
 
+  it("excludes same-bank transfer markers even when Plaid says OTHER", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: 400,
+      name: "WQ062 TFR-TO 6911127",
+      merchant_name: null,
+      personal_finance_category: {
+        primary: "OTHER",
+        detailed: "OTHER_OTHER",
+      },
+    })).toBe("excluded");
+  });
+
   it("excludes account-transfer rows with common own-account transfer markers", () => {
     for (const name of [
       "TRANSFER TO SAVINGS",

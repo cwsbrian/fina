@@ -478,7 +478,7 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     await app.close();
   });
 
-  it("detached categorize after exchange — tx get categoryId + source='ai' within poll window", async () => {
+  it("categorizes before exchange response — tx gets categoryId + source='ai'", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "ex-cat@x.com", name: "EC" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -493,24 +493,26 @@ describe("POST /workspaces/:id/plaid/exchange", () => {
     geminiMock.generateContent.push(
       new Promise<{ results: Array<{ tx_id: string; category: string }> }>((r) => { geminiResolveExch = r; }),
     );
-    const res = await app.inject({
+    const resPromise = app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/plaid/exchange`,
       headers: { cookie: owner.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
       payload: JSON.stringify({ publicToken: "p", institutionId: "ins_1", institutionName: "TB" }),
     });
-    expect(res.statusCode).toBe(200);
-    const localTx = await prisma.transaction.findFirstOrThrow({
-      where: { workspaceId: wsId, plaidTransactionId: "tx_cat" },
-      select: { id: true },
-    });
-    geminiResolveExch({ results: [{ tx_id: localTx.id, category: "Groceries" }] });
+    let localTx: { id: string } | null = null;
     for (let i = 0; i < 50; i++) {
-      const alloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: localTx.id } });
-      if (alloc?.categoryId !== null) break;
+      localTx = await prisma.transaction.findFirst({
+        where: { workspaceId: wsId, plaidTransactionId: "tx_cat" },
+        select: { id: true },
+      });
+      if (localTx) break;
       await new Promise((r) => setTimeout(r, 50));
     }
-    const finalAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: localTx.id } });
+    expect(localTx).not.toBeNull();
+    geminiResolveExch({ results: [{ tx_id: localTx!.id, category: "Groceries" }] });
+    const res = await resPromise;
+    expect(res.statusCode).toBe(200);
+    const finalAlloc = await prisma.transactionAllocation.findFirst({ where: { transactionId: localTx!.id } });
     const groceriesCat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Groceries" } });
     expect(finalAlloc?.categoryId).toBe(groceriesCat.id);
     expect(finalAlloc?.source).toBe("ai");

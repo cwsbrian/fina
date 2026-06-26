@@ -35,6 +35,31 @@ type ExchangedItemCleanup = {
   webhookUrl: string | null;
 };
 
+const HISTORICAL_CATCHUP_DELAY_MS = 90_000;
+
+async function categorizeSyncResult(
+  env: Env,
+  workspaceId: string,
+  plaidItemId: string,
+  r: Awaited<ReturnType<typeof syncTransactions>>,
+): Promise<void> {
+  if (r.newTxIds.length === 0) return;
+  await categorizeNewTransactions(env, workspaceId, r.newTxIds).catch((e) => {
+    logError({ err: e, plaidItemId, workspaceId }, "categorize after plaid sync failed");
+  });
+}
+
+function scheduleHistoricalCatchup(env: Env, workspaceId: string, plaidItemId: string): void {
+  const timer = setTimeout(() => {
+    void syncTransactions(env, workspaceId, plaidItemId)
+      .then((r) => categorizeSyncResult(env, workspaceId, plaidItemId, r))
+      .catch((e) => {
+        logError({ err: e, plaidItemId, workspaceId }, "plaid historical catch-up sync failed");
+      });
+  }, HISTORICAL_CATCHUP_DELAY_MS);
+  timer.unref?.();
+}
+
 async function checkPlaidItemLimit(
   userId: string,
   client: PlaidItemLimitClient = prisma,
@@ -347,8 +372,9 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
     let transactionCount = 0;
     let syncOk = true;
     try {
+      const syncPromise = syncTransactions(app.fina.env, verifiedWsId, plaidItemId);
       const r = await Promise.race([
-        syncTransactions(app.fina.env, verifiedWsId, plaidItemId),
+        syncPromise,
         new Promise<{ skipped: "deadline" }>((resolve) =>
           setTimeout(() => resolve({ skipped: "deadline" }), SYNC_DEADLINE_MS),
         ),
@@ -365,17 +391,19 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
             where: { id: plaidItemId },
             data: { status: "error", errorCode: "sync_timeout" },
           });
+          void syncPromise
+            .then(async (done) => {
+              await categorizeSyncResult(app.fina.env, verifiedWsId, plaidItemId, done);
+              scheduleHistoricalCatchup(app.fina.env, verifiedWsId, plaidItemId);
+            })
+            .catch((e) => {
+              logError({ err: e, plaidItemId, workspaceId: verifiedWsId }, "plaid initial sync finished after deadline failed");
+            });
         }
       } else {
         transactionCount = r.added;
-      }
-
-      // Detached categorize — keeps the response fast. Errors are logged.
-      if ("newTxIds" in r && r.newTxIds.length > 0) {
-        const newTxIds = r.newTxIds;
-        void categorizeNewTransactions(app.fina.env, verifiedWsId, newTxIds).catch((e) => {
-          logError({ err: e, plaidItemId, workspaceId: verifiedWsId }, "categorize after exchange failed");
-        });
+        await categorizeSyncResult(app.fina.env, verifiedWsId, plaidItemId, r);
+        scheduleHistoricalCatchup(app.fina.env, verifiedWsId, plaidItemId);
       }
     } catch {
       // Status was already persisted inside syncTransactions's catch.

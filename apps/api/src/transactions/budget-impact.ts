@@ -145,7 +145,7 @@ export function classifyPlaidBudgetImpact(t: PlaidBudgetTx): BudgetImpactValue {
   if (/\b(PAYMENT|PYMT|PMT)\b/.test(text) && /\b(CREDIT|CARD|VISA|MASTERCARD|AMEX)\b/.test(text)) {
     return "excluded";
   }
-  if (isAccountTransfer && ACCOUNT_TRANSFER_MARKERS.some((marker) => hasKeyword(text, marker))) return "excluded";
+  if (ACCOUNT_TRANSFER_MARKERS.some((marker) => hasKeyword(text, marker))) return "excluded";
   if (INVESTMENT_ACCOUNT_KEYWORDS.some((keyword) => hasKeyword(text, keyword))) {
     return "excluded";
   }
