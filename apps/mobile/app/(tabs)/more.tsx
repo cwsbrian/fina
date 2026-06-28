@@ -607,6 +607,11 @@ export default function More() {
             onPress={() => WebBrowser.openBrowserAsync(env.EXPO_PUBLIC_WEB_URL)}
           />
           <SettingsRow
+            icon="help-circle-outline"
+            title="Contact support"
+            onPress={() => router.push("/support" as never)}
+          />
+          <SettingsRow
             icon="shield-checkmark-outline"
             title="Privacy policy"
             onPress={() => WebBrowser.openBrowserAsync(`${env.EXPO_PUBLIC_WEB_URL}/privacy`)}

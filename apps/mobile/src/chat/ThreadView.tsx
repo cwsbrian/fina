@@ -11,6 +11,8 @@ import {
   Alert,
   Animated,
   KeyboardAvoidingView,
+  Keyboard,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -83,6 +85,46 @@ type PostMessageResp = {
   assistantMessage: ChatMessageDTO;
 };
 
+const CHAT_SUPPORT_SUBJECT = "Chat issue";
+const CHAT_SUPPORT_ANSWER_LIMIT = 1800;
+
+function chatSupportAnswerText(message: ChatMessageDTO): string {
+  const blocks = Array.isArray(message.blocks)
+    ? (message.blocks as Block[])
+    : [];
+  const text = blocks
+    .filter((b): b is Extract<Block, { type: "text" }> => b.type === "text")
+    .map((b) => b.markdown)
+    .join("\n\n")
+    .trim();
+  if (text.length === 0) {
+    const blockTypes = blocks.map((b) => b.type).join(", ");
+    return blockTypes ? `(structured answer: ${blockTypes})` : "(empty answer)";
+  }
+  if (text.length <= CHAT_SUPPORT_ANSWER_LIMIT) return text;
+  return `${text.slice(0, CHAT_SUPPORT_ANSWER_LIMIT).trimEnd()}\n...`;
+}
+
+function buildChatSupportMessage({
+  note,
+  threadId,
+  message,
+}: {
+  note: string;
+  threadId: string | null;
+  message: ChatMessageDTO;
+}): string {
+  return [
+    note.trim(),
+    "",
+    "---- Chat context ----",
+    `Thread ID: ${threadId ?? "pending"}`,
+    `Message ID: ${message.id}`,
+    "Fina answer:",
+    chatSupportAnswerText(message),
+  ].join("\n");
+}
+
 export function ThreadView({
   threadId,
   bottomInset = 0,
@@ -136,6 +178,14 @@ export function ThreadView({
   const [dismissedIntents, setDismissedIntents] = useState<Set<string>>(
     () => new Set(),
   );
+  const [supportMessage, setSupportMessage] = useState<ChatMessageDTO | null>(null);
+  const [supportNote, setSupportNote] = useState("");
+  const [supportSubmitting, setSupportSubmitting] = useState(false);
+  const [supportErr, setSupportErr] = useState<string | null>(null);
+  const supportCanSubmit =
+    supportMessage?.role === "assistant" &&
+    supportNote.trim().length > 0 &&
+    !supportSubmitting;
 
   // Sync when the parent switches us to a different thread (e.g. tapping
   // a row in /chats). Reset all local state so the new thread loads cleanly.
@@ -368,6 +418,48 @@ export function ThreadView({
     }
   };
 
+  const openSupport = useCallback((message: ChatMessageDTO) => {
+    if (message.role !== "assistant") return;
+    Keyboard.dismiss();
+    setSupportMessage(message);
+    setSupportNote("");
+    setSupportErr(null);
+  }, []);
+
+  const closeSupport = useCallback(() => {
+    if (supportSubmitting) return;
+    setSupportMessage(null);
+    setSupportNote("");
+    setSupportErr(null);
+  }, [supportSubmitting]);
+
+  const submitSupport = useCallback(async () => {
+    if (!supportCanSubmit || !supportMessage) return;
+    setSupportSubmitting(true);
+    setSupportErr(null);
+    try {
+      await apiFetch("/support/tickets", {
+        method: "POST",
+        body: JSON.stringify({
+          subject: CHAT_SUPPORT_SUBJECT,
+          message: buildChatSupportMessage({
+            note: supportNote,
+            threadId: localId,
+            message: supportMessage,
+          }),
+          attachments: [],
+        }),
+      });
+      setSupportMessage(null);
+      setSupportNote("");
+      Alert.alert("Sent", "We'll reply by email.");
+    } catch (e) {
+      setSupportErr((e as { code?: string }).code ?? "send_failed");
+    } finally {
+      setSupportSubmitting(false);
+    }
+  }, [localId, supportCanSubmit, supportMessage, supportNote]);
+
   if (err) {
     return (
       <View style={styles.center}>
@@ -431,6 +523,7 @@ export function ThreadView({
               );
               scrollToBottom();
             }}
+            onSupportPress={openSupport}
           />
         )}
         ListFooterComponent={sending ? <TypingIndicator /> : null}
@@ -508,6 +601,66 @@ export function ThreadView({
         onSelect={(id) => setPickedWorkspaceId(id)}
         onClose={() => setPickerVisible(false)}
       />
+      <Modal
+        visible={supportMessage?.role === "assistant"}
+        transparent
+        animationType="fade"
+        onRequestClose={closeSupport}
+      >
+        <KeyboardAvoidingView
+          style={styles.modalAvoid}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.supportModal}>
+              <Text style={styles.supportTitle}>Report this answer</Text>
+              <TextInput
+                value={supportNote}
+                onChangeText={setSupportNote}
+                placeholder="What went wrong?"
+                placeholderTextColor={colors.mutedSoft}
+                style={styles.supportInput}
+                multiline
+                textAlignVertical="top"
+                editable={!supportSubmitting}
+                maxLength={2400}
+                autoFocus
+              />
+              {supportErr && (
+                <Text style={styles.supportErr}>Couldn't send: {supportErr}</Text>
+              )}
+              <View style={styles.supportActions}>
+                <Pressable
+                  onPress={closeSupport}
+                  disabled={supportSubmitting}
+                  style={({ pressed }) => [
+                    styles.supportBtn,
+                    styles.supportBtnSecondary,
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Text style={styles.supportBtnSecondaryText}>Cancel</Text>
+                </Pressable>
+                <Pressable
+                  onPress={submitSupport}
+                  disabled={!supportCanSubmit}
+                  style={({ pressed }) => [
+                    styles.supportBtn,
+                    styles.supportBtnPrimary,
+                    (!supportCanSubmit || pressed) && { opacity: 0.7 },
+                  ]}
+                >
+                  {supportSubmitting ? (
+                    <ActivityIndicator size="small" color={colors.onPrimary} />
+                  ) : (
+                    <Text style={styles.supportBtnPrimaryText}>Send</Text>
+                  )}
+                </Pressable>
+              </View>
+            </View>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -651,6 +804,7 @@ function MessageBubble({
   onIntentDismissed,
   onFormFocusChange,
   onConfirmationMessage,
+  onSupportPress,
 }: {
   message: ChatMessageDTO;
   workspaceId: string | null;
@@ -659,6 +813,7 @@ function MessageBubble({
   onIntentDismissed: (intentId: string) => void;
   onFormFocusChange?: (focused: boolean) => void;
   onConfirmationMessage?: (msg: ChatMessageDTO) => void;
+  onSupportPress?: (message: ChatMessageDTO) => void;
 }) {
   const rawBlocks = Array.isArray(message.blocks)
     ? (message.blocks as Block[])
@@ -757,6 +912,22 @@ function MessageBubble({
           </View>
         );
       })}
+      {message.role === "assistant" && onSupportPress && (
+        <View style={styles.supportActionRow}>
+          <Pressable
+            onPress={() => onSupportPress(message)}
+            accessibilityRole="button"
+            accessibilityLabel="Report this answer"
+            hitSlop={8}
+            style={({ pressed }) => [
+              styles.supportAction,
+              pressed && { opacity: 0.65 },
+            ]}
+          >
+            <Ionicons name="help-circle-outline" size={16} color={colors.muted} />
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
@@ -769,6 +940,19 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", marginVertical: 4 },
   rowUser: { justifyContent: "flex-end" },
   rowAssistant: { justifyContent: "flex-start" },
+  supportActionRow: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignSelf: "flex-start",
+    width: "82%",
+    marginTop: -5,
+  },
+  supportAction: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 2,
+    paddingVertical: 1,
+  },
   bubble: {
     maxWidth: "82%",
     paddingHorizontal: space.base,
@@ -844,4 +1028,51 @@ const styles = StyleSheet.create({
   },
   wsChipPrefix: { ...type$.caption, color: colors.muted },
   wsChipName: { ...type$.caption, color: colors.ink, fontWeight: "600" },
+  modalAvoid: { flex: 1 },
+  modalBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    padding: space.lg,
+    backgroundColor: "rgba(17, 24, 39, 0.36)",
+  },
+  supportModal: {
+    backgroundColor: colors.canvas,
+    borderRadius: 14,
+    padding: space.base,
+    gap: space.sm,
+  },
+  supportTitle: { ...type$.titleMd, color: colors.ink },
+  supportInput: {
+    minHeight: 128,
+    paddingHorizontal: space.sm + 2,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.surfaceSoft,
+    color: colors.ink,
+    fontSize: 16,
+  },
+  supportErr: { ...type$.caption, color: colors.down },
+  supportActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: space.xs,
+  },
+  supportBtn: {
+    minWidth: 86,
+    minHeight: 42,
+    borderRadius: 999,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: space.base,
+  },
+  supportBtnSecondary: {
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.canvas,
+  },
+  supportBtnPrimary: { backgroundColor: colors.primary },
+  supportBtnSecondaryText: { ...type$.button, color: colors.ink },
+  supportBtnPrimaryText: { ...type$.button, color: colors.onPrimary },
 });

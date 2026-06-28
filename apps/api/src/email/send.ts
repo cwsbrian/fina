@@ -13,10 +13,15 @@ function getClient(apiKey: string | undefined): Resend | null {
 }
 
 export type EmailInput = {
-  to: string;
+  to: string | string[];
   subject: string;
   text: string;
   html?: string;
+  attachments?: Array<{
+    filename: string;
+    content: Buffer | string;
+    contentType?: string;
+  }>;
 };
 
 export async function sendEmail(
@@ -39,6 +44,7 @@ export async function sendEmail(
     subject: input.subject,
     text: input.text,
     ...(input.html !== undefined ? { html: input.html } : {}),
+    ...(input.attachments !== undefined ? { attachments: input.attachments } : {}),
   });
   if (result.error) {
     const message = result.error.message ?? JSON.stringify(result.error);

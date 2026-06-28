@@ -17,6 +17,7 @@ const Schema = z.object({
   RESEND_API_KEY: z.string().optional(),
   WEB_APP_URL: z.string().url(),
   EMAIL_FROM: z.string().default("Fina <no-reply@buildingintent.com>"),
+  SUPPORT_EMAIL_TO: z.string().default("building.intent@gmail.com"),
   // Comma-separated extra origins allowed in dev (CORS + Better Auth trustedOrigins).
   // Default empty; baseline allowlist still includes localhost:3000 and :3100.
   // Use this to add LAN/Tailscale IPs when smoke-testing from another device.
