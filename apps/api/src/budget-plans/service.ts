@@ -573,11 +573,12 @@ export async function recentDiscretionaryDailyByCategory(
 
   const rows = await prisma.transactionAllocation.findMany({
     where: {
-      transaction: budgetExpenseTransactionWhere({
+      transaction: {
         workspaceId,
+        removedAt: null,
         pending: false,
         occurredAt: { gte: since },
-      }),
+      },
       categoryId: { in: categoryIds },
     },
     select: { amount: true, categoryId: true },

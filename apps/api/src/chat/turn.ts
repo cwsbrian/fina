@@ -538,7 +538,7 @@ export async function processChatTurn(
       const fcArgs = (fc.args ?? {}) as Record<string, unknown>;
       const dispatch = await dispatchTool(toolCtx, fcName, fcArgs, REGISTRY);
       if (AUDIT_WRITE_TOOLS.has(fcName) && dispatch.ok) {
-        void logAuditEvent({
+        await logAuditEvent({
           workspaceId: thread.workspaceId,
           actorType: "agent",
           actorUserId: userId,

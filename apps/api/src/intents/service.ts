@@ -253,7 +253,7 @@ export async function consumeIntentService(
     parsed.data,
   );
   if (AUDIT_WRITE_TOOLS.has(payload.tool)) {
-    void logAuditEvent({
+    await logAuditEvent({
       workspaceId: ctx.workspaceId,
       actorType: "user",
       actorUserId: ctx.userId,

@@ -35,11 +35,20 @@ describe("scheduler", () => {
     expect(Cron).not.toHaveBeenCalled();
   });
 
-  it("CRON_ENABLED=true → exactly 5 Cron instances created", () => {
-    // 5 jobs: daily-brief (1m), daily-refresh, retry-unprocessed,
-    // cleanup-events, scheduled-spend-match. daily-brief added by Plan 2B.
+  it("CRON_ENABLED=true → registers the expected Cron jobs", () => {
     startScheduler({ ...env, CRON_ENABLED: true });
-    expect(Cron).toHaveBeenCalledTimes(5);
+    expect(Cron).toHaveBeenCalledTimes(9);
+    expect(vi.mocked(Cron).mock.calls.map((call) => call[1]?.name)).toEqual([
+      "daily-brief",
+      "push-receipts",
+      "sweep-expired-intents",
+      "daily-refresh",
+      "retry-unprocessed",
+      "cleanup-events",
+      "scheduled-spend-match",
+      "trial-expiring",
+      "goal-milestones",
+    ]);
   });
 
   it("stopScheduler calls stop() on all registered jobs", () => {

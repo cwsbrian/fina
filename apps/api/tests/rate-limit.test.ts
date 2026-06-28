@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/server.js";
-import { signUpAndGetCookie } from "./helpers/auth.js";
+import { getOwnerWorkspaceId, signUpAndGetCookie } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 
@@ -10,11 +10,11 @@ describe("rate limits", () => {
   beforeEach(async () => { await truncateAll(); });
   afterEach(async () => { /* nothing — each test rebuilds app */ });
 
-  it("global default — 60/min per IP, 61st returns 429 rate_limit_exceeded", async () => {
+  it("global default — 600/min per IP, 601st returns 429 rate_limit_exceeded", async () => {
     const app = await buildApp(env);
     let last;
-    for (let i = 0; i < 61; i++) {
-      last = await app.inject({ method: "GET", url: "/health" });
+    for (let i = 0; i < 601; i++) {
+      last = await app.inject({ method: "GET", url: "/live" });
     }
     expect(last?.statusCode).toBe(429);
     expect(last?.json().error).toBe("rate_limit_exceeded");
@@ -77,9 +77,10 @@ describe("rate limits", () => {
     await app.close();
   });
 
-  it("chat per-user — 30/min keyed by userId via session-decorator", async () => {
+  it("chat per-user — 60/min keyed by userId via session-decorator", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "rl-chat@t.co" });
+    const wsId = await getOwnerWorkspaceId(u.userId);
     const create = await app.inject({
       method: "POST", url: "/chat/threads",
       headers: { cookie: u.cookie, "content-type": "application/json" },
@@ -89,12 +90,12 @@ describe("rate limits", () => {
     const threadId = create.json().thread.id;
 
     let last;
-    for (let i = 0; i < 31; i++) {
+    for (let i = 0; i < 61; i++) {
       last = await app.inject({
         method: "POST",
         url: `/chat/threads/${threadId}/messages`,
         headers: { cookie: u.cookie, "content-type": "application/json" },
-        payload: JSON.stringify({ text: `m${i}`, workspaceId: "anything" }),
+        payload: JSON.stringify({ text: "", workspaceId: wsId }),
       });
     }
     expect(last?.statusCode).toBe(429);

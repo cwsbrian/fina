@@ -2,6 +2,10 @@ import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { startTrialAndBootstrapWorkspace } from "../src/workspaces/bootstrap.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
+import {
+  DEFAULT_EXPENSE_CATEGORIES,
+  DEFAULT_INCOME_CATEGORIES,
+} from "../src/categorize/seed.js";
 
 describe("startTrialAndBootstrapWorkspace", () => {
   beforeEach(async () => {
@@ -66,7 +70,7 @@ describe("startTrialAndBootstrapWorkspace", () => {
     expect(result.workspace.name).toBe("alice's workspace");
   });
 
-  it("seeds 11 default categories on workspace bootstrap", async () => {
+  it("seeds default expense and income categories on workspace bootstrap", async () => {
     const u = await prisma.user.create({
       data: { id: `bs-cat-${Date.now()}`, email: `bscat-${Date.now()}@x.com`, emailVerified: true, name: "BSCat" },
     });
@@ -74,12 +78,12 @@ describe("startTrialAndBootstrapWorkspace", () => {
     const wsId = result.workspace.id;
     const cats = await prisma.category.findMany({
       where: { workspaceId: wsId, archivedAt: null },
-      orderBy: { name: "asc" },
-      select: { name: true },
+      orderBy: [{ type: "asc" }, { name: "asc" }],
+      select: { name: true, type: true },
     });
-    expect(cats.map((c) => c.name).sort()).toEqual([
-      "Dining", "Entertainment", "Groceries", "Health", "Housing",
-      "Income", "Other", "Shopping", "Subscriptions", "Transit", "Utilities",
-    ]);
+    expect(cats.map((c) => `${c.type}:${c.name}`).sort()).toEqual([
+      ...DEFAULT_EXPENSE_CATEGORIES.map((c) => `expense:${c.name}`),
+      ...DEFAULT_INCOME_CATEGORIES.map((c) => `income:${c.name}`),
+    ].sort());
   });
 });

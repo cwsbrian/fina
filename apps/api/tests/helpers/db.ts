@@ -4,17 +4,19 @@ export async function truncateAll(): Promise<void> {
   // Workspace cascade kills plaid_items, bank_accounts (Plaid), transactions,
   // categories, invites, memberships. User cascade kills sessions, accounts
   // (better-auth), and any remaining memberships. Verification has no FK to
-  // User so it has to be truncated explicitly. Order: workspaces first (so
-  // workspace-scoped rows are removed cleanly), then users.
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "workspaces" RESTART IDENTITY CASCADE;`);
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "users" RESTART IDENTITY CASCADE;`);
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "verifications" RESTART IDENTITY CASCADE;`);
-  // webhook_events has no FK dependencies; truncate to prevent idempotency
-  // short-circuits from prior test runs bleeding into the next run.
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "webhook_events" RESTART IDENTITY CASCADE;`);
-  // IAP tombstone / retry tables — no FK to users or workspaces.
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "iap_deleted_bindings" RESTART IDENTITY CASCADE;`);
-  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "iap_retry_counters" RESTART IDENTITY CASCADE;`);
+  // User so it has to be truncated explicitly. One statement lets Postgres
+  // acquire locks in a single pass, which avoids deadlocks between sequential
+  // TRUNCATEs and late test-request transactions.
+  await prisma.$executeRawUnsafe(`
+    TRUNCATE TABLE
+      "workspaces",
+      "users",
+      "verifications",
+      "webhook_events",
+      "iap_deleted_bindings",
+      "iap_retry_counters"
+    RESTART IDENTITY CASCADE;
+  `);
 }
 
 export async function disconnect(): Promise<void> {

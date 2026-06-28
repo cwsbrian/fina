@@ -5,12 +5,24 @@ import { toLlmFunctionDeclarations } from "../src/chat/llm-tool-adapter.js";
 
 const EXPECTED_NEW_TOOLS: ReadonlyArray<readonly [string, string]> = [
   ["listAccounts", "List bank accounts in the workspace with balances, account status, and Plaid connection status."],
-  ["getTransactionDetails", "Get full details for one transaction, including account and category context."],
+  [
+    "getTransactionDetails",
+    "Get full details for one transaction by id (account, category, note, splits), returned as a detail card. To find a transaction the user named, use findTransactions instead — it shows a detail card when exactly one matches.",
+  ],
   ["findUncategorizedTransactions", "Find transactions that are uncategorized or have not been manually reviewed."],
-  ["getCategoryBreakdown", "Summarize CAD spending by readable category name, including parent category and visual metadata."],
-  ["compareSpendingPeriods", "Compare CAD spending between two matching periods by category or merchant and return the largest changes."],
+  [
+    "getCategoryBreakdown",
+    "Summarize CAD spending by readable category name for a date range, including parent category and visual metadata. Pass YYYY-MM-DD since/until from the 'Today' anchor in your context.",
+  ],
+  [
+    "compareSpendingPeriods",
+    "Compare CAD spending between two arbitrary date ranges by category or merchant and return the largest changes. Use this WHENEVER the user asks about change between periods — even with shorthand phrasing. Trigger phrases (EN): 'vs last month', 'vs last week', 'compared to', 'how does X compare to Y', 'has it gone up?', 'biggest changes', 'what got more expensive', 'difference vs', 'change from'. Trigger phrases (KR): '지난달 대비', '지난주랑 비교', '지난달과 비교', '비교해줘', '얼마나 늘었어', '얼마나 줄었어', '큰 변화', '변동', '이번달이 더 썼어?'. Do NOT call getSpendingSummary twice when one of these phrases appears — call this tool instead. Provide YYYY-MM-DD dates for both ranges; comparison range must be older than current range; ranges may be different lengths but matched lengths produce more interpretable deltas (e.g. compare a full month to a full month, not a month vs a quarter).",
+  ],
   ["detectRecurringMerchants", "Detect likely recurring merchant payments from recent transaction history using cadence and amount stability heuristics."],
-  ["getCashflowSummary", "Summarize CAD income, expenses, and net cashflow for a period, grouped by day or account."],
+  [
+    "getCashflowSummary",
+    "Summarize CAD income, expenses, and net cashflow for a date range, grouped by day or account. Pass YYYY-MM-DD since/until from the 'Today' anchor in your context. Use this whenever the user asks about both directions (income vs expense) or net flow.",
+  ],
 ];
 
 describe("REGISTRY (plan 1e-next)", () => {
@@ -143,15 +155,15 @@ describe("REGISTRY (plan 1c-budget)", () => {
   const EXPECTED = [
     [
       "setBudget",
-      "Set the monthly budget for a category. Upserts on (workspace, category, month). Use category_id when known, else category_name (case-insensitive). period defaults to this_month.",
+      "Set the monthly budget cap for a category. Updates the BudgetPlan category allocation for the month (the same budget shown on the Budget screen and by getBudget). period defaults to this_month.",
     ],
     [
       "getBudget",
-      "List monthly budgets. Returns a single-element array when category_id or category_name is provided, else all budgets for the period.",
+      "Show the user's monthly budget — total cap, spend so far, and per-category caps with progress. Sources the real BudgetPlan (same as the Budget screen). period defaults to this_month.",
     ],
     [
       "compareSpendingVsBudget",
-      "Compare actual spending against budgets for the given period. Returns per-category amount/spent/remaining/pace status. period defaults to this_month.",
+      "Compare actual spending against the budget for the period — per capped category, with remaining and pace. Sources the real BudgetPlan. period defaults to this_month.",
     ],
   ] as const;
 
@@ -209,7 +221,7 @@ describe("REGISTRY (plan 1c-recurring-persist)", () => {
     ],
     [
       "listRecurring",
-      "List all recurring expenses in the workspace, ordered by next occurrence date. Includes the resolved category name (null if uncategorized).",
+      "List all recurring expenses in the workspace, ordered by next occurrence date. Use for 'show my recurring', '내 정기지출', 'subscriptions', '구독 목록'. Includes the resolved category name (null if uncategorized).",
     ],
     [
       "removeRecurring",

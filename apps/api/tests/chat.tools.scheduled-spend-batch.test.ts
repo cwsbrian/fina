@@ -12,6 +12,8 @@ import type { ToolContext } from "../src/chat/tools/types.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();
+const FUTURE_DATE_1 = "2099-06-03";
+const FUTURE_DATE_2 = "2099-06-10";
 
 let app: FastifyInstance;
 beforeAll(async () => { app = await buildApp(env); await app.ready(); });
@@ -33,8 +35,8 @@ describe("addScheduledSpendBatchService", () => {
     const result = await addScheduledSpendBatchService({
       workspaceId: wsId,
       items: [
-        { categoryId: groceries, amount: 60, scheduledDate: "2026-06-03" },
-        { categoryId: dining, amount: 45, scheduledDate: "2026-06-10", note: "dinner" },
+        { categoryId: groceries, amount: 60, scheduledDate: FUTURE_DATE_1 },
+        { categoryId: dining, amount: 45, scheduledDate: FUTURE_DATE_2, note: "dinner" },
       ],
     });
     expect(result.count).toBe(2);
@@ -52,8 +54,8 @@ describe("addScheduledSpendBatchService", () => {
       addScheduledSpendBatchService({
         workspaceId: wsId,
         items: [
-          { categoryId: groceries, amount: 60, scheduledDate: "2026-06-03" },
-          { categoryId: "non-existent-category-id", amount: 40, scheduledDate: "2026-06-10" },
+          { categoryId: groceries, amount: 60, scheduledDate: FUTURE_DATE_1 },
+          { categoryId: "non-existent-category-id", amount: 40, scheduledDate: FUTURE_DATE_2 },
         ],
       }),
     ).rejects.toThrow();
@@ -68,7 +70,7 @@ describe("addScheduledSpendBatchService", () => {
       addScheduledSpendBatchService({
         workspaceId: wsId,
         items: [
-          { categoryId: groceries, amount: -5, scheduledDate: "2026-06-03" },
+          { categoryId: groceries, amount: -5, scheduledDate: FUTURE_DATE_1 },
         ],
       }),
     ).rejects.toThrow();
@@ -89,9 +91,9 @@ describe("addScheduledSpendBatch tool", () => {
     const result = await addScheduledSpendBatch.run(ctx, {
       items: [
         // "groceries" (lowercase) resolves to the seeded "Groceries" row
-        { category: "groceries", amount: 60, scheduled_date: "2026-06-03" },
+        { category: "groceries", amount: 60, scheduled_date: FUTURE_DATE_1 },
         // "Dining" (exact case) resolves to the seeded "Dining" row
-        { category: "Dining", amount: 45, scheduled_date: "2026-06-10", note: "dinner" },
+        { category: "Dining", amount: 45, scheduled_date: FUTURE_DATE_2, note: "dinner" },
       ],
     });
     expect(result.count).toBe(2);
@@ -110,7 +112,7 @@ describe("addScheduledSpendBatch tool", () => {
     await expect(
       addScheduledSpendBatch.run(ctx, {
         items: [
-          { category: "Nope", amount: 60, scheduled_date: "2026-06-03" },
+          { category: "Nope", amount: 60, scheduled_date: FUTURE_DATE_1 },
         ],
       }),
     ).rejects.toThrow();
@@ -131,8 +133,8 @@ describe("presentScheduledSpendPlan + consume", () => {
     const result = await presentScheduledSpendPlan.run(ctx, {
       question: "Groceries twice in June?",
       items: [
-        { category: "groceries", amount: 60, scheduled_date: "2026-06-03" },
-        { category: "Dining",    amount: 55, scheduled_date: "2026-06-10" },
+        { category: "groceries", amount: 60, scheduled_date: FUTURE_DATE_1 },
+        { category: "Dining",    amount: 55, scheduled_date: FUTURE_DATE_2 },
       ],
     });
 
@@ -167,7 +169,7 @@ describe("presentScheduledSpendPlan + consume", () => {
     await expect(
       presentScheduledSpendPlan.run(ctx, {
         question: "Bad category plan",
-        items: [{ category: "NoSuchCategory", amount: 60, scheduled_date: "2026-06-03" }],
+        items: [{ category: "NoSuchCategory", amount: 60, scheduled_date: FUTURE_DATE_1 }],
       }),
     ).rejects.toThrow("category_not_found");
 
@@ -200,7 +202,7 @@ describe("presentScheduledSpendPlan + consume", () => {
       presentScheduledSpendPlan.run(ctx, {
         question: "3-decimal plan",
         // args schema's zod refine rejects 3-decimal amounts
-        items: [{ category: "Groceries", amount: 60.999, scheduled_date: "2026-06-03" }],
+        items: [{ category: "Groceries", amount: 60.999, scheduled_date: FUTURE_DATE_1 }],
       }),
     ).rejects.toThrow();
 

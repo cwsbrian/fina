@@ -77,7 +77,11 @@ describe("[plan 1e-time] tz anchor + tool migration", () => {
     // toISOString().slice(0, 10) (pre-fix) → '2026-05-01'.
     await seed("tx-dk", new Date("2026-05-01T02:00:00Z"));
 
-    const result = await getSpendingSummary.run(ctx, { period: "this_month", group_by: "day" });
+    const result = await getSpendingSummary.run(ctx, {
+      since: "2026-04-01",
+      until: "2026-05-01",
+      group_by: "day",
+    });
     expect(result.groups).toHaveLength(1);
     expect(result.groups[0]!.key).toBe("2026-04-30");
   });

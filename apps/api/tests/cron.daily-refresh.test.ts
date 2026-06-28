@@ -82,7 +82,13 @@ const env = testEnv();
 process.env.APPLE_BUNDLE_ID = "com.fina.app";
 process.env.APPLE_ASC_ISSUER_ID = "00000000-0000-0000-0000-000000000000";
 process.env.APPLE_ASC_KEY_ID = "K1";
-process.env.APPLE_ASC_PRIVATE_KEY = "-----BEGIN PRIVATE KEY-----\nfake\n-----END PRIVATE KEY-----\n";
+process.env.APPLE_ASC_PRIVATE_KEY = [
+  "-----BEGIN PRIVATE KEY-----",
+  "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgAcvl5sOJAjZyWhy5",
+  "QpOcq+x8y+wiF/Zem9V6k9CGyvmhRANCAAQGPqdYzYDbUZI31jq1kCnyJenuMTso",
+  "j4nHy21uJD8G55EmON8vhySO1JFiO7zQl4kNVlkpl+3xSdVnlUI/tejt",
+  "-----END PRIVATE KEY-----",
+].join("\n");
 process.env.APPLE_ENV = "sandbox";
 process.env.GOOGLE_PACKAGE_NAME = "app.fina";
 process.env.GOOGLE_SERVICE_ACCOUNT_JSON = JSON.stringify({
@@ -367,7 +373,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     const { items } = await seedUserWithActiveItems({
       userId: "u-stripe-refresh",
       email: "stripe-refresh@test.fina",
-      count: 2,
+      count: 6,
       stripeCustomerId: "cus_refresh",
     });
     providerMocks.stripe.subscriptions.list.mockImplementation(async () => {
@@ -393,7 +399,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       status: "all",
       limit: 10,
     });
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
     expect(order.indexOf("stripe-list")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 
@@ -428,7 +434,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     const { items } = await seedUserWithActiveItems({
       userId: "u-cleanup-fail",
       email: "cleanup-fail@test.fina",
-      count: 2,
+      count: 6,
     });
     await prisma.subscription.create({
       data: {
@@ -445,7 +451,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
 
     await runDailyRefresh(env);
 
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
     expect(syncTransactions).not.toHaveBeenCalled();
   });
 
@@ -492,7 +498,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     const { items } = await seedUserWithActiveItems({
       userId: "u-apple-refresh",
       email: "apple-refresh@test.fina",
-      count: 2,
+      count: 6,
     });
     await prisma.subscription.create({
       data: {
@@ -523,8 +529,8 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
 
     expect(providerMocks.appleClient.getSubscriptionStatus).toHaveBeenCalledWith("OT-apple-refresh");
     const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-apple-refresh" } });
-    expect(sub.tier).toBe("max");
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(sub.tier).toBe("pro");
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
     expect(order.indexOf("apple-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 
@@ -533,7 +539,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     const { items } = await seedUserWithActiveItems({
       userId: "u-google-refresh",
       email: "google-refresh@test.fina",
-      count: 2,
+      count: 6,
     });
     await prisma.subscription.create({
       data: {
@@ -575,8 +581,8 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       acknowledgementState: "ACKNOWLEDGEMENT_STATE_PENDING",
     });
     const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-google-refresh" } });
-    expect(sub.tier).toBe("max");
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[1]!.id);
+    expect(sub.tier).toBe("pro");
+    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
     expect(order.indexOf("google-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 });
