@@ -18,6 +18,28 @@ describe("toLlmHistory leading-orphan stripping", () => {
     expect(out[0]).toEqual({ role: "user", parts: [{ text: "real start" }] });
   });
 
+  it("preserves a leading daily brief as context for the user's reply", () => {
+    const out = toLlmHistory([
+      {
+        role: "assistant",
+        blocks: [{ type: "text", markdown: "Open Fina and ask me for a plan to stay on track." }],
+        brief: { id: "brief_1" },
+      },
+      { role: "user", blocks: [{ type: "text", markdown: "어떻게해?" }] },
+    ]);
+    expect(out).toEqual([
+      {
+        role: "user",
+        parts: [
+          {
+            text: "Context from Fina's latest brief:\nOpen Fina and ask me for a plan to stay on track.",
+          },
+        ],
+      },
+      { role: "user", parts: [{ text: "어떻게해?" }] },
+    ]);
+  });
+
   it("drops leading user functionResponse with no matching functionCall (tool-first slice)", () => {
     const out = toLlmHistory([
       { role: "tool", blocks: [{ type: "tool", toolName: "listCategories", args: {}, result: { output: { categories: [] } } }] },

@@ -331,6 +331,11 @@ export type ToolCallRecord = {
 type TextBlock = { type: "text"; markdown: string };
 type ToolBlock = { type: "tool"; toolName: string; args: unknown; result: unknown };
 type Block = TextBlock | ToolBlock;
+type HistoryMessage = {
+  role: string;
+  blocks: unknown;
+  brief?: unknown;
+};
 
 type ChatLlmContent = {
   role: "user" | "model";
@@ -341,16 +346,45 @@ type ChatLlmContent = {
   >;
 };
 
-export function toLlmHistory(messages: Array<{ role: string; blocks: unknown }>): ChatLlmContent[] {
+function textFromBlocks(blocks: unknown): string {
+  const arr = Array.isArray(blocks) ? (blocks as Array<{ type?: unknown; markdown?: unknown }>) : [];
+  const textBlock = arr.find((b) => b?.type === "text" && typeof b?.markdown === "string");
+  return (textBlock?.markdown as string | undefined) ?? "";
+}
+
+function isBriefAssistantMessage(message: HistoryMessage): boolean {
+  return message.role === "assistant" && message.brief != null;
+}
+
+function isUserTextMessage(message: HistoryMessage): boolean {
+  return message.role === "user" && textFromBlocks(message.blocks).trim().length > 0;
+}
+
+export function toLlmHistory(messages: HistoryMessage[]): ChatLlmContent[] {
+  let start = 0;
+  while (start < messages.length) {
+    const message = messages[start]!;
+    if (isUserTextMessage(message) || isBriefAssistantMessage(message)) break;
+    start++;
+  }
+
   const out: ChatLlmContent[] = [];
-  for (const m of messages) {
+  for (const m of messages.slice(start)) {
     const blocks = m.blocks as Block[];
     if (m.role === "user") {
-      out.push({ role: "user", parts: [{ text: (blocks[0] as TextBlock).markdown }] });
+      out.push({ role: "user", parts: [{ text: textFromBlocks(m.blocks) }] });
       continue;
     }
     if (m.role === "assistant") {
-      out.push({ role: "model", parts: [{ text: (blocks[0] as TextBlock).markdown }] });
+      const text = textFromBlocks(m.blocks);
+      if (isBriefAssistantMessage(m) && out.length === 0) {
+        out.push({
+          role: "user",
+          parts: [{ text: `Context from Fina's latest brief:\n${text}` }],
+        });
+      } else {
+        out.push({ role: "model", parts: [{ text }] });
+      }
       continue;
     }
     const t = blocks[0] as ToolBlock;
@@ -421,6 +455,7 @@ export async function processChatTurn(
     where: { threadId: thread.id },
     orderBy: { createdAt: "desc" },
     take: HISTORY_LIMIT_MESSAGES,
+    include: { brief: { select: { id: true, type: true, date: true } } },
   });
   const historyChrono = selectHistoryWindow(recent, {
     limitMessages: HISTORY_LIMIT_MESSAGES,

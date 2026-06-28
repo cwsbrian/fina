@@ -104,6 +104,41 @@ describe("processChatTurn", () => {
     expect(r.toolCalls).toHaveLength(0);
   });
 
+  it("uses a leading daily brief as context when the user replies to it", async () => {
+    await prisma.chatMessage.deleteMany({ where: { threadId } });
+    const briefMsg = await prisma.chatMessage.create({
+      data: {
+        threadId,
+        role: "assistant",
+        blocks: [{ type: "text", markdown: "Open Fina and ask me for a plan to stay on track." }],
+      },
+    });
+    await prisma.brief.create({
+      data: {
+        userId,
+        type: "daily",
+        date: "2026-06-27",
+        messageId: briefMsg.id,
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        threadId,
+        role: "user",
+        blocks: [{ type: "text", markdown: "어떻게해?" }],
+      },
+    });
+    chatGeminiMock.responses.push({ text: "예산을 지키는 계획을 잡아드릴게요." });
+
+    await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
+
+    const req = lastChatLlmRequest() as { messages?: Array<{ role?: string; content?: string | null }> };
+    const userMessages = req.messages?.filter((m) => m.role === "user").map((m) => m.content ?? "") ?? [];
+    expect(userMessages[0]).toContain("Context from Fina's latest brief");
+    expect(userMessages[0]).toContain("Open Fina and ask me for a plan");
+    expect(userMessages[1]).toBe("어떻게해?");
+  });
+
   it("LLM provider throws → exception propagates to caller", async () => {
     chatGeminiMock.responses.push(new Error("network kaput"));
     await expect(processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner")).rejects.toThrow(/network kaput/);
