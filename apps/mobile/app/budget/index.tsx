@@ -19,6 +19,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
+import { analysisCategoryRoute } from "../../src/analysis/category-route";
 
 type Allocation = { categoryId: string; amount: number };
 
@@ -231,6 +232,9 @@ export default function BudgetScreen() {
   }
   const over = spent > total;
   const willExceed = !over && spent + scheduled > total;
+  const [periodYearPart, periodMonthPart] = data.current.yearMonth.split("-");
+  const periodYear = Number(periodYearPart);
+  const periodMonth = Number(periodMonthPart);
 
   // Compare against the default to surface this-month overrides.
   const defaultTotal = data.defaultPlan
@@ -403,6 +407,8 @@ export default function BudgetScreen() {
                 key={r.categoryId}
                 row={r}
                 goals={goalsByCategory[r.categoryId] ?? []}
+                year={periodYear}
+                month={periodMonth}
               />
             ))}
           </View>
@@ -415,6 +421,8 @@ export default function BudgetScreen() {
 function CategoryRow({
   row,
   goals,
+  year,
+  month,
 }: {
   row: {
     categoryId: string;
@@ -426,6 +434,8 @@ function CategoryRow({
     scheduled: number;
   };
   goals: GoalChip[];
+  year: number;
+  month: number;
 }) {
   const meta = categoryMeta(row.cat);
   const hasBudget = row.budget > 0;
@@ -462,7 +472,17 @@ function CategoryRow({
       ? row.budget - row.defaultBudget
       : 0;
   return (
-    <View style={styles.catRow}>
+    <Pressable
+      style={({ pressed }) => [styles.catRow, pressed && { opacity: 0.7 }]}
+      onPress={() =>
+        router.push(analysisCategoryRoute({
+          categoryId: row.categoryId,
+          categoryName: row.categoryName,
+          year,
+          month,
+        }) as never)
+      }
+    >
       <View style={styles.catTop}>
         <View style={[styles.catGlyph, { backgroundColor: meta.bg }]}>
           <Ionicons name={meta.icon} size={16} color={meta.fg} />
@@ -572,7 +592,7 @@ function CategoryRow({
           ))}
         </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 

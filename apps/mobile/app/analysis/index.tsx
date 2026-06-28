@@ -24,6 +24,7 @@ import {
   analysisRequestPath,
   type AnalysisPeriod,
 } from "../../src/analysis/request";
+import { analysisCategoryRoute } from "../../src/analysis/category-route";
 
 type CategorySpend = {
   categoryId: string;
@@ -524,15 +525,12 @@ function CompareRow({
     deltaColor = up ? colors.down : down ? colors.up : colors.muted;
   }
   const onPress = () => {
-    router.push({
-      pathname: "/analysis/category/[id]",
-      params: {
-        id: category.categoryId,
-        name: category.categoryName,
-        year: String(year),
-        month: String(month),
-      },
-    } as never);
+    router.push(analysisCategoryRoute({
+      categoryId: category.categoryId,
+      categoryName: category.categoryName,
+      year,
+      month,
+    }) as never);
   };
   return (
     <Pressable

@@ -30,9 +30,11 @@ import { useSession } from "../../src/auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { isBackendUnavailableError } from "../../src/api/backend-status";
 import { MaintenanceScreen } from "../../src/api/MaintenanceScreen";
+import { analysisCategoryRoute } from "../../src/analysis/category-route";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { ActionItemCard } from "../../src/home/ActionItemCard";
+import { shouldShowBudgetHero } from "../../src/home/budget-hero";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { formatMoney, isExpenseAmount } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
@@ -474,9 +476,10 @@ export default function Home() {
   }
 
   // ── Section gating ─────────────────────────────────────────
-  // Hero (This month) requires real spending data — show only when
-  // we have at least one transaction this month.
-  const heroVisible = budgetCurrent !== null && spentNum > 0;
+  // Hero (This month) appears once the budget summary loads and either
+  // a plan exists or there is spending to summarize.
+  const heroVisible =
+    budgetCurrent !== null && shouldShowBudgetHero({ hasBudget, spent: spentNum });
 
   return (
     <View style={styles.safe}>
@@ -703,7 +706,14 @@ export default function Home() {
                       <Pressable
                         key={c.categoryId}
                         style={({ pressed }) => [styles.catRow, pressed && { opacity: 0.7 }]}
-                        onPress={() => router.push("/budget" as never)}
+                        onPress={() =>
+                          router.push(analysisCategoryRoute({
+                            categoryId: c.categoryId,
+                            categoryName: name,
+                            year: now.getFullYear(),
+                            month: now.getMonth() + 1,
+                          }) as never)
+                        }
                       >
                         <View style={[styles.catGlyph, { backgroundColor: meta.bg }]}>
                           <Ionicons name={meta.icon} size={16} color={meta.fg} />

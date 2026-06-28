@@ -27,6 +27,11 @@ import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
 import { ConnectBankButton } from "../../src/plaid/ConnectBankButton";
 import { NeedsReviewDot } from "../../src/categorize/NeedsReviewPill";
 import { getSeenExcludedIds } from "../../src/transactions/excludedSeen";
+import {
+  ACTIVITY_PAGE_LIMIT,
+  buildActivityTransactionsPath,
+  mergeActivityTransactionPages,
+} from "../../src/activity/pagination";
 
 const HEADER_HEIGHT = 84;
 
@@ -206,6 +211,7 @@ function currentMonthRange(): { from: string; to: string } {
 
 export default function Activity() {
   const [txs, setTxs] = useState<TransactionDTO[] | null>(null);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [upcoming, setUpcoming] = useState<UpcomingSummary>({
     total: 0,
@@ -216,6 +222,7 @@ export default function Activity() {
   const [wsId, setWsId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<DateRange>({});
@@ -239,20 +246,23 @@ export default function Activity() {
         return;
       }
       setWsId(id);
+      setNextCursor(null);
+      setLoadingMore(false);
       const trimmed = queryRef.current.trim();
       const r = rangeRef.current;
-      const params = new URLSearchParams({ limit: "100" });
-      if (trimmed) params.set("q", trimmed);
-      if (r.from) params.set("from", r.from);
-      if (r.to) params.set("to", r.to);
-      const qs = `?${params.toString()}`;
+      const txPath = buildActivityTransactionsPath({
+        workspaceId: id,
+        limit: ACTIVITY_PAGE_LIMIT,
+        query: trimmed,
+        range: r,
+      });
       const excludedParams = new URLSearchParams({
         budgetImpact: "excluded",
-        limit: "100",
+        limit: String(ACTIVITY_PAGE_LIMIT),
         ...currentMonthRange(),
       });
       const [txResp, catResp, schedResp, recurResp, excludedResp, seenExcluded] = await Promise.all([
-        apiFetch<TxListResp>(`/workspaces/${id}/transactions${qs}`),
+        apiFetch<TxListResp>(txPath),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
         apiFetch<{ schedules: Schedule[] }>(
           `/workspaces/${id}/schedules?status=upcoming`,
@@ -263,7 +273,8 @@ export default function Activity() {
         apiFetch<TxListResp>(`/workspaces/${id}/transactions?${excludedParams.toString()}`).catch(() => ({ transactions: [], nextCursor: null })),
         getSeenExcludedIds(),
       ]);
-      setTxs(txResp.transactions.filter((t) => isExpenseAmount(t.amount)));
+      setTxs(mergeActivityTransactionPages([], txResp.transactions));
+      setNextCursor(txResp.nextCursor);
       const visibleExcluded = excludedResp.transactions.filter((t) => isExpenseAmount(t.amount));
       setExcludedCount(visibleExcluded.length);
       setNewExcludedCount(visibleExcluded.filter((t) => !seenExcluded.has(t.id)).length);
@@ -274,8 +285,34 @@ export default function Activity() {
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
+      setNextCursor(null);
     }
   }, []);
+
+  const loadMore = useCallback(async () => {
+    if (!wsId || !nextCursor || loadingMore || txs === null) return;
+    setLoadingMore(true);
+    try {
+      const path = buildActivityTransactionsPath({
+        workspaceId: wsId,
+        limit: ACTIVITY_PAGE_LIMIT,
+        cursor: nextCursor,
+        query: queryRef.current.trim(),
+        range: rangeRef.current,
+      });
+      const resp = await apiFetch<TxListResp>(path);
+      setTxs((current) =>
+        current === null
+          ? mergeActivityTransactionPages([], resp.transactions)
+          : mergeActivityTransactionPages(current, resp.transactions),
+      );
+      setNextCursor(resp.nextCursor);
+    } catch {
+      // Keep the current page intact. The next scroll can retry the same cursor.
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, nextCursor, txs, wsId]);
 
   // Reload every focus so deletions / edits on detail show fresh.
   useFocusEffect(
@@ -347,6 +384,8 @@ export default function Activity() {
         stickySectionHeadersEnabled={false}
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
+        onEndReached={loadMore}
+        onEndReachedThreshold={0.35}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -398,6 +437,13 @@ export default function Activity() {
         renderItem={({ item }) => (
           <TxRow tx={item} categories={categories} />
         )}
+        ListFooterComponent={
+          loadingMore ? (
+            <View style={styles.footerLoading}>
+              <ActivityIndicator size="small" color={colors.primary} />
+            </View>
+          ) : null
+        }
         ListEmptyComponent={
           isSearching ? (
             <View style={styles.empty}>
@@ -731,6 +777,11 @@ const styles = StyleSheet.create({
     maxWidth: 320, marginBottom: space.lg,
   },
   listContent: { padding: space.lg, paddingTop: space.sm, flexGrow: 1 },
+  footerLoading: {
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: space.lg,
+  },
   banner: {
     flexDirection: "row",
     alignItems: "center",
