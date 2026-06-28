@@ -18,7 +18,9 @@ import { Ionicons } from "@expo/vector-icons";
 import BottomSheet, {
   BottomSheetBackdrop,
   BottomSheetFlatList,
+  BottomSheetTextInput,
   type BottomSheetBackdropProps,
+  type BottomSheetFlatListMethods,
 } from "@gorhom/bottom-sheet";
 import type { CategoryDTO, MeDTO as Me } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
@@ -58,6 +60,7 @@ type PlaidItemsResp = {
 
 export default function NewBudget() {
   const categorySheetRef = useRef<BottomSheet>(null);
+  const categoryListRef = useRef<BottomSheetFlatListMethods>(null);
   const [me, setMe] = useState<Me | null>(null);
   const [categories, setCategories] = useState<CategoryDTO[]>([]);
   const [defaultPlan, setDefaultPlan] = useState<Plan | null>(null);
@@ -73,6 +76,26 @@ export default function NewBudget() {
   const [err, setErr] = useState<string | null>(null);
   const [categorySheetOpen, setCategorySheetOpen] = useState(false);
   const categorySnapPoints = useMemo(() => ["88%"], []);
+  const scrollCategoryInputIntoView = useCallback((index: number) => {
+    requestAnimationFrame(() => {
+      categoryListRef.current?.scrollToIndex({
+        index,
+        animated: true,
+        viewPosition: 0.35,
+      });
+    });
+  }, []);
+  const handleCategoryScrollToIndexFailed = useCallback(
+    (info: { averageItemLength: number; index: number }) => {
+      requestAnimationFrame(() => {
+        categoryListRef.current?.scrollToOffset({
+          offset: Math.max(0, info.averageItemLength * info.index),
+          animated: true,
+        });
+      });
+    },
+    [],
+  );
 
   const loadCategories = useCallback(async (workspaceId: string) => {
     const data = await apiFetch<{ categories: CategoryDTO[] }>(
@@ -381,6 +404,38 @@ export default function NewBudget() {
     ),
     [],
   );
+  const renderSheetListHeader = useCallback(() => {
+    if (!isPro || totalNum <= 0) return null;
+    return (
+      <View style={styles.sheetListHeader}>
+        <Pressable
+          onPress={onSuggest}
+          disabled={suggesting}
+          style={({ pressed }) => [
+            styles.suggestBtn,
+            (pressed || suggesting) && { opacity: 0.6 },
+          ]}
+        >
+          {suggesting ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : (
+            <>
+              <Ionicons
+                name="sparkles-outline"
+                size={14}
+                color={colors.primary}
+              />
+              <Text style={styles.suggestText}>
+                {allocs.length > 0
+                  ? "Re-suggest split"
+                  : "Let Fina split this for you"}
+              </Text>
+            </>
+          )}
+        </Pressable>
+      </View>
+    );
+  }, [allocs.length, isPro, onSuggest, suggesting, totalNum]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -550,72 +605,45 @@ export default function NewBudget() {
         handleIndicatorStyle={styles.grabber}
         backgroundStyle={styles.sheetBackground}
         enablePanDownToClose
-        keyboardBehavior="interactive"
-        keyboardBlurBehavior="restore"
+        keyboardBehavior="extend"
       >
+        <View style={styles.sheetFixedHeader}>
+          <View style={styles.sheetHead}>
+            <Pressable
+              onPress={() => {
+                Keyboard.dismiss();
+                categorySheetRef.current?.close();
+              }}
+              hitSlop={8}
+            >
+              <Text style={styles.cancel}>Cancel</Text>
+            </Pressable>
+            <View style={styles.sheetTitleWrap}>
+              <Text style={styles.title}>Category budgets</Text>
+              <Text style={styles.sheetSub}>
+                ${allocSum.toFixed(2)} / ${totalNum.toFixed(2)}
+              </Text>
+            </View>
+            <Pressable
+              onPress={() => {
+                Keyboard.dismiss();
+                if (allocSum > 0) setTotal(allocSum.toFixed(2));
+                categorySheetRef.current?.close();
+              }}
+              hitSlop={8}
+            >
+              <Text style={styles.save}>Done</Text>
+            </Pressable>
+          </View>
+        </View>
         <BottomSheetFlatList
+          ref={categoryListRef}
           data={categories}
           keyExtractor={(c) => c.id}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.sheetList}
-          ListHeaderComponent={
-            <>
-              <View style={styles.sheetHead}>
-                <Pressable
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    categorySheetRef.current?.close();
-                  }}
-                  hitSlop={8}
-                >
-                  <Text style={styles.cancel}>Cancel</Text>
-                </Pressable>
-                <View style={styles.sheetTitleWrap}>
-                  <Text style={styles.title}>Category budgets</Text>
-                  <Text style={styles.sheetSub}>
-                    ${allocSum.toFixed(2)} / ${totalNum.toFixed(2)}
-                  </Text>
-                </View>
-                <Pressable
-                  onPress={() => {
-                    Keyboard.dismiss();
-                    if (allocSum > 0) setTotal(allocSum.toFixed(2));
-                    categorySheetRef.current?.close();
-                  }}
-                  hitSlop={8}
-                >
-                  <Text style={styles.save}>Done</Text>
-                </Pressable>
-              </View>
-              {isPro && totalNum > 0 && (
-                <Pressable
-                  onPress={onSuggest}
-                  disabled={suggesting}
-                  style={({ pressed }) => [
-                    styles.suggestBtn,
-                    (pressed || suggesting) && { opacity: 0.6 },
-                  ]}
-                >
-                  {suggesting ? (
-                    <ActivityIndicator size="small" color={colors.primary} />
-                  ) : (
-                    <>
-                      <Ionicons
-                        name="sparkles-outline"
-                        size={14}
-                        color={colors.primary}
-                      />
-                      <Text style={styles.suggestText}>
-                        {allocs.length > 0
-                          ? "Re-suggest split"
-                          : "Let Fina split this for you"}
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
-              )}
-            </>
-          }
+          ListHeaderComponent={renderSheetListHeader}
+          onScrollToIndexFailed={handleCategoryScrollToIndexFailed}
           ListEmptyComponent={
             <Text style={styles.emptyCats}>No expense categories yet.</Text>
           }
@@ -639,7 +667,7 @@ export default function NewBudget() {
               </View>
             </Pressable>
           }
-          renderItem={({ item: c }) => {
+          renderItem={({ item: c, index }) => {
             const meta = categoryMeta(c);
             const a = allocs.find((x) => x.categoryId === c.id);
             return (
@@ -652,7 +680,7 @@ export default function NewBudget() {
                 </Text>
                 <View style={styles.catInputWrap}>
                   <Text style={styles.catInputCurrency}>$</Text>
-                  <TextInput
+                  <BottomSheetTextInput
                     style={styles.catInput}
                     value={a?.amount ?? ""}
                     onChangeText={(v) => setAlloc(c.id, v)}
@@ -660,6 +688,7 @@ export default function NewBudget() {
                     placeholderTextColor={colors.mutedSoft}
                     keyboardType="decimal-pad"
                     editable={!submitting}
+                    onFocus={() => scrollCategoryInputIntoView(index)}
                   />
                 </View>
               </View>
@@ -790,9 +819,19 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 20,
   },
   grabber: { backgroundColor: colors.mutedSoft, width: 36, height: 4 },
+  sheetFixedHeader: {
+    paddingHorizontal: space.lg,
+    paddingBottom: space.sm,
+    backgroundColor: colors.canvas,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
+  },
   sheetList: {
     paddingHorizontal: space.lg,
-    paddingBottom: space.xl,
+    paddingBottom: 160,
+  },
+  sheetListHeader: {
+    paddingTop: space.base,
   },
   sheetHead: {
     flexDirection: "row",
