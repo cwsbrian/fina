@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -19,6 +19,10 @@ import {
 import { colors, space, type as type$ } from "../../design/tokens";
 import { useDatePickerSheet } from "../../datetime/DatePickerSheetHost";
 import { BlockCard, currencySymbol } from "./_primitives";
+import type {
+  FormBlockActions,
+  FormBlockActionState,
+} from "./RecurringFormBlock";
 
 type Block = Extract<PresentationBlock, { type: "goal_form_card" }>;
 
@@ -26,6 +30,9 @@ type Props = {
   block: Block;
   onSubmit: (intentId: string, overrides: Record<string, unknown>) => Promise<void>;
   onCancel: () => void;
+  formActions?: "inline" | "header";
+  onActionsChange?: (actions: FormBlockActions | null) => void;
+  onActionStateChange?: (state: FormBlockActionState) => void;
   onFocusChange?: (focused: boolean) => void;
 };
 
@@ -37,7 +44,15 @@ function floorDateStr(): string {
   return minDueDateOneMonthUTC().toISOString().slice(0, 10);
 }
 
-export function GoalFormBlock({ block, onSubmit, onCancel, onFocusChange }: Props) {
+export function GoalFormBlock({
+  block,
+  onSubmit,
+  onCancel,
+  formActions = "inline",
+  onActionsChange,
+  onActionStateChange,
+  onFocusChange,
+}: Props) {
   const datePicker = useDatePickerSheet();
   const sym = currencySymbol(block.currency);
   const [title, setTitle] = useState<string>(block.defaults.title ?? "");
@@ -69,7 +84,7 @@ export function GoalFormBlock({ block, onSubmit, onCancel, onFocusChange }: Prop
     return new Date(Date.UTC(y, mo - 1, d, 12));
   }, [dateStr]);
 
-  const submit = async () => {
+  const submit = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
@@ -91,13 +106,22 @@ export function GoalFormBlock({ block, onSubmit, onCancel, onFocusChange }: Prop
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [amount, block.intent_id, canSubmit, dateStr, onSubmit, title]);
 
-  const cancel = () => {
+  const cancel = useCallback(() => {
     if (submitting || done) return;
     onCancel();
     setCancelled(true);
-  };
+  }, [done, onCancel, submitting]);
+
+  useEffect(() => {
+    onActionsChange?.({ submit, cancel });
+    return () => onActionsChange?.(null);
+  }, [cancel, onActionsChange, submit]);
+
+  useEffect(() => {
+    onActionStateChange?.({ canSubmit, submitting, done, cancelled });
+  }, [canSubmit, cancelled, done, onActionStateChange, submitting]);
 
   if (done) {
     return (
@@ -181,22 +205,30 @@ export function GoalFormBlock({ block, onSubmit, onCancel, onFocusChange }: Prop
         </Pressable>
       </View>
 
-      <View style={styles.actions}>
-        <Pressable style={[styles.btn, styles.btnCancel]} onPress={cancel} disabled={submitting}>
-          <Text style={styles.btnCancelText}>Cancel</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.btn, styles.btnSubmit, !canSubmit && styles.btnDisabled]}
-          onPress={submit}
-          disabled={!canSubmit}
-        >
-          {submitting ? (
-            <ActivityIndicator size="small" color={colors.onPrimary} />
-          ) : (
-            <Text style={styles.btnSubmitText}>{block.mode === "update" ? "Update" : "Add goal"}</Text>
-          )}
-        </Pressable>
-      </View>
+      {formActions === "header" ? null : (
+        <View style={styles.actions}>
+          <Pressable
+            style={[styles.btn, styles.btnCancel]}
+            onPress={cancel}
+            disabled={submitting}
+          >
+            <Text style={styles.btnCancelText}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.btn, styles.btnSubmit, !canSubmit && styles.btnDisabled]}
+            onPress={submit}
+            disabled={!canSubmit}
+          >
+            {submitting ? (
+              <ActivityIndicator size="small" color={colors.onPrimary} />
+            ) : (
+              <Text style={styles.btnSubmitText}>
+                {block.mode === "update" ? "Update" : "Add goal"}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+      )}
     </BlockCard>
   );
 }

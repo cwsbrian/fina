@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   View,
   Text,
@@ -13,8 +20,16 @@ import {
   KeyboardAvoidingView,
   Keyboard,
   Modal,
+  type LayoutChangeEvent,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import {
+  BottomSheetBackdrop,
+  BottomSheetModal,
+  BottomSheetScrollView,
+  type BottomSheetBackdropProps,
+} from "@gorhom/bottom-sheet";
+import { router } from "expo-router";
 import {
   isApiError,
   type ChatMessageDTO,
@@ -84,9 +99,24 @@ type PostMessageResp = {
   userMessage: ChatMessageDTO;
   assistantMessage: ChatMessageDTO;
 };
+type ActiveDetailBlock = { block: Block; message: ChatMessageDTO };
+type DetailFormActions = {
+  submit: () => void;
+  cancel: () => void;
+};
+type DetailFormState = {
+  canSubmit: boolean;
+  submitting: boolean;
+  done: boolean;
+  cancelled: boolean;
+};
+type DetailActionKind = "none" | "form" | "intent";
 
 const CHAT_SUPPORT_SUBJECT = "Chat issue";
 const CHAT_SUPPORT_ANSWER_LIMIT = 1800;
+const DETAIL_BLOB_MIN_WIDTH = 196;
+const SUPPORT_ACTION_ICON_SIZE = 16;
+const SUPPORT_ACTION_MIN_WIDTH = SUPPORT_ACTION_ICON_SIZE;
 
 function chatSupportAnswerText(message: ChatMessageDTO): string {
   const blocks = Array.isArray(message.blocks)
@@ -182,6 +212,13 @@ export function ThreadView({
   const [supportNote, setSupportNote] = useState("");
   const [supportSubmitting, setSupportSubmitting] = useState(false);
   const [supportErr, setSupportErr] = useState<string | null>(null);
+  const [activeDetailBlock, setActiveDetailBlock] =
+    useState<ActiveDetailBlock | null>(null);
+  const [detailFormState, setDetailFormState] =
+    useState<DetailFormState | null>(null);
+  const detailFormActionsRef = useRef<DetailFormActions | null>(null);
+  const detailSnapPoints = useMemo(() => ["68%", "92%"], []);
+  const detailSheetRef = useRef<BottomSheetModal>(null);
   const supportCanSubmit =
     supportMessage?.role === "assistant" &&
     supportNote.trim().length > 0 &&
@@ -267,6 +304,35 @@ export function ThreadView({
       listRef.current?.scrollToEnd({ animated: true });
     });
   }, []);
+
+  const renderDetailBackdrop = useCallback(
+    (props: BottomSheetBackdropProps) => (
+      <BottomSheetBackdrop
+        {...props}
+        appearsOnIndex={0}
+        disappearsOnIndex={-1}
+        opacity={0.35}
+        pressBehavior="close"
+      />
+    ),
+    [],
+  );
+
+  const dismissIntent = useCallback((intentId: string) => {
+    setDismissedIntents((prev) => {
+      if (prev.has(intentId)) return prev;
+      const next = new Set(prev);
+      next.add(intentId);
+      return next;
+    });
+  }, []);
+
+  const appendConfirmationMessage = useCallback((msg: ChatMessageDTO) => {
+    setMessages((prev) =>
+      prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
+    );
+    scrollToBottom();
+  }, [scrollToBottom]);
 
   useEffect(() => {
     // Pending thread: nothing to load. Composer is shown over an empty
@@ -460,6 +526,124 @@ export function ThreadView({
     }
   }, [localId, supportCanSubmit, supportMessage, supportNote]);
 
+  const openDetail = useCallback((block: Block, message: ChatMessageDTO) => {
+    Keyboard.dismiss();
+    const route = detailRouteForBlock(block);
+    if (route) {
+      router.push(route as never);
+      return;
+    }
+    detailFormActionsRef.current = null;
+    setDetailFormState(null);
+    setActiveDetailBlock({ block, message });
+    requestAnimationFrame(() => detailSheetRef.current?.present());
+  }, []);
+
+  const clearDetailState = useCallback(() => {
+    detailFormActionsRef.current = null;
+    setDetailFormState(null);
+    setActiveDetailBlock(null);
+    setFormFocused(false);
+  }, []);
+
+  const closeDetail = useCallback(() => {
+    detailSheetRef.current?.dismiss();
+  }, []);
+
+  const acceptDetailIntent = useCallback(async (intentId: string) => {
+    dismissIntent(intentId);
+    try {
+      const confirmation = await submitFormIntent(
+        thread?.workspaceId ?? null,
+        localId,
+        intentId,
+        {},
+      );
+      if (confirmation) appendConfirmationMessage(confirmation);
+      closeDetail();
+    } catch (e) {
+      notifyConsumeError(e);
+    }
+  }, [
+    appendConfirmationMessage,
+    closeDetail,
+    dismissIntent,
+    localId,
+    thread?.workspaceId,
+  ]);
+
+  const rejectDetailIntent = useCallback(() => {
+    const block = activeDetailBlock?.block;
+    if (block?.type === "confirm_card" || block?.type === "plan_proposal_card") {
+      dismissIntent(block.accept_intent);
+    }
+    closeDetail();
+  }, [activeDetailBlock?.block, closeDetail, dismissIntent]);
+
+  const submitDetailForm = useCallback(async (
+    intentId: string,
+    overrides: Record<string, unknown>,
+  ) => {
+    try {
+      const confirmation = await submitFormIntent(
+        thread?.workspaceId ?? null,
+        localId,
+        intentId,
+        overrides,
+      );
+      if (confirmation) appendConfirmationMessage(confirmation);
+    } catch (e) {
+      notifyConsumeError(e);
+      throw e;
+    }
+  }, [appendConfirmationMessage, localId, thread?.workspaceId]);
+
+  const handleDetailFormActions = useCallback((actions: DetailFormActions | null) => {
+    detailFormActionsRef.current = actions;
+  }, []);
+
+  const handleDetailFormActionState = useCallback((state: DetailFormState) => {
+    setDetailFormState(state);
+  }, []);
+
+  const handleDetailCancel = useCallback(() => {
+    const block = activeDetailBlock?.block;
+    if (block && isIntentDetailBlock(block)) {
+      rejectDetailIntent();
+      return;
+    }
+    closeDetail();
+  }, [activeDetailBlock?.block, closeDetail, rejectDetailIntent]);
+
+  const handleDetailSave = useCallback(() => {
+    const block = activeDetailBlock?.block;
+    if (!block) return;
+    if (isFormDetailBlock(block)) {
+      detailFormActionsRef.current?.submit();
+      return;
+    }
+    if (isIntentDetailBlock(block)) {
+      void acceptDetailIntent(block.accept_intent);
+    }
+  }, [acceptDetailIntent, activeDetailBlock?.block]);
+
+  const activeDetail = activeDetailBlock?.block ?? null;
+  const detailActionKind = activeDetail
+    ? detailActionKindForBlock(activeDetail)
+    : "none";
+  const detailTitle = activeDetail ? detailTitleForBlock(activeDetail) : "Detail";
+  const detailShowSave =
+    detailActionKind === "intent" ||
+    (detailActionKind === "form" &&
+      detailFormState?.done !== true &&
+      detailFormState?.cancelled !== true);
+  const detailSaveDisabled =
+    detailActionKind === "form"
+      ? detailFormState?.canSubmit !== true
+      : detailActionKind !== "intent";
+  const detailSaving =
+    detailActionKind === "form" && detailFormState?.submitting === true;
+
   if (err) {
     return (
       <View style={styles.center}>
@@ -505,24 +689,8 @@ export function ThreadView({
         renderItem={({ item }) => (
           <MessageBubble
             message={item}
-            workspaceId={thread?.workspaceId ?? null}
-            threadId={localId}
             dismissedIntents={dismissedIntents}
-            onIntentDismissed={(intentId) =>
-              setDismissedIntents((prev) => {
-                if (prev.has(intentId)) return prev;
-                const next = new Set(prev);
-                next.add(intentId);
-                return next;
-              })
-            }
-            onFormFocusChange={setFormFocused}
-            onConfirmationMessage={(msg) => {
-              setMessages((prev) =>
-                prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
-              );
-              scrollToBottom();
-            }}
+            onDetailPress={openDetail}
             onSupportPress={openSupport}
           />
         )}
@@ -601,6 +769,77 @@ export function ThreadView({
         onSelect={(id) => setPickedWorkspaceId(id)}
         onClose={() => setPickerVisible(false)}
       />
+      <BottomSheetModal
+        ref={detailSheetRef}
+        snapPoints={detailSnapPoints}
+        enableDynamicSizing={false}
+        index={0}
+        backdropComponent={renderDetailBackdrop}
+        onDismiss={clearDetailState}
+        handleIndicatorStyle={styles.grabber}
+        backgroundStyle={styles.sheetBackground}
+        enablePanDownToClose
+      >
+        <View style={styles.detailSheetHeader}>
+          <View style={styles.detailHeaderSide}>
+            <Pressable
+              onPress={handleDetailCancel}
+              accessibilityRole="button"
+              accessibilityLabel="Cancel detail"
+              hitSlop={8}
+              style={({ pressed }) => [
+                styles.detailHeaderAction,
+                pressed && { opacity: 0.65 },
+              ]}
+            >
+              <Text style={styles.detailHeaderActionText}>Cancel</Text>
+            </Pressable>
+          </View>
+          <Text style={styles.detailSheetTitle} numberOfLines={1}>
+            {detailTitle}
+          </Text>
+          <View style={[styles.detailHeaderSide, styles.detailHeaderRight]}>
+            {detailShowSave ? (
+              <Pressable
+                onPress={handleDetailSave}
+                disabled={detailSaveDisabled}
+                accessibilityRole="button"
+                accessibilityLabel="Save detail"
+                hitSlop={8}
+                style={({ pressed }) => [
+                  styles.detailHeaderAction,
+                  detailSaveDisabled && styles.detailHeaderDisabled,
+                  pressed && !detailSaveDisabled && { opacity: 0.65 },
+                ]}
+              >
+                {detailSaving ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Text style={styles.detailHeaderSaveText}>Save</Text>
+                )}
+              </Pressable>
+            ) : null}
+          </View>
+        </View>
+        <BottomSheetScrollView
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.detailSheetContent}
+        >
+          {activeDetailBlock && (
+            <PresentationBlock block={activeDetailBlock.block}
+              role={activeDetailBlock.message.role}
+              presentation="sheet"
+              formActions="header"
+              onAccept={acceptDetailIntent}
+              onReject={rejectDetailIntent}
+              onSubmitForm={submitDetailForm}
+              onFormFocusChange={setFormFocused}
+              onFormActionsChange={handleDetailFormActions}
+              onFormActionStateChange={handleDetailFormActionState}
+            />
+          )}
+        </BottomSheetScrollView>
+      </BottomSheetModal>
       <Modal
         visible={supportMessage?.role === "assistant"}
         transparent
@@ -714,6 +953,81 @@ function TypingIndicator() {
   );
 }
 
+type FormDetailBlock = Extract<
+  Block,
+  { type: "recurring_form_card" | "goal_form_card" }
+>;
+type IntentDetailBlock = Extract<
+  Block,
+  { type: "confirm_card" | "plan_proposal_card" }
+>;
+
+function isFormDetailBlock(block: Block): block is FormDetailBlock {
+  return block.type === "recurring_form_card" || block.type === "goal_form_card";
+}
+
+function isIntentDetailBlock(block: Block): block is IntentDetailBlock {
+  return block.type === "confirm_card" || block.type === "plan_proposal_card";
+}
+
+function detailActionKindForBlock(block: Block): DetailActionKind {
+  if (isFormDetailBlock(block)) return "form";
+  if (isIntentDetailBlock(block)) return "intent";
+  return "none";
+}
+
+function detailTitleForBlock(block: Block): string {
+  switch (block.type) {
+    case "recurring_form_card":
+      return block.mode === "update" ? "Update Recurring" : "Add Recurring";
+    case "goal_form_card":
+      return block.mode === "update" ? "Update Goal" : "Add Goal";
+    case "confirm_card":
+      return "Confirm";
+    case "plan_proposal_card":
+      return "Review Plan";
+    case "categorize_confirm_card":
+      return "Review Categories";
+    case "recap":
+    case "transactions_list":
+    case "recurring_list":
+    case "budget_list":
+    case "accounts_list":
+    case "scheduled_list":
+    case "recurring_candidates":
+    case "category_list":
+    case "goals_list":
+      return block.title;
+    case "transaction_detail":
+      return "Transaction Detail";
+    case "goal_detail":
+      return "Goal Detail";
+    case "text":
+      return "Detail";
+  }
+}
+
+function detailRouteForBlock(block: Block): string | null {
+  switch (block.type) {
+    case "category_list":
+      return "/categories";
+    case "accounts_list":
+      return "/banks";
+    case "recurring_list":
+      return "/subscriptions";
+    case "goals_list":
+      return "/goals";
+    case "goal_detail":
+      return `/goal/${block.id}`;
+    case "transaction_detail":
+      return `/transactions/${block.id}`;
+    case "budget_list":
+      return "/budget";
+    default:
+      return null;
+  }
+}
+
 /** Block kinds rendered as self-contained cards instead of inside a chat
  *  bubble. Adding a new card-style block here lifts it out of the bubble
  *  and lets it use its own surface treatment (border, padding, etc). */
@@ -798,21 +1112,13 @@ async function submitFormIntent(
 
 function MessageBubble({
   message,
-  workspaceId,
-  threadId,
   dismissedIntents,
-  onIntentDismissed,
-  onFormFocusChange,
-  onConfirmationMessage,
+  onDetailPress,
   onSupportPress,
 }: {
   message: ChatMessageDTO;
-  workspaceId: string | null;
-  threadId: string | null;
   dismissedIntents: Set<string>;
-  onIntentDismissed: (intentId: string) => void;
-  onFormFocusChange?: (focused: boolean) => void;
-  onConfirmationMessage?: (msg: ChatMessageDTO) => void;
+  onDetailPress?: (block: Block, message: ChatMessageDTO) => void;
   onSupportPress?: (message: ChatMessageDTO) => void;
 }) {
   const rawBlocks = Array.isArray(message.blocks)
@@ -828,6 +1134,70 @@ function MessageBubble({
     return true;
   });
   const isUser = message.role === "user";
+  const lastCardBlockIndex = blocks.reduce(
+    (last, block, index) => (isCardBlock(block) ? index : last),
+    -1,
+  );
+  const hasCardBlocks = lastCardBlockIndex !== -1;
+  const [actionRowWidth, setActionRowWidth] = useState(
+    hasCardBlocks ? DETAIL_BLOB_MIN_WIDTH : SUPPORT_ACTION_MIN_WIDTH,
+  );
+  const lastTextBlockIndex = blocks.reduce(
+    (last, block, index) => (!isCardBlock(block) ? index : last),
+    -1,
+  );
+  const hasAssistantSupportAction = message.role === "assistant" && !!onSupportPress;
+  const actionRowWidthStyle =
+    !isUser && (hasCardBlocks || hasAssistantSupportAction)
+      ? { width: actionRowWidth }
+      : null;
+
+  useEffect(() => {
+    setActionRowWidth(
+      hasCardBlocks ? DETAIL_BLOB_MIN_WIDTH : SUPPORT_ACTION_MIN_WIDTH,
+    );
+  }, [hasCardBlocks, message.id]);
+
+  const captureActionBubbleWidth = useCallback((event: LayoutChangeEvent) => {
+    if (isUser) return;
+    const minWidth = hasCardBlocks
+      ? DETAIL_BLOB_MIN_WIDTH
+      : SUPPORT_ACTION_MIN_WIDTH;
+    const nextWidth = Math.max(
+      minWidth,
+      Math.ceil(event.nativeEvent.layout.width),
+    );
+    setActionRowWidth((current) =>
+      Math.abs(current - nextWidth) < 1 ? current : nextWidth,
+    );
+  }, [hasCardBlocks, isUser]);
+  const handleDetailPress = (block: Block, msg: ChatMessageDTO) => {
+    onDetailPress?.(block, msg);
+  };
+  const renderSupportButton = (density: "default" | "compact" = "default") => {
+    if (!hasAssistantSupportAction) return null;
+    return (
+      <Pressable
+        onPress={() => onSupportPress?.(message)}
+        accessibilityRole="button"
+        accessibilityLabel="Report this answer"
+        hitSlop={8}
+        style={({ pressed }) => [
+          styles.supportAction,
+          density === "compact"
+            ? styles.supportActionInSupportOnlyRow
+            : styles.supportActionInDetailRow,
+          pressed && { opacity: 0.65 },
+        ]}
+      >
+        <Ionicons
+          name="help-circle-outline"
+          size={SUPPORT_ACTION_ICON_SIZE}
+          color={colors.muted}
+        />
+      </Pressable>
+    );
+  };
 
   // Render each block as its own visual row. Text blocks get the standard
   // chat bubble; card blocks render full-width (within the list padding)
@@ -838,96 +1208,81 @@ function MessageBubble({
       {blocks.map((b, i) => {
         const key = `${message.id}-${i}`;
         if (isCardBlock(b)) {
+          const showSupportInDetailRow =
+            message.role === "assistant" &&
+            !!onSupportPress &&
+            i === lastCardBlockIndex;
           return (
-            <View key={key} style={styles.cardRow}>
-              <PresentationBlock
-                block={b}
-                role={message.role}
-                onAccept={async (intentId) => {
-                  // Hide the card immediately so the user sees a
-                  // commit — the network round-trip is async and the
-                  // server posts the confirmation message into the
-                  // thread anyway.
-                  onIntentDismissed(intentId);
-                  try {
-                    const confirmation = await submitFormIntent(
-                      workspaceId,
-                      threadId,
-                      intentId,
-                      {},
-                    );
-                    if (confirmation && onConfirmationMessage) {
-                      onConfirmationMessage(confirmation);
-                    }
-                  } catch (e) {
-                    // Surface a permission error; other (transient) errors
-                    // stay silent so the list keeps flowing.
-                    notifyConsumeError(e);
-                  }
-                }}
-                onReject={() => {
-                  // No server call — the intent expires via TTL. Hide
-                  // the card on the client so the choice registers
-                  // visually. Key the dismissal by accept_intent (the
-                  // same id we filter by in the render path) since
-                  // reject_intent can differ.
-                  if (b.type === "confirm_card" || b.type === "plan_proposal_card") {
-                    onIntentDismissed(b.accept_intent);
-                  }
-                }}
-                onSubmitForm={async (id, overrides) => {
-                  try {
-                    const confirmation = await submitFormIntent(
-                      workspaceId,
-                      threadId,
-                      id,
-                      overrides,
-                    );
-                    if (confirmation && onConfirmationMessage) {
-                      onConfirmationMessage(confirmation);
-                    }
-                  } catch (e) {
-                    notifyConsumeError(e);
-                    throw e; // let the card's own handler react (keep form open, etc.)
-                  }
-                }}
-                {...(onFormFocusChange ? { onFormFocusChange } : {})}
-              />
+            <View
+              key={key}
+              style={[
+                isUser ? styles.rowUser : styles.rowAssistant,
+                styles.detailActionRow,
+                actionRowWidthStyle,
+              ]}
+            >
+              <Pressable
+                onPress={() => handleDetailPress(b, message)}
+                accessibilityRole="button"
+                accessibilityLabel="View message detail"
+                style={({ pressed }) => [
+                  styles.detailButton,
+                  pressed && { opacity: 0.72 },
+                ]}
+              >
+                <Ionicons
+                  name="reader-outline"
+                  size={16}
+                  color={colors.primary}
+                />
+                <Text style={styles.detailButtonText}>View detail</Text>
+              </Pressable>
+              {showSupportInDetailRow ? renderSupportButton() : null}
             </View>
           );
         }
+        const showSupportOnlyRow =
+          hasAssistantSupportAction &&
+          lastCardBlockIndex === -1 &&
+          i === lastTextBlockIndex;
+        const shouldCaptureActionBubbleWidth =
+          !isUser &&
+          i === lastTextBlockIndex &&
+          (hasCardBlocks || hasAssistantSupportAction);
         return (
-          <View
-            key={key}
-            style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}
-          >
+          <Fragment key={key}>
             <View
-              style={[
-                styles.bubble,
-                isUser ? styles.bubbleUser : styles.bubbleAssistant,
-              ]}
+              style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}
             >
-              <PresentationBlock block={b} role={message.role} />
+              <View
+                onLayout={
+                  shouldCaptureActionBubbleWidth
+                    ? captureActionBubbleWidth
+                    : undefined
+                }
+                style={[
+                  styles.bubble,
+                  isUser ? styles.bubbleUser : styles.bubbleAssistant,
+                  !isUser && hasCardBlocks && styles.assistantBubbleWithDetailActions,
+                ]}
+              >
+                <PresentationBlock block={b} role={message.role} />
+              </View>
             </View>
-          </View>
+            {showSupportOnlyRow ? (
+              <View
+                style={[
+                  styles.detailActionRow,
+                  styles.supportOnlyActionRow,
+                  actionRowWidthStyle,
+                ]}
+              >
+                {renderSupportButton("compact")}
+              </View>
+            ) : null}
+          </Fragment>
         );
       })}
-      {message.role === "assistant" && onSupportPress && (
-        <View style={styles.supportActionRow}>
-          <Pressable
-            onPress={() => onSupportPress(message)}
-            accessibilityRole="button"
-            accessibilityLabel="Report this answer"
-            hitSlop={8}
-            style={({ pressed }) => [
-              styles.supportAction,
-              pressed && { opacity: 0.65 },
-            ]}
-          >
-            <Ionicons name="help-circle-outline" size={16} color={colors.muted} />
-          </Pressable>
-        </View>
-      )}
     </View>
   );
 }
@@ -940,18 +1295,61 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", marginVertical: 4 },
   rowUser: { justifyContent: "flex-end" },
   rowAssistant: { justifyContent: "flex-start" },
-  supportActionRow: {
+  assistantBubbleWithDetailActions: {
+    minWidth: DETAIL_BLOB_MIN_WIDTH,
+  },
+  detailActionRow: {
     flexDirection: "row",
-    justifyContent: "flex-end",
+    alignItems: "center",
     alignSelf: "flex-start",
-    width: "82%",
-    marginTop: -5,
+    justifyContent: "space-between",
+    gap: space.xs,
+    minWidth: DETAIL_BLOB_MIN_WIDTH,
+    maxWidth: "82%",
+    marginVertical: 2,
+  },
+  supportOnlyActionRow: {
+    alignItems: "flex-start",
+    justifyContent: "flex-end",
+    minWidth: SUPPORT_ACTION_MIN_WIDTH,
+  },
+  detailButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 36,
+    paddingHorizontal: space.sm,
+    paddingVertical: 7,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.canvas,
+  },
+  detailButtonText: {
+    ...type$.button,
+    fontSize: 14,
+    lineHeight: 16,
+    color: colors.primary,
   },
   supportAction: {
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: 2,
     paddingVertical: 1,
+  },
+  supportActionInDetailRow: {
+    minWidth: SUPPORT_ACTION_ICON_SIZE,
+    minHeight: 36,
+    paddingHorizontal: 0,
+    justifyContent: "center",
+  },
+  supportActionInSupportOnlyRow: {
+    minWidth: SUPPORT_ACTION_ICON_SIZE,
+    minHeight: 18,
+    paddingHorizontal: 0,
+    paddingVertical: 0,
+    alignItems: "center",
+    justifyContent: "flex-start",
   },
   bubble: {
     maxWidth: "82%",
@@ -961,11 +1359,40 @@ const styles = StyleSheet.create({
   },
   bubbleUser: { backgroundColor: colors.primary, borderBottomRightRadius: 4 },
   bubbleAssistant: { backgroundColor: colors.surfaceSoft, borderBottomLeftRadius: 4 },
-  cardRow: {
-    // Card blocks render full-width within the list's padding rather than
-    // inside an alignment-flex row, so they don't get squeezed to 82%.
-    marginVertical: 4,
+  grabber: { backgroundColor: colors.hairline, width: 36, height: 4 },
+  sheetBackground: { backgroundColor: colors.canvas },
+  detailSheetHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: space.lg,
+    paddingTop: 8,
+    paddingBottom: space.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.hairlineSoft,
   },
+  detailHeaderSide: {
+    width: 72,
+    minHeight: 36,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  detailHeaderRight: { justifyContent: "flex-end" },
+  detailSheetTitle: {
+    ...type$.titleSm,
+    color: colors.ink,
+    flex: 1,
+    textAlign: "center",
+  },
+  detailHeaderAction: {
+    minHeight: 36,
+    justifyContent: "center",
+  },
+  detailHeaderActionText: { ...type$.button, color: colors.muted },
+  detailHeaderSaveText: { ...type$.button, color: colors.primary },
+  detailHeaderDisabled: {
+    opacity: 0.42,
+  },
+  detailSheetContent: { padding: space.lg, paddingBottom: space.xl },
   typingBubble: {
     flexDirection: "row",
     alignItems: "center",

@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { createContext, ReactNode, useContext } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, space, type as type$ } from "../../design/tokens";
@@ -37,10 +37,30 @@ export function CategoryIcon({
   );
 }
 
+type BlockPresentation = "card" | "sheet";
+
+const BlockPresentationContext = createContext<BlockPresentation>("card");
+
+export function BlockPresentationProvider({
+  value,
+  children,
+}: {
+  value: BlockPresentation;
+  children: ReactNode;
+}) {
+  return (
+    <BlockPresentationContext.Provider value={value}>
+      {children}
+    </BlockPresentationContext.Provider>
+  );
+}
+
 /** Outer container shared by every assistant block other than plain text.
  *  Same surface treatment as the existing confirm card so visual hierarchy
  *  stays consistent across block types. */
 export function BlockCard({ children }: { children: ReactNode }) {
+  const presentation = useContext(BlockPresentationContext);
+  if (presentation === "sheet") return <View style={styles.sheet}>{children}</View>;
   return <View style={styles.card}>{children}</View>;
 }
 
@@ -241,6 +261,9 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     paddingHorizontal: space.base,
     marginVertical: 4,
+    gap: space.xs,
+  },
+  sheet: {
     gap: space.xs,
   },
   header: {

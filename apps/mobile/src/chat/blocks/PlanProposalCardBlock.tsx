@@ -6,15 +6,17 @@ type PlanCard = Extract<PresentationBlock, { type: "plan_proposal_card" }>;
 
 export function PlanProposalCardBlock({
   block,
+  presentation = "card",
   onAccept,
   onReject,
 }: {
   block: PlanCard;
+  presentation?: "card" | "sheet";
   onAccept?: (intent: string) => void;
   onReject?: (intent: string | undefined) => void;
 }) {
   return (
-    <View style={styles.card}>
+    <View style={presentation === "sheet" ? styles.sheet : styles.card}>
       <Text style={styles.question}>{block.question}</Text>
       {block.rows.map((r, i) => (
         <View key={i} style={styles.row}>
@@ -26,20 +28,23 @@ export function PlanProposalCardBlock({
         <Text style={styles.totalLabel}>Total</Text>
         <Text style={styles.totalAmount}>{block.total}</Text>
       </View>
-      <View style={styles.actions}>
-        <Pressable style={({ pressed }) => [styles.btn, styles.reject, pressed && { opacity: 0.7 }]} onPress={() => onReject?.(block.reject_intent)}>
-          <Text style={styles.rejectText}>{block.reject_label}</Text>
-        </Pressable>
-        <Pressable style={({ pressed }) => [styles.btn, styles.accept, pressed && { opacity: 0.85 }]} onPress={() => onAccept?.(block.accept_intent)}>
-          <Text style={styles.acceptText}>{block.accept_label}</Text>
-        </Pressable>
-      </View>
+      {presentation === "sheet" ? null : (
+        <View style={styles.actions}>
+          <Pressable style={({ pressed }) => [styles.btn, styles.reject, pressed && { opacity: 0.7 }]} onPress={() => onReject?.(block.reject_intent)}>
+            <Text style={styles.rejectText}>{block.reject_label}</Text>
+          </Pressable>
+          <Pressable style={({ pressed }) => [styles.btn, styles.accept, pressed && { opacity: 0.85 }]} onPress={() => onAccept?.(block.accept_intent)}>
+            <Text style={styles.acceptText}>{block.accept_label}</Text>
+          </Pressable>
+        </View>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   card: { backgroundColor: colors.canvas, borderWidth: 1, borderColor: colors.hairline, borderRadius: 16, padding: space.base, marginVertical: 4, gap: space.xs },
+  sheet: { gap: space.xs },
   question: { ...type$.bodyMd, color: colors.ink, fontWeight: "600" },
   row: { flexDirection: "row", justifyContent: "space-between", gap: space.sm },
   rowLeft: { ...type$.bodySm, color: colors.body, flex: 1, minWidth: 0 },

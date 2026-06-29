@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -21,9 +21,24 @@ type Props = {
   block: Block;
   onSubmit: (intentId: string, overrides: Record<string, unknown>) => Promise<void>;
   onCancel: () => void;
+  formActions?: "inline" | "header";
+  onActionsChange?: (actions: FormBlockActions | null) => void;
+  onActionStateChange?: (state: FormBlockActionState) => void;
   /** Called when any of the form inputs gains/loses focus so the parent
    *  can hide the chat composer while the user is filling in the form. */
   onFocusChange?: (focused: boolean) => void;
+};
+
+export type FormBlockActions = {
+  submit: () => void;
+  cancel: () => void;
+};
+
+export type FormBlockActionState = {
+  canSubmit: boolean;
+  submitting: boolean;
+  done: boolean;
+  cancelled: boolean;
 };
 
 const CADENCE_OPTIONS: Array<{ key: Cadence; label: string }> = [
@@ -43,7 +58,15 @@ const TEN_YEARS_MS = 10 * 365 * 24 * 60 * 60 * 1000;
 
 /** Inline form for adding a recurring expense. LLM seeds defaults; user
  *  edits and submits — no further back-and-forth with the assistant. */
-export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }: Props) {
+export function RecurringFormBlock({
+  block,
+  onSubmit,
+  onCancel,
+  formActions = "inline",
+  onActionsChange,
+  onActionStateChange,
+  onFocusChange,
+}: Props) {
   const datePicker = useDatePickerSheet();
   const [name, setName] = useState<string>(block.defaults.name);
   const [amount, setAmount] = useState<string>(block.defaults.amount ?? "");
@@ -79,7 +102,7 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
     return new Date(Date.UTC(y, mo - 1, d, 12));
   }, [dateStr]);
 
-  const submit = async () => {
+  const submit = useCallback(async () => {
     if (!canSubmit) return;
     setSubmitting(true);
     try {
@@ -102,13 +125,22 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [amount, block.intent_id, cadence, canSubmit, dateStr, name, onSubmit]);
 
-  const cancel = () => {
+  const cancel = useCallback(() => {
     if (submitting || done) return;
     onCancel();
     setCancelled(true);
-  };
+  }, [done, onCancel, submitting]);
+
+  useEffect(() => {
+    onActionsChange?.({ submit, cancel });
+    return () => onActionsChange?.(null);
+  }, [cancel, onActionsChange, submit]);
+
+  useEffect(() => {
+    onActionStateChange?.({ canSubmit, submitting, done, cancelled });
+  }, [canSubmit, cancelled, done, onActionStateChange, submitting]);
 
   // Post-submit: render the form as a single row of resolved values,
   // styled like a recurring_list row. No editable fields visible.
@@ -228,28 +260,30 @@ export function RecurringFormBlock({ block, onSubmit, onCancel, onFocusChange }:
         </Pressable>
       </View>
 
-      <View style={styles.actions}>
-        <Pressable
-          style={[styles.btn, styles.btnCancel]}
-          onPress={cancel}
-          disabled={submitting}
-        >
-          <Text style={styles.btnCancelText}>Cancel</Text>
-        </Pressable>
-        <Pressable
-          style={[styles.btn, styles.btnSubmit, !canSubmit && styles.btnDisabled]}
-          onPress={submit}
-          disabled={!canSubmit}
-        >
-          {submitting ? (
-            <ActivityIndicator size="small" color={colors.onPrimary} />
-          ) : (
-            <Text style={styles.btnSubmitText}>
-              {block.mode === "update" ? "Update" : "Add"}
-            </Text>
-          )}
-        </Pressable>
-      </View>
+      {formActions === "header" ? null : (
+        <View style={styles.actions}>
+          <Pressable
+            style={[styles.btn, styles.btnCancel]}
+            onPress={cancel}
+            disabled={submitting}
+          >
+            <Text style={styles.btnCancelText}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            style={[styles.btn, styles.btnSubmit, !canSubmit && styles.btnDisabled]}
+            onPress={submit}
+            disabled={!canSubmit}
+          >
+            {submitting ? (
+              <ActivityIndicator size="small" color={colors.onPrimary} />
+            ) : (
+              <Text style={styles.btnSubmitText}>
+                {block.mode === "update" ? "Update" : "Add"}
+              </Text>
+            )}
+          </Pressable>
+        </View>
+      )}
     </BlockCard>
   );
 }
