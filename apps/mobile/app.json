@@ -3,7 +3,7 @@
     "name": "Fina",
     "slug": "fina",
     "scheme": "fina",
-    "version": "1.2",
+    "version": "1.3",
     "orientation": "portrait",
     "icon": "./assets/fina-app-icon.png",
     "userInterfaceStyle": "automatic",

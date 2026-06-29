@@ -2,9 +2,12 @@ import { describe, expect, it } from "vitest";
 import type { AdminUserDTO, AdminUsersResponse } from "@fina/shared";
 import {
   adminErrorState,
+  formatAdminDevices,
   formatAdminDate,
   formatAdminSubscription,
+  formatCad,
   mergeAdminUsersPage,
+  usageSignal,
 } from "./admin-page-model";
 
 const row: AdminUserDTO = {
@@ -25,6 +28,7 @@ const row: AdminUserDTO = {
     pendingTierAt: "2026-07-12T00:00:00.000Z",
     environment: "Production",
   },
+  deviceSummary: [],
   activeSubscriptionCount: 1,
   isPlanMismatch: false,
 };
@@ -38,6 +42,26 @@ describe("admin page model", () => {
 
   it("formats null dates as None", () => {
     expect(formatAdminDate(null)).toBe("None");
+  });
+
+  it("formats device and usage summaries", () => {
+    expect(formatAdminDevices({ ...row, deviceSummary: [{ platform: "ios", lastSeenAt: null }] })).toBe("ios");
+    expect(formatCad("0.123456")).toBe("$0.1235 CAD");
+    expect(usageSignal({
+      user: row,
+      devices: [],
+      sessions: [],
+      plaidItems: [{ id: "p1", institutionName: "Bank", status: "active", errorCode: null, lastSyncAt: null, createdAt: row.createdAt, accounts: [] }],
+      activity: {
+        lastSeenAt: row.createdAt,
+        transactionCount: 2,
+        lastTransactionAt: row.createdAt,
+        chatThreadCount: 1,
+        chatMessageCount: 3,
+        lastChatAt: row.createdAt,
+      },
+      aiUsage: { total: { callCount: 1, inputTokens: 10, outputTokens: 5, costCad: "0.010000" }, monthly: [] },
+    })).toBe("1/1 Plaid active, 2 tx, 3 chat msgs");
   });
 
   it("merges additional pages without dropping prior rows", () => {

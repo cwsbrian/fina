@@ -11,6 +11,7 @@ function expectSafeUserShape(row: Record<string, unknown>) {
   expect(Object.keys(row).sort()).toEqual([
     "activeSubscriptionCount",
     "createdAt",
+    "deviceSummary",
     "email",
     "id",
     "isPlanMismatch",
@@ -204,6 +205,7 @@ describe("GET /admin/users", () => {
       name: "Paid User",
       role: "user",
       tier: "pro",
+      deviceSummary: expect.any(Array),
       activeSubscriptionCount: 1,
       isPlanMismatch: true,
       subscription: {
@@ -313,6 +315,161 @@ describe("GET /admin/users", () => {
     expect(row.tier).toBe("max");
     expect(row.activeSubscriptionCount).toBe(2);
     expect(row.subscription).toMatchObject({ source: "iap_google", tier: "max" });
+    await app.close();
+  });
+});
+
+describe("GET /admin/users/:userId", () => {
+  beforeEach(async () => {
+    await truncateAll();
+  });
+
+  afterAll(async () => {
+    await disconnect();
+  });
+
+  it("returns device, Plaid, activity, and AI usage detail without secrets", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
+    const user = await signUpAndGetCookie(app, { email: "detail@example.com", name: "Detail User" });
+    const wsId = await getOwnerWorkspaceId(user.userId);
+    await prisma.session.updateMany({
+      where: { userId: user.userId },
+      data: {
+        userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)",
+        updatedAt: new Date("2026-06-15T10:00:00Z"),
+      },
+    });
+    await prisma.userDevice.createMany({
+      data: [
+        {
+          userId: user.userId,
+          clientDeviceId: "secret-device-id",
+          expoPushToken: "ExponentPushToken[secret]",
+          platform: "ios",
+          lastSeenAt: new Date("2026-06-20T10:00:00Z"),
+        },
+        {
+          userId: user.userId,
+          platform: "android",
+          lastSeenAt: new Date("2026-06-10T10:00:00Z"),
+        },
+      ],
+    });
+    const item = await prisma.plaidItem.create({
+      data: {
+        workspaceId: wsId,
+        connectedBy: user.userId,
+        accessTokenCiphertext: Buffer.from("access-secret-token"),
+        accessTokenIv: Buffer.from("123456789012"),
+        itemId: "plaid-secret-item-id",
+        institutionId: "ins_1",
+        institutionName: "Test Bank",
+        lastSyncAt: new Date("2026-06-18T10:00:00Z"),
+      },
+    });
+    const account = await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        plaidItemId: item.id,
+        plaidAccountId: "plaid-secret-account-id",
+        name: "Chequing",
+        mask: "1234",
+        type: "depository",
+        subtype: "checking",
+        lastBalanceSyncAt: new Date("2026-06-18T10:00:00Z"),
+      },
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: account.id,
+        plaidItemId: item.id,
+        plaidTransactionId: "plaid-secret-transaction-id",
+        amount: "12.34",
+        merchantRaw: "Coffee",
+        occurredAt: new Date("2026-06-19T12:00:00Z"),
+        rawData: {},
+      },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        userId: user.userId,
+        workspaceId: wsId,
+        lastMessageAt: new Date("2026-06-21T10:00:00Z"),
+      },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        threadId: thread.id,
+        role: "user",
+        blocks: [{ type: "text", markdown: "hello" }],
+        createdAt: new Date("2026-06-21T10:00:00Z"),
+      },
+    });
+    await prisma.llmCallLog.createMany({
+      data: [
+        {
+          userId: user.userId,
+          source: "chat",
+          model: "deepseek-v4-flash",
+          inputTokens: 100,
+          outputTokens: 20,
+          costUsd: "0.010000",
+          costCad: "0.014000",
+          usdToCadRate: "1.400000",
+          createdAt: new Date("2026-06-21T10:00:00Z"),
+        },
+        {
+          userId: user.userId,
+          source: "brief",
+          model: "deepseek-v4-flash",
+          inputTokens: 50,
+          outputTokens: 10,
+          costUsd: "0.020000",
+          costCad: "0.028000",
+          usdToCadRate: "1.400000",
+          createdAt: new Date("2026-05-01T10:00:00Z"),
+        },
+      ],
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/admin/users/${user.userId}`,
+      headers: { cookie: admin.cookie },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers["cache-control"]).toBe("no-store");
+    expect(res.json()).toMatchObject({
+      user: { id: user.userId, email: "detail@example.com" },
+      activity: {
+        lastSeenAt: "2026-06-21T10:00:00.000Z",
+        transactionCount: 1,
+        chatMessageCount: 1,
+      },
+      aiUsage: {
+        total: { callCount: 2, inputTokens: 150, outputTokens: 30, costCad: "0.042000" },
+        monthly: [
+          { month: "2026-06", callCount: 1, inputTokens: 100, outputTokens: 20, costCad: "0.014000" },
+          { month: "2026-05", callCount: 1, inputTokens: 50, outputTokens: 10, costCad: "0.028000" },
+        ],
+      },
+      plaidItems: [
+        {
+          institutionName: "Test Bank",
+          status: "active",
+          accounts: [{ name: "Chequing", mask: "1234", type: "depository", subtype: "checking" }],
+        },
+      ],
+    });
+    expect(res.json().devices.map((d: { platform: string }) => d.platform)).toEqual(["ios", "android"]);
+    const serialized = JSON.stringify(res.json());
+    expect(serialized).not.toContain("access-secret-token");
+    expect(serialized).not.toContain("plaid-secret");
+    expect(serialized).not.toContain("ExponentPushToken");
+    expect(serialized).not.toContain("secret-device-id");
     await app.close();
   });
 });

@@ -15,6 +15,10 @@
         "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID": "287347024529-9kscoil7sm759d1kl459t7554o95vdlb.apps.googleusercontent.com"
       }
     },
+    "production-local": {
+      "extends": "production",
+      "autoIncrement": false
+    },
     "playtest": {
       "extends": "production",
       "autoIncrement": false,
