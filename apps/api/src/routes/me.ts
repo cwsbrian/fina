@@ -6,6 +6,7 @@ import { computeEffectiveTier } from "../auth/tier.js";
 import {
   ACTIVE_SUBSCRIPTION_STATUSES,
   PatchMeBody,
+  resolveMorningBriefFrequency,
   resolveNotificationPrefs,
   type MeDTO,
   type NotificationPrefs,
@@ -44,7 +45,19 @@ function tzNoonUtc(dateStr: string, tz: string): Date {
 
 function toMeDTO(
   user: NonNullable<Awaited<ReturnType<typeof prisma.user.findUnique>>>,
-  activeSubs: Array<{ tier: string; status: string; currentPeriodEnd: Date; cancelAtPeriodEnd: boolean; source: SubscriptionDTO["source"]; pendingTier: string | null; pendingTierAt: Date | null; environment: string; createdAt: Date; updatedAt: Date; sourceSubscriptionId: string }>,
+  activeSubs: Array<{
+    tier: string;
+    status: string;
+    currentPeriodEnd: Date;
+    cancelAtPeriodEnd: boolean;
+    source: SubscriptionDTO["source"];
+    pendingTier: string | null;
+    pendingTierAt: Date | null;
+    environment: string;
+    createdAt: Date;
+    updatedAt: Date;
+    sourceSubscriptionId: string;
+  }>,
   runtimeEnv: "sandbox" | "production",
   iapDevice: Awaited<ReturnType<typeof touchNativeIapDevice>>,
   iapPlatform: NativeIapPlatform | null,
@@ -52,7 +65,10 @@ function toMeDTO(
   // Sandbox env filter MUST run before precedence — stale sandbox rows
   // should not influence the primary pick or the EffectiveTier.
   const filtered = filterEnvironmentRows(activeSubs, runtimeEnv);
-  const t = computeEffectiveTier(user, filtered as unknown as Parameters<typeof computeEffectiveTier>[1]);
+  const t = computeEffectiveTier(
+    user,
+    filtered as unknown as Parameters<typeof computeEffectiveTier>[1],
+  );
   // Deterministic primary-sub pick: Stripe wins unconditionally;
   // inside non-Stripe, max > pro; then source order; then createdAt ASC.
   // MeDTO.subscription is null when no active sub.
@@ -70,9 +86,7 @@ function toMeDTO(
     : null;
   // snoozeUntil → "YYYY-MM-DD" string (date portion in UTC; close enough for
   // settings UI display purposes; tz conversion in cron is what matters).
-  const snoozeUntilStr = user.snoozeUntil
-    ? user.snoozeUntil.toISOString().slice(0, 10)
-    : null;
+  const snoozeUntilStr = user.snoozeUntil ? user.snoozeUntil.toISOString().slice(0, 10) : null;
   return {
     user: {
       id: user.id,
@@ -82,6 +96,7 @@ function toMeDTO(
       tz: user.tz,
       locale: user.locale,
       morningTime: user.morningTime,
+      morningBriefFrequency: resolveMorningBriefFrequency(user.morningBriefFrequency),
       snoozeUntil: snoozeUntilStr,
       pauseEnabled: user.pauseEnabled,
       notificationPrefs: resolveNotificationPrefs(user.notificationPrefs),
@@ -118,7 +133,10 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       ]);
       if (!user) return reply.code(404).send({ error: "no_user" });
       const activeSubs = await prisma.subscription.findMany({
-        where: { userId: user.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
+        where: {
+          userId: user.id,
+          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+        },
         orderBy: { currentPeriodEnd: "desc" },
       });
       const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
@@ -151,7 +169,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
           result = await sendBankReconnectPush(env, session.userId, "Test Bank");
           break;
         case "workspaceInvites":
-          result = await sendWorkspaceInvitePush(env, session.userId, "Test inviter", "Test workspace");
+          result = await sendWorkspaceInvitePush(
+            env,
+            session.userId,
+            "Test inviter",
+            "Test workspace",
+          );
           break;
         case "trialExpiring":
           result = await sendTrialExpiringPush(env, session.userId, 3);
@@ -160,13 +183,30 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
           result = await sendGoalMilestonePush(env, session.userId, "Test goal", 50);
           break;
         case "largeCharges":
-          result = await sendLargeChargePush(env, session.userId, "Test merchant", "199.99", "Dining");
+          result = await sendLargeChargePush(
+            env,
+            session.userId,
+            "Test merchant",
+            "199.99",
+            "Dining",
+          );
           break;
         case "transactionAdded":
-          result = await sendTransactionAddedPush(env, session.userId, "Test Merchant", "12.34", "Dining");
+          result = await sendTransactionAddedPush(
+            env,
+            session.userId,
+            "Test Merchant",
+            "12.34",
+            "Dining",
+          );
           break;
         case "productUpdates":
-          result = await sendProductUpdatePush(env, session.userId, "What's new in Fina", "Test product update.");
+          result = await sendProductUpdatePush(
+            env,
+            session.userId,
+            "What's new in Fina",
+            "Test product update.",
+          );
           break;
         default:
           return reply.code(400).send({ error: "invalid_channel" });
@@ -177,10 +217,12 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
         where: { userId: session.userId },
       });
       const channelEnabled = resolveNotificationPrefs(
-        (await prisma.user.findUnique({
-          where: { id: session.userId },
-          select: { notificationPrefs: true },
-        }))?.notificationPrefs,
+        (
+          await prisma.user.findUnique({
+            where: { id: session.userId },
+            select: { notificationPrefs: true },
+          })
+        )?.notificationPrefs,
       )[channel];
       return {
         sent: result.sent,
@@ -207,6 +249,9 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       const data: Prisma.UserUpdateInput = {};
       if (body.name !== undefined) data.name = body.name;
       if (body.morningTime !== undefined) data.morningTime = body.morningTime;
+      if (body.morningBriefFrequency !== undefined) {
+        data.morningBriefFrequency = body.morningBriefFrequency;
+      }
       if (body.pauseEnabled !== undefined) data.pauseEnabled = body.pauseEnabled;
       if (body.tz !== undefined) data.tz = body.tz;
       if (body.notificationPrefs !== undefined) {
@@ -233,10 +278,14 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
           // Need the user's tz BEFORE the update applies — if the PATCH
           // body includes a new tz, that's the tz to interpret snoozeUntil
           // against. Else use existing User.tz.
-          const tzForSnooze = body.tz ?? (await prisma.user.findUniqueOrThrow({
-            where: { id: session.userId },
-            select: { tz: true },
-          })).tz;
+          const tzForSnooze =
+            body.tz ??
+            (
+              await prisma.user.findUniqueOrThrow({
+                where: { id: session.userId },
+                select: { tz: true },
+              })
+            ).tz;
           data.snoozeUntil = tzNoonUtc(body.snoozeUntil, tzForSnooze);
         }
       }
@@ -248,7 +297,10 @@ export async function meRoutes(app: FastifyInstance): Promise<void> {
       const nativeIapClient = readNativeIapClient(req);
       const iapDevice = await touchNativeIapDevice(session.userId, nativeIapClient);
       const activeSubs = await prisma.subscription.findMany({
-        where: { userId: updated.id, status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] } },
+        where: {
+          userId: updated.id,
+          status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+        },
         orderBy: { currentPeriodEnd: "desc" },
       });
       const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";

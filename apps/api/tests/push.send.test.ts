@@ -23,21 +23,29 @@ function firstPushMessage(spy: MockInstance): Record<string, unknown> {
 vi.mock("expo-server-sdk", () => {
   return {
     Expo: class {
-      static isExpoPushToken(t: string) { return /^ExponentPushToken\[/.test(t); }
+      static isExpoPushToken(t: string) {
+        return /^ExponentPushToken\[/.test(t);
+      }
       chunkPushNotifications(messages: unknown[]) {
         // Single chunk in tests; matches real behavior for ≤100 messages.
         return [messages];
       }
       async sendPushNotificationsAsync(_messages: unknown[]): Promise<unknown[]> {
-        return [];  // default — tests override via vi.spyOn
+        return []; // default — tests override via vi.spyOn
       }
     },
   };
 });
 
-beforeEach(async () => { await truncateAll(); });
-afterEach(() => { vi.restoreAllMocks(); });  // Vitest singleFork — prevent spy leakage across files.
-afterAll(async () => { await disconnect(); });
+beforeEach(async () => {
+  await truncateAll();
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+}); // Vitest singleFork — prevent spy leakage across files.
+afterAll(async () => {
+  await disconnect();
+});
 
 describe("sendBriefPush", () => {
   it("no devices — no-op + logs zero count", async () => {
@@ -50,9 +58,7 @@ describe("sendBriefPush", () => {
 
   it("one device — calls Expo once, returns sent=1", async () => {
     const { Expo } = await import("expo-server-sdk");
-    const u = await makeUserWithDevices([
-      { token: "ExponentPushToken[abc]", platform: "ios" },
-    ]);
+    const u = await makeUserWithDevices([{ token: "ExponentPushToken[abc]", platform: "ios" }]);
     // Pre-stub the next .sendPushNotificationsAsync to return a single ok ticket
     const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "ticket_1" }]);
     vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
@@ -69,9 +75,7 @@ describe("sendBriefPush", () => {
     const u = await makeUserWithDevices([
       { token: "ExponentPushToken[ok-persists]", platform: "ios" },
     ]);
-    const sendSpy = vi.fn().mockResolvedValueOnce([
-      { status: "ok", id: "ticket_persist_1" },
-    ]);
+    const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "ticket_persist_1" }]);
     vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
 
     const { sendBriefPush } = await import("../src/push/send.js");
@@ -89,12 +93,16 @@ describe("sendBriefPush", () => {
 
   it("DeviceNotRegistered ticket → row deleted", async () => {
     const { Expo } = await import("expo-server-sdk");
-    const u = await makeUserWithDevices([
-      { token: "ExponentPushToken[stale]", platform: "ios" },
-    ]);
-    const sendSpy = vi.fn().mockResolvedValueOnce([
-      { status: "error", message: "device not registered", details: { error: "DeviceNotRegistered" } },
-    ]);
+    const u = await makeUserWithDevices([{ token: "ExponentPushToken[stale]", platform: "ios" }]);
+    const sendSpy = vi
+      .fn()
+      .mockResolvedValueOnce([
+        {
+          status: "error",
+          message: "device not registered",
+          details: { error: "DeviceNotRegistered" },
+        },
+      ]);
     vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
 
     const { sendBriefPush } = await import("../src/push/send.js");
@@ -106,19 +114,19 @@ describe("sendBriefPush", () => {
 
   it("non-DeviceNotRegistered error → row preserved, warn logged", async () => {
     const { Expo } = await import("expo-server-sdk");
-    const u = await makeUserWithDevices([
-      { token: "ExponentPushToken[rate]", platform: "ios" },
-    ]);
-    const sendSpy = vi.fn().mockResolvedValueOnce([
-      { status: "error", message: "too many", details: { error: "MessageRateExceeded" } },
-    ]);
+    const u = await makeUserWithDevices([{ token: "ExponentPushToken[rate]", platform: "ios" }]);
+    const sendSpy = vi
+      .fn()
+      .mockResolvedValueOnce([
+        { status: "error", message: "too many", details: { error: "MessageRateExceeded" } },
+      ]);
     vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
 
     const { sendBriefPush } = await import("../src/push/send.js");
     const result = await sendBriefPush({} as never, u.id, "x");
     expect(result.failed).toBe(1);
     const devices = await prisma.userDevice.findMany({ where: { userId: u.id } });
-    expect(devices).toHaveLength(1);  // not deleted — could work next time
+    expect(devices).toHaveLength(1); // not deleted — could work next time
   });
 
   it("filters out malformed tokens (Expo.isExpoPushToken false)", async () => {
@@ -392,11 +400,13 @@ describe("sendTransactionAddedPush payload shape", () => {
     const chunk = firstCall[0] as Array<Record<string, unknown>>;
     expect(chunk).toHaveLength(1);
     const msg = chunk[0]!;
-    expect(msg).toEqual(expect.objectContaining({
-      title: "Starbucks · $5.50",
-      body: "New transaction · Coffee",
-      data: { type: "transaction-added" },
-    }));
+    expect(msg).toEqual(
+      expect.objectContaining({
+        title: "Starbucks · $5.50",
+        body: "New transaction · Coffee",
+        data: { type: "transaction-added" },
+      }),
+    );
   });
 
   it("categoryName=null → body='New transaction' (no category suffix)", async () => {
@@ -414,10 +424,12 @@ describe("sendTransactionAddedPush payload shape", () => {
     const firstCall = calls[0]!;
     const chunk = firstCall[0] as Array<Record<string, unknown>>;
     const msg = chunk[0]!;
-    expect(msg).toEqual(expect.objectContaining({
-      title: "Anon Shop · $1.00",
-      body: "New transaction",
-    }));
+    expect(msg).toEqual(
+      expect.objectContaining({
+        title: "Anon Shop · $1.00",
+        body: "New transaction",
+      }),
+    );
   });
 
   it("priority='high', sound='default' (regression guard against payload defaults change)", async () => {
@@ -435,10 +447,12 @@ describe("sendTransactionAddedPush payload shape", () => {
     const firstCall = calls[0]!;
     const chunk = firstCall[0] as Array<Record<string, unknown>>;
     const msg = chunk[0]!;
-    expect(msg).toEqual(expect.objectContaining({
-      priority: "high",
-      sound: "default",
-    }));
+    expect(msg).toEqual(
+      expect.objectContaining({
+        priority: "high",
+        sound: "default",
+      }),
+    );
   });
 });
 
@@ -447,17 +461,43 @@ describe("payload-shape coverage for remaining wrappers", () => {
     it("title='Fina ☀️', dataType='daily-brief', body passthrough", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-br-1" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
-      const u = await makeUserWithDevices([{ token: "ExponentPushToken[brief-1]", platform: "ios" }]);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[brief-1]", platform: "ios" },
+      ]);
 
       const { sendBriefPush } = await import("../src/push/send.js");
       await sendBriefPush(testEnv(), u.id, "Yesterday looked normal.");
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Fina ☀️",
-        body: "Yesterday looked normal.",
-        data: { type: "daily-brief" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Fina ☀️",
+          body: "Yesterday looked normal.",
+          data: { type: "daily-brief" },
+        }),
+      );
+    });
+
+    it("includes the brief chat thread id so notification taps can open the brief", async () => {
+      const { Expo } = await import("expo-server-sdk");
+      const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-br-route" }]);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
+      const u = await makeUserWithDevices([
+        { token: "ExponentPushToken[brief-route]", platform: "ios" },
+      ]);
+
+      const { sendBriefPush } = await import("../src/push/send.js");
+      await sendBriefPush(testEnv(), u.id, "Open the brief.", { threadId: "thread_123" });
+
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          data: { type: "daily-brief", threadId: "thread_123" },
+        }),
+      );
     });
   });
 
@@ -465,17 +505,21 @@ describe("payload-shape coverage for remaining wrappers", () => {
     it("title + body + dataType pinned", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-bk-1" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[brc-1]", platform: "ios" }]);
 
       const { sendBankReconnectPush } = await import("../src/push/send.js");
       await sendBankReconnectPush(testEnv(), u.id, "Chase");
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Reconnect your bank",
-        body: "Chase stopped syncing. Open Fina to reconnect.",
-        data: { type: "bank-reconnect" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Reconnect your bank",
+          body: "Chase stopped syncing. Open Fina to reconnect.",
+          data: { type: "bank-reconnect" },
+        }),
+      );
     });
   });
 
@@ -483,31 +527,39 @@ describe("payload-shape coverage for remaining wrappers", () => {
     it("daysLeft=1 → 'Your trial ends tomorrow'", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-te-1" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[te-1]", platform: "ios" }]);
 
       const { sendTrialExpiringPush } = await import("../src/push/send.js");
       await sendTrialExpiringPush(testEnv(), u.id, 1);
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Your trial ends tomorrow",
-        data: { type: "trial-expiring" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Your trial ends tomorrow",
+          data: { type: "trial-expiring" },
+        }),
+      );
     });
 
     it("daysLeft=5 → 'Your trial ends in 5 days'", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-te-2" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[te-2]", platform: "ios" }]);
 
       const { sendTrialExpiringPush } = await import("../src/push/send.js");
       await sendTrialExpiringPush(testEnv(), u.id, 5);
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Your trial ends in 5 days",
-        data: { type: "trial-expiring" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Your trial ends in 5 days",
+          data: { type: "trial-expiring" },
+        }),
+      );
     });
   });
 
@@ -515,33 +567,41 @@ describe("payload-shape coverage for remaining wrappers", () => {
     it("pct=100 → 'Goal complete: <title>'", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-gm-1" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[gm-1]", platform: "ios" }]);
 
       const { sendGoalMilestonePush } = await import("../src/push/send.js");
       await sendGoalMilestonePush(testEnv(), u.id, "Vacation", 100);
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Goal complete: Vacation",
-        body: "Nice. Open Fina to see what's next.",
-        data: { type: "goal-milestone" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Goal complete: Vacation",
+          body: "Nice. Open Fina to see what's next.",
+          data: { type: "goal-milestone" },
+        }),
+      );
     });
 
     it("pct<100 → '<pct>% there on <title>'", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-gm-2" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[gm-2]", platform: "ios" }]);
 
       const { sendGoalMilestonePush } = await import("../src/push/send.js");
       await sendGoalMilestonePush(testEnv(), u.id, "Vacation", 50);
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "50% there on Vacation",
-        body: "Keep going. Tap to see what's funding it.",
-        data: { type: "goal-milestone" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "50% there on Vacation",
+          body: "Keep going. Tap to see what's funding it.",
+          data: { type: "goal-milestone" },
+        }),
+      );
     });
   });
 
@@ -549,32 +609,40 @@ describe("payload-shape coverage for remaining wrappers", () => {
     it("title='Unusual charge: $<amount>', body with category", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-lc-1" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[lc-1]", platform: "ios" }]);
 
       const { sendLargeChargePush } = await import("../src/push/send.js");
       await sendLargeChargePush(testEnv(), u.id, "Best Buy", "200.00", "Electronics");
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Unusual charge: $200.00",
-        body: "Best Buy for Electronics is well above your usual.",
-        data: { type: "large-charge" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Unusual charge: $200.00",
+          body: "Best Buy for Electronics is well above your usual.",
+          data: { type: "large-charge" },
+        }),
+      );
     });
 
     it("categoryName=null → body without ' for <category>'", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-lc-2" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[lc-2]", platform: "ios" }]);
 
       const { sendLargeChargePush } = await import("../src/push/send.js");
       await sendLargeChargePush(testEnv(), u.id, "Anon", "100.00", null);
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Unusual charge: $100.00",
-        body: "Anon is well above your usual.",
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Unusual charge: $100.00",
+          body: "Anon is well above your usual.",
+        }),
+      );
     });
   });
 
@@ -582,17 +650,21 @@ describe("payload-shape coverage for remaining wrappers", () => {
     it("title/body passthrough, dataType='product-update'", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-pu-1" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[pu-1]", platform: "ios" }]);
 
       const { sendProductUpdatePush } = await import("../src/push/send.js");
       await sendProductUpdatePush(testEnv(), u.id, "What's new in Fina", "Try the new chat!");
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "What's new in Fina",
-        body: "Try the new chat!",
-        data: { type: "product-update" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "What's new in Fina",
+          body: "Try the new chat!",
+          data: { type: "product-update" },
+        }),
+      );
     });
   });
 
@@ -600,17 +672,21 @@ describe("payload-shape coverage for remaining wrappers", () => {
     it("title='Workspace invite', body templated, dataType='workspace-invite'", async () => {
       const { Expo } = await import("expo-server-sdk");
       const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-wi-1" }]);
-      const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+      const spy = vi
+        .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+        .mockImplementation(sendSpy);
       const u = await makeUserWithDevices([{ token: "ExponentPushToken[wi-1]", platform: "ios" }]);
 
       const { sendWorkspaceInvitePush } = await import("../src/push/send.js");
       await sendWorkspaceInvitePush(testEnv(), u.id, "Alice", "Family Budget");
 
-      expect(firstPushMessage(spy)).toEqual(expect.objectContaining({
-        title: "Workspace invite",
-        body: "Alice invited you to Family Budget.",
-        data: { type: "workspace-invite" },
-      }));
+      expect(firstPushMessage(spy)).toEqual(
+        expect.objectContaining({
+          title: "Workspace invite",
+          body: "Alice invited you to Family Budget.",
+          data: { type: "workspace-invite" },
+        }),
+      );
     });
   });
 });

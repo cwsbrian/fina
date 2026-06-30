@@ -1,6 +1,6 @@
 import type { Tier } from "../tier.js";
 import type { SubscriptionDTO } from "./subscription.js";
-import type { NotificationPrefs } from "../notifications.js";
+import type { MorningBriefFrequency, NotificationPrefs } from "../notifications.js";
 import type { CategorizationMode } from "../categorization.js";
 import type { UserRole } from "../user-role.js";
 
@@ -23,8 +23,9 @@ export type MeDTO = {
     tz: string;
     locale: string;
     /** Daily brief settings (Plan 2B). */
-    morningTime: string;          // "HH:mm" 24h format
-    snoozeUntil: string | null;   // ISO date string "YYYY-MM-DD" or null
+    morningTime: string; // "HH:mm" 24h format
+    morningBriefFrequency: MorningBriefFrequency;
+    snoozeUntil: string | null; // ISO date string "YYYY-MM-DD" or null
     pauseEnabled: boolean;
     /** Per-type push notification prefs, fully resolved (server applies
      *  defaults so the client always sees every key). */

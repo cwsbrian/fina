@@ -8,8 +8,12 @@ import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 // Mock expo-server-sdk — prototype method so vi.spyOn(Expo.prototype, ...) works.
 vi.mock("expo-server-sdk", () => ({
   Expo: class {
-    static isExpoPushToken(t: string) { return /^ExponentPushToken\[/.test(t); }
-    chunkPushNotifications(messages: unknown[]) { return [messages]; }
+    static isExpoPushToken(t: string) {
+      return /^ExponentPushToken\[/.test(t);
+    }
+    chunkPushNotifications(messages: unknown[]) {
+      return [messages];
+    }
     async sendPushNotificationsAsync(_messages: unknown[]) {
       return [{ status: "ok", id: "t1" }];
     }
@@ -21,15 +25,24 @@ beforeEach(async () => {
   resetGeminiMock();
   chatGeminiMock.responses.push({ text: "morning brief text" });
 });
-afterEach(() => { vi.restoreAllMocks(); });  // Vitest singleFork — prevent spy leakage across files.
-afterAll(async () => { await disconnect(); });
+afterEach(() => {
+  vi.restoreAllMocks();
+}); // Vitest singleFork — prevent spy leakage across files.
+afterAll(async () => {
+  await disconnect();
+});
 
 describe("daily-brief push integration", () => {
   it("after brief tx commits, sendBriefPush fires for the user's device", async () => {
     const tz = "Asia/Seoul";
     const u = await prisma.user.create({
-      data: { id: `bp-${Date.now()}`, email: `bp-${Date.now()}@t.co`, name: "BP",
-              tz, morningTime: await currentLocalHHmm(tz) },
+      data: {
+        id: `bp-${Date.now()}`,
+        email: `bp-${Date.now()}@t.co`,
+        name: "BP",
+        tz,
+        morningTime: await currentLocalHHmm(tz),
+      },
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
@@ -49,13 +62,27 @@ describe("daily-brief push integration", () => {
     expect(briefs).toHaveLength(1);
     // Push was sent (T6 contribution)
     expect(sendSpy).toHaveBeenCalledTimes(1);
+    const msg = await prisma.chatMessage.findUniqueOrThrow({
+      where: { id: briefs[0]!.messageId },
+      select: { threadId: true },
+    });
+    const sent = sendSpy.mock.calls[0]?.[0] as Array<{ data?: Record<string, unknown> }>;
+    expect(sent[0]?.data).toMatchObject({
+      type: "daily-brief",
+      threadId: msg.threadId,
+    });
   });
 
   it("push throw — brief still durable in DB", async () => {
     const tz = "Asia/Seoul";
     const u = await prisma.user.create({
-      data: { id: `bpf-${Date.now()}`, email: `bpf-${Date.now()}@t.co`, name: "BPF",
-              tz, morningTime: await currentLocalHHmm(tz) },
+      data: {
+        id: `bpf-${Date.now()}`,
+        email: `bpf-${Date.now()}@t.co`,
+        name: "BPF",
+        tz,
+        morningTime: await currentLocalHHmm(tz),
+      },
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
@@ -73,14 +100,19 @@ describe("daily-brief push integration", () => {
     await runDailyBrief(testEnv());
 
     const briefs = await prisma.brief.findMany({ where: { userId: u.id } });
-    expect(briefs).toHaveLength(1);  // brief durably in DB even though push failed
+    expect(briefs).toHaveLength(1); // brief durably in DB even though push failed
   });
 
   it("user with zero devices — brief still emitted, no push attempt", async () => {
     const tz = "Asia/Seoul";
     const u = await prisma.user.create({
-      data: { id: `nodev-${Date.now()}`, email: `nodev-${Date.now()}@t.co`, name: "ND",
-              tz, morningTime: await currentLocalHHmm(tz) },
+      data: {
+        id: `nodev-${Date.now()}`,
+        email: `nodev-${Date.now()}@t.co`,
+        name: "ND",
+        tz,
+        morningTime: await currentLocalHHmm(tz),
+      },
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
@@ -94,6 +126,6 @@ describe("daily-brief push integration", () => {
 
     const briefs = await prisma.brief.findMany({ where: { userId: u.id } });
     expect(briefs).toHaveLength(1);
-    expect(sendSpy).not.toHaveBeenCalled();  // 0 devices → no Expo call
+    expect(sendSpy).not.toHaveBeenCalled(); // 0 devices → no Expo call
   });
 });

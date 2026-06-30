@@ -1,6 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { $Enums } from "@prisma/client";
-import { CheckoutBody, SyncBody, ACTIVE_SUBSCRIPTION_STATUSES, resolveNotificationPrefs } from "@fina/shared";
+import {
+  CheckoutBody,
+  SyncBody,
+  ACTIVE_SUBSCRIPTION_STATUSES,
+  resolveMorningBriefFrequency,
+  resolveNotificationPrefs,
+} from "@fina/shared";
 import type { MeDTO, SubscriptionDTO } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireSession } from "../auth/context.js";
@@ -57,9 +63,7 @@ export async function buildMeBody(
       }
     : null;
   // snoozeUntil → "YYYY-MM-DD" string for UI display (matches toMeDTO in me.ts).
-  const snoozeUntilStr = user.snoozeUntil
-    ? user.snoozeUntil.toISOString().slice(0, 10)
-    : null;
+  const snoozeUntilStr = user.snoozeUntil ? user.snoozeUntil.toISOString().slice(0, 10) : null;
   return {
     user: {
       id: user.id,
@@ -69,6 +73,7 @@ export async function buildMeBody(
       tz: user.tz,
       locale: user.locale,
       morningTime: user.morningTime,
+      morningBriefFrequency: resolveMorningBriefFrequency(user.morningBriefFrequency),
       snoozeUntil: snoozeUntilStr,
       pauseEnabled: user.pauseEnabled,
       notificationPrefs: resolveNotificationPrefs(user.notificationPrefs),
@@ -113,9 +118,7 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
       const stripe = stripeClient(app.fina.env);
       const stripeSession = await stripe.checkout.sessions.create({
         mode: "subscription",
-        line_items: [
-          { price: priceIdForTier(app.fina.env, parsed.data.tier), quantity: 1 },
-        ],
+        line_items: [{ price: priceIdForTier(app.fina.env, parsed.data.tier), quantity: 1 }],
         client_reference_id: user.id,
         customer: customerId,
         // success_url includes {CHECKOUT_SESSION_ID} so /billing/sync can
@@ -201,11 +204,15 @@ export async function billingRoutes(app: FastifyInstance): Promise<void> {
         if (sess.customer) {
           await prisma.user.update({
             where: { id: user.id },
-            data: { stripeCustomerId: typeof sess.customer === "string" ? sess.customer : sess.customer.id },
+            data: {
+              stripeCustomerId:
+                typeof sess.customer === "string" ? sess.customer : sess.customer.id,
+            },
           });
         }
         if (sess.subscription) {
-          const subId = typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
+          const subId =
+            typeof sess.subscription === "string" ? sess.subscription : sess.subscription.id;
           const synced = await syncSubscriptionFromStripe(app.fina.env, subId, user.id, app.log);
           if (synced) {
             syncedStripeSubscriptionIds.add(subId);

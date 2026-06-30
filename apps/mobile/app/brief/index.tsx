@@ -18,7 +18,7 @@ import BottomSheet, {
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
-import type { MeDTO as Me } from "@fina/shared";
+import type { MeDTO as Me, MorningBriefFrequency } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
@@ -60,6 +60,23 @@ const SNOOZE_OPTIONS: SnoozeOption[] = [
   { key: "3d", label: "3 days", daysAhead: 3 },
   { key: "1w", label: "1 week", daysAhead: 7 },
   { key: "1mo", label: "1 month", daysAhead: 30 },
+];
+
+const FREQUENCY_OPTIONS: Array<{
+  value: MorningBriefFrequency;
+  label: string;
+  sub: string;
+}> = [
+  {
+    value: "issues_only",
+    label: "Needs attention",
+    sub: "Only when Fina spots something important",
+  },
+  {
+    value: "daily",
+    label: "Every morning",
+    sub: "Send a brief even on quiet days",
+  },
 ];
 
 function daysAheadIso(days: number): string {
@@ -108,10 +125,7 @@ export default function MorningBriefSettings() {
       });
       setMe(m);
     } catch (e) {
-      Alert.alert(
-        "Couldn't save",
-        (e as { code?: string }).code ?? "Try again.",
-      );
+      Alert.alert("Couldn't save", (e as { code?: string }).code ?? "Try again.");
     } finally {
       setSaving(false);
     }
@@ -140,6 +154,7 @@ export default function MorningBriefSettings() {
   }
 
   const morningTime = me.user.morningTime ?? "08:00";
+  const morningBriefFrequency = me.user.morningBriefFrequency ?? "daily";
   const t = splitTime(morningTime);
   const enabled = !me.user.pauseEnabled;
 
@@ -155,8 +170,7 @@ export default function MorningBriefSettings() {
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.heroTitle}>Daily morning brief</Text>
             <Text style={styles.heroSub}>
-              Fina sends one push each morning with yesterday's activity and
-              what's coming.
+              Fina sends one push each morning with yesterday's activity and what's coming.
             </Text>
           </View>
         </View>
@@ -175,11 +189,46 @@ export default function MorningBriefSettings() {
               trackColor={{ true: colors.primary, false: colors.surfaceStrong }}
             />
           </View>
+        </View>
 
+        <Text style={styles.groupLabel}>Frequency</Text>
+        <View style={styles.group}>
+          {FREQUENCY_OPTIONS.map((opt, idx) => {
+            const selected = morningBriefFrequency === opt.value;
+            return (
+              <Pressable
+                key={opt.value}
+                style={({ pressed }) => [
+                  styles.row,
+                  idx > 0 && styles.rowBorder,
+                  pressed && { backgroundColor: colors.surfaceSoft },
+                ]}
+                onPress={() => patch({ morningBriefFrequency: opt.value })}
+                disabled={saving || !enabled}
+              >
+                <View style={styles.rowBody}>
+                  <Text style={[styles.rowTitle, !enabled && { color: colors.muted }]}>
+                    {opt.label}
+                  </Text>
+                  <Text style={styles.rowSub}>{opt.sub}</Text>
+                </View>
+                {selected && (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={enabled ? colors.primary : colors.mutedSoft}
+                  />
+                )}
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <Text style={styles.groupLabel}>Schedule</Text>
+        <View style={styles.group}>
           <Pressable
             style={({ pressed }) => [
               styles.row,
-              styles.rowBorder,
               pressed && { backgroundColor: colors.surfaceSoft },
             ]}
             onPress={() => setTimeOpen(true)}
@@ -242,7 +291,6 @@ export default function MorningBriefSettings() {
             />
           </Pressable>
         </View>
-
       </ScrollView>
 
       <TimePickerSheet
@@ -450,9 +498,7 @@ function PauseSheet({
                 ]}
               >
                 <Text style={sheetStyles.pauseRowText}>{opt.label}</Text>
-                {isSelected && (
-                  <Ionicons name="checkmark" size={18} color={colors.primary} />
-                )}
+                {isSelected && <Ionicons name="checkmark" size={18} color={colors.primary} />}
               </Pressable>
             );
           })}
@@ -467,11 +513,7 @@ function PauseSheet({
             ]}
           >
             <Text style={sheetStyles.pauseRowText}>Pick a date…</Text>
-            <Ionicons
-              name="chevron-forward"
-              size={16}
-              color={colors.mutedSoft}
-            />
+            <Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} />
           </Pressable>
         </View>
       </BottomSheetView>
@@ -582,7 +624,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     letterSpacing: 1,
   },
-
 });
 
 const sheetStyles = StyleSheet.create({

@@ -1,4 +1,4 @@
-import { Stack } from "expo-router";
+import { Stack, router } from "expo-router";
 import { useEffect } from "react";
 import { AppState } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -11,9 +11,12 @@ import {
   registerForPushNotifications,
   setupForegroundNotificationHandler,
   addNotificationResponseListener,
+  getLastNotificationResponseAsync,
+  type PushNotificationResponse,
 } from "../src/api/push";
 import { useSession } from "../src/auth/client";
 import { syncDeviceTz } from "../src/api/tz-sync";
+import { notificationRouteForData } from "../src/api/push-routing";
 
 export default function RootLayout() {
   const { data: session } = useSession();
@@ -39,12 +42,23 @@ export default function RootLayout() {
   }, [session?.user?.id]);
 
   useEffect(() => {
-    // V1: tap → app launch is enough. No deep-link routing yet (Plan 2D).
-    // Listener exists so Expo doesn't complain about unhandled responses.
-    const sub = addNotificationResponseListener(() => {
-      // No-op. Future: route to specific chat thread via payload.data.
-    });
-    return () => sub.remove();
+    let mounted = true;
+    const handleNotificationResponse = (response: PushNotificationResponse) => {
+      const route = notificationRouteForData(response.notification.request.content.data);
+      if (route) router.push(route as never);
+    };
+
+    getLastNotificationResponseAsync()
+      .then((response) => {
+        if (mounted && response) handleNotificationResponse(response);
+      })
+      .catch(() => {});
+
+    const sub = addNotificationResponseListener(handleNotificationResponse);
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
   }, []);
 
   return (

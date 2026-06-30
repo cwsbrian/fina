@@ -2,7 +2,7 @@ import { prisma } from "../../db.js";
 import { logInfo, logError } from "../../logger.js";
 import type { Env } from "../../env.js";
 import { partsInTz, resolveTz } from "../../chat/tools/periods.js";
-import { buildBriefContext, type BriefType } from "../../chat/brief-context.js";
+import { buildBriefContext, type BriefContext, type BriefType } from "../../chat/brief-context.js";
 import { generateBrief, briefBlocksToText } from "../../chat/brief.js";
 import type { PresentationBlock } from "../../chat/blocks.js";
 import { sendBriefPush } from "../../push/send.js";
@@ -23,20 +23,28 @@ export async function runDailyBrief(env: Env): Promise<void> {
       pauseEnabled: false,
       OR: [{ snoozeUntil: null }, { snoozeUntil: { lt: new Date() } }],
     },
-    select: { id: true, morningTime: true, tz: true },
+    select: { id: true, morningTime: true, morningBriefFrequency: true, tz: true },
   });
   if (candidates.length === 0) return;
 
   // 2. App-side filter (tz-aware time + idempotency). Synchronous —
   //    candidates already include u.tz; resolveTz is pure CPU (validates
   //    against IANA list, falls back to DEFAULT_TZ) so no DB roundtrip.
-  type Enriched = { id: string; morningTime: string; tz: string; localHHmm: string; localDate: string };
+  type Enriched = {
+    id: string;
+    morningTime: string;
+    morningBriefFrequency: string;
+    tz: string;
+    localHHmm: string;
+    localDate: string;
+  };
   const enriched: Enriched[] = candidates.map((u) => {
     const tz = resolveTz(u.tz);
     const p = partsInTz(new Date(), tz);
     return {
       id: u.id,
       morningTime: u.morningTime,
+      morningBriefFrequency: u.morningBriefFrequency,
       tz,
       localHHmm: `${pad2(p.hour)}:${pad2(p.minute)}`,
       localDate: `${p.year}-${pad2(p.month)}-${pad2(p.day)}`,
@@ -62,6 +70,10 @@ export async function runDailyBrief(env: Env): Promise<void> {
     try {
       const briefType = determineBriefType(u.localDate);
       const context = await buildBriefContext(u.id, briefType);
+      if (u.morningBriefFrequency === "issues_only" && !hasBriefIssues(context)) {
+        logInfo({ cron: CRON_NAME, userId: u.id, briefType }, "brief skipped quiet day");
+        continue;
+      }
 
       const recent = await prisma.brief.findMany({
         where: { userId: u.id, type: briefType },
@@ -167,7 +179,7 @@ export async function runDailyBrief(env: Env): Promise<void> {
       try {
         const briefText = briefBlocksToText(blocks);
         const preview = markdownToPlainPreview(briefText);
-        await sendBriefPush(env, u.id, preview);
+        await sendBriefPush(env, u.id, preview, { threadId: threadIdLocal });
       } catch (err) {
         logError(
           { cron: CRON_NAME, userId: u.id, err },
@@ -183,8 +195,22 @@ export async function runDailyBrief(env: Env): Promise<void> {
 /** Cadence rule: highest wins. */
 function determineBriefType(localDateIso: string): BriefType {
   const [y, m, d] = localDateIso.split("-").map(Number);
-  const dow = new Date(Date.UTC(y!, (m! - 1), d!)).getUTCDay();
+  const dow = new Date(Date.UTC(y!, m! - 1, d!)).getUTCDay();
   if (d === 1) return "monthly";
   if (dow === 1) return "weekly";
   return "daily";
+}
+
+function hasBriefIssues(context: BriefContext): boolean {
+  return context.workspaces.some((w) => {
+    const portfolioSeverity = w.forecast.portfolio?.severity;
+    return (
+      portfolioSeverity === "watch" ||
+      portfolioSeverity === "at_risk" ||
+      w.forecast.topRisks.length > 0 ||
+      w.uncategorizedCount > 0 ||
+      w.schedule.length > 0 ||
+      w.recurring.length > 0
+    );
+  });
 }

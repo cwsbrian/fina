@@ -10,7 +10,9 @@ beforeEach(async () => {
   resetGeminiMock();
   chatGeminiMock.responses.push({ text: "test brief text" });
 });
-afterAll(async () => { await disconnect(); });
+afterAll(async () => {
+  await disconnect();
+});
 
 async function makeUser(tz = "America/Toronto", morningTime = "08:00") {
   return prisma.user.create({
@@ -75,6 +77,67 @@ describe("runDailyBrief", () => {
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
+    await runDailyBrief(testEnv());
+
+    const briefs = await prisma.brief.findMany({ where: { userId: u.id } });
+    expect(briefs).toHaveLength(1);
+  });
+
+  it("skips quiet days for users who only want briefs when attention is needed", async () => {
+    const tz = "Asia/Seoul";
+    const u = await prisma.user.create({
+      data: {
+        id: `db-quiet-${Date.now()}`,
+        email: `quiet-${Date.now()}@t.co`,
+        name: "Quiet",
+        tz,
+        morningTime: await currentLocalHHmm(tz),
+        morningBriefFrequency: "issues_only",
+      },
+    });
+    const ws = await prisma.workspace.create({ data: { name: "Personal" } });
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await syncMorningTimeToNow(u.id, tz);
+
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+    await runDailyBrief(testEnv());
+
+    const briefs = await prisma.brief.findMany({ where: { userId: u.id } });
+    const messages = await prisma.chatMessage.findMany({
+      where: { thread: { userId: u.id } },
+    });
+    expect(briefs).toHaveLength(0);
+    expect(messages).toHaveLength(0);
+  });
+
+  it("emits an attention-only brief when an upcoming scheduled spend exists", async () => {
+    const tz = "Asia/Seoul";
+    const u = await prisma.user.create({
+      data: {
+        id: `db-attention-${Date.now()}`,
+        email: `attention-${Date.now()}@t.co`,
+        name: "Attention",
+        tz,
+        morningTime: await currentLocalHHmm(tz),
+        morningBriefFrequency: "issues_only",
+      },
+    });
+    const ws = await prisma.workspace.create({ data: { name: "Personal" } });
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    const category = await prisma.category.create({
+      data: { workspaceId: ws.id, name: "Housing" },
+    });
+    await prisma.scheduledSpend.create({
+      data: {
+        workspaceId: ws.id,
+        categoryId: category.id,
+        amount: "1200.00",
+        scheduledDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    });
+    await syncMorningTimeToNow(u.id, tz);
+
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
 
     const briefs = await prisma.brief.findMany({ where: { userId: u.id } });

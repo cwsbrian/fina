@@ -34,9 +34,10 @@ model User {
   // Plan 2B daily brief settings.
   // morningTime: validated by PatchMeBody zod (API is sole writer).
   // No DB-level CHECK constraint.
-  morningTime  String    @default("08:00")
-  snoozeUntil  DateTime?
-  pauseEnabled Boolean   @default(false)
+  morningTime           String    @default("08:00")
+  morningBriefFrequency String    @default("daily")
+  snoozeUntil           DateTime?
+  pauseEnabled          Boolean   @default(false)
 
   categorizationMode CategorizationMode @default(flexible)
 

@@ -4,6 +4,16 @@ import { apiFetch } from "./client";
 
 type ExpoNotifications = typeof import("expo-notifications");
 
+export type PushNotificationResponse = {
+  notification: {
+    request: {
+      content: {
+        data?: Record<string, unknown>;
+      };
+    };
+  };
+};
+
 /** Lazy-require expo-notifications. We attempt the require everywhere,
  *  including Expo Go: on iOS Expo Go push delivery AND the foreground handler
  *  work, so blanket-disabling them there needlessly swallowed foreground
@@ -40,11 +50,20 @@ export function setupForegroundNotificationHandler(): void {
 /** Subscribe to notification-tap responses. Returns a remover; in Expo Go it
  *  returns a stub so callers can unconditionally call `.remove()` on cleanup. */
 export function addNotificationResponseListener(
-  handler: () => void,
+  handler: (response: PushNotificationResponse) => void,
 ): { remove: () => void } {
   const Notifications = getNotifications();
   if (!Notifications) return { remove: () => {} };
-  return Notifications.addNotificationResponseReceivedListener(handler);
+  return Notifications.addNotificationResponseReceivedListener(
+    handler as Parameters<typeof Notifications.addNotificationResponseReceivedListener>[0],
+  );
+}
+
+export async function getLastNotificationResponseAsync(): Promise<PushNotificationResponse | null> {
+  const Notifications = getNotifications();
+  if (!Notifications) return null;
+  const response = await Notifications.getLastNotificationResponseAsync();
+  return (response as PushNotificationResponse | null) ?? null;
 }
 
 /** Sentinel value in apps/mobile/app.json `extra.eas.projectId`. Run

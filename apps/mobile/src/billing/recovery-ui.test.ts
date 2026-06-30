@@ -17,6 +17,7 @@ function me(overrides: Partial<MeDTO>): MeDTO {
       tz: "America/Vancouver",
       locale: "en",
       morningTime: "08:00",
+      morningBriefFrequency: "daily",
       snoozeUntil: null,
       pauseEnabled: false,
       notificationPrefs: {

@@ -1,10 +1,7 @@
 import { Expo, type ExpoPushMessage, type ExpoPushTicket } from "expo-server-sdk";
 import { prisma } from "../db.js";
 import { logInfo, logWarn, logError } from "../logger.js";
-import {
-  resolveNotificationPrefs,
-  type NotificationPrefs,
-} from "@fina/shared";
+import { resolveNotificationPrefs, type NotificationPrefs } from "@fina/shared";
 import type { Env } from "../env.js";
 
 /** Read the user's notification prefs and return whether the given
@@ -35,6 +32,7 @@ type PushPayload = {
   /** Goes into the notification's data blob; mobile uses it to route
    *  the user to the right screen when they tap. */
   dataType: string;
+  data?: Record<string, string>;
 };
 
 /** Core send helper. Filters out registered devices into one Expo
@@ -70,7 +68,7 @@ async function sendToUserDevices(
       to: d.expoPushToken,
       title: payload.title,
       body: payload.body,
-      data: { type: payload.dataType },
+      data: { type: payload.dataType, ...payload.data },
       sound: "default",
       priority: "high",
       __deviceId: d.id,
@@ -109,10 +107,7 @@ async function sendToUserDevices(
             data: { expoTicketId: t.id, userDeviceId: deviceId },
           });
         } catch (err) {
-          logWarn(
-            { userId, removedDeviceId: deviceId, err },
-            "ticket persist failed",
-          );
+          logWarn({ userId, removedDeviceId: deviceId, err }, "ticket persist failed");
         }
         sent++;
         continue;
@@ -134,7 +129,13 @@ async function sendToUserDevices(
   }
 
   logInfo(
-    { userId, deviceCount: devices.length, pushSent: sent, pushFailed: failed, channel: payload.dataType },
+    {
+      userId,
+      deviceCount: devices.length,
+      pushSent: sent,
+      pushFailed: failed,
+      channel: payload.dataType,
+    },
     "push send done",
   );
   return { sent, failed };
@@ -147,16 +148,19 @@ export async function sendBriefPush(
   env: Env,
   userId: string,
   briefText: string,
+  route?: { threadId?: string },
 ): Promise<PushSendResult> {
   if (!(await isChannelEnabled(userId, "morningBrief"))) {
     logInfo({ userId, channel: "morningBrief" }, "push skipped — channel disabled");
     return { sent: 0, failed: 0 };
   }
-  return sendToUserDevices(env, userId, {
+  const payload: PushPayload = {
     title: "Fina ☀️",
     body: briefText,
     dataType: "daily-brief",
-  });
+  };
+  if (route?.threadId) payload.data = { threadId: route.threadId };
+  return sendToUserDevices(env, userId, payload);
 }
 
 /** Plaid item entered relink_required / error. Tell the user so they
@@ -187,8 +191,7 @@ export async function sendTrialExpiringPush(
     logInfo({ userId, channel: "trialExpiringPush" }, "push skipped — channel disabled");
     return { sent: 0, failed: 0 };
   }
-  const label =
-    daysLeft === 1 ? "Your trial ends tomorrow" : `Your trial ends in ${daysLeft} days`;
+  const label = daysLeft === 1 ? "Your trial ends tomorrow" : `Your trial ends in ${daysLeft} days`;
   return sendToUserDevices(env, userId, {
     title: label,
     body: "Pick a plan to keep Plaid sync, chat, and the morning brief running.",
@@ -207,8 +210,7 @@ export async function sendGoalMilestonePush(
     logInfo({ userId, channel: "goalMilestones" }, "push skipped — channel disabled");
     return { sent: 0, failed: 0 };
   }
-  const title =
-    pct >= 100 ? `Goal complete: ${goalTitle}` : `${pct}% there on ${goalTitle}`;
+  const title = pct >= 100 ? `Goal complete: ${goalTitle}` : `${pct}% there on ${goalTitle}`;
   const body =
     pct >= 100
       ? "Nice. Open Fina to see what's next."

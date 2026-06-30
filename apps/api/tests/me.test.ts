@@ -149,6 +149,24 @@ describe("PATCH /me", () => {
     await app.close();
   });
 
+  it("updates morningBriefFrequency", async () => {
+    const app = await buildApp(testEnv());
+    const { cookie, userId } = await signUpAndGetCookie(app, {
+      email: "patch-brief-frequency@t.co",
+    });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ morningBriefFrequency: "issues_only" }),
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().user.morningBriefFrequency).toBe("issues_only");
+    const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
+    expect(fresh.morningBriefFrequency).toBe("issues_only");
+    await app.close();
+  });
+
   it("rejects invalid morningTime", async () => {
     const app = await buildApp(testEnv());
     const { cookie } = await signUpAndGetCookie(app, { email: "patchme2@t.co" });
@@ -157,6 +175,22 @@ describe("PATCH /me", () => {
       url: "/me",
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ morningTime: "9am" }),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error).toBe("invalid_body");
+    await app.close();
+  });
+
+  it("rejects invalid morningBriefFrequency", async () => {
+    const app = await buildApp(testEnv());
+    const { cookie } = await signUpAndGetCookie(app, {
+      email: "patch-brief-frequency-invalid@t.co",
+    });
+    const res = await app.inject({
+      method: "PATCH",
+      url: "/me",
+      headers: { cookie, "content-type": "application/json" },
+      payload: JSON.stringify({ morningBriefFrequency: "always_bother_me" }),
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().error).toBe("invalid_body");
@@ -236,20 +270,26 @@ describe("PATCH /me", () => {
       method: "PATCH",
       url: "/me",
       headers: { cookie, "content-type": "application/json" },
-      payload: JSON.stringify({ morningTime: "07:15", pauseEnabled: true }),
+      payload: JSON.stringify({
+        morningTime: "07:15",
+        morningBriefFrequency: "issues_only",
+        pauseEnabled: true,
+      }),
     });
     const res = await app.inject({ method: "GET", url: "/me", headers: { cookie } });
     expect(res.statusCode).toBe(200);
     expect(res.json().user.morningTime).toBe("07:15");
+    expect(res.json().user.morningBriefFrequency).toBe("issues_only");
     expect(res.json().user.pauseEnabled).toBe(true);
     await app.close();
   });
 
-  it("GET /me default user.morningTime is 08:00 and snoozeUntil is null", async () => {
+  it("GET /me default brief settings use daily delivery at 08:00", async () => {
     const app = await buildApp(testEnv());
     const { cookie } = await signUpAndGetCookie(app, { email: "patchme6@t.co" });
     const res = await app.inject({ method: "GET", url: "/me", headers: { cookie } });
     expect(res.json().user.morningTime).toBe("08:00");
+    expect(res.json().user.morningBriefFrequency).toBe("daily");
     expect(res.json().user.snoozeUntil).toBeNull();
     expect(res.json().user.pauseEnabled).toBe(false);
     await app.close();
@@ -326,7 +366,7 @@ describe("PATCH /me notificationPrefs", () => {
     const fresh = await prisma.user.findUniqueOrThrow({ where: { id: userId } });
     const blob = fresh.notificationPrefs as Record<string, boolean>;
     expect(blob.morningBrief).toBe(false);
-    expect(blob.largeCharges).toBe(true);  // default merged in by route
+    expect(blob.largeCharges).toBe(true); // default merged in by route
     await app.close();
   });
 
@@ -351,7 +391,7 @@ describe("PATCH /me notificationPrefs", () => {
     const blob = fresh.notificationPrefs as Record<string, boolean>;
     expect(blob.morningBrief).toBe(false);
     expect(blob.largeCharges).toBe(false);
-    expect(blob.bankReconnect).toBe(true);  // untouched default
+    expect(blob.bankReconnect).toBe(true); // untouched default
     await app.close();
   });
 

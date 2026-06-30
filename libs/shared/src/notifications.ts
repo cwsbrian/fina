@@ -1,5 +1,16 @@
 import { z } from "zod";
 
+export const MORNING_BRIEF_FREQUENCIES = ["issues_only", "daily"] as const;
+export type MorningBriefFrequency = (typeof MORNING_BRIEF_FREQUENCIES)[number];
+export const DEFAULT_MORNING_BRIEF_FREQUENCY: MorningBriefFrequency = "daily";
+export const MorningBriefFrequencySchema = z.enum(MORNING_BRIEF_FREQUENCIES);
+
+export function resolveMorningBriefFrequency(stored: unknown): MorningBriefFrequency {
+  return MorningBriefFrequencySchema.safeParse(stored).success
+    ? (stored as MorningBriefFrequency)
+    : DEFAULT_MORNING_BRIEF_FREQUENCY;
+}
+
 /** All push-notification types Fina can emit. Missing keys read as the
  *  per-key default in `DEFAULT_NOTIFICATION_PREFS` — so adding a new
  *  type doesn't strand existing users with a stale prefs blob. */
@@ -60,9 +71,7 @@ export type NotificationPrefsPatch = z.infer<typeof NotificationPrefsSchema>;
 
 /** Merge a stored prefs blob (any shape, possibly null) with the
  *  defaults so consumers always see a complete object. */
-export function resolveNotificationPrefs(
-  stored: unknown,
-): NotificationPrefs {
+export function resolveNotificationPrefs(stored: unknown): NotificationPrefs {
   if (!stored || typeof stored !== "object") return { ...DEFAULT_NOTIFICATION_PREFS };
   const s = stored as Record<string, unknown>;
   const out: NotificationPrefs = { ...DEFAULT_NOTIFICATION_PREFS };
