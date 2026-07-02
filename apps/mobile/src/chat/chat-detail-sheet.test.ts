@@ -68,10 +68,10 @@ describe("chat detail sheet", () => {
     expect(threadView).toContain("setActionRowWidth");
     expect(threadView).toContain("actionRowWidthStyle");
     expect(threadView).toContain("renderSupportButton");
-    expect(threadView).toContain("renderCopyButton");
+    expect(threadView).toContain("renderShareButton");
     expect(threadView).toContain("copyTextToClipboard");
-    expect(threadView).toContain("accessibilityLabel=\"Copy answer\"");
-    expect(threadView).toContain("name=\"copy-outline\"");
+    expect(threadView).toContain("accessibilityLabel=\"Share answer\"");
+    expect(threadView).toContain("name=\"share-outline\"");
     expect(threadView).toContain("assistantCopyText(message)");
     expect(threadView).toContain("Alert.alert(\"Copied\", \"Answer copied to clipboard.\")");
     expect(threadView).toContain("renderSupportButton(\"compact\")");

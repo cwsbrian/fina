@@ -1158,10 +1158,10 @@ function MessageBubble({
     (last, block, index) => (!isCardBlock(block) ? index : last),
     -1,
   );
-  const copyText = assistantCopyText(message);
-  const hasAssistantCopyAction = message.role === "assistant" && copyText.length > 0;
+  const shareText = assistantCopyText(message);
+  const hasAssistantShareAction = message.role === "assistant" && shareText.length > 0;
   const hasAssistantSupportAction = message.role === "assistant" && !!onSupportPress;
-  const hasAssistantAction = hasAssistantCopyAction || hasAssistantSupportAction;
+  const hasAssistantAction = hasAssistantShareAction || hasAssistantSupportAction;
   const actionRowWidthStyle =
     !isUser && (hasCardBlocks || hasAssistantAction)
       ? { width: actionRowWidth }
@@ -1189,7 +1189,7 @@ function MessageBubble({
   const handleDetailPress = (block: Block, msg: ChatMessageDTO) => {
     onDetailPress?.(block, msg);
   };
-  const handleCopy = useCallback(async () => {
+  const handleShare = useCallback(async () => {
     const text = assistantCopyText(message);
     if (!text) return;
     try {
@@ -1198,16 +1198,16 @@ function MessageBubble({
         Alert.alert("Copied", "Answer copied to clipboard.");
       }
     } catch (e) {
-      Alert.alert("Couldn't copy", e instanceof Error ? e.message : "Try again.");
+      Alert.alert("Couldn't share", e instanceof Error ? e.message : "Try again.");
     }
   }, [message]);
-  const renderCopyButton = (density: "default" | "compact" = "default") => {
-    if (!hasAssistantCopyAction) return null;
+  const renderShareButton = (density: "default" | "compact" = "default") => {
+    if (!hasAssistantShareAction) return null;
     return (
       <Pressable
-        onPress={handleCopy}
+        onPress={handleShare}
         accessibilityRole="button"
-        accessibilityLabel="Copy answer"
+        accessibilityLabel="Share answer"
         hitSlop={8}
         style={({ pressed }) => [
           styles.supportAction,
@@ -1218,7 +1218,7 @@ function MessageBubble({
         ]}
       >
         <Ionicons
-          name="copy-outline"
+          name="share-outline"
           size={SUPPORT_ACTION_ICON_SIZE}
           color={colors.muted}
         />
@@ -1288,7 +1288,7 @@ function MessageBubble({
                 />
                 <Text style={styles.detailButtonText}>View detail</Text>
               </Pressable>
-              {showActionsInDetailRow ? renderCopyButton() : null}
+              {showActionsInDetailRow ? renderShareButton() : null}
               {showActionsInDetailRow ? renderSupportButton() : null}
             </View>
           );
@@ -1330,7 +1330,7 @@ function MessageBubble({
                   actionRowWidthStyle,
                 ]}
               >
-                {renderCopyButton("compact")}
+                {renderShareButton("compact")}
                 {renderSupportButton("compact")}
               </View>
             ) : null}
