@@ -31,6 +31,8 @@ describe("brief LLM strings are English (no Hangul)", () => {
       expect(v).toContain("hasHistory");
       expect(v).toContain("at_risk");
       expect(v).toContain("highest-risk workspace");
+      expect(v).toContain("briefLabel");
+      expect(v).toContain("Never call a workspace \"your workspace\"");
       expect(v).toContain("ask me for a plan to stay on track");
     }
   });

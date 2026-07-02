@@ -74,6 +74,8 @@ export function summarizeForecast(f: MonthEndForecast, currency: string): BriefF
 export type WorkspaceContext = {
   id: string;
   name: string;
+  /** Exact label the brief must use when naming this workspace. */
+  briefLabel: string;
   currency: string;
   /** New transactions in the relevant window. Pre-formatted display strings. */
   newTransactions: {
@@ -135,16 +137,39 @@ export async function buildBriefContext(
       workspace: { select: { id: true, name: true, currency: true } },
     },
   });
+  const workspaceStates = await Promise.all(
+    memberships.map(async (m) => ({
+      membership: m,
+      hasFinancialData: await workspaceHasBriefData(m.workspaceId),
+    })),
+  );
+  const hasAnyFinancialData = workspaceStates.some((s) => s.hasFinancialData);
+  const includedWorkspaces = hasAnyFinancialData
+    ? workspaceStates.filter((s) => s.hasFinancialData)
+    : workspaceStates;
 
   const now = new Date();
   const workspaces: WorkspaceContext[] = [];
-  for (const m of memberships) {
+  for (const { membership: m } of includedWorkspaces) {
     workspaces.push(
       await buildWorkspaceContext(m.workspaceId, m.workspace, briefType, tz, userId, now),
     );
   }
 
   return { user, briefType, date: dateIso, workspaces };
+}
+
+async function workspaceHasBriefData(workspaceId: string): Promise<boolean> {
+  const [transactionCount, budgetCount] = await Promise.all([
+    prisma.transaction.count({ where: { workspaceId, removedAt: null } }),
+    prisma.budgetPlan.count({
+      where: {
+        workspaceId,
+        totalAmount: { gt: 0 },
+      },
+    }),
+  ]);
+  return transactionCount > 0 || budgetCount > 0;
 }
 
 /** Per-workspace data fetch + format. */
@@ -265,6 +290,7 @@ async function buildWorkspaceContext(
   return {
     id: ws.id,
     name: ws.name,
+    briefLabel: ws.name,
     currency: ws.currency,
     newTransactions: { count: newCount, sample },
     uncategorizedCount,

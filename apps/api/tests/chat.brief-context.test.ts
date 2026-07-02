@@ -45,6 +45,45 @@ describe("buildBriefContext", () => {
     expect(ctx.workspaces).toHaveLength(2);
     const names = ctx.workspaces.map((w) => w.name).sort();
     expect(names).toEqual(["Family", "Personal"]);
+    const labels = ctx.workspaces.map((w) => (w as { briefLabel?: string }).briefLabel).sort();
+    expect(labels).toEqual(["Family", "Personal"]);
+  });
+
+  it("omits empty secondary workspaces when another workspace has financial data", async () => {
+    const u = await prisma.user.create({
+      data: {
+        id: `bc-filter-${Date.now()}`,
+        email: `bcf-${Date.now()}@t.co`,
+        name: "BCF",
+      },
+    });
+    const used = await prisma.workspace.create({ data: { name: "Used" } });
+    const empty = await prisma.workspace.create({ data: { name: "Empty" } });
+    await prisma.membership.create({
+      data: { userId: u.id, workspaceId: used.id, role: "owner" },
+    });
+    await prisma.membership.create({
+      data: { userId: u.id, workspaceId: empty.id, role: "owner" },
+    });
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: used.id, name: "Chequing", type: "depository" },
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: used.id,
+        accountId: acct.id,
+        amount: "12.00",
+        merchantRaw: "Old merchant",
+        occurredAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
+        source: "manual",
+        pending: false,
+        rawData: {},
+      },
+    });
+
+    const ctx = await buildBriefContext(u.id, "daily");
+
+    expect(ctx.workspaces.map((w) => w.name)).toEqual(["Used"]);
   });
 
   it("daily brief includes yesterday's transactions in newTransactions", async () => {

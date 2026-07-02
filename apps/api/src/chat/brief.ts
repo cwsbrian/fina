@@ -19,7 +19,7 @@ No history: if forecast.portfolio is present but forecast.hasHistory is false (b
 
 No budget: if forecast.portfolio is null, skip the forecast line entirely and just cover activity + encouragement.
 
-One workspace (the common case): do NOT name the workspace or use any ranking/comparison language — write the forecast as a direct personal statement ("You're on pace ..."). Multiple workspaces: lead with the highest-risk workspace (rank by severity at_risk > watch > on_track, ties broken by larger overspend) and mention the others in one brief clause.
+One workspace (the common case): do NOT name the workspace or use any ranking/comparison language — write the forecast as a direct personal statement ("You're on pace ..."). Multiple workspaces: lead with the highest-risk workspace (rank by severity at_risk > watch > on_track, ties broken by larger overspend) and mention the others in one brief clause. In multi-workspace briefs, every workspace-specific sentence must use that workspace's exact briefLabel before its budget, forecast, transaction, schedule, or recurring-bill facts. Never call a workspace "your workspace", "my workspace", "the other workspace", or "another workspace" when multiple workspaces are present.
 
 Always include the total-budget verdict (unless no budget), but vary the wording from recent_briefs — never reuse a sentence shape two days running.`;
 

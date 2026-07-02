@@ -54,7 +54,7 @@ export async function sendEmail(
     // want this to block the surrounding business action (invite created,
     // password reset row written, etc.) during dev — log the would-be email
     // and continue. In prod the right fix is to verify a domain on Resend.
-    if (isSandboxRecipientRestriction(message) || isUnverifiedDomain(message)) {
+    if (canFallbackResendReject() && (isSandboxRecipientRestriction(message) || isUnverifiedDomain(message))) {
       logWarn(
         {},
         `[email fallback] Resend rejected (${shortReason(message)}) to=${input.to} subject="${input.subject}" — verify domain at resend.com/domains to fix`,
@@ -69,8 +69,12 @@ function isSandboxRecipientRestriction(msg: string): boolean {
   return /only send testing emails to your own email address/i.test(msg);
 }
 
+function canFallbackResendReject(): boolean {
+  return process.env.NODE_ENV !== "production";
+}
+
 function isUnverifiedDomain(msg: string): boolean {
-  return /domain is not verified/i.test(msg);
+  return /domain(?: .+)? is not verified/i.test(msg);
 }
 
 function shortReason(msg: string): string {

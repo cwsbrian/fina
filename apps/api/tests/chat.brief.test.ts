@@ -2,6 +2,14 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { briefBlocksToText, EMPTY_BRIEF_FALLBACK } from "../src/chat/brief.js";
 import { chatGeminiMock, lastChatLlmRequest, resetGeminiMock } from "./helpers/gemini-mock.js";
 
+vi.mock("../src/llm/budget.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/llm/budget.js")>();
+  return {
+    ...actual,
+    logLlmCall: vi.fn(async () => {}),
+  };
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetGeminiMock();
@@ -53,6 +61,7 @@ describe("generateBrief (mocked LLM)", () => {
         workspaces: [{
           id: "ws1",
           name: "Personal",
+          briefLabel: "Personal",
           currency: "CAD",
           newTransactions: { count: 1, sample: [{ merchant: "Starbucks", amount: "10.00", occurredAt: "2026-05-21T15:00:00Z", category: null }] },
           uncategorizedCount: 1,
