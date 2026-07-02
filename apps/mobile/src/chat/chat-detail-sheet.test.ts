@@ -68,6 +68,12 @@ describe("chat detail sheet", () => {
     expect(threadView).toContain("setActionRowWidth");
     expect(threadView).toContain("actionRowWidthStyle");
     expect(threadView).toContain("renderSupportButton");
+    expect(threadView).toContain("renderCopyButton");
+    expect(threadView).toContain("copyTextToClipboard");
+    expect(threadView).toContain("accessibilityLabel=\"Copy answer\"");
+    expect(threadView).toContain("name=\"copy-outline\"");
+    expect(threadView).toContain("assistantCopyText(message)");
+    expect(threadView).toContain("Alert.alert(\"Copied\", \"Answer copied to clipboard.\")");
     expect(threadView).toContain("renderSupportButton(\"compact\")");
     expect(threadView).toContain("styles.supportActionInSupportOnlyRow");
     expect(threadView).toContain([
@@ -79,7 +85,7 @@ describe("chat detail sheet", () => {
     expect(threadView).toContain("minWidth: SUPPORT_ACTION_ICON_SIZE");
     expect(threadView).toContain("paddingHorizontal: 0");
     expect(threadView).toContain("styles.assistantBubbleWithDetailActions");
-    expect(threadView).toContain("showSupportInDetailRow");
+    expect(threadView).toContain("showActionsInDetailRow");
     expect(threadView).toContain("styles.detailActionRow");
     expect(threadView).toContain("styles.supportOnlyActionRow");
     expect(threadView).toContain("styles.supportActionInDetailRow");

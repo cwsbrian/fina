@@ -37,6 +37,7 @@ import {
   type PresentationBlock as Block,
 } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
+import { copyTextToClipboard } from "../iap/native-subscription-store";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { PresentationBlock } from "./PresentationBlock";
 import {
@@ -116,7 +117,7 @@ const CHAT_SUPPORT_SUBJECT = "Chat issue";
 const CHAT_SUPPORT_ANSWER_LIMIT = 1800;
 const DETAIL_BLOB_MIN_WIDTH = 196;
 const SUPPORT_ACTION_ICON_SIZE = 16;
-const SUPPORT_ACTION_MIN_WIDTH = SUPPORT_ACTION_ICON_SIZE;
+const SUPPORT_ACTION_MIN_WIDTH = SUPPORT_ACTION_ICON_SIZE * 2 + space.sm;
 
 function chatSupportAnswerText(message: ChatMessageDTO): string {
   const blocks = Array.isArray(message.blocks)
@@ -133,6 +134,17 @@ function chatSupportAnswerText(message: ChatMessageDTO): string {
   }
   if (text.length <= CHAT_SUPPORT_ANSWER_LIMIT) return text;
   return `${text.slice(0, CHAT_SUPPORT_ANSWER_LIMIT).trimEnd()}\n...`;
+}
+
+function assistantCopyText(message: ChatMessageDTO): string {
+  const blocks = Array.isArray(message.blocks)
+    ? (message.blocks as Block[])
+    : [];
+  return blocks
+    .filter((b): b is Extract<Block, { type: "text" }> => b.type === "text")
+    .map((b) => b.markdown.trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function buildChatSupportMessage({
@@ -1146,9 +1158,12 @@ function MessageBubble({
     (last, block, index) => (!isCardBlock(block) ? index : last),
     -1,
   );
+  const copyText = assistantCopyText(message);
+  const hasAssistantCopyAction = message.role === "assistant" && copyText.length > 0;
   const hasAssistantSupportAction = message.role === "assistant" && !!onSupportPress;
+  const hasAssistantAction = hasAssistantCopyAction || hasAssistantSupportAction;
   const actionRowWidthStyle =
-    !isUser && (hasCardBlocks || hasAssistantSupportAction)
+    !isUser && (hasCardBlocks || hasAssistantAction)
       ? { width: actionRowWidth }
       : null;
 
@@ -1173,6 +1188,42 @@ function MessageBubble({
   }, [hasCardBlocks, isUser]);
   const handleDetailPress = (block: Block, msg: ChatMessageDTO) => {
     onDetailPress?.(block, msg);
+  };
+  const handleCopy = useCallback(async () => {
+    const text = assistantCopyText(message);
+    if (!text) return;
+    try {
+      const mode = await copyTextToClipboard(text);
+      if (mode === "clipboard") {
+        Alert.alert("Copied", "Answer copied to clipboard.");
+      }
+    } catch (e) {
+      Alert.alert("Couldn't copy", e instanceof Error ? e.message : "Try again.");
+    }
+  }, [message]);
+  const renderCopyButton = (density: "default" | "compact" = "default") => {
+    if (!hasAssistantCopyAction) return null;
+    return (
+      <Pressable
+        onPress={handleCopy}
+        accessibilityRole="button"
+        accessibilityLabel="Copy answer"
+        hitSlop={8}
+        style={({ pressed }) => [
+          styles.supportAction,
+          density === "compact"
+            ? styles.supportActionInSupportOnlyRow
+            : styles.supportActionInDetailRow,
+          pressed && { opacity: 0.65 },
+        ]}
+      >
+        <Ionicons
+          name="copy-outline"
+          size={SUPPORT_ACTION_ICON_SIZE}
+          color={colors.muted}
+        />
+      </Pressable>
+    );
   };
   const renderSupportButton = (density: "default" | "compact" = "default") => {
     if (!hasAssistantSupportAction) return null;
@@ -1208,10 +1259,10 @@ function MessageBubble({
       {blocks.map((b, i) => {
         const key = `${message.id}-${i}`;
         if (isCardBlock(b)) {
-          const showSupportInDetailRow =
+          const showActionsInDetailRow =
             message.role === "assistant" &&
-            !!onSupportPress &&
-            i === lastCardBlockIndex;
+            i === lastCardBlockIndex &&
+            hasAssistantAction;
           return (
             <View
               key={key}
@@ -1237,18 +1288,19 @@ function MessageBubble({
                 />
                 <Text style={styles.detailButtonText}>View detail</Text>
               </Pressable>
-              {showSupportInDetailRow ? renderSupportButton() : null}
+              {showActionsInDetailRow ? renderCopyButton() : null}
+              {showActionsInDetailRow ? renderSupportButton() : null}
             </View>
           );
         }
         const showSupportOnlyRow =
-          hasAssistantSupportAction &&
+          hasAssistantAction &&
           lastCardBlockIndex === -1 &&
           i === lastTextBlockIndex;
         const shouldCaptureActionBubbleWidth =
           !isUser &&
           i === lastTextBlockIndex &&
-          (hasCardBlocks || hasAssistantSupportAction);
+          (hasCardBlocks || hasAssistantAction);
         return (
           <Fragment key={key}>
             <View
@@ -1264,6 +1316,7 @@ function MessageBubble({
                   styles.bubble,
                   isUser ? styles.bubbleUser : styles.bubbleAssistant,
                   !isUser && hasCardBlocks && styles.assistantBubbleWithDetailActions,
+                  !isUser && hasAssistantAction && !hasCardBlocks && styles.assistantBubbleWithSupportActions,
                 ]}
               >
                 <PresentationBlock block={b} role={message.role} />
@@ -1277,6 +1330,7 @@ function MessageBubble({
                   actionRowWidthStyle,
                 ]}
               >
+                {renderCopyButton("compact")}
                 {renderSupportButton("compact")}
               </View>
             ) : null}
@@ -1297,6 +1351,9 @@ const styles = StyleSheet.create({
   rowAssistant: { justifyContent: "flex-start" },
   assistantBubbleWithDetailActions: {
     minWidth: DETAIL_BLOB_MIN_WIDTH,
+  },
+  assistantBubbleWithSupportActions: {
+    minWidth: SUPPORT_ACTION_MIN_WIDTH,
   },
   detailActionRow: {
     flexDirection: "row",
