@@ -17,7 +17,10 @@
     },
     "production-local": {
       "extends": "production",
-      "autoIncrement": false
+      "autoIncrement": false,
+      "env": {
+        "FINA_LOCAL_BUILD": "1"
+      }
     },
     "playtest": {
       "extends": "production",
