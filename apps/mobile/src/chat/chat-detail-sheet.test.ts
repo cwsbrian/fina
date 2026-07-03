@@ -133,6 +133,8 @@ describe("chat detail sheet", () => {
     expect(presentationBlock).toContain("onChangeCategory(it.txId");
     expect(presentationBlock).toContain("Change category");
     expect(presentationBlock).not.toContain("오늘 분류한");
+    expect(presentationBlock).not.toContain("외 {block.moreCount}건");
+    expect(presentationBlock).toContain("+ {block.moreCount} more");
   });
 
   it("routes redundant detail blocks directly instead of opening the sheet", () => {

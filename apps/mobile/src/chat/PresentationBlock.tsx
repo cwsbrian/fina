@@ -169,7 +169,7 @@ export function PresentationBlock({
             </View>
           ))}
           {block.moreCount > 0 && (
-            <Text style={styles.catCardMore}>외 {block.moreCount}건</Text>
+            <Text style={styles.catCardMore}>+ {block.moreCount} more</Text>
           )}
           <Pressable
             style={styles.catCardCta}

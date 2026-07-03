@@ -146,6 +146,8 @@ function IosDatePickerSheet({
             value={draft}
             mode={mode}
             display="spinner"
+            textColor={colors.ink}
+            themeVariant="light"
             maximumDate={maximumDate ?? new Date()}
             {...(minimumDate ? { minimumDate } : {})}
             onChange={(_, selected) => {
