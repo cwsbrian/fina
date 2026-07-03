@@ -70,8 +70,8 @@ describe("chat detail sheet", () => {
     expect(threadView).toContain("renderSupportButton");
     expect(threadView).toContain("renderShareButton");
     expect(threadView).toContain("copyTextToClipboard");
-    expect(threadView).toContain("accessibilityLabel=\"Share answer\"");
-    expect(threadView).toContain("name=\"share-outline\"");
+    expect(threadView).toContain("accessibilityLabel=\"Copy answer\"");
+    expect(threadView).toContain("name=\"copy-outline\"");
     expect(threadView).toContain("assistantCopyText(message)");
     expect(threadView).toContain("Alert.alert(\"Copied\", \"Answer copied to clipboard.\")");
     expect(threadView).toContain("renderSupportButton(\"compact\")");
@@ -99,6 +99,40 @@ describe("chat detail sheet", () => {
     expect(threadView).not.toContain("styles.detailBubble");
     expect(threadView).not.toContain("assistantTextSupportFooter");
     expect(threadView).not.toContain("supportActionInBubble");
+  });
+
+  it("keeps copy and support grouped next to the detail action", () => {
+    const threadView = readMobile("src/chat/ThreadView.tsx");
+
+    expect(threadView).toContain("styles.messageActionGroup");
+    expect(threadView).toContain("showActionsInDetailRow ? (");
+    expect(threadView).toContain("<View style={styles.messageActionGroup}>");
+    expect(threadView).toContain("{renderShareButton()}");
+    expect(threadView).toContain("{renderSupportButton()}");
+  });
+
+  it("uses category review copy and closes the detail sheet before opening Activity", () => {
+    const threadView = readMobile("src/chat/ThreadView.tsx");
+    const presentationBlock = readMobile("src/chat/PresentationBlock.tsx");
+
+    expect(threadView).toContain('case "categorize_confirm_card":');
+    expect(threadView).toContain('return "Review Categories";');
+    expect(threadView).toContain('detailLabelForBlock');
+    expect(threadView).toContain('return "Review categories";');
+    expect(presentationBlock).toContain('onOpenActivity?: () => void;');
+    expect(presentationBlock).toContain('onOpenActivity?.();');
+    expect(threadView).toContain("handleOpenActivityFromDetail");
+    expect(threadView).toContain('router.push("/(tabs)/activity" as never)');
+    expect(threadView).toContain("detailSheetRef.current?.dismiss()");
+    expect(presentationBlock).toContain("Review 1 categorized transaction");
+    expect(presentationBlock).toContain("Review categorized transactions");
+    expect(threadView).toContain("CategoryPickerSheet");
+    expect(threadView).toContain("handleChangeCategoryFromDetail");
+    expect(threadView).toContain("categoryPickedRef.current?.(cat)");
+    expect(presentationBlock).toContain("onChangeCategory?:");
+    expect(presentationBlock).toContain("onChangeCategory(it.txId");
+    expect(presentationBlock).toContain("Change category");
+    expect(presentationBlock).not.toContain("오늘 분류한");
   });
 
   it("routes redundant detail blocks directly instead of opening the sheet", () => {

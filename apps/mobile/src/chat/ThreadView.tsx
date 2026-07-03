@@ -32,6 +32,7 @@ import {
 import { router } from "expo-router";
 import {
   isApiError,
+  type CategoryDTO,
   type ChatMessageDTO,
   type ChatThreadDTO,
   type PresentationBlock as Block,
@@ -40,6 +41,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
 import { copyTextToClipboard } from "../iap/native-subscription-store";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { PresentationBlock } from "./PresentationBlock";
+import { CategoryPickerSheet } from "../categories/CategoryPickerSheet";
 import {
   WorkspacePickerSheet,
   type WorkspaceOption,
@@ -231,6 +233,8 @@ export function ThreadView({
   const detailFormActionsRef = useRef<DetailFormActions | null>(null);
   const detailSnapPoints = useMemo(() => ["68%", "92%"], []);
   const detailSheetRef = useRef<BottomSheetModal>(null);
+  const categoryPickedRef = useRef<((cat: CategoryDTO | null) => void) | null>(null);
+  const [categoryPickerTxId, setCategoryPickerTxId] = useState<string | null>(null);
   const supportCanSubmit =
     supportMessage?.role === "assistant" &&
     supportNote.trim().length > 0 &&
@@ -562,6 +566,24 @@ export function ThreadView({
     detailSheetRef.current?.dismiss();
   }, []);
 
+  const handleOpenActivityFromDetail = useCallback(() => {
+    detailSheetRef.current?.dismiss();
+    router.push("/(tabs)/activity" as never);
+  }, []);
+
+  const handleChangeCategoryFromDetail = useCallback((
+    txId: string,
+    onPicked: (cat: CategoryDTO | null) => void,
+  ) => {
+    categoryPickedRef.current = onPicked;
+    setCategoryPickerTxId(txId);
+  }, []);
+
+  const handleCategoryPickerClose = useCallback(() => {
+    setCategoryPickerTxId(null);
+    categoryPickedRef.current = null;
+  }, []);
+
   const acceptDetailIntent = useCallback(async (intentId: string) => {
     dismissIntent(intentId);
     try {
@@ -848,10 +870,18 @@ export function ThreadView({
               onFormFocusChange={setFormFocused}
               onFormActionsChange={handleDetailFormActions}
               onFormActionStateChange={handleDetailFormActionState}
+              onOpenActivity={handleOpenActivityFromDetail}
+              onChangeCategory={handleChangeCategoryFromDetail}
             />
           )}
         </BottomSheetScrollView>
       </BottomSheetModal>
+      <CategoryPickerSheet
+        visible={categoryPickerTxId !== null}
+        {...(categoryPickerTxId ? { txId: categoryPickerTxId } : {})}
+        onClose={handleCategoryPickerClose}
+        onSelect={(cat) => categoryPickedRef.current?.(cat)}
+      />
       <Modal
         visible={supportMessage?.role === "assistant"}
         transparent
@@ -1017,6 +1047,11 @@ function detailTitleForBlock(block: Block): string {
     case "text":
       return "Detail";
   }
+}
+
+function detailLabelForBlock(block: Block): string {
+  if (block.type === "categorize_confirm_card") return "Review categories";
+  return "View detail";
 }
 
 function detailRouteForBlock(block: Block): string | null {
@@ -1198,7 +1233,7 @@ function MessageBubble({
         Alert.alert("Copied", "Answer copied to clipboard.");
       }
     } catch (e) {
-      Alert.alert("Couldn't share", e instanceof Error ? e.message : "Try again.");
+      Alert.alert("Couldn't copy", e instanceof Error ? e.message : "Try again.");
     }
   }, [message]);
   const renderShareButton = (density: "default" | "compact" = "default") => {
@@ -1207,7 +1242,7 @@ function MessageBubble({
       <Pressable
         onPress={handleShare}
         accessibilityRole="button"
-        accessibilityLabel="Share answer"
+        accessibilityLabel="Copy answer"
         hitSlop={8}
         style={({ pressed }) => [
           styles.supportAction,
@@ -1218,7 +1253,7 @@ function MessageBubble({
         ]}
       >
         <Ionicons
-          name="share-outline"
+          name="copy-outline"
           size={SUPPORT_ACTION_ICON_SIZE}
           color={colors.muted}
         />
@@ -1286,10 +1321,14 @@ function MessageBubble({
                   size={16}
                   color={colors.primary}
                 />
-                <Text style={styles.detailButtonText}>View detail</Text>
+                <Text style={styles.detailButtonText}>{detailLabelForBlock(b)}</Text>
               </Pressable>
-              {showActionsInDetailRow ? renderShareButton() : null}
-              {showActionsInDetailRow ? renderSupportButton() : null}
+              {showActionsInDetailRow ? (
+                <View style={styles.messageActionGroup}>
+                  {renderShareButton()}
+                  {renderSupportButton()}
+                </View>
+              ) : null}
             </View>
           );
         }
@@ -1369,6 +1408,11 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     justifyContent: "flex-end",
     minWidth: SUPPORT_ACTION_MIN_WIDTH,
+  },
+  messageActionGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.xs,
   },
   detailButton: {
     flexDirection: "row",

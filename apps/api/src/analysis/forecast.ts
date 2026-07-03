@@ -6,6 +6,7 @@ import {
   monthlySubscriptionByCategory,
   monthlyScheduledSpendByCategory,
   recentMonthlyAvgSpend,
+  recentMonthlyAvgSpendByCategory,
 } from "../budget-plans/service.js";
 import { partsInTz, resolveUserTz } from "../chat/tools/periods.js";
 import { serverNow } from "../dev-clock.js";
@@ -77,11 +78,12 @@ export async function projectMonthEnd(
   const capped = snap.categories.filter((c) => c.allocated !== null);
   const capIds = capped.map((c) => c.categoryId);
 
-  const [discRates, typicals, subs, scheduled] = await Promise.all([
+  const [discRates, typicals, subs, scheduled, monthlyAvgs] = await Promise.all([
     recentDiscretionaryDailyByCategory(workspaceId, capIds),
     recentTypicalAmountByCategory(workspaceId, capIds),
     monthlySubscriptionByCategory(workspaceId, year, month),
     monthlyScheduledSpendByCategory(workspaceId, year, month),
+    daysLeft > 0 ? recentMonthlyAvgSpendByCategory(workspaceId, capIds) : Promise.resolve(new Map<string, number>()),
   ]);
 
   const categories: CategoryForecast[] = capped.map((c) => {
@@ -90,9 +92,10 @@ export async function projectMonthEnd(
     const fixedBills = subs.get(c.categoryId) ?? 0;
     const plannedOneOffs = scheduled.get(c.categoryId) ?? 0;
     const discRate = discRates.get(c.categoryId) ?? 0;
+    const monthlyAvg = monthlyAvgs.get(c.categoryId) ?? 0;
 
-    const discProjection = discRate * daysLeft;
-    const projected = round2(spent + fixedBills + Math.max(plannedOneOffs, discProjection));
+    const committed = round2(spent + fixedBills + plannedOneOffs);
+    const projected = round2(Math.max(committed, monthlyAvg));
     const projectedOverspend = Math.max(0, round2(projected - cap));
     const projectedUnderspend = Math.max(0, round2(cap - projected));
 

@@ -177,6 +177,7 @@ export function CategoryPickerSheet({
         },
       );
       ref.current?.close();
+      onSelect?.(cat);
       onChange?.(result.affectedTransactionIds ?? [txId]);
     } catch (e) {
       setSaving(null);

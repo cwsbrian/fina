@@ -247,6 +247,31 @@ export async function recentMonthlyAvgSpend(
   return Math.round(total / 3);
 }
 
+export async function recentMonthlyAvgSpendByCategory(
+  workspaceId: string,
+  categoryIds: string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (categoryIds.length === 0) return out;
+  const since = new Date(serverNow().getTime() - 90 * 86_400_000);
+  const rows = await prisma.transactionAllocation.findMany({
+    where: {
+      ...budgetExpenseAllocationWhere({
+        workspaceId,
+        occurredAt: { gte: since },
+      }),
+      categoryId: { in: categoryIds },
+    },
+    select: { amount: true, categoryId: true },
+  });
+
+  for (const r of rows) {
+    if (!r.categoryId) continue;
+    out.set(r.categoryId, (out.get(r.categoryId) ?? 0) + Number(r.amount));
+  }
+  return new Map(Array.from(out, ([id, total]) => [id, Math.round(total / 3)]));
+}
+
 /** Sum of the monthly-equivalent amount of every recurring expense in the
  *  workspace — the "fixed" baseline that should be excluded when estimating
  *  the workspace's typical DISCRETIONARY run-rate for the month-end forecast. */
@@ -576,6 +601,7 @@ export async function recentDiscretionaryDailyByCategory(
       transaction: {
         workspaceId,
         removedAt: null,
+        budgetImpact: "expense",
         pending: false,
         occurredAt: { gte: since },
       },

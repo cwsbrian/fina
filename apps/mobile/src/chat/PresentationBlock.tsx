@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { View, Text, StyleSheet, Pressable } from "react-native";
 import { router } from "expo-router";
-import type { PresentationBlock as Block } from "@fina/shared";
+import type { CategoryDTO, PresentationBlock as Block } from "@fina/shared";
 import { colors, space, type as type$ } from "../design/tokens";
 import { BlockPresentationProvider } from "./blocks/_primitives";
 import { RecapBlock } from "./blocks/RecapBlock";
@@ -38,6 +39,8 @@ type Props = {
   formActions?: "inline" | "header";
   onFormActionsChange?: (actions: FormBlockActions | null) => void;
   onFormActionStateChange?: (state: FormBlockActionState) => void;
+  onOpenActivity?: () => void;
+  onChangeCategory?: (txId: string, onPicked: (cat: CategoryDTO | null) => void) => void;
 };
 
 /** Renders a single presentation block. Exhaustive over the
@@ -54,7 +57,11 @@ export function PresentationBlock({
   formActions = "inline",
   onFormActionsChange,
   onFormActionStateChange,
+  onOpenActivity,
+  onChangeCategory,
 }: Props) {
+  const [categoryNames, setCategoryNames] = useState<Record<string, string>>({});
+
   const renderBlock = () => {
     if (block.type === "text") {
       return (
@@ -123,22 +130,58 @@ export function PresentationBlock({
       );
     }
     if (block.type === "categorize_confirm_card") {
+      const reviewTitle =
+        block.count === 1
+          ? "Review 1 categorized transaction"
+          : "Review categorized transactions";
       return (
         <View style={presentation === "sheet" ? styles.catSheet : styles.catCard}>
-          <Text style={styles.catCardTitle}>오늘 분류한 {block.count}개 확인해주세요</Text>
+          <Text style={styles.catCardTitle}>{reviewTitle}</Text>
           {block.items.map((it) => (
-            <Text key={it.txId} style={styles.catCardItem}>
-              {it.merchant} → {it.categoryName}
-            </Text>
+            <View key={it.txId} style={styles.catCardItemRow}>
+              <View style={styles.catCardItemCopy}>
+                <Text style={styles.catCardItemMerchant}>{it.merchant}</Text>
+                <Text style={styles.catCardItem}>
+                  {categoryNames[it.txId] ?? it.categoryName}
+                </Text>
+              </View>
+              {onChangeCategory ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Change category"
+                  hitSlop={8}
+                  onPress={() =>
+                    onChangeCategory(it.txId, (cat) => {
+                      setCategoryNames((prev) => ({
+                        ...prev,
+                        [it.txId]: cat?.name ?? "Uncategorized",
+                      }));
+                    })
+                  }
+                  style={({ pressed }) => [
+                    styles.catCardChange,
+                    pressed && { opacity: 0.7 },
+                  ]}
+                >
+                  <Text style={styles.catCardChangeText}>Change</Text>
+                </Pressable>
+              ) : null}
+            </View>
           ))}
           {block.moreCount > 0 && (
             <Text style={styles.catCardMore}>외 {block.moreCount}건</Text>
           )}
           <Pressable
             style={styles.catCardCta}
-            onPress={() => router.push("/(tabs)/activity" as never)}
+            onPress={() => {
+              if (onOpenActivity) {
+                onOpenActivity?.();
+                return;
+              }
+              router.push("/(tabs)/activity" as never);
+            }}
           >
-            <Text style={styles.catCardCtaText}>Activity에서 보기</Text>
+            <Text style={styles.catCardCtaText}>View Activity</Text>
           </Pressable>
         </View>
       );
@@ -271,7 +314,25 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   catCardTitle: { ...type$.titleSm, color: colors.ink },
+  catCardItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingVertical: 4,
+  },
+  catCardItemCopy: { flex: 1 },
+  catCardItemMerchant: { ...type$.bodySm, color: colors.ink },
   catCardItem: { ...type$.bodySm, color: colors.body },
+  catCardChange: {
+    minHeight: 32,
+    justifyContent: "center",
+    paddingHorizontal: space.sm,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.hairline,
+    backgroundColor: colors.canvas,
+  },
+  catCardChangeText: { ...type$.captionStrong, color: colors.primary },
   catCardMore: { ...type$.bodySm, color: colors.muted, fontStyle: "italic" },
   catCardCta: { marginTop: space.sm, alignSelf: "flex-start" },
   catCardCtaText: { ...type$.captionStrong, color: colors.primary },

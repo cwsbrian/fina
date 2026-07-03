@@ -26,9 +26,14 @@ describe("recentDiscretionaryDailyByCategory", () => {
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
-  async function tx(amount: string, day: string, pending = false) {
+  async function tx(
+    amount: string,
+    day: string,
+    pending = false,
+    budgetImpact: "expense" | "excluded" = "expense",
+  ) {
     const t = await prisma.transaction.create({
-      data: { workspaceId: wsId, accountId: acct, amount, merchantRaw: "M", occurredAt: new Date(day), source: "manual", pending, rawData: {} },
+      data: { workspaceId: wsId, accountId: acct, amount, merchantRaw: "M", occurredAt: new Date(day), source: "manual", pending, rawData: {}, budgetImpact },
     });
     await prisma.transactionAllocation.create({ data: { transactionId: t.id, categoryId: dining, amount } });
     return t;
@@ -68,6 +73,12 @@ describe("recentDiscretionaryDailyByCategory", () => {
     await tx("50.00", "2026-04-12T12:00:00Z");
     await tx("-200.00", "2026-04-15T12:00:00Z"); // big refund
     // positives [50,50] → median 50, cap 150, nothing capped; net = -100 → clamped to 0.
+    const rates = await recentDiscretionaryDailyByCategory(wsId, [dining]);
+    expect(rates.get(dining) ?? 0).toBeCloseTo(0, 4);
+  });
+
+  it("excludes transactions marked out of budget from the forecast rate", async () => {
+    await tx("100.00", "2026-04-10T12:00:00Z", false, "excluded");
     const rates = await recentDiscretionaryDailyByCategory(wsId, [dining]);
     expect(rates.get(dining) ?? 0).toBeCloseTo(0, 4);
   });
@@ -175,10 +186,22 @@ describe("projectMonthEnd", () => {
     expect(c.severity).toBe("on_track");
   });
 
-  it("flags at_risk when the discretionary run-rate projects past cap*1.10", async () => {
+  it("a monthly fixed category without a recurring rule does not project daily repeats", async () => {
+    await plan(2500);
+    await spend("2500.00", "2026-03-01T12:00:00Z");
+    await spend("2500.00", "2026-04-01T12:00:00Z");
+    await spend("2500.00", "2026-05-01T12:00:00Z");
+
+    const f = await projectMonthEnd(wsId, userId, 2026, 5);
+    const c = f.categories.find((x) => x.categoryId === dining)!;
+    expect(c.projected).toBeCloseTo(2500, 0);
+    expect(c.severity).toBe("on_track");
+  });
+
+  it("flags at_risk when the recent monthly average projects past cap*1.10", async () => {
     await plan(300);
-    // Heavy historical dining: $300 x 6 across the trailing 90 days (prior
-    // months), nothing yet this month → 90-day discretionary rate ~ $20/day.
+    // Heavy historical dining: $300 x 6 across the trailing 90 days,
+    // nothing yet this month → recent monthly average is about $600.
     for (const day of ["2026-03-05","2026-03-20","2026-04-05","2026-04-20","2026-04-25","2026-04-28"]) {
       await spend("300.00", `${day}T12:00:00Z`);
     }
