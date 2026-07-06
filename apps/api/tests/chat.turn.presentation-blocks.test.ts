@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { collectPresentationBlocks, redactToolCallArgs } from "../src/chat/turn.js";
+import { collectPresentationBlocks, redactToolCallArgs, SYSTEM_PROMPT } from "../src/chat/turn.js";
 
 describe("collectPresentationBlocks", () => {
   it("collects block from a tool result that has { output: { block: {...} } } shape", () => {
@@ -46,5 +46,12 @@ describe("redactToolCallArgs", () => {
   it("passes through args for other tools unchanged", () => {
     const result = redactToolCallArgs("createCategory", { name: "Coffee" });
     expect(result).toEqual({ name: "Coffee" });
+  });
+});
+
+describe("chat forecast prompt", () => {
+  it("forbids inventing higher category forecasts from timing patterns", () => {
+    expect(SYSTEM_PROMPT).toContain("Use the returned projected number as-is");
+    expect(SYSTEM_PROMPT).toContain("do not claim \"last month was $400 so this month will be $600\"");
   });
 });

@@ -117,6 +117,8 @@ describe("mobile brand assets", () => {
     const expo = appJson.expo;
 
     expect(expo.icon).toBe("./assets/fina-app-icon.png");
+    expect(expo.userInterfaceStyle).toBe("light");
+    expect(expo.ios.infoPlist.UIUserInterfaceStyle).toBe("Light");
     expect(expo.splash.image).toBe("./assets/fina-login-icon.png");
     expect(expo.android.adaptiveIcon.foregroundImage).toBe("./assets/fina-adaptive-icon.png");
     expect(expo.web.favicon).toBe("./assets/fina-favicon.png");

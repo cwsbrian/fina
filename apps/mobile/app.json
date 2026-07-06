@@ -6,7 +6,7 @@
     "version": "1.6",
     "orientation": "portrait",
     "icon": "./assets/fina-app-icon.png",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/fina-login-icon.png",
@@ -21,6 +21,7 @@
       "bundleIdentifier": "com.withfina.app",
       "infoPlist": {
         "NSUserNotificationsUsageDescription": "Fina sends a daily morning brief notification.",
+        "UIUserInterfaceStyle": "Light",
         "ITSAppUsesNonExemptEncryption": false
       }
     },

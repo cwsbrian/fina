@@ -21,6 +21,16 @@ describe("chat detail sheet", () => {
     expect(threadView).toContain("handleDetailPress(b, message)");
   });
 
+  it("renders write form cards inline in the thread", () => {
+    const threadView = readMobile("src/chat/ThreadView.tsx");
+
+    expect(threadView).toContain("isInlineCardBlock(b)");
+    expect(threadView).toContain("onSubmitForm={onSubmitForm}");
+    expect(threadView).toContain("onFormFocusChange={onFormFocusChange}");
+    expect(threadView).toContain('b.type === "recurring_form_card"');
+    expect(threadView).toContain('b.type === "goal_form_card"');
+  });
+
   it("keeps bottom sheet actions in the header", () => {
     const threadView = readMobile("src/chat/ThreadView.tsx");
 

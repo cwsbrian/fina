@@ -726,6 +726,12 @@ export function ThreadView({
             dismissedIntents={dismissedIntents}
             onDetailPress={openDetail}
             onSupportPress={openSupport}
+            onAccept={acceptDetailIntent}
+            onSubmitForm={submitDetailForm}
+            onFormFocusChange={setFormFocused}
+            onOpenActivity={handleOpenActivityFromDetail}
+            onChangeCategory={handleChangeCategoryFromDetail}
+            onDismissIntent={dismissIntent}
           />
         )}
         ListFooterComponent={sending ? <TypingIndicator /> : null}
@@ -1099,6 +1105,14 @@ function isCardBlock(b: Block): boolean {
   );
 }
 
+function isInlineCardBlock(b: Block): boolean {
+  return isCardBlock(b);
+}
+
+function hasDetailButtonForBlock(b: Block): boolean {
+  return detailRouteForBlock(b) !== null || b.type === "categorize_confirm_card";
+}
+
 /** Best-effort POST /chat/threads/:id/read. We never block the UI on
  *  this; a failed call just means the unread count drops on the next
  *  poll. Silently swallow so chat keeps flowing even when /read is
@@ -1162,11 +1176,23 @@ function MessageBubble({
   dismissedIntents,
   onDetailPress,
   onSupportPress,
+  onAccept,
+  onSubmitForm,
+  onFormFocusChange,
+  onOpenActivity,
+  onChangeCategory,
+  onDismissIntent,
 }: {
   message: ChatMessageDTO;
   dismissedIntents: Set<string>;
   onDetailPress?: (block: Block, message: ChatMessageDTO) => void;
   onSupportPress?: (message: ChatMessageDTO) => void;
+  onAccept?: (intent: string) => void;
+  onSubmitForm?: (intentId: string, overrides: Record<string, unknown>) => Promise<void>;
+  onFormFocusChange?: (focused: boolean) => void;
+  onOpenActivity?: () => void;
+  onChangeCategory?: (txId: string, onPicked: (cat: CategoryDTO | null) => void) => void;
+  onDismissIntent?: (intentId: string) => void;
 }) {
   const rawBlocks = Array.isArray(message.blocks)
     ? (message.blocks as Block[])
@@ -1293,43 +1319,71 @@ function MessageBubble({
     <View style={{ gap: 6 }}>
       {blocks.map((b, i) => {
         const key = `${message.id}-${i}`;
-        if (isCardBlock(b)) {
+        if (isInlineCardBlock(b)) {
+          const showDetailButton = hasDetailButtonForBlock(b);
           const showActionsInDetailRow =
             message.role === "assistant" &&
             i === lastCardBlockIndex &&
             hasAssistantAction;
           return (
-            <View
-              key={key}
-              style={[
-                isUser ? styles.rowUser : styles.rowAssistant,
-                styles.detailActionRow,
-                actionRowWidthStyle,
-              ]}
-            >
-              <Pressable
-                onPress={() => handleDetailPress(b, message)}
-                accessibilityRole="button"
-                accessibilityLabel="View message detail"
-                style={({ pressed }) => [
-                  styles.detailButton,
-                  pressed && { opacity: 0.72 },
+            <Fragment key={key}>
+              <View
+                style={[
+                  styles.cardRow,
+                  isUser ? styles.rowUser : styles.rowAssistant,
                 ]}
               >
-                <Ionicons
-                  name="reader-outline"
-                  size={16}
-                  color={colors.primary}
+                <PresentationBlock
+                  block={b}
+                  role={message.role}
+                  onAccept={onAccept}
+                  onReject={(intent) => {
+                    if (b.type === "confirm_card" || b.type === "plan_proposal_card") {
+                      onDismissIntent?.(b.accept_intent);
+                    }
+                    if (intent) onDismissIntent?.(intent);
+                  }}
+                  onSubmitForm={onSubmitForm}
+                  onFormFocusChange={onFormFocusChange}
+                  onOpenActivity={onOpenActivity}
+                  onChangeCategory={onChangeCategory}
                 />
-                <Text style={styles.detailButtonText}>{detailLabelForBlock(b)}</Text>
-              </Pressable>
-              {showActionsInDetailRow ? (
-                <View style={styles.messageActionGroup}>
-                  {renderShareButton()}
-                  {renderSupportButton()}
+              </View>
+              {showDetailButton || showActionsInDetailRow ? (
+                <View
+                  style={[
+                    styles.detailActionRow,
+                    !showDetailButton && styles.supportOnlyActionRow,
+                    actionRowWidthStyle,
+                  ]}
+                >
+                  {showDetailButton ? (
+                    <Pressable
+                      onPress={() => handleDetailPress(b, message)}
+                      accessibilityRole="button"
+                      accessibilityLabel="View message detail"
+                      style={({ pressed }) => [
+                        styles.detailButton,
+                        pressed && { opacity: 0.72 },
+                      ]}
+                    >
+                      <Ionicons
+                        name="reader-outline"
+                        size={16}
+                        color={colors.primary}
+                      />
+                      <Text style={styles.detailButtonText}>{detailLabelForBlock(b)}</Text>
+                    </Pressable>
+                  ) : null}
+                  {showActionsInDetailRow ? (
+                    <View style={styles.messageActionGroup}>
+                      {renderShareButton()}
+                      {renderSupportButton()}
+                    </View>
+                  ) : null}
                 </View>
               ) : null}
-            </View>
+            </Fragment>
           );
         }
         const showSupportOnlyRow =
@@ -1388,6 +1442,7 @@ const styles = StyleSheet.create({
   row: { flexDirection: "row", marginVertical: 4 },
   rowUser: { justifyContent: "flex-end" },
   rowAssistant: { justifyContent: "flex-start" },
+  cardRow: { width: "100%", marginVertical: 2 },
   assistantBubbleWithDetailActions: {
     minWidth: DETAIL_BLOB_MIN_WIDTH,
   },
