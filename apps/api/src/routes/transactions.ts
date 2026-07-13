@@ -31,6 +31,15 @@ const BoolFlag = z
   .optional()
   .default("false");
 
+const CategoryIds = z
+  .string()
+  .max(4000)
+  .transform((value) => [
+    ...new Set(value.split(",").map((id) => id.trim()).filter(Boolean)),
+  ])
+  .refine((ids) => ids.length <= 100)
+  .optional();
+
 const PatchTxBody = z
   .object({
     amount: z.number().optional(),
@@ -69,6 +78,7 @@ const QuerySchema = z.object({
   needsReview: BoolFlag,
   budgetImpact: z.enum(["expense", "excluded"]).optional().default("expense"),
   categoryId: z.string().optional(),
+  categoryIds: CategoryIds,
   /** Free-text search across merchantRaw + merchantNormalized
    *  (case-insensitive substring). 1-character min keeps trivial
    *  full-table-scan queries out. */
@@ -121,6 +131,9 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         select: { currency: true },
       });
       const cursor = decodeCursor(q.cursor);
+      const categoryIds = [
+        ...new Set([...(q.categoryIds ?? []), ...(q.categoryId ? [q.categoryId] : [])]),
+      ];
       const where = {
         workspaceId: ctx.membership.workspaceId,
         ...(q.accountId ? { accountId: q.accountId } : {}),
@@ -158,11 +171,19 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
               },
             };
           }
-          if (q.uncategorizedOnly && q.categoryId) {
-            return { allocations: { some: { OR: [{ categoryId: null }, { categoryId: q.categoryId }] } } };
+          if (q.uncategorizedOnly && categoryIds.length > 0) {
+            return {
+              allocations: {
+                some: {
+                  OR: [{ categoryId: null }, { categoryId: { in: categoryIds } }],
+                },
+              },
+            };
           }
           if (q.uncategorizedOnly) return { allocations: { some: { categoryId: null } } };
-          if (q.categoryId)        return { allocations: { some: { categoryId: q.categoryId } } };
+          if (categoryIds.length > 0) {
+            return { allocations: { some: { categoryId: { in: categoryIds } } } };
+          }
           return {};
         })(),
         ...(cursor

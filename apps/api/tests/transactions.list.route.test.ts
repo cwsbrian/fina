@@ -210,4 +210,37 @@ describe("GET /workspaces/:id/transactions", () => {
     const body = res.json();
     expect(body.transactions).toHaveLength(2); // c1 tx + uncategorized tx
   });
+
+  it("filter ?categoryIds=X,Y matches either category and can include uncategorized", async () => {
+    const { cookie, wsId } = await setup("tl-multi@t.co");
+    const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-tl-multi" } });
+    const c2 = await prisma.category.create({ data: { workspaceId: wsId, name: "C2-tl-multi" } });
+    const c3 = await prisma.category.create({ data: { workspaceId: wsId, name: "C3-tl-multi" } });
+    const c1Tx = await seedTxWithAllocations(wsId, "10", [
+      { categoryId: c1.id, amount: "10", source: "manual" },
+    ]);
+    const c2Tx = await seedTxWithAllocations(wsId, "20", [
+      { categoryId: c2.id, amount: "20", source: "manual" },
+    ]);
+    await seedTxWithAllocations(wsId, "30", [
+      { categoryId: c3.id, amount: "30", source: "manual" },
+    ]);
+    const uncategorizedTx = await seedTxWithAllocations(wsId, "40", [
+      { categoryId: null, amount: "40", source: null },
+    ]);
+
+    const params = new URLSearchParams({
+      categoryIds: `${c1.id},${c2.id}`,
+      uncategorizedOnly: "true",
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?${params.toString()}`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    const ids = res.json().transactions.map((tx: { id: string }) => tx.id);
+    expect(ids).toEqual(expect.arrayContaining([c1Tx, c2Tx, uncategorizedTx]));
+    expect(ids).toHaveLength(3);
+  });
 });

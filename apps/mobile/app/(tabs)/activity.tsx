@@ -10,6 +10,7 @@ import {
   Animated,
   TextInput,
   Keyboard,
+  Modal,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
@@ -32,8 +33,13 @@ import {
   buildActivityTransactionsPath,
   mergeActivityTransactionPages,
 } from "../../src/activity/pagination";
+import {
+  CategoryFilterSheet,
+  UNCATEGORIZED_FILTER_ID,
+} from "../../src/activity/CategoryFilterSheet";
 
 const HEADER_HEIGHT = 84;
+const categoryFiltersByWorkspace = new Map<string, string[]>();
 
 type TxListResp = {
   transactions: TransactionDTO[];
@@ -224,6 +230,8 @@ export default function Activity() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [categoryFilterOpen, setCategoryFilterOpen] = useState(false);
+  const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<DateRange>({});
   const dateRangeSheet = useDateRangeSheet();
@@ -232,6 +240,8 @@ export default function Activity() {
   // deps stable across renders).
   const queryRef = useRef("");
   const rangeRef = useRef<DateRange>({});
+  const categoryFilterRef = useRef<string[]>([]);
+  const filterWorkspaceRef = useRef<string | null>(null);
   queryRef.current = query;
   rangeRef.current = range;
   const insets = useSafeAreaInsets();
@@ -245,6 +255,12 @@ export default function Activity() {
         setErr("no_workspace");
         return;
       }
+      if (filterWorkspaceRef.current !== id) {
+        const savedFilter = categoryFiltersByWorkspace.get(id) ?? [];
+        filterWorkspaceRef.current = id;
+        categoryFilterRef.current = savedFilter;
+        setSelectedCategoryIds(savedFilter);
+      }
       setWsId(id);
       setNextCursor(null);
       setLoadingMore(false);
@@ -255,6 +271,7 @@ export default function Activity() {
         limit: ACTIVITY_PAGE_LIMIT,
         query: trimmed,
         range: r,
+        categoryFilter: splitCategoryFilter(categoryFilterRef.current),
       });
       const excludedParams = new URLSearchParams({
         budgetImpact: "excluded",
@@ -299,6 +316,7 @@ export default function Activity() {
         cursor: nextCursor,
         query: queryRef.current.trim(),
         range: rangeRef.current,
+        categoryFilter: splitCategoryFilter(categoryFilterRef.current),
       });
       const resp = await apiFetch<TxListResp>(path);
       setTxs((current) =>
@@ -342,6 +360,14 @@ export default function Activity() {
     setRefreshing(false);
   };
 
+  const applyCategoryFilter = (ids: string[]) => {
+    const next = [...new Set(ids)];
+    categoryFilterRef.current = next;
+    setSelectedCategoryIds(next);
+    if (wsId) categoryFiltersByWorkspace.set(wsId, next);
+    load();
+  };
+
   if (err && txs === null) {
     return (
       <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -370,6 +396,11 @@ export default function Activity() {
 
   const sections = groupByDate(txs);
   const isSearching = query.trim().length > 0;
+  const hasCategoryFilter = selectedCategoryIds.length > 0;
+  const categoryFilterLabel = formatCategoryFilterLabel(
+    selectedCategoryIds,
+    categories,
+  );
 
   // Pick a currency for section totals — Plaid items live in one
   // workspace and share its currency, so safe to read from first tx.
@@ -396,6 +427,21 @@ export default function Activity() {
         }
         ListHeaderComponent={
           <View>
+            {hasCategoryFilter ? (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.filterPill,
+                  pressed && { opacity: 0.7 },
+                ]}
+                onPress={() => setCategoryFilterOpen(true)}
+              >
+                <Ionicons name="funnel" size={13} color={colors.primary} />
+                <Text style={styles.filterPillText} numberOfLines={1}>
+                  {categoryFilterLabel}
+                </Text>
+                <Ionicons name="chevron-down" size={14} color={colors.primary} />
+              </Pressable>
+            ) : null}
             {upcoming.count > 0 ? (
               <UpcomingBanner
                 total={upcoming.total}
@@ -445,7 +491,23 @@ export default function Activity() {
           ) : null
         }
         ListEmptyComponent={
-          isSearching ? (
+          hasCategoryFilter ? (
+            <View style={styles.empty}>
+              <View style={styles.iconWrap}>
+                <Ionicons name="funnel-outline" size={32} color={colors.muted} />
+              </View>
+              <Text style={styles.emptyTitle}>No matching transactions</Text>
+              <Text style={styles.emptyBody}>
+                No transactions match the selected categories and other filters.
+              </Text>
+              <Pressable
+                style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
+                onPress={() => applyCategoryFilter([])}
+              >
+                <Text style={styles.ctaText}>Clear category filter</Text>
+              </Pressable>
+            </View>
+          ) : isSearching ? (
             <View style={styles.empty}>
               <View style={styles.iconWrap}>
                 <Ionicons name="search" size={32} color={colors.muted} />
@@ -530,14 +592,49 @@ export default function Activity() {
           <ActivityHeader
             onSearch={() => setSearchOpen(true)}
             onRange={() => dateRangeSheet.open(range, setRange)}
+            onCategories={() => setCategoryFilterOpen(true)}
             rangeActive={!!(range.from || range.to)}
+            categoriesActive={hasCategoryFilter}
             count={txs?.length}
           />
         )}
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
+      <Modal
+        visible={categoryFilterOpen}
+        transparent
+        animationType="none"
+        onRequestClose={() => setCategoryFilterOpen(false)}
+      >
+        <View style={styles.categoryFilterModal}>
+          <CategoryFilterSheet
+            visible={categoryFilterOpen}
+            categories={Object.values(categories)}
+            selectedIds={selectedCategoryIds}
+            onClose={() => setCategoryFilterOpen(false)}
+            onApply={applyCategoryFilter}
+          />
+        </View>
+      </Modal>
     </View>
   );
+}
+
+function splitCategoryFilter(selectedIds: string[]) {
+  return {
+    categoryIds: selectedIds.filter((id) => id !== UNCATEGORIZED_FILTER_ID),
+    includeUncategorized: selectedIds.includes(UNCATEGORIZED_FILTER_ID),
+  };
+}
+
+function formatCategoryFilterLabel(
+  selectedIds: string[],
+  categories: Record<string, CategoryDTO>,
+): string {
+  if (selectedIds.length !== 1) return `${selectedIds.length} categories`;
+  const id = selectedIds[0];
+  if (id === UNCATEGORIZED_FILTER_ID) return "Uncategorized";
+  return (id && categories[id]?.name) || "1 category";
 }
 
 function UpcomingBanner({
@@ -603,12 +700,16 @@ function ExcludedBanner({ hasNew }: { hasNew: boolean }) {
 function ActivityHeader({
   onSearch,
   onRange,
+  onCategories,
   rangeActive,
+  categoriesActive,
   count,
 }: {
   onSearch?: () => void;
   onRange?: () => void;
+  onCategories?: () => void;
   rangeActive?: boolean;
+  categoriesActive?: boolean;
   count?: number;
 } = {}) {
   return (
@@ -627,6 +728,12 @@ function ActivityHeader({
           accessibilityLabel="Date range"
           {...(onRange ? { onPress: onRange } : {})}
           {...(rangeActive ? { color: colors.primary } : {})}
+        />
+        <HeaderIconButton
+          icon="funnel-outline"
+          accessibilityLabel="Filter categories"
+          {...(onCategories ? { onPress: onCategories } : {})}
+          {...(categoriesActive ? { color: colors.primary } : {})}
         />
         <HeaderIconButton
           icon="search-outline"
@@ -710,6 +817,7 @@ function TxRow({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
+  categoryFilterModal: { flex: 1 },
   headerOverlay: {
     position: "absolute",
     left: 0,
@@ -789,6 +897,25 @@ const styles = StyleSheet.create({
     maxWidth: 320, marginBottom: space.lg,
   },
   listContent: { padding: space.lg, paddingTop: space.sm, flexGrow: 1 },
+  filterPill: {
+    alignSelf: "flex-start",
+    maxWidth: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    marginTop: space.sm,
+    marginBottom: 4,
+    backgroundColor: colors.surfaceSoft,
+    borderRadius: 999,
+  },
+  filterPillText: {
+    ...type$.bodySm,
+    color: colors.primary,
+    fontWeight: "600",
+    flexShrink: 1,
+  },
   footerLoading: {
     alignItems: "center",
     justifyContent: "center",

@@ -40,9 +40,13 @@ describe("activity pagination", () => {
           from: "2026-06-01T00:00:00.000Z",
           to: "2026-06-30T23:59:59.999Z",
         },
+        categoryFilter: {
+          categoryIds: ["cat-food", "cat-shopping"],
+          includeUncategorized: true,
+        },
       }),
     ).toBe(
-      "/workspaces/ws_123/transactions?limit=100&q=coffee&from=2026-06-01T00%3A00%3A00.000Z&to=2026-06-30T23%3A59%3A59.999Z&cursor=cursor%2Bvalue",
+      "/workspaces/ws_123/transactions?limit=100&q=coffee&from=2026-06-01T00%3A00%3A00.000Z&to=2026-06-30T23%3A59%3A59.999Z&categoryIds=cat-food%2Ccat-shopping&uncategorizedOnly=true&cursor=cursor%2Bvalue",
     );
   });
 
