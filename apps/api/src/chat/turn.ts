@@ -210,13 +210,22 @@ Tool-selection notes:
   card/list answer. (Use getTransactionDetails only when you already hold a specific tx_id.)
 
 Add-intent disambiguation ('X 추가' / 'Add X'):
-- Transactions cannot be manually added — they come from bank sync. Never offer that.
-- Determine recurring vs scheduled-spend by the user's cues:
-  - "매월" / "monthly" / "구독" / "subscription" / "매주" → recurring
-  - specific future date + single charge ("다음주 25일에", "next Tuesday", "한 번") → addScheduledSpend
-  - no clear cue ("Netflix 추가해줘") → ASK first. ONE short sentence:
-      "Netflix 매월 구독으로 추가할까요, 한 번 결제 예정인가요?"
-      "Add Netflix as a monthly subscription, or a one-time future charge?"
+- Ordinary purchases are one-time manual transactions by default. Words like "bought", "spent",
+  "paid", "샀어", "썼어", "결제했어", or a plain "add" request mean addManualTransaction
+  unless the user explicitly says the charge repeats or is in the future.
+- Use recurring ONLY for explicit repetition cues such as "monthly", "weekly", "subscription",
+  "recurring", "매월", "매주", or "구독".
+- Use scheduled spend ONLY when the user explicitly gives a future date or says the purchase is planned.
+- Never guess that coffee, food, shopping, or another ordinary purchase is a subscription.
+- If merchant and amount are known, call addManualTransaction directly. Date defaults to today, so
+  do not ask for it. Category is optional; omit it when uncertain.
+- If required information is missing, ask ONE short question for only the missing merchant and/or
+  amount. Example: "How much did you spend on coffee and a bagel?" Do not repeat the question in
+  different words and do not ask whether it is recurring or scheduled without an explicit cue.
+- Do not call budget tools or show a budget card while adding a transaction unless the user asked
+  about their budget.
+- After addManualTransaction succeeds, reply with one short confirmation; the transaction detail
+  card already shows the merchant, amount, date, account, and category.
 - Once the user picks RECURRING, ALWAYS call presentRecurringForm — NOT
   presentConfirmCard — even if some fields are missing. The form has
   editable inputs for amount, cadence, and next-occurrence date; the user
@@ -326,7 +335,7 @@ Bulk-remove-recurring intent ('모든 구독 지워줘' / 'remove all subscripti
 - Generating/editing a savings STRATEGY is screen-only — tell the user to tap
   the goal card to open the goal screen; do NOT try to generate it in chat.
 
-For write tools (createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring), briefly confirm with the user before invoking unless the request is unambiguous. When you want a confirm-then-execute flow, call presentConfirmCard with \`accept_action\` set to the target tool + args — the user sees a Yes/No card and the action runs only when they tap accept. Use this for destructive ops (removeRecurring) and for changes the user might want to reconsider (e.g. tripling a budget, mapping a frequent merchant). Example unambiguous (direct call OK): '카테고리 만들어줘 — Coffee 라는 이름으로' or '식비 예산 500 달러로 설정해줘' or 'Starbucks를 Coffee 카테고리로 자동분류' or 'Netflix를 매월 19달러 정기지출로 추가, 다음 결제 2026-06-01'. Example needs presentConfirmCard: 'Netflix 정기지출 삭제해줘' or '식비 예산을 500→2000으로 늘려' or 'Starbucks를 다른 카테고리로 옮길까?'`;
+For write tools (addManualTransaction, createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring), briefly confirm with the user before invoking unless the request is unambiguous. A manual-transaction request with merchant and amount is unambiguous and should run directly. When you want a confirm-then-execute flow, call presentConfirmCard with \`accept_action\` set to the target tool + args — the user sees a Yes/No card and the action runs only when they tap accept. Use this for destructive ops (removeRecurring) and for changes the user might want to reconsider (e.g. tripling a budget, mapping a frequent merchant). Example unambiguous (direct call OK): 'Coffee $5 this morning', '카테고리 만들어줘 — Coffee 라는 이름으로' or '식비 예산 500 달러로 설정해줘' or 'Starbucks를 Coffee 카테고리로 자동분류' or 'Netflix를 매월 19달러 정기지출로 추가, 다음 결제 2026-06-01'. Example needs presentConfirmCard: 'Netflix 정기지출 삭제해줘' or '식비 예산을 500→2000으로 늘려' or 'Starbucks를 다른 카테고리로 옮길까?'`;
 
 export type ToolCallRecord = {
   toolName: string;

@@ -317,7 +317,7 @@ export default function More() {
     : null;
   const bankSubtitle = banks
     ? banks.length === 0
-      ? "Connect to start importing"
+      ? "Optional · No banks connected"
       : `${banks.length} connected${
           banks.some((b) => b.status === "error" || b.errorCode) ? " · needs attention" : ""
         }`

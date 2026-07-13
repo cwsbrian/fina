@@ -42,6 +42,11 @@ describe("extractTargetId", () => {
       extractTargetId("addRecurring", { recurring: { id: "r1", name: "Netflix" } }),
     ).toBe("r1");
   });
+  it("extracts id from addManualTransaction result", () => {
+    expect(
+      extractTargetId("addManualTransaction", { transaction: { id: "tx1" } }),
+    ).toBe("tx1");
+  });
   it("returns null for removeRecurring (row deleted)", () => {
     expect(extractTargetId("removeRecurring", { removed: true })).toBeNull();
   });
@@ -127,11 +132,12 @@ describe("logAuditEvent", () => {
 });
 
 describe("AUDIT_WRITE_TOOLS", () => {
-  it("contains all 10 expected tool names", () => {
+  it("contains every expected write tool", () => {
     for (const t of [
       "categorizeTransaction",
       "createCategory",
       "addTransactionNote",
+      "addManualTransaction",
       "setBudget",
       "mapMerchantToCategory",
       "addRecurring",

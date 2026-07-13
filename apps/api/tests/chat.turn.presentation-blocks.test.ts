@@ -55,3 +55,12 @@ describe("chat forecast prompt", () => {
     expect(SYSTEM_PROMPT).toContain("do not claim \"last month was $400 so this month will be $600\"");
   });
 });
+
+describe("manual transaction prompt", () => {
+  it("defaults ordinary purchases to manual transactions without budget noise", () => {
+    expect(SYSTEM_PROMPT).toContain("Ordinary purchases are one-time manual transactions by default");
+    expect(SYSTEM_PROMPT).toContain("call addManualTransaction directly");
+    expect(SYSTEM_PROMPT).toContain("Do not call budget tools or show a budget card");
+    expect(SYSTEM_PROMPT).not.toContain("Transactions cannot be manually added");
+  });
+});

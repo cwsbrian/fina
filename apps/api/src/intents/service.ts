@@ -27,6 +27,13 @@ function confirmationFor(
 ): string | null {
   const ko = locale.startsWith("ko");
   switch (tool) {
+    case "addManualTransaction": {
+      const tx = (result as {
+        transaction?: { merchantRaw: string; amount: string; currency: string };
+      }).transaction;
+      if (!tx) return null;
+      return `Added ${tx.merchantRaw} for ${tx.currency} ${tx.amount}.`;
+    }
     case "addRecurring": {
       const typed = result as {
         recurring?: { name: string; amount: string; cadence: string; nextOccurrenceDate: string };
@@ -142,6 +149,7 @@ async function getRegistry(): Promise<ToolDef[]> {
 }
 
 export const CONFIRMABLE_TOOLS = [
+  "addManualTransaction",
   "createCategory",
   "addTransactionNote",
   "setBudget",

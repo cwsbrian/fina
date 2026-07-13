@@ -466,10 +466,21 @@ export default function Activity() {
               </View>
               <Text style={styles.emptyTitle}>No transactions yet</Text>
               <Text style={styles.emptyBody}>
-                Connect a bank to import automatically, or add transactions
-                manually.
+                Add one manually to get started. Bank sync is optional.
               </Text>
-              <ConnectBankButton onConnected={() => load()} />
+              <View style={styles.emptyActions}>
+                <Pressable
+                  style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
+                  onPress={() => router.push("/transactions/new" as never)}
+                >
+                  <Text style={styles.ctaText}>Add transaction</Text>
+                </Pressable>
+                <ConnectBankButton
+                  compact
+                  label="Connect a bank (optional)"
+                  onConnected={() => load()}
+                />
+              </View>
             </View>
           )
         }
@@ -765,6 +776,7 @@ const styles = StyleSheet.create({
     ...type$.bodyMd, color: colors.body, textAlign: "center",
     maxWidth: 320, marginBottom: space.lg,
   },
+  emptyActions: { alignItems: "center", gap: space.sm },
   cta: {
     backgroundColor: colors.primary,
     paddingHorizontal: space.xl, paddingVertical: 14,

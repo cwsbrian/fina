@@ -13,6 +13,7 @@ import { getCashflowSummary } from "./get-cashflow-summary.js";
 import { findTransactions } from "./find-transactions.js";
 import { createCategory } from "./create-category.js";
 import { addTransactionNote } from "./add-transaction-note.js";
+import { addManualTransaction } from "./add-manual-transaction.js";
 import { setBudget } from "./set-budget.js";
 import { getBudget } from "./get-budget.js";
 import { compareSpendingVsBudget } from "./compare-spending-vs-budget.js";
@@ -53,6 +54,7 @@ export const REGISTRY: ToolDef[] = [
   findTransactions as ToolDef,
   createCategory as ToolDef,
   addTransactionNote as ToolDef,
+  addManualTransaction as ToolDef,
   setBudget as ToolDef,
   getBudget as ToolDef,
   compareSpendingVsBudget as ToolDef,

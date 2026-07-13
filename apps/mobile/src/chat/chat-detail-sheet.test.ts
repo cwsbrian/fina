@@ -25,8 +25,8 @@ describe("chat detail sheet", () => {
     const threadView = readMobile("src/chat/ThreadView.tsx");
 
     expect(threadView).toContain("isInlineCardBlock(b)");
-    expect(threadView).toContain("onSubmitForm={onSubmitForm}");
-    expect(threadView).toContain("onFormFocusChange={onFormFocusChange}");
+    expect(threadView).toContain("...(onSubmitForm ? { onSubmitForm } : {})");
+    expect(threadView).toContain("...(onFormFocusChange ? { onFormFocusChange } : {})");
     expect(threadView).toContain('b.type === "recurring_form_card"');
     expect(threadView).toContain('b.type === "goal_form_card"');
   });

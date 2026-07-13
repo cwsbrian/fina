@@ -713,11 +713,24 @@ export function ThreadView({
         scrollEventThrottle={scrollEventThrottle}
         ListEmptyComponent={
           <View style={styles.startCard}>
-            <Text style={styles.startCardTitle}>Say hi</Text>
+            <Text style={styles.startCardTitle}>Tell Fina what you spent</Text>
             <Text style={styles.startCardBody}>
-              Tell Fina what's on your mind. "How am I doing this month?" is a
-              fine start.
+              Add a purchase in one sentence. No bank connection needed.
             </Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Use example transaction"
+              style={({ pressed }) => [
+                styles.startSuggestion,
+                pressed && { opacity: 0.7 },
+              ]}
+              onPress={() => {
+                setDraft("Coffee $5 this morning");
+                requestAnimationFrame(() => inputRef.current?.focus());
+              }}
+            >
+              <Text style={styles.startSuggestionText}>“Coffee $5 this morning”</Text>
+            </Pressable>
           </View>
         }
         renderItem={({ item }) => (
@@ -777,7 +790,7 @@ export function ThreadView({
           key={composerKey}
           ref={inputRef}
           style={styles.input}
-          placeholder="Message Fina…"
+          placeholder="Tell Fina what you spent…"
           placeholderTextColor={colors.muted}
           value={draft}
           onChangeText={setDraft}
@@ -1345,17 +1358,17 @@ function MessageBubble({
                 <PresentationBlock
                   block={b}
                   role={message.role}
-                  onAccept={onAccept}
+                  {...(onAccept ? { onAccept } : {})}
                   onReject={(intent) => {
                     if (b.type === "confirm_card" || b.type === "plan_proposal_card") {
                       onDismissIntent?.(b.accept_intent);
                     }
                     if (intent) onDismissIntent?.(intent);
                   }}
-                  onSubmitForm={onSubmitForm}
-                  onFormFocusChange={onFormFocusChange}
-                  onOpenActivity={onOpenActivity}
-                  onChangeCategory={onChangeCategory}
+                  {...(onSubmitForm ? { onSubmitForm } : {})}
+                  {...(onFormFocusChange ? { onFormFocusChange } : {})}
+                  {...(onOpenActivity ? { onOpenActivity } : {})}
+                  {...(onChangeCategory ? { onChangeCategory } : {})}
                 />
               </View>
               {showDetailButton || showActionsInDetailRow ? (
@@ -1577,6 +1590,15 @@ const styles = StyleSheet.create({
   },
   startCardTitle: { ...type$.titleSm, color: colors.ink, marginBottom: 4 },
   startCardBody: { ...type$.bodyMd, color: colors.body },
+  startSuggestion: {
+    alignSelf: "flex-start",
+    marginTop: space.sm,
+    paddingHorizontal: space.sm,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: colors.canvas,
+  },
+  startSuggestionText: { ...type$.bodySm, color: colors.primary, fontWeight: "600" },
   composer: {
     flexDirection: "row",
     alignItems: "flex-end",

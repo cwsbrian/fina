@@ -356,11 +356,10 @@ export default function Home() {
   );
   const trialUrgent = !!(me?.trial?.active && days !== null && days <= 5);
   const hasBudget = budgetCurrent?.plan !== null && budgetCurrent?.plan !== undefined;
-  const bankCount = plaidItems?.length ?? 0;
   // Effective tier: trial active grants Pro features regardless of base tier.
   const effectiveTier: Tier = me?.trial?.active ? "pro" : (me?.tier ?? "free");
-  const canConnectBanks = tierAtLeast(effectiveTier, "pro");
   const canUseGoals = tierAtLeast(effectiveTier, "pro");
+  const hasNoBank = plaidItems !== null && plaidItems.length === 0;
   const goalsSavedTotal = goals.reduce((sum, goal) => sum + Number(goal.savedAmount), 0);
   const goalsTargetTotal = goals.reduce((sum, goal) => sum + Number(goal.targetAmount), 0);
   const goalsOverallPct =
@@ -434,14 +433,17 @@ export default function Home() {
     });
   }
 
-  // Connect a bank — gated to Pro+ (Free tier can't connect Plaid items).
-  if (plaidItems !== null && bankCount === 0 && canConnectBanks) {
-    actionItems.push({
-      key: "ob-bank",
-      icon: "card-outline",
-      title: "Connect a bank",
-      subtitle: "Plaid securely imports your transactions.",
-      href: "/banks",
+  // Bank sync is optional. Lead with manual entry instead of putting bank
+  // connection in the user's queue as though it were required.
+  if (hasNoBank) {
+    actionItems.unshift({
+      key: "ob-manual",
+      icon: "add-circle-outline",
+      title: canUseGoals ? "Tell Fina what you spent" : "Add a transaction",
+      subtitle: canUseGoals
+        ? "Try “Coffee $5 this morning.”"
+        : "Log it manually — no bank connection needed.",
+      href: canUseGoals ? "/(tabs)/chat" : "/transactions/new",
     });
   }
   if (budgetCurrent !== null && !hasBudget) {
@@ -455,7 +457,7 @@ export default function Home() {
   }
   // Try chatting with Fina — Pro feature; hides once the user has typed
   // at least once. (Trial grants effective Pro so the card shows.)
-  if (canUseGoals && !hasChatted) {
+  if (canUseGoals && !hasChatted && !hasNoBank) {
     actionItems.push({
       key: "ob-chat",
       icon: "chatbubble-ellipses-outline",
@@ -598,7 +600,9 @@ export default function Home() {
                     icon={it.icon}
                     title={it.title}
                     {...(it.subtitle ? { subtitle: it.subtitle } : {})}
-                    variant={it.key === "categorize" ? "solid" : "default"}
+                    variant={
+                      it.key === "categorize" || it.key === "ob-manual" ? "solid" : "default"
+                    }
                     onPress={() => router.push(it.href as never)}
                   />
                 ))}
