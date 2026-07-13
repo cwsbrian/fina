@@ -9,6 +9,7 @@ describe("manual-first transaction entry", () => {
   it("leads bankless Home users to manual entry instead of bank connection", () => {
     const home = readMobile("app/(tabs)/index.tsx");
     expect(home).toContain('title: canUseGoals ? "Tell Fina what you spent" : "Add a transaction"');
+    expect(home).toContain("if (hasNoBank && hasTransactions === false)");
     expect(home).not.toContain('title: "Connect a bank"');
   });
 

@@ -31,6 +31,7 @@ export type LlmGenerateArgs = {
   maxOutputTokens?: number;
   temperature?: number;
   thinkingBudget?: number;
+  forceTool?: string;
 };
 
 export type LlmGenerateResponse = {
@@ -88,6 +89,9 @@ async function generateDeepSeek(
   };
   const tools = toOpenAITools(args.tools);
   if (tools.length > 0) body.tools = tools;
+  if (args.forceTool) {
+    body.tool_choice = { type: "function", function: { name: args.forceTool } };
+  }
   if (args.responseMimeType === "application/json") {
     body.response_format = { type: "json_object" };
   }

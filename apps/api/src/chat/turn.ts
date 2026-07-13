@@ -226,6 +226,9 @@ Add-intent disambiguation ('X 추가' / 'Add X'):
   about their budget.
 - After addManualTransaction succeeds, reply with one short confirmation; the transaction detail
   card already shows the merchant, amount, date, account, and category.
+- addManualTransaction auto-categorizes when category_name is omitted. If its result says
+  needsCategory=true, ask ONE short question for the category instead of claiming completion.
+  When the user answers, call categorizeTransaction with that transaction id and category.
 - Once the user picks RECURRING, ALWAYS call presentRecurringForm — NOT
   presentConfirmCard — even if some fields are missing. The form has
   editable inputs for amount, cadence, and next-occurrence date; the user
@@ -449,6 +452,24 @@ export function collectPresentationBlocks(
   return out;
 }
 
+const MANUAL_AMOUNT_RE =
+  /(?:[$]\s*\d+(?:[,.]\d{1,2})?|\b\d+(?:[,.]\d{1,2})?\s*(?:cad|usd|dollars?|bucks?|달러|불)\b)/i;
+const MANUAL_QUESTION_RE =
+  /[?？]|^\s*(?:how|what|when|where|why|did|do|can|could|show|find|list|얼마|보여|찾아|내역)/i;
+const NON_MANUAL_TRANSACTION_RE =
+  /\b(?:budget|goal|balance|income|salary|saving|transfer|deposit|refund|subscription|recurring|monthly|weekly|schedule|scheduled|plan|planned|tomorrow|next\s+(?:week|month)|upcoming)\b|예산|목표|잔액|수입|월급|저축|이체|입금|환불|구독|정기|매월|매주|예약|일정|계획|예정|내일|다음\s*(?:주|달)/i;
+
+export function shouldForceManualTransaction(message: string): boolean {
+  const text = message.trim();
+  return (
+    text.length > 0 &&
+    text.length <= 160 &&
+    MANUAL_AMOUNT_RE.test(text) &&
+    !MANUAL_QUESTION_RE.test(text) &&
+    !NON_MANUAL_TRANSACTION_RE.test(text)
+  );
+}
+
 export async function processChatTurn(
   env: Env,
   thread: { id: string; workspaceId: string },
@@ -482,6 +503,15 @@ export async function processChatTurn(
 
   let contents = toLlmHistory(historyChrono);
   if (contents.length === 0) throw new Error("chat_history_empty");
+  const latestUserText = [...contents]
+    .reverse()
+    .find((content) => content.role === "user" && content.parts.some((part) => "text" in part))
+    ?.parts.filter((part): part is { text: string } => "text" in part)
+    .map((part) => part.text)
+    .join("\n") ?? "";
+  const forceTool = shouldForceManualTransaction(latestUserText)
+    ? "addManualTransaction"
+    : undefined;
 
   const toolCalls: ToolCallRecord[] = [];
   let dispatched = 0;
@@ -493,6 +523,7 @@ export async function processChatTurn(
       systemInstruction: sysInstruction,
       tools,
       thinkingBudget: 0,
+      ...(dispatched === 0 && forceTool ? { forceTool } : {}),
     });
 
     // Account every LLM call (including multi-round tool dispatch

@@ -72,6 +72,7 @@ describe("generateLlmContent", () => {
             ],
           },
         ],
+        forceTool: "listCategories",
       },
     );
 
@@ -100,6 +101,10 @@ describe("generateLlmContent", () => {
           },
         },
       ],
+      tool_choice: {
+        type: "function",
+        function: { name: "listCategories" },
+      },
     });
     expect(result.text).toBe("ok");
     expect(result.functionCalls).toEqual([

@@ -62,6 +62,40 @@ describe("addManualTransaction chat tool", () => {
     });
     expect(saved.account.name).toBe("Cash");
     expect(saved.allocations[0]?.categoryId).toBe(category.id);
+    expect(result.needsCategory).toBe(false);
+  });
+
+  it("auto-categorizes from learned merchant mappings", async () => {
+    const category = await prisma.category.create({
+      data: { workspaceId: wsId, name: "Dining", type: "expense" },
+    });
+    await prisma.merchantMapping.create({
+      data: {
+        workspaceId: wsId,
+        merchantNormalized: "coffee and a bagel",
+        categoryId: category.id,
+        source: "manual",
+      },
+    });
+
+    const result = await addManualTransaction.run(ctx, {
+      merchant: "Coffee and a bagel",
+      amount: 8.5,
+    });
+
+    expect(result.transaction.category?.name).toBe("Dining");
+    expect(result.transaction.allocations[0]?.source).toBe("mapping");
+    expect(result.needsCategory).toBe(false);
+  });
+
+  it("asks for a category when automatic categorization has no vocabulary", async () => {
+    const result = await addManualTransaction.run(ctx, {
+      merchant: "Unknown purchase",
+      amount: 5,
+    });
+
+    expect(result.transaction.category).toBeNull();
+    expect(result.needsCategory).toBe(true);
   });
 
   it("rejects viewers", async () => {

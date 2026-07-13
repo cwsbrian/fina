@@ -1,6 +1,7 @@
 import { hasAtLeast, type PresentationBlock } from "@fina/shared";
 import { z } from "zod";
 import { prisma } from "../../db.js";
+import { categorizeNewTransactions } from "../../categorize/service.js";
 import { createManualTransactionService } from "../../transactions/create-manual.js";
 import { loadTransactionDetail } from "./get-transaction-details.js";
 import type { ToolDef } from "./types.js";
@@ -33,6 +34,7 @@ type Result = {
     occurredAt: string;
   };
   block?: PresentationBlock;
+  needsCategory: boolean;
 };
 
 export const addManualTransaction: ToolDef<Args, Result> = {
@@ -66,11 +68,19 @@ export const addManualTransaction: ToolDef<Args, Result> = {
         ...(args.note ? { note: args.note } : {}),
       },
     );
+    if (!args.category_name) {
+      await categorizeNewTransactions(ctx.env, ctx.workspaceId, [created.transaction.id]);
+    }
     const detail = await loadTransactionDetail(
       { workspaceId: ctx.workspaceId, userId: ctx.userId },
       created.transaction.id,
     );
     if (!detail) throw new Error("transaction_not_found");
-    return detail;
+    return {
+      ...detail,
+      needsCategory:
+        detail.transaction.category === null ||
+        detail.transaction.category.name.trim().toLowerCase() === "other",
+    };
   },
 };

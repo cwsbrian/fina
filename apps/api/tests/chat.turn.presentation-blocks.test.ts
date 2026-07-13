@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { collectPresentationBlocks, redactToolCallArgs, SYSTEM_PROMPT } from "../src/chat/turn.js";
+import {
+  collectPresentationBlocks,
+  redactToolCallArgs,
+  shouldForceManualTransaction,
+  SYSTEM_PROMPT,
+} from "../src/chat/turn.js";
 
 describe("collectPresentationBlocks", () => {
   it("collects block from a tool result that has { output: { block: {...} } } shape", () => {
@@ -61,6 +66,15 @@ describe("manual transaction prompt", () => {
     expect(SYSTEM_PROMPT).toContain("Ordinary purchases are one-time manual transactions by default");
     expect(SYSTEM_PROMPT).toContain("call addManualTransaction directly");
     expect(SYSTEM_PROMPT).toContain("Do not call budget tools or show a budget card");
+    expect(SYSTEM_PROMPT).toContain("needsCategory=true");
     expect(SYSTEM_PROMPT).not.toContain("Transactions cannot be manually added");
+  });
+
+  it("forces clear purchase shorthand but leaves other money intents to the model", () => {
+    expect(shouldForceManualTransaction("Coffee and bagel $5")).toBe(true);
+    expect(shouldForceManualTransaction("I paid $5 for coffee this morning")).toBe(true);
+    expect(shouldForceManualTransaction("Coffee $5 monthly")).toBe(false);
+    expect(shouldForceManualTransaction("Set my coffee budget to $50")).toBe(false);
+    expect(shouldForceManualTransaction("Did I spend $5 on coffee?")).toBe(false);
   });
 });

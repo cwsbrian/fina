@@ -146,6 +146,7 @@ export default function Home() {
   );
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
   const [recentTxs, setRecentTxs] = useState<TransactionDTO[] | null>(null);
+  const [hasTransactions, setHasTransactions] = useState<boolean | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [goals, setGoals] = useState<GoalSummary[]>([]);
   const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
@@ -255,10 +256,12 @@ export default function Home() {
         apiFetch<{ transactions: TransactionDTO[] }>(`/workspaces/${wsId}/transactions?limit=10`)
           .then((r) => {
             if (runId !== loadRunId.current) return;
+            setHasTransactions(r.transactions.length > 0);
             setRecentTxs(r.transactions.filter((tx) => isExpenseAmount(tx.amount)).slice(0, 3));
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
+            setHasTransactions(null);
             setRecentTxs([]);
           }),
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${wsId}/categories`)
@@ -435,7 +438,7 @@ export default function Home() {
 
   // Bank sync is optional. Lead with manual entry instead of putting bank
   // connection in the user's queue as though it were required.
-  if (hasNoBank) {
+  if (hasNoBank && hasTransactions === false) {
     actionItems.unshift({
       key: "ob-manual",
       icon: "add-circle-outline",
