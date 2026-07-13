@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import {
   View,
   Text,
@@ -720,7 +720,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   rowLabel: { ...type$.bodyMd, color: colors.ink },
-  rowValue: { ...type$.bodyMd, color: colors.muted, flexShrink: 1, marginLeft: space.sm },
+  rowValue: { ...type$.bodyMd, color: colors.muted, flexShrink: 1, marginLeft: space.sm, textAlign: "right" },
   rowValueWrap: { flexDirection: "row", alignItems: "center", gap: 4, flexShrink: 1 },
   statusValue: { flexDirection: "row", alignItems: "center", gap: 6 },
   statusDot: { width: 6, height: 6, borderRadius: 999 },
