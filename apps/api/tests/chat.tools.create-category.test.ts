@@ -67,9 +67,15 @@ describe("createCategory chat tool", () => {
     await prisma.workspace.delete({ where: { id: other.id } });
   });
 
-  it("editor caller → throws insufficient_role", async () => {
+  it("editor caller creates a category", async () => {
     const editorCtx: ToolContext = { ...ctx, role: "editor" };
-    await expect(createCategory.run(editorCtx, { name: "Food" })).rejects.toThrow("insufficient_role");
+    const r = await createCategory.run(editorCtx, { name: "Food" });
+    expect(r.category.name).toBe("Food");
+  });
+
+  it("viewer caller → throws insufficient_role", async () => {
+    const viewerCtx: ToolContext = { ...ctx, role: "viewer" };
+    await expect(createCategory.run(viewerCtx, { name: "Food" })).rejects.toThrow("insufficient_role");
   });
 
   it("at the 30-category cap → throws too_many_categories", async () => {

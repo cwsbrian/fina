@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hasAtLeast } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { createCategoryService } from "../../categories/create.js";
 import type { ToolDef } from "./types.js";
@@ -47,7 +48,7 @@ export const createCategory: ToolDef<Args, Result> = {
     "Throws category_exists if an active category with this name already exists.",
   args: Args,
   async run(ctx, args) {
-    if (ctx.role !== "owner") {
+    if (!hasAtLeast(ctx.role, "editor")) {
       throw new Error("insufficient_role");
     }
 

@@ -17,8 +17,8 @@ import BottomSheet, {
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
-import type { CategoryDTO } from "@fina/shared";
-import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
+import { hasAtLeast, type CategoryDTO } from "@fina/shared";
+import { apiFetch, bootstrapActiveWorkspaceSummary } from "../api/client";
 import { getActiveWorkspaceId } from "../workspace/active";
 import { colors, space, type as type$ } from "../design/tokens";
 import { categoryMeta } from "./meta";
@@ -67,7 +67,6 @@ export function CategoryPickerSheet({
   onClose,
   onChange,
   onSelect,
-  categoryType,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
   const swipeRefs = useRef<Map<string, Swipeable | null>>(new Map());
@@ -75,6 +74,7 @@ export function CategoryPickerSheet({
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [canManage, setCanManage] = useState(false);
   const effectiveCategoryType = "expense";
 
   const snapPoints = useMemo(() => ["90%"], []);
@@ -82,10 +82,10 @@ export function CategoryPickerSheet({
 
   const load = useCallback(async () => {
     try {
-      const wsId =
-        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
-      if (!wsId) throw new Error("no_workspace");
-      const url = `/workspaces/${wsId}/categories?type=${effectiveCategoryType}`;
+      const workspace = await bootstrapActiveWorkspaceSummary();
+      if (!workspace) throw new Error("no_workspace");
+      setCanManage(hasAtLeast(workspace.role, "editor"));
+      const url = `/workspaces/${workspace.id}/categories?type=${effectiveCategoryType}`;
       const data = await apiFetch<CategoriesResp>(url);
       setCats(
         data.categories
@@ -196,9 +196,9 @@ export function CategoryPickerSheet({
     const rows: Item[] = [{ kind: "header" }];
     for (const c of filtered) rows.push({ kind: "cat", cat: c });
     rows.push({ kind: "none" });
-    if (txId) rows.push({ kind: "create" });
+    if (txId && canManage) rows.push({ kind: "create" });
     return rows;
-  }, [cats, query, txId]);
+  }, [canManage, cats, query, txId]);
 
   const renderBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
@@ -362,6 +362,28 @@ export function CategoryPickerSheet({
             const meta = categoryMeta(c);
             const isSel = c.id === selectedId;
             const isSaving = saving === c.id;
+            const categoryRow = (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.row,
+                  { backgroundColor: colors.canvas },
+                  pressed && { backgroundColor: colors.surfaceSoft },
+                ]}
+                disabled={!!saving}
+                onPress={() => pick(c)}
+              >
+                <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
+                  <Ionicons name={meta.icon} size={16} color={meta.fg} />
+                </View>
+                <Text style={styles.name}>{c.name}</Text>
+                {isSaving ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : isSel ? (
+                  <SelectedMark />
+                ) : null}
+              </Pressable>
+            );
+            if (!canManage) return categoryRow;
             return (
               <Swipeable
                 ref={(r) => {
@@ -415,25 +437,7 @@ export function CategoryPickerSheet({
                   </View>
                 )}
               >
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.row,
-                    { backgroundColor: colors.canvas },
-                    pressed && { backgroundColor: colors.surfaceSoft },
-                  ]}
-                  disabled={!!saving}
-                  onPress={() => pick(c)}
-                >
-                  <View style={[styles.glyph, { backgroundColor: meta.bg }]}>
-                    <Ionicons name={meta.icon} size={16} color={meta.fg} />
-                  </View>
-                  <Text style={styles.name}>{c.name}</Text>
-                  {isSaving ? (
-                    <ActivityIndicator size="small" color={colors.primary} />
-                  ) : isSel ? (
-                    <SelectedMark />
-                  ) : null}
-                </Pressable>
+                {categoryRow}
               </Swipeable>
             );
           }}

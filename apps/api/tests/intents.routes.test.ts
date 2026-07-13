@@ -145,7 +145,7 @@ describe("POST /workspaces/:id/intents/:intentId/consume", () => {
     expect(res.json().error).toBe("workspace_mismatch");
   });
 
-  it("POST 403 insufficient_role: editor-only user cannot run createCategory", async () => {
+  it("POST 200: editor can run createCategory", async () => {
     const u = await signUpAndGetCookie(app, { email: `int-role-${Date.now()}@t.co` });
     const wsId = await getOwnerWorkspaceId(u.userId);
     await makePro(u.userId);
@@ -162,13 +162,12 @@ describe("POST /workspaces/:id/intents/:intentId/consume", () => {
       { tool: "createCategory", args: { name: "EditorCat" } },
     );
 
-    // Consume as editor — consumeIntentService dispatches createCategory.run which checks role === "owner"
     const res = await app.inject({
       method: "POST",
       url: `/workspaces/${wsId}/intents/${intent.id}/consume`,
       headers: { cookie: u.cookie, "x-workspace-id": wsId },
     });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("insufficient_role");
+    expect(res.statusCode).toBe(200);
+    expect(res.json().result.category.name).toBe("EditorCat");
   });
 });

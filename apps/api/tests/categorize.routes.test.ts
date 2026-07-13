@@ -55,6 +55,24 @@ describe("GET /workspaces/:id/categories", () => {
     await app.close();
   });
 
+  it("viewer can list categories", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "cat-list-o@x.com", name: "O" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const viewer = await signUpAndGetCookie(app, { email: "cat-list-v@x.com", name: "V" });
+    await prisma.membership.create({
+      data: { userId: viewer.userId, workspaceId: wsId, role: "viewer" },
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/categories`,
+      headers: { cookie: viewer.cookie, "x-workspace-id": wsId },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().categories.length).toBeGreaterThan(0);
+    await app.close();
+  });
+
   it("404 for non-member workspace", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "cat-nm@x.com", name: "NM" });
@@ -85,7 +103,7 @@ describe("POST /workspaces/:id/categories", () => {
     await app.close();
   });
 
-  it("editor cannot create — 403", async () => {
+  it("editor creates new category", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "cat-ed-o@x.com", name: "O" });
     const wsId = await getOwnerWorkspaceId(owner.userId);
@@ -99,7 +117,27 @@ describe("POST /workspaces/:id/categories", () => {
       headers: { cookie: editor.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
       payload: JSON.stringify({ name: "Hobbies" }),
     });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().category.name).toBe("Hobbies");
+    await app.close();
+  });
+
+  it("viewer cannot create — 403", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "cat-view-o@x.com", name: "O" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const viewer = await signUpAndGetCookie(app, { email: "cat-view-v@x.com", name: "V" });
+    await prisma.membership.create({
+      data: { userId: viewer.userId, workspaceId: wsId, role: "viewer" },
+    });
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/categories`,
+      headers: { cookie: viewer.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ name: "Hobbies" }),
+    });
     expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("insufficient_role");
     await app.close();
   });
 
@@ -205,6 +243,57 @@ describe("PATCH /workspaces/:id/categories/:catId", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().category.name).toBe("Misc");
+    await app.close();
+  });
+
+  it("editor edits and archives category", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "cat-patch-o@x.com", name: "O" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const editor = await signUpAndGetCookie(app, { email: "cat-patch-e@x.com", name: "E" });
+    await prisma.membership.create({
+      data: { userId: editor.userId, workspaceId: wsId, role: "editor" },
+    });
+    const cat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Other" } });
+    const headers = { cookie: editor.cookie, "x-workspace-id": wsId, "content-type": "application/json" };
+
+    const edit = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/categories/${cat.id}`,
+      headers,
+      payload: JSON.stringify({ name: "Misc", icon: "pricetag", color: "#123456" }),
+    });
+    expect(edit.statusCode).toBe(200);
+    expect(edit.json().category).toMatchObject({ name: "Misc", icon: "pricetag", color: "#123456" });
+
+    const archive = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/categories/${cat.id}`,
+      headers,
+      payload: JSON.stringify({ archived: true }),
+    });
+    expect(archive.statusCode).toBe(200);
+    expect(archive.json().category.archivedAt).not.toBeNull();
+    await app.close();
+  });
+
+  it("viewer cannot edit category — 403", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "cat-patch-view-o@x.com", name: "O" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const viewer = await signUpAndGetCookie(app, { email: "cat-patch-view-v@x.com", name: "V" });
+    await prisma.membership.create({
+      data: { userId: viewer.userId, workspaceId: wsId, role: "viewer" },
+    });
+    const cat = await prisma.category.findFirstOrThrow({ where: { workspaceId: wsId, name: "Other" } });
+    const res = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/categories/${cat.id}`,
+      headers: { cookie: viewer.cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: JSON.stringify({ name: "Misc" }),
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error).toBe("insufficient_role");
     await app.close();
   });
 

@@ -49,7 +49,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
     try {
-      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
@@ -97,7 +97,7 @@ export async function categoriesRoutes(app: FastifyInstance): Promise<void> {
     if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
 
     try {
-      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "editor" });
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }

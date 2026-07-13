@@ -11,9 +11,8 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import type { CategoryDTO } from "@fina/shared";
-import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
-import { getActiveWorkspaceId } from "../../src/workspace/active";
+import { hasAtLeast, type CategoryDTO } from "@fina/shared";
+import { apiFetch, bootstrapActiveWorkspaceSummary } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { categoryMeta, withAlpha } from "../../src/categories/meta";
@@ -22,14 +21,15 @@ export default function CategoriesScreen() {
   const [cats, setCats] = useState<CategoryDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [canManage, setCanManage] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const wsId =
-        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
-      if (!wsId) throw new Error("no_workspace");
+      const workspace = await bootstrapActiveWorkspaceSummary();
+      if (!workspace) throw new Error("no_workspace");
+      setCanManage(hasAtLeast(workspace.role, "editor"));
       const data = await apiFetch<{ categories: CategoryDTO[] }>(
-        `/workspaces/${wsId}/categories`,
+        `/workspaces/${workspace.id}/categories`,
       );
       setCats(
         data.categories
@@ -60,11 +60,16 @@ export default function CategoriesScreen() {
       <View style={styles.head}>
         <HeaderIconButton icon="chevron-back" onPress={() => router.back()} variant="plain" />
         <Text style={styles.title}>Categories</Text>
-        <HeaderIconButton
-          icon="add"
-          variant="plain"
-          onPress={() => router.push("/categories/new?type=expense" as never)}
-        />
+        {canManage ? (
+          <HeaderIconButton
+            icon="add"
+            variant="plain"
+            accessibilityLabel="Add category"
+            onPress={() => router.push("/categories/new?type=expense" as never)}
+          />
+        ) : (
+          <View style={styles.headerSlot} />
+        )}
       </View>
 
       {cats === null && !err && (
@@ -93,12 +98,12 @@ export default function CategoriesScreen() {
           {visible.length === 0 ? (
             <View style={styles.empty}>
               <Text style={styles.emptyTitle}>No categories yet</Text>
-              <Text style={styles.emptyBody}>
-                Tap + to add your first one.
-              </Text>
+              {canManage && (
+                <Text style={styles.emptyBody}>Tap + to add your first one.</Text>
+              )}
             </View>
           ) : (
-            visible.map((c) => <Row key={c.id} cat={c} />)
+            visible.map((c) => <Row key={c.id} cat={c} canManage={canManage} />)
           )}
         </ScrollView>
       )}
@@ -106,12 +111,13 @@ export default function CategoriesScreen() {
   );
 }
 
-function Row({ cat }: { cat: CategoryDTO }) {
+function Row({ cat, canManage }: { cat: CategoryDTO; canManage: boolean }) {
   const meta = categoryMeta(cat);
   return (
     <Pressable
       style={({ pressed }) => [styles.row, pressed && { opacity: 0.7 }]}
-      onPress={() => router.push(`/categories/${cat.id}/edit` as never)}
+      disabled={!canManage}
+      onPress={canManage ? () => router.push(`/categories/${cat.id}/edit` as never) : undefined}
     >
       <View
         style={[styles.glyph, { backgroundColor: withAlpha(meta.fg, 0.14) }]}
@@ -121,7 +127,9 @@ function Row({ cat }: { cat: CategoryDTO }) {
       <Text style={styles.rowName} numberOfLines={1}>
         {cat.name}
       </Text>
-      <Ionicons name="chevron-forward" size={18} color={colors.mutedSoft} />
+      {canManage && (
+        <Ionicons name="chevron-forward" size={18} color={colors.mutedSoft} />
+      )}
     </Pressable>
   );
 }
@@ -138,6 +146,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   title: { ...type$.titleSm, color: colors.ink, fontWeight: "600" },
+  headerSlot: { width: 34, height: 34 },
   list: { paddingHorizontal: space.lg, paddingBottom: space.xl },
   row: {
     flexDirection: "row",

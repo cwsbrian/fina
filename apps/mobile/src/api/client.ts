@@ -29,15 +29,19 @@ export const apiFetch = makeApiFetch({
 });
 
 export async function bootstrapActiveWorkspace(): Promise<string | null> {
+  return (await bootstrapActiveWorkspaceSummary())?.id ?? null;
+}
+
+export async function bootstrapActiveWorkspaceSummary(): Promise<WorkspaceSummary | null> {
   // Always reconcile against the live list — a stored id from a workspace the
   // user has since left would otherwise return 404 forever.
   const data = await apiFetch<{ workspaces: WorkspaceSummary[] }>("/workspaces");
-  const ids = new Set(data.workspaces.map((w) => w.id));
   const existing = await getActiveWorkspaceId();
-  if (existing && ids.has(existing)) return existing;
-  const first = data.workspaces[0]?.id ?? null;
+  const active = data.workspaces.find((w) => w.id === existing);
+  if (active) return active;
+  const first = data.workspaces[0] ?? null;
   if (first) {
-    await setActiveWorkspaceId(first);
+    await setActiveWorkspaceId(first.id);
   } else {
     await clearActiveWorkspaceId();
   }
