@@ -882,12 +882,21 @@ export function ThreadView({
           )}
         </BottomSheetScrollView>
       </BottomSheetModal>
-      <CategoryPickerSheet
+      <Modal
         visible={categoryPickerTxId !== null}
-        {...(categoryPickerTxId ? { txId: categoryPickerTxId } : {})}
-        onClose={handleCategoryPickerClose}
-        onSelect={(cat) => categoryPickedRef.current?.(cat)}
-      />
+        transparent
+        animationType="none"
+        onRequestClose={handleCategoryPickerClose}
+      >
+        <View style={styles.categoryPickerModal}>
+          <CategoryPickerSheet
+            visible={categoryPickerTxId !== null}
+            {...(categoryPickerTxId ? { txId: categoryPickerTxId } : {})}
+            onClose={handleCategoryPickerClose}
+            onSelect={(cat) => categoryPickedRef.current?.(cat)}
+          />
+        </View>
+      </Modal>
       <Modal
         visible={supportMessage?.role === "assistant"}
         transparent
@@ -1612,6 +1621,7 @@ const styles = StyleSheet.create({
   wsChipPrefix: { ...type$.caption, color: colors.muted },
   wsChipName: { ...type$.caption, color: colors.ink, fontWeight: "600" },
   modalAvoid: { flex: 1 },
+  categoryPickerModal: { flex: 1 },
   modalBackdrop: {
     flex: 1,
     justifyContent: "center",

@@ -139,6 +139,17 @@ describe("chat detail sheet", () => {
     expect(threadView).toContain("CategoryPickerSheet");
     expect(threadView).toContain("handleChangeCategoryFromDetail");
     expect(threadView).toContain("categoryPickedRef.current?.(cat)");
+    expect(threadView).toContain([
+      "<Modal",
+      "        visible={categoryPickerTxId !== null}",
+      "        transparent",
+      '        animationType="none"',
+      "        onRequestClose={handleCategoryPickerClose}",
+      "      >",
+      "        <View style={styles.categoryPickerModal}>",
+      "          <CategoryPickerSheet",
+    ].join("\n"));
+    expect(threadView).toContain("categoryPickerModal: { flex: 1 }");
     expect(presentationBlock).toContain("onChangeCategory?:");
     expect(presentationBlock).toContain("onChangeCategory(it.txId");
     expect(presentationBlock).toContain("Change category");
