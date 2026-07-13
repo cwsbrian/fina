@@ -7,6 +7,7 @@ import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
 export const DEFAULT_PERIOD = new Date("1900-01-01T00:00:00.000Z");
+const UNCATEGORIZED_CATEGORY_ID = "__uncategorized__";
 
 export type CategoryAllocation = { categoryId: string; amount: number };
 
@@ -187,8 +188,9 @@ export type CategorySpend = {
 
 /** Sum positive-amount expense allocations grouped by category for the
  *  given month [periodStart, nextMonth). Pulls category names alongside
- *  for UI render. Categories with zero spend are NOT returned — the
- *  caller can backfill them from the plan's allocations. */
+ *  for UI render and groups null categories into Uncategorized. Categories
+ *  with zero spend are NOT returned — the caller can backfill them from the
+ *  plan's allocations. */
 export async function monthlySpendByCategory(
   workspaceId: string,
   year: number,
@@ -205,7 +207,6 @@ export async function monthlySpendByCategory(
         workspaceId,
         occurredAt: { gte: from, lt: to },
       }),
-      categoryId: { not: null },
     },
     select: {
       amount: true,
@@ -215,10 +216,13 @@ export async function monthlySpendByCategory(
   });
   const sums = new Map<string, { name: string; spent: number }>();
   for (const r of rows) {
-    if (!r.categoryId || !r.category) continue;
-    const cur = sums.get(r.categoryId) ?? { name: r.category.name, spent: 0 };
+    const categoryId = r.categoryId ?? UNCATEGORIZED_CATEGORY_ID;
+    const cur = sums.get(categoryId) ?? {
+      name: r.category?.name ?? "Uncategorized",
+      spent: 0,
+    };
     cur.spent += Number(r.amount);
-    sums.set(r.categoryId, cur);
+    sums.set(categoryId, cur);
   }
   return Array.from(sums, ([categoryId, v]) => ({
     categoryId,

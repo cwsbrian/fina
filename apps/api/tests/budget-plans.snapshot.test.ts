@@ -52,6 +52,34 @@ describe("budgetPlanSnapshot", () => {
     expect(d.color).toBe("#cc33aa");
   });
 
+  it("includes uncategorized spend as a category", async () => {
+    await prisma.budgetPlan.create({
+      data: {
+        workspaceId: wsId,
+        periodStart: new Date("2026-05-01T12:00:00.000Z"),
+        totalAmount: "9000.00",
+        categoryAllocations: [],
+      },
+    });
+    const tx = await prisma.transaction.create({
+      data: { workspaceId: wsId, accountId: acct, amount: "25.40", merchantRaw: "Unknown", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+    });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: null, amount: "25.40" },
+    });
+
+    const snap = await budgetPlanSnapshot(wsId, 2026, 5);
+    expect(snap!.categories).toContainEqual({
+      categoryId: "__uncategorized__",
+      categoryName: "Uncategorized",
+      color: null,
+      icon: null,
+      allocated: null,
+      spent: "25.40",
+      scheduled: "0.00",
+    });
+  });
+
   it("periodToYearMonth maps relative to UTC now", () => {
     expect(periodToYearMonth("this_month")).toEqual({ year: 2026, month: 5 });
     expect(periodToYearMonth("last_month")).toEqual({ year: 2026, month: 4 });
