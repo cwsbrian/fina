@@ -81,6 +81,7 @@ describe("generateBrief (mocked LLM)", () => {
             recurring: [],
             budgetTotal: null,
             forecast: {
+              mention: true,
               daysLeft: 10,
               hasHistory: false,
               portfolio: null,

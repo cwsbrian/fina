@@ -29,6 +29,8 @@ function formatMoney(amount: number, currency: string): string {
 /** Server-internal forecast summary fed to the LLM (never a client DTO). All
  *  amounts are display-formatted so the prompt uses them verbatim. */
 export type BriefForecast = {
+  /** Daily dedupe gate. Weekly/Monthly always leave this true. */
+  mention: boolean;
   daysLeft: number;
   /** False only for a brand-new workspace with no current or historical signal. */
   hasHistory: boolean;
@@ -106,7 +108,14 @@ export function summarizeForecast(f: MonthEndForecast, currency: string): BriefF
               ? ("faster" as const)
               : ("similar" as const),
     }));
-  return { daysLeft: f.daysLeft, hasHistory, portfolio, topRisks, historicalPatterns };
+  return {
+    mention: true,
+    daysLeft: f.daysLeft,
+    hasHistory,
+    portfolio,
+    topRisks,
+    historicalPatterns,
+  };
 }
 
 export type WorkspaceContext = {

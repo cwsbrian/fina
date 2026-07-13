@@ -29,6 +29,7 @@ describe("brief LLM strings are English (no Hangul)", () => {
       expect(v).toContain("forecast.portfolio");
       expect(v).toContain("forecast.topRisks");
       expect(v).toContain("forecast.historicalPatterns");
+      expect(v).toContain("forecast.mention");
       expect(v).toContain("projectedOverBudget");
       expect(v).toContain("hasHistory");
       expect(v).toContain("at_risk");

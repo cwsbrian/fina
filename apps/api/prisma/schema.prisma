@@ -774,6 +774,9 @@ model Brief {
   /// changes between briefs. Lexical sort = chronological.
   date      String
   messageId String    @unique
+  /// Structured Daily forecast state that was actually delivered by push.
+  /// Null for Weekly/Monthly, suppressed repeats, and failed/skipped pushes.
+  forecastState Json?
   createdAt DateTime  @default(now())
 
   user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)

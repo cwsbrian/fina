@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../db.js";
 import { logInfo, logError } from "../../logger.js";
 import type { Env } from "../../env.js";
@@ -70,6 +71,27 @@ export async function runDailyBrief(env: Env): Promise<void> {
     try {
       const briefType = determineBriefType(u.localDate);
       const context = await buildBriefContext(u.id, briefType);
+      let dailyForecastState: ForecastAlertState | null = null;
+      let mentionForecast = true;
+      if (briefType === "daily") {
+        dailyForecastState = snapshotForecastState(context);
+        const previous = await prisma.brief.findFirst({
+          where: {
+            userId: u.id,
+            type: "daily",
+            forecastState: { not: Prisma.DbNull },
+          },
+          orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+          select: { forecastState: true },
+        });
+        mentionForecast = shouldMentionDailyForecast(
+          dailyForecastState,
+          parseForecastState(previous?.forecastState),
+        );
+        if (!mentionForecast) {
+          for (const workspace of context.workspaces) workspace.forecast.mention = false;
+        }
+      }
       if (u.morningBriefFrequency === "issues_only" && !hasBriefIssues(context)) {
         logInfo({ cron: CRON_NAME, userId: u.id, briefType }, "brief skipped quiet day");
         continue;
@@ -149,7 +171,7 @@ export async function runDailyBrief(env: Env): Promise<void> {
       const threadIdLocal = thread.id;
 
       // Atomic emit — message + brief together.
-      await prisma.$transaction(async (tx) => {
+      const emitted = await prisma.$transaction(async (tx) => {
         const msg = await tx.chatMessage.create({
           data: {
             threadId: threadIdLocal,
@@ -157,7 +179,7 @@ export async function runDailyBrief(env: Env): Promise<void> {
             blocks: blocks as unknown as object,
           },
         });
-        await tx.brief.create({
+        const brief = await tx.brief.create({
           data: {
             userId: u.id,
             type: briefType,
@@ -169,6 +191,7 @@ export async function runDailyBrief(env: Env): Promise<void> {
           { cron: CRON_NAME, userId: u.id, briefType, msgId: msg.id, threadId: threadIdLocal },
           "brief emitted",
         );
+        return { briefId: brief.id };
       });
 
       // Push notification (Plan 2C). Best-effort — brief is already in
@@ -179,7 +202,13 @@ export async function runDailyBrief(env: Env): Promise<void> {
       try {
         const briefText = briefBlocksToText(blocks);
         const preview = markdownToPlainPreview(briefText);
-        await sendBriefPush(env, u.id, preview, { threadId: threadIdLocal });
+        const result = await sendBriefPush(env, u.id, preview, { threadId: threadIdLocal });
+        if (dailyForecastState && mentionForecast && result.sent > 0) {
+          await prisma.brief.update({
+            where: { id: emitted.briefId },
+            data: { forecastState: dailyForecastState as unknown as Prisma.InputJsonValue },
+          });
+        }
       } catch (err) {
         logError(
           { cron: CRON_NAME, userId: u.id, err },
@@ -204,14 +233,123 @@ function determineBriefType(localDateIso: string): BriefType {
 function hasBriefIssues(context: BriefContext): boolean {
   return context.workspaces.some((w) => {
     const portfolioSeverity = w.forecast.portfolio?.severity;
+    const hasForecastIssue =
+      w.forecast.mention &&
+      (portfolioSeverity === "watch" ||
+        portfolioSeverity === "at_risk" ||
+        w.forecast.topRisks.length > 0);
     return (
-      portfolioSeverity === "watch" ||
-      portfolioSeverity === "at_risk" ||
-      w.forecast.topRisks.length > 0 ||
+      hasForecastIssue ||
       (context.briefType !== "daily" && w.forecast.historicalPatterns.length > 0) ||
+      w.newTransactions.count > 0 ||
       w.uncategorizedCount > 0 ||
       w.schedule.length > 0 ||
       w.recurring.length > 0
     );
   });
+}
+
+type ForecastRiskState = {
+  category: string;
+  severity: "watch" | "at_risk";
+  overspend: number;
+};
+
+type WorkspaceForecastAlertState = {
+  id: string;
+  portfolioSeverity: "none" | "on_track" | "watch" | "at_risk";
+  portfolioOverspend: number;
+  risks: ForecastRiskState[];
+  scheduledEvidence: string[];
+};
+
+export type ForecastAlertState = {
+  version: 1;
+  workspaces: WorkspaceForecastAlertState[];
+};
+
+/** Stable, sentence-independent state used only for Daily forecast dedupe. */
+export function snapshotForecastState(context: BriefContext): ForecastAlertState {
+  const workspaces = context.workspaces
+    .map((workspace): WorkspaceForecastAlertState => ({
+      id: workspace.id,
+      portfolioSeverity: workspace.forecast.portfolio?.severity ?? "none",
+      portfolioOverspend: moneyNumber(workspace.forecast.portfolio?.overspend ?? "0"),
+      risks: workspace.forecast.topRisks
+        .map((risk) => ({
+          category: risk.category,
+          severity: risk.severity,
+          overspend: moneyNumber(risk.overspend),
+        }))
+        .sort((a, b) => a.category.localeCompare(b.category)),
+      scheduledEvidence: [
+        ...workspace.schedule.map(
+          (item) => `scheduled|${item.category}|${item.amount}|${item.date}`,
+        ),
+        ...workspace.recurring.map(
+          (item) => `recurring|${item.merchant}|${item.amount}|${item.nextDate}`,
+        ),
+      ].sort(),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
+  return { version: 1, workspaces };
+}
+
+/** True only for a first alert or a meaningful structured state change. */
+export function shouldMentionDailyForecast(
+  current: ForecastAlertState,
+  previous: ForecastAlertState | null,
+): boolean {
+  if (!previous) return true;
+  if (current.workspaces.length !== previous.workspaces.length) return true;
+
+  const previousById = new Map(previous.workspaces.map((workspace) => [workspace.id, workspace]));
+  for (const workspace of current.workspaces) {
+    const before = previousById.get(workspace.id);
+    if (!before || workspace.portfolioSeverity !== before.portfolioSeverity) return true;
+    if (workspace.risks.length !== before.risks.length) return true;
+
+    const beforeRisks = new Map(before.risks.map((risk) => [risk.category, risk]));
+    for (const risk of workspace.risks) {
+      const oldRisk = beforeRisks.get(risk.category);
+      if (!oldRisk || oldRisk.severity !== risk.severity) return true;
+      if (meaningfullyDifferent(risk.overspend, oldRisk.overspend)) return true;
+    }
+
+    const hasRisk =
+      workspace.portfolioSeverity === "watch" ||
+      workspace.portfolioSeverity === "at_risk" ||
+      before.portfolioSeverity === "watch" ||
+      before.portfolioSeverity === "at_risk" ||
+      workspace.risks.length > 0 ||
+      before.risks.length > 0;
+    if (hasRisk && meaningfullyDifferent(workspace.portfolioOverspend, before.portfolioOverspend)) {
+      return true;
+    }
+    if (
+      hasRisk &&
+      workspace.scheduledEvidence.join("\n") !== before.scheduledEvidence.join("\n")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function parseForecastState(value: unknown): ForecastAlertState | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Partial<ForecastAlertState>;
+  return candidate.version === 1 && Array.isArray(candidate.workspaces)
+    ? (candidate as ForecastAlertState)
+    : null;
+}
+
+function moneyNumber(display: string): number {
+  const value = Number(display.replace(/[^0-9.-]/g, ""));
+  return Number.isFinite(value) ? Math.round(value * 100) / 100 : 0;
+}
+
+function meaningfullyDifferent(current: number, previous: number): boolean {
+  const threshold = Math.max(50, Math.abs(previous) * 0.1);
+  return Math.abs(current - previous) >= threshold;
 }

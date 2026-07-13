@@ -48,6 +48,7 @@ describe("summarizeForecast", () => {
       "CAD",
     );
     expect(out.portfolio).not.toBeNull();
+    expect(out.mention).toBe(true);
     expect(out.portfolio!.severity).toBe("on_track");
     expect(out.portfolio!.projectedOverBudget).toBe(false);
     expect(out.portfolio!.overspend).toBe("$0.00");
