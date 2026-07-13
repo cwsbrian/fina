@@ -35,7 +35,14 @@ type Result = {
   period: { start: string; end: string };
   /** TOTAL (whole-budget) month-end projection — the headline judgment: will
    *  the user blow their OVERALL budget. Lead with this; items are the "where". */
-  portfolio: { budget: string; spent: string; scheduled: string; projected: string; overspend: string; severity: RiskTier };
+  portfolio: {
+    budget: string;
+    spent: string;
+    scheduled: string;
+    projected: string;
+    overspend: string;
+    severity: RiskTier;
+  };
   items: Item[];
   block: PresentationBlock;
 };
@@ -52,7 +59,9 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
 
     const todayPct = todayPctFor(period, year, month);
     const forecast = await projectMonthEnd(ctx.workspaceId, ctx.userId, year, month);
-    const fcById = new Map<string, CategoryForecast>(forecast.categories.map((f) => [f.categoryId, f]));
+    const fcById = new Map<string, CategoryForecast>(
+      forecast.categories.map((f) => [f.categoryId, f]),
+    );
     const items: Item[] = (snap?.categories ?? [])
       .filter((c) => c.allocated !== null)
       .map((c) => {
@@ -68,7 +77,8 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
         const remaining = amount - spent - planned;
         const spentPct = amount > 0 ? Number(((spent / amount) * 100).toFixed(2)) : 0;
         const plannedPct = amount > 0 ? Number(((planned / amount) * 100).toFixed(2)) : 0;
-        const status: "on-pace" | "over-pace" = spentPct <= todayPct * 1.05 ? "on-pace" : "over-pace";
+        const status: "on-pace" | "over-pace" =
+          spentPct <= todayPct * 1.05 ? "on-pace" : "over-pace";
         return {
           categoryId: c.categoryId,
           categoryName: c.categoryName,
@@ -138,8 +148,7 @@ function toRecapBlock(
   projectedTotal: number,
 ): PresentationBlock {
   const periodLabel =
-    period === "this_month" ? "This month" :
-    period === "last_month" ? "Last month" : "Next month";
+    period === "this_month" ? "This month" : period === "last_month" ? "Last month" : "Next month";
 
   // True totals across ALL spend (capped + uncapped), matching the Home
   // screen and getBudget — not just the capped rows below.
@@ -150,12 +159,14 @@ function toRecapBlock(
 
   // Only surface categories that need ATTENTION — forecast severity is
   // at_risk/watch, or already over their cap. Using forecast-based severity
-  // rather than pace alone means the filter accounts for discretionary
-  // run-rate projection, not just the current-day snapshot. Categories that
+  // rather than pace alone means the filter accounts for the category's
+  // same-day pattern projection, not just the current-day snapshot. Categories that
   // are on_track (or have insufficient history) are noise on a "how am I
   // doing" card, so we hide them and note the count instead. Most-strained first.
   const attention = items
-    .filter((i) => i.severity === "at_risk" || i.severity === "watch" || parseFloat(i.remaining) < 0)
+    .filter(
+      (i) => i.severity === "at_risk" || i.severity === "watch" || parseFloat(i.remaining) < 0,
+    )
     .sort((a, b) => b.spentPct - a.spentPct);
   const hiddenOnPace = items.length - attention.length;
 

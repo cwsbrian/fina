@@ -11,12 +11,18 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
 
   beforeEach(async () => {
     const stamp = `cvb-${Date.now()}-${Math.floor(Math.random() * 1e9)}`;
-    const u = await prisma.user.create({ data: { id: stamp, email: `${stamp}@t.co`, name: "CVB", tz: "America/Toronto" } });
+    const u = await prisma.user.create({
+      data: { id: stamp, email: `${stamp}@t.co`, name: "CVB", tz: "America/Toronto" },
+    });
     const ws = await prisma.workspace.create({ data: { name: "cvb-ws", currency: "CAD" } });
     wsId = ws.id;
     await prisma.membership.create({ data: { userId: u.id, workspaceId: wsId, role: "owner" } });
     dining = (await prisma.category.create({ data: { workspaceId: wsId, name: "Dining" } })).id;
-    acct = (await prisma.bankAccount.create({ data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" } })).id;
+    acct = (
+      await prisma.bankAccount.create({
+        data: { workspaceId: wsId, name: "Chq", type: "depository", currency: "CAD" },
+      })
+    ).id;
     ctx = { env: {} as never, workspaceId: wsId, userId: u.id, role: "owner" };
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-15T12:00:00Z"));
@@ -29,12 +35,28 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
 
   it("builds items + recap from the BudgetPlan, per capped category", async () => {
     await prisma.budgetPlan.create({
-      data: { workspaceId: wsId, periodStart: new Date("2026-05-01T12:00:00.000Z"), totalAmount: "9000.00", categoryAllocations: [{ categoryId: dining, amount: 500 }] },
+      data: {
+        workspaceId: wsId,
+        periodStart: new Date("2026-05-01T12:00:00.000Z"),
+        totalAmount: "9000.00",
+        categoryAllocations: [{ categoryId: dining, amount: 500 }],
+      },
     });
     const tx = await prisma.transaction.create({
-      data: { workspaceId: wsId, accountId: acct, amount: "200.00", merchantRaw: "Resto", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+      data: {
+        workspaceId: wsId,
+        accountId: acct,
+        amount: "200.00",
+        merchantRaw: "Resto",
+        occurredAt: new Date("2026-05-10T12:00:00Z"),
+        source: "manual",
+        pending: false,
+        rawData: {},
+      },
     });
-    await prisma.transactionAllocation.create({ data: { transactionId: tx.id, categoryId: dining, amount: "200.00" } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx.id, categoryId: dining, amount: "200.00" },
+    });
 
     const r = await compareSpendingVsBudget.run(ctx, {});
     expect(r.block.type).toBe("recap");
@@ -52,16 +74,43 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
     // hid the uncapped spend.
     const misc = (await prisma.category.create({ data: { workspaceId: wsId, name: "Misc" } })).id;
     await prisma.budgetPlan.create({
-      data: { workspaceId: wsId, periodStart: new Date("2026-05-01T12:00:00.000Z"), totalAmount: "9000.00", categoryAllocations: [{ categoryId: dining, amount: 500 }] },
+      data: {
+        workspaceId: wsId,
+        periodStart: new Date("2026-05-01T12:00:00.000Z"),
+        totalAmount: "9000.00",
+        categoryAllocations: [{ categoryId: dining, amount: 500 }],
+      },
     });
     const tx1 = await prisma.transaction.create({
-      data: { workspaceId: wsId, accountId: acct, amount: "200.00", merchantRaw: "Resto", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+      data: {
+        workspaceId: wsId,
+        accountId: acct,
+        amount: "200.00",
+        merchantRaw: "Resto",
+        occurredAt: new Date("2026-05-10T12:00:00Z"),
+        source: "manual",
+        pending: false,
+        rawData: {},
+      },
     });
-    await prisma.transactionAllocation.create({ data: { transactionId: tx1.id, categoryId: dining, amount: "200.00" } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx1.id, categoryId: dining, amount: "200.00" },
+    });
     const tx2 = await prisma.transaction.create({
-      data: { workspaceId: wsId, accountId: acct, amount: "8000.00", merchantRaw: "Rent", occurredAt: new Date("2026-05-09T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+      data: {
+        workspaceId: wsId,
+        accountId: acct,
+        amount: "8000.00",
+        merchantRaw: "Rent",
+        occurredAt: new Date("2026-05-09T12:00:00Z"),
+        source: "manual",
+        pending: false,
+        rawData: {},
+      },
     });
-    await prisma.transactionAllocation.create({ data: { transactionId: tx2.id, categoryId: misc, amount: "8000.00" } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: tx2.id, categoryId: misc, amount: "8000.00" },
+    });
 
     const r = await compareSpendingVsBudget.run(ctx, {});
     if (r.block.type !== "recap") throw new Error("wrong block");
@@ -74,7 +123,9 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
   });
 
   it("recap rows show only categories needing attention; on-pace ones are hidden", async () => {
-    const groceries = (await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } })).id;
+    const groceries = (
+      await prisma.category.create({ data: { workspaceId: wsId, name: "Groceries" } })
+    ).id;
     // Dining: tiny cap, big spend -> over budget (attention).
     // Groceries: large cap, trivial spend -> on pace (hidden).
     await prisma.budgetPlan.create({
@@ -89,13 +140,35 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
       },
     });
     const t1 = await prisma.transaction.create({
-      data: { workspaceId: wsId, accountId: acct, amount: "200.00", merchantRaw: "Resto", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+      data: {
+        workspaceId: wsId,
+        accountId: acct,
+        amount: "200.00",
+        merchantRaw: "Resto",
+        occurredAt: new Date("2026-05-10T12:00:00Z"),
+        source: "manual",
+        pending: false,
+        rawData: {},
+      },
     });
-    await prisma.transactionAllocation.create({ data: { transactionId: t1.id, categoryId: dining, amount: "200.00" } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: t1.id, categoryId: dining, amount: "200.00" },
+    });
     const t2 = await prisma.transaction.create({
-      data: { workspaceId: wsId, accountId: acct, amount: "10.00", merchantRaw: "Mart", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
+      data: {
+        workspaceId: wsId,
+        accountId: acct,
+        amount: "10.00",
+        merchantRaw: "Mart",
+        occurredAt: new Date("2026-05-10T12:00:00Z"),
+        source: "manual",
+        pending: false,
+        rawData: {},
+      },
     });
-    await prisma.transactionAllocation.create({ data: { transactionId: t2.id, categoryId: groceries, amount: "10.00" } });
+    await prisma.transactionAllocation.create({
+      data: { transactionId: t2.id, categoryId: groceries, amount: "10.00" },
+    });
 
     const r = await compareSpendingVsBudget.run(ctx, {});
     if (r.block.type !== "recap") throw new Error("wrong block");
@@ -113,21 +186,45 @@ describe("compareSpendingVsBudget chat tool (BudgetPlan)", () => {
     expect(r.block.type).toBe("recap");
   });
 
-  it("surfaces a month-end forecast: projected + severity on over-pace categories", async () => {
+  it("surfaces a month-end forecast when current pace is faster than the category pattern", async () => {
     await prisma.budgetPlan.create({
-      data: { workspaceId: wsId, periodStart: new Date("2026-05-01T12:00:00.000Z"), totalAmount: "9000.00", categoryAllocations: [{ categoryId: dining, amount: 300 }] },
+      data: {
+        workspaceId: wsId,
+        periodStart: new Date("2026-05-01T12:00:00.000Z"),
+        totalAmount: "9000.00",
+        categoryAllocations: [{ categoryId: dining, amount: 300 }],
+      },
     });
-    // Heavy historical dining so the 90-day discretionary rate projects over cap.
-    for (const day of ["2026-03-05","2026-03-20","2026-04-05","2026-04-20","2026-04-25","2026-04-28"]) {
+    for (const day of [
+      "2026-02-05",
+      "2026-02-20",
+      "2026-03-05",
+      "2026-03-20",
+      "2026-04-05",
+      "2026-04-20",
+      "2026-05-05",
+    ]) {
+      const amount = day === "2026-05-05" ? "450.00" : "300.00";
       const t = await prisma.transaction.create({
-        data: { workspaceId: wsId, accountId: acct, amount: "300.00", merchantRaw: "Resto", occurredAt: new Date(`${day}T12:00:00Z`), source: "manual", pending: false, rawData: {} },
+        data: {
+          workspaceId: wsId,
+          accountId: acct,
+          amount,
+          merchantRaw: "Resto",
+          occurredAt: new Date(`${day}T12:00:00Z`),
+          source: "manual",
+          pending: false,
+          rawData: {},
+        },
       });
-      await prisma.transactionAllocation.create({ data: { transactionId: t.id, categoryId: dining, amount: "300.00" } });
+      await prisma.transactionAllocation.create({
+        data: { transactionId: t.id, categoryId: dining, amount },
+      });
     }
     const r = await compareSpendingVsBudget.run(ctx, {});
     const item = r.items.find((i) => i.categoryName === "Dining")!;
     expect(item.severity).toBe("at_risk");
-    expect(Number(item.projected)).toBeGreaterThan(300);
+    expect(Number(item.projected)).toBe(900);
     if (r.block.type !== "recap") throw new Error("wrong block");
     const row = r.block.rows.find((x) => x.label === "Dining")!;
     expect(row.projected).toBeDefined();

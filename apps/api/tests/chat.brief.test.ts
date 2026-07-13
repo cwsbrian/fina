@@ -58,19 +58,37 @@ describe("generateBrief (mocked LLM)", () => {
         user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" },
         briefType: "daily",
         date: "2026-05-22",
-        workspaces: [{
-          id: "ws1",
-          name: "Personal",
-          briefLabel: "Personal",
-          currency: "CAD",
-          newTransactions: { count: 1, sample: [{ merchant: "Starbucks", amount: "10.00", occurredAt: "2026-05-21T15:00:00Z", category: null }] },
-          uncategorizedCount: 1,
-          schedule: [{ category: "시장", amount: "100", date: "2026-05-22" }],
-          budgets: [],
-          recurring: [],
-          budgetTotal: null,
-          forecast: { daysLeft: 10, hasHistory: false, portfolio: null, topRisks: [] },
-        }],
+        workspaces: [
+          {
+            id: "ws1",
+            name: "Personal",
+            briefLabel: "Personal",
+            currency: "CAD",
+            newTransactions: {
+              count: 1,
+              sample: [
+                {
+                  merchant: "Starbucks",
+                  amount: "10.00",
+                  occurredAt: "2026-05-21T15:00:00Z",
+                  category: null,
+                },
+              ],
+            },
+            uncategorizedCount: 1,
+            schedule: [{ category: "시장", amount: "100", date: "2026-05-22" }],
+            budgets: [],
+            recurring: [],
+            budgetTotal: null,
+            forecast: {
+              daysLeft: 10,
+              hasHistory: false,
+              portfolio: null,
+              topRisks: [],
+              historicalPatterns: [],
+            },
+          },
+        ],
       },
       [],
       "daily",
@@ -88,7 +106,12 @@ describe("generateBrief (mocked LLM)", () => {
 
     await generateBrief(
       testEnv(),
-      { user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" }, briefType: "daily", date: "2026-05-22", workspaces: [] },
+      {
+        user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" },
+        briefType: "daily",
+        date: "2026-05-22",
+        workspaces: [],
+      },
       ["BRIEF_FROM_YESTERDAY_MARKER"],
       "daily",
     );
@@ -104,7 +127,12 @@ describe("generateBrief (mocked LLM)", () => {
 
     const blocks = await generateBrief(
       testEnv(),
-      { user: { id: "u1", name: null, tz: "America/Toronto", morningTime: "08:00" }, briefType: "daily", date: "2026-05-22", workspaces: [] },
+      {
+        user: { id: "u1", name: null, tz: "America/Toronto", morningTime: "08:00" },
+        briefType: "daily",
+        date: "2026-05-22",
+        workspaces: [],
+      },
       [],
       "daily",
     );

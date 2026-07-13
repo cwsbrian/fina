@@ -1,7 +1,12 @@
 import { prisma } from "../db.js";
 import { resolveUserTz, partsInTz } from "./tools/periods.js";
 import { budgetPlanSnapshot } from "../budget-plans/service.js";
-import { projectMonthEnd, round2, type MonthEndForecast, type CategoryForecast } from "../analysis/forecast.js";
+import {
+  projectMonthEnd,
+  round2,
+  type MonthEndForecast,
+  type CategoryForecast,
+} from "../analysis/forecast.js";
 
 export type BriefType = "daily" | "weekly" | "monthly";
 
@@ -25,12 +30,13 @@ function formatMoney(amount: number, currency: string): string {
  *  amounts are display-formatted so the prompt uses them verbatim. */
 export type BriefForecast = {
   daysLeft: number;
-  /** False when projected === 0 (brand-new workspace, no spend + no 90-day avg). */
+  /** False only for a brand-new workspace with no current or historical signal. */
   hasHistory: boolean;
   portfolio: {
     cap: string;
     projected: string;
     overspend: string; // "$0.00" when not over
+    projectedOverBudget: boolean;
     severity: "on_track" | "watch" | "at_risk";
   } | null; // null ⇔ no positive total cap (no plan OR totalAmount<=0)
   topRisks: Array<{
@@ -40,17 +46,30 @@ export type BriefForecast = {
     overspend: string;
     severity: "watch" | "at_risk";
   }>;
+  historicalPatterns: Array<{
+    category: string;
+    average: string;
+    cap: string;
+    monthsOverBudget: number;
+    monthsObserved: number;
+    currentPace: "slower" | "similar" | "faster" | "not_yet_comparable";
+  }>;
 };
 
 /** Pure mapper: MonthEndForecast + currency → BriefForecast. No DB, no clock. */
 export function summarizeForecast(f: MonthEndForecast, currency: string): BriefForecast {
-  const hasHistory = f.portfolio.projected > 0;
+  const hasHistory =
+    f.portfolio.projected > 0 || f.categories.some((category) => category.historyMonths > 0);
   const portfolio =
     f.portfolio.cap > 0
       ? {
           cap: formatMoney(f.portfolio.cap, currency),
           projected: formatMoney(f.portfolio.projected, currency),
-          overspend: formatMoney(Math.max(0, round2(f.portfolio.projected - f.portfolio.cap)), currency),
+          overspend: formatMoney(
+            Math.max(0, round2(f.portfolio.projected - f.portfolio.cap)),
+            currency,
+          ),
+          projectedOverBudget: f.portfolio.projected > f.portfolio.cap,
           severity: f.portfolio.severity as "on_track" | "watch" | "at_risk",
         }
       : null;
@@ -68,7 +87,26 @@ export function summarizeForecast(f: MonthEndForecast, currency: string): BriefF
       overspend: formatMoney(c.projectedOverspend, currency),
       severity: c.severity,
     }));
-  return { daysLeft: f.daysLeft, hasHistory, portfolio, topRisks };
+  const historicalPatterns = f.categories
+    .filter((c) => c.historyMonths === 3 && c.historicalOverspendMonths >= 2)
+    .sort((a, b) => b.historicalOverspendMonths - a.historicalOverspendMonths)
+    .slice(0, 3)
+    .map((c) => ({
+      category: c.categoryName,
+      average: formatMoney(c.historicalMonthlyAverage, currency),
+      cap: formatMoney(c.cap, currency),
+      monthsOverBudget: c.historicalOverspendMonths,
+      monthsObserved: c.historyMonths,
+      currentPace:
+        c.currentPaceRatio === null
+          ? ("not_yet_comparable" as const)
+          : c.currentPaceRatio < 0.9
+            ? ("slower" as const)
+            : c.currentPaceRatio > 1.1
+              ? ("faster" as const)
+              : ("similar" as const),
+    }));
+  return { daysLeft: f.daysLeft, hasHistory, portfolio, topRisks, historicalPatterns };
 }
 
 export type WorkspaceContext = {
@@ -284,7 +322,13 @@ async function buildWorkspaceContext(
     nextDate: r.nextOccurrenceDate.toISOString().slice(0, 10),
   }));
 
-  const monthEnd = await projectMonthEnd(workspaceId, userId, nowInUserTz.year, nowInUserTz.month, now);
+  const monthEnd = await projectMonthEnd(
+    workspaceId,
+    userId,
+    nowInUserTz.year,
+    nowInUserTz.month,
+    now,
+  );
   const forecast = summarizeForecast(monthEnd, ws.currency);
 
   return {
@@ -315,11 +359,7 @@ function txWindowStartFor(briefType: BriefType, now: Date, tz: string): Date {
 }
 
 /** Window-end for "upcoming schedule" per brief type. */
-function scheduleWindowEndFor(
-  briefType: BriefType,
-  now: Date,
-  tz: string,
-): Date {
+function scheduleWindowEndFor(briefType: BriefType, now: Date, tz: string): Date {
   switch (briefType) {
     case "daily":
       return shiftDaysInTz(now, 7, tz);

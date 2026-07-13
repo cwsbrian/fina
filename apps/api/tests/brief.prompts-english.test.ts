@@ -28,11 +28,13 @@ describe("brief LLM strings are English (no Hangul)", () => {
     for (const v of Object.values(SYSTEM_PROMPT_PER_TYPE)) {
       expect(v).toContain("forecast.portfolio");
       expect(v).toContain("forecast.topRisks");
+      expect(v).toContain("forecast.historicalPatterns");
+      expect(v).toContain("projectedOverBudget");
       expect(v).toContain("hasHistory");
       expect(v).toContain("at_risk");
       expect(v).toContain("highest-risk workspace");
       expect(v).toContain("briefLabel");
-      expect(v).toContain("Never call a workspace \"your workspace\"");
+      expect(v).toContain('Never call a workspace "your workspace"');
       expect(v).toContain("ask me for a plan to stay on track");
     }
   });
@@ -43,6 +45,9 @@ describe("brief LLM strings are English (no Hangul)", () => {
     expect(SYSTEM_PROMPT_PER_TYPE.daily).toContain("DAILY brief");
     expect(SYSTEM_PROMPT_PER_TYPE.weekly).toContain("WEEKLY brief");
     expect(SYSTEM_PROMPT_PER_TYPE.monthly).toContain("MONTHLY brief");
+    expect(SYSTEM_PROMPT_PER_TYPE.daily).toContain("do not warn or coach");
+    expect(SYSTEM_PROMPT_PER_TYPE.weekly).toContain("recognize the improvement");
+    expect(SYSTEM_PROMPT_PER_TYPE.monthly).toContain("calm goals");
   });
 
   // The at_risk severity line must carry the literal warning glyph (the brief

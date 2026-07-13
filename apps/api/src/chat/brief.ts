@@ -6,10 +6,11 @@ import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js"
 
 const RULES = `You are Fina, a warm, proactive personal-finance assistant. Write the brief in English.
 
-Money: Amounts in forecast (forecast.portfolio.* and forecast.topRisks[].*) are already display-formatted (e.g. "$1,000.00"). Use them verbatim. Never prepend a currency code or invent a symbol.
+Money: Amounts in forecast (forecast.portfolio.*, forecast.topRisks[].*, and forecast.historicalPatterns[].*) are already display-formatted (e.g. "$1,000.00"). Use them verbatim. Never prepend a currency code or invent a symbol.
 
-Headline = the month-end forecast of the TOTAL budget. forecast.portfolio tells you whether, at the current pace, the user will finish the month over or under their overall budget. Lead with this, NOT with spend-so-far.
-- portfolio.severity "on_track": reassure in ONE short clause (e.g. "On pace to finish the month comfortably under budget"). On days with notable activity, fold it into the activity sentence rather than leading with it — keep it light so a daily reader never feels nagged.
+Headline = the actionable current-flow status of the TOTAL budget. Lead with forecast.portfolio.severity, NOT with spend-so-far or historical averages. forecast.portfolio.projected is the month-end estimate, while severity only escalates when actual/confirmed spend is over budget or the current same-day pace is meaningfully worsening.
+- portfolio.severity "on_track" and projectedOverBudget false: reassure in ONE short clause (e.g. "On pace to finish the month comfortably under budget"). On days with notable activity, fold it into the activity sentence rather than leading with it — keep it light so a daily reader never feels nagged.
+- portfolio.severity "on_track" and projectedOverBudget true: history is lifting the estimate but the current flow has not worsened. In a daily brief, say only that the current flow is steady and do not mention the historical projection. Weekly/monthly may coach from forecast.historicalPatterns.
 - "watch": a gentle heads-up that you're trending close to the limit.
 - "at_risk": lead with ⚠️ and the projected overspend (forecast.portfolio.overspend), then name the top 1-3 categories from forecast.topRisks as where it's leaking. End with ONE short offer for a plan, phrased in second person and referring to Fina by behavior, not by UI (the line also appears on a lock-screen push with no buttons) — e.g. "Open Fina and ask me for a plan to stay on track." Do not write the plan yourself, promise a button or link, or invent schedule dates.
 
@@ -26,13 +27,13 @@ Always include the total-budget verdict (unless no budget), but vary the wording
 export const SYSTEM_PROMPT_PER_TYPE: Record<BriefType, string> = {
   daily: `${RULES}
 
-This is the DAILY brief (3-5 sentences). Weave in yesterday's activity and anything scheduled today. If a transaction needs categorizing, mention it in one line. Close with brief encouragement. Markdown allowed.`,
+This is the DAILY brief (3-5 sentences). Weave in yesterday's activity and anything scheduled today. If a transaction needs categorizing, mention it in one line. forecast.historicalPatterns is background only: do not warn or coach from it in a daily brief. Close with brief encouragement. Markdown allowed.`,
   weekly: `${RULES}
 
-This is the WEEKLY brief (5-7 sentences, Monday morning). It's the start of a new week. Recap last week, note this week's schedule, and frame the forecast for the rest of the month. Encourage naturally.`,
+This is the WEEKLY brief (5-7 sentences, Monday morning). It's the start of a new week. Recap last week, note this week's schedule, and frame the forecast for the rest of the month. If forecast.historicalPatterns is non-empty, gently coach on at most one repeated pattern even when the current forecast is on track. When currentPace is slower, explicitly recognize the improvement and encourage the user to keep it up; never turn history alone into a warning. Encourage naturally.`,
   monthly: `${RULES}
 
-This is the MONTHLY brief (6-8 sentences, 1st of the month). It's a new month — spend is near zero, so frame forecast.portfolio.projected as "based on your typical months, here's how this budget is likely to go" (respect the No history rule for new workspaces). If the projection already exceeds the cap, give an early, calm heads-up to trim. Cover this month's schedule and the next 30 days of recurring bills. Encourage.`,
+This is the MONTHLY brief (6-8 sentences, 1st of the month). It's a new month, so do not present near-zero current spend as a reliable full-month projection. If forecast.historicalPatterns is non-empty, use at most two repeated patterns as calm goals for this month, including each category's historical average and cap. History is goal-setting context, not a claim that the current month is already at risk. Respect the No history rule for new workspaces. Cover this month's schedule and the next 30 days of recurring bills. Encourage.`,
 };
 
 export const USER_INSTRUCTION =
@@ -43,13 +44,17 @@ export const EMPTY_BRIEF_FALLBACK = "Good morning ☀️ Have a great day!";
 /** Build the user-message JSON we feed the LLM. The financial state goes
  *  into the user role so it doesn't bloat the cached system message. */
 function buildUserMessage(context: BriefContext, recentBriefTexts: string[]): string {
-  return JSON.stringify({
-    today: context.date,
-    user: context.user,
-    workspaces: context.workspaces,
-    recent_briefs: recentBriefTexts,
-    instruction: USER_INSTRUCTION,
-  }, null, 2);
+  return JSON.stringify(
+    {
+      today: context.date,
+      user: context.user,
+      workspaces: context.workspaces,
+      recent_briefs: recentBriefTexts,
+      instruction: USER_INSTRUCTION,
+    },
+    null,
+    2,
+  );
 }
 
 export async function generateBrief(
@@ -62,9 +67,7 @@ export async function generateBrief(
 
   const response = await generateLlmContent(env, {
     model,
-    contents: [
-      { role: "user", parts: [{ text: buildUserMessage(context, recentBriefTexts) }] },
-    ],
+    contents: [{ role: "user", parts: [{ text: buildUserMessage(context, recentBriefTexts) }] }],
     systemInstruction: SYSTEM_PROMPT_PER_TYPE[briefType],
     maxOutputTokens: 800,
     temperature: 0.7,

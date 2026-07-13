@@ -208,6 +208,7 @@ function hasBriefIssues(context: BriefContext): boolean {
       portfolioSeverity === "watch" ||
       portfolioSeverity === "at_risk" ||
       w.forecast.topRisks.length > 0 ||
+      (context.briefType !== "daily" && w.forecast.historicalPatterns.length > 0) ||
       w.uncategorizedCount > 0 ||
       w.schedule.length > 0 ||
       w.recurring.length > 0
