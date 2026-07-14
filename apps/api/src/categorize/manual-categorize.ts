@@ -3,6 +3,7 @@ import { normalizeMerchant } from "./normalize.js";
 import { withWorkspaceLock } from "../locks/workspace.js";
 import { applyAllocations } from "../transactions/allocations.js";
 import { maybeAutoPromote } from "./auto-promote.js";
+import { syncTransactionImpact } from "../transactions/refunds.js";
 
 export class ManualCategorizeError extends Error {
   constructor(public code: "tx_not_found" | "category_not_found") {
@@ -98,6 +99,7 @@ export async function applyManualCategorize(
       where: { transactionId: txRow.id },
       data: { needsConfirmation: false, dismissedUntil: null },
     });
+    await syncTransactionImpact(tx, txRow.id);
 
     // Update merchantNormalized on the transaction.
     await tx.transaction.update({
@@ -172,6 +174,7 @@ export async function applyManualCategorize(
       });
       if (upd.count > 0) {
         backfilledCount += 1;
+        await syncTransactionImpact(tx, sib.id);
       }
     }
 

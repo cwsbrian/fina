@@ -48,23 +48,28 @@ async function tx({
   categoryId,
   amount,
   occurredAt,
+  merchant = "Merchant",
+  budgetImpact,
 }: {
   wsId: string;
   accountId: string;
   categoryId: string;
   amount: string;
   occurredAt: Date;
+  merchant?: string;
+  budgetImpact?: "expense" | "income" | "refund" | "excluded";
 }) {
   const row = await prisma.transaction.create({
     data: {
       workspaceId: wsId,
       accountId,
       amount: new Prisma.Decimal(amount),
-      merchantRaw: "Merchant",
+      merchantRaw: merchant,
       occurredAt,
       source: "manual",
       pending: false,
       rawData: {},
+      budgetImpact: budgetImpact ?? (Number(amount) < 0 ? "income" : "expense"),
     },
   });
   if (Number(amount) > 0) {
@@ -76,6 +81,7 @@ async function tx({
       },
     });
   }
+  return row;
 }
 
 describe("analysis service", () => {
@@ -135,5 +141,114 @@ describe("analysis service", () => {
     expect(result.current.spend).toBe(30);
     expect(result.current.spendByCategory).toHaveLength(1);
     expect(result.current.spendByCategory[0]?.amount).toBe(30);
+  });
+
+  it("shows real income while excluding transfer income", async () => {
+    const { wsId, accountId, categoryId } = await seedWorkspace();
+    await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "-2500.00",
+      occurredAt: new Date("2026-05-15T12:00:00.000Z"),
+      merchant: "ACME Payroll",
+      budgetImpact: "income",
+    });
+    await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "-500.00",
+      occurredAt: new Date("2026-05-16T12:00:00.000Z"),
+      merchant: "Transfer from savings",
+      budgetImpact: "excluded",
+    });
+
+    const result = await getAnalysis(wsId, 2026, 5);
+
+    expect(result.current.income).toBe(2500);
+    expect(result.current.spend).toBe(0);
+    expect(result.current.net).toBe(2500);
+  });
+
+  it("restates a refund against the purchase month instead of income", async () => {
+    const { wsId, accountId, categoryId } = await seedWorkspace();
+    const purchase = await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "100.00",
+      occurredAt: new Date("2026-05-20T12:00:00.000Z"),
+      merchant: "Store",
+    });
+    const refund = await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "-40.00",
+      occurredAt: new Date("2026-06-01T12:00:00.000Z"),
+      merchant: "Store refund",
+      budgetImpact: "refund",
+    });
+
+    const may = await getAnalysis(wsId, 2026, 5);
+    const june = await getAnalysis(wsId, 2026, 6);
+    const linked = await prisma.transaction.findUniqueOrThrow({ where: { id: refund.id } });
+
+    expect(linked.refundOfTransactionId).toBe(purchase.id);
+    expect(may.current.spend).toBe(60);
+    expect(may.current.spendByCategory[0]?.amount).toBe(60);
+    expect(june.current.income).toBe(0);
+    expect(june.current.spend).toBe(0);
+  });
+
+  it("supports multiple refunds without reducing an expense below zero", async () => {
+    const { wsId, accountId, categoryId } = await seedWorkspace();
+    await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "100.00",
+      occurredAt: new Date("2026-05-10T12:00:00.000Z"),
+      merchant: "Shop",
+    });
+    for (const [amount, day] of [["-30.00", 12], ["-70.00", 13]] as const) {
+      await tx({
+        wsId,
+        accountId,
+        categoryId,
+        amount,
+        occurredAt: new Date(`2026-05-${day}T12:00:00.000Z`),
+        merchant: "Shop refund",
+        budgetImpact: "refund",
+      });
+    }
+
+    const result = await getAnalysis(wsId, 2026, 5);
+
+    expect(result.current.spend).toBe(0);
+    expect(result.current.income).toBe(0);
+    expect(result.current.spendByCategory).toEqual([]);
+  });
+
+  it("does not count an unmatched refund as income", async () => {
+    const { wsId, accountId, categoryId } = await seedWorkspace();
+    const refund = await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "-25.00",
+      occurredAt: new Date("2026-05-15T12:00:00.000Z"),
+      merchant: "Unknown refund",
+      budgetImpact: "refund",
+    });
+
+    const result = await getAnalysis(wsId, 2026, 5);
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: refund.id } });
+
+    expect(row.refundOfTransactionId).toBeNull();
+    expect(result.current.income).toBe(0);
+    expect(result.current.spend).toBe(0);
+    expect(result.current.net).toBe(0);
   });
 });

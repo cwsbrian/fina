@@ -64,6 +64,52 @@ describe("GET /workspaces/:id/transactions", () => {
     expect(body.transactions[0].allocations).toHaveLength(1);
     expect(body.transactions[0].allocations[0].categoryId).toBe(cat.id);
     expect(body.transactions[0].needsReclassification).toBe(false);
+    expect(body.transactions[0].refundOfTransactionId).toBeNull();
+  });
+
+  it("shows income and refunds by default while keeping excluded transfers hidden", async () => {
+    const { cookie, wsId } = await setup("tl-directions@t.co");
+    const acct = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Test", type: "depository" },
+    });
+    const base = {
+      workspaceId: wsId,
+      accountId: acct.id,
+      occurredAt: new Date("2026-05-19T12:00:00Z"),
+      pending: false,
+      source: "manual" as const,
+      rawData: {},
+    };
+    const income = await prisma.transaction.create({
+      data: { ...base, amount: "-1000", merchantRaw: "Payroll", budgetImpact: "income" },
+    });
+    const expense = await prisma.transaction.create({
+      data: { ...base, amount: "50", merchantRaw: "Store", budgetImpact: "expense" },
+    });
+    const refund = await prisma.transaction.create({
+      data: { ...base, amount: "-20", merchantRaw: "Store refund", budgetImpact: "refund" },
+    });
+    const transfer = await prisma.transaction.create({
+      data: { ...base, amount: "-500", merchantRaw: "Transfer", budgetImpact: "excluded" },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    const rows = res.json().transactions as Array<{
+      id: string;
+      refundOfTransactionId: string | null;
+      refundedAmount: string;
+    }>;
+    const ids = rows.map((tx) => tx.id);
+    expect(ids).toEqual(expect.arrayContaining([income.id, expense.id, refund.id]));
+    expect(ids).not.toContain(transfer.id);
+    expect(rows.find((tx) => tx.id === expense.id)?.refundedAmount).toBe("20.00");
+    expect(rows.find((tx) => tx.id === refund.id)?.refundOfTransactionId).toBe(expense.id);
   });
 
   it("split tx returns multiple allocations", async () => {

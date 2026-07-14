@@ -10,7 +10,7 @@ type PlaidBudgetTx = {
   } | null;
 };
 
-export type BudgetImpactValue = "expense" | "excluded";
+export type BudgetImpactValue = "expense" | "income" | "refund" | "excluded";
 
 const INVESTMENT_ACCOUNT_KEYWORDS = [
   "RSP",
@@ -107,7 +107,9 @@ function hasKeyword(text: string, keyword: string): boolean {
 }
 
 export function budgetImpactForAmount(amount: number): BudgetImpactValue {
-  return amount > 0 ? "expense" : "excluded";
+  if (amount > 0) return "expense";
+  if (amount < 0) return "income";
+  return "excluded";
 }
 
 export function budgetExpenseTransactionWhere(
@@ -131,15 +133,17 @@ export function budgetExpenseAllocationWhere(
 }
 
 export function classifyPlaidBudgetImpact(t: PlaidBudgetTx): BudgetImpactValue {
-  if (budgetImpactForAmount(t.amount) === "excluded") return "excluded";
-
   const primary = t.personal_finance_category?.primary?.toUpperCase() ?? "";
   const detailed = t.personal_finance_category?.detailed?.toUpperCase() ?? "";
   const text = `${t.name ?? ""} ${t.merchant_name ?? ""}`.toUpperCase();
-  const isAccountTransfer = detailed.includes("ACCOUNT_TRANSFER");
+  const personTransfer = PERSON_TRANSFER_MARKERS.some((marker) => hasKeyword(text, marker));
+  const refund = detailed.includes("REFUND") || /\b(REFUND|REFUNDED|REVERSAL)\b/.test(text);
 
-  if (SAFE_EXPENSE_DETAILED.some((value) => detailed.startsWith(value))) return "expense";
-  if (PERSON_TRANSFER_MARKERS.some((marker) => hasKeyword(text, marker))) return "expense";
+  if (t.amount === 0) return "excluded";
+  if (t.amount < 0 && refund) return "refund";
+  if (t.amount > 0 && SAFE_EXPENSE_DETAILED.some((value) => detailed.startsWith(value))) return "expense";
+  if (personTransfer) return t.amount > 0 ? "expense" : "income";
+  if (t.amount < 0 && detailed.includes("ACCOUNT_TRANSFER")) return "excluded";
   if (detailed.includes("INVESTMENT") || detailed.includes("RETIREMENT")) return "excluded";
   if (detailed.includes("CREDIT_CARD_PAYMENT")) return "excluded";
   if (/\b(PAYMENT|PYMT|PMT)\b/.test(text) && /\b(CREDIT|CARD|VISA|MASTERCARD|AMEX)\b/.test(text)) {
@@ -156,5 +160,5 @@ export function classifyPlaidBudgetImpact(t: PlaidBudgetTx): BudgetImpactValue {
     return "excluded";
   }
 
-  return "expense";
+  return t.amount > 0 ? "expense" : "income";
 }

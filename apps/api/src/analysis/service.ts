@@ -1,5 +1,5 @@
 import { prisma } from "../db.js";
-import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../transactions/budget-impact.js";
+import { cashflowEntries, effectiveExpenseAllocations } from "../transactions/cashflow.js";
 
 export type CategorySpend = {
   categoryId: string;
@@ -65,30 +65,12 @@ async function monthFlows(
   month: number,
 ): Promise<{ income: number; spend: number }> {
   const { from, to } = monthRange(year, month);
-  // Positive amount = expense; negative amount = income (Plaid convention,
-  // mirrored in our manual-tx form).
-  const [spendAgg, incomeAgg] = await Promise.all([
-    prisma.transaction.aggregate({
-      where: budgetExpenseTransactionWhere({
-        workspaceId,
-        occurredAt: { gte: from, lt: to },
-      }),
-      _sum: { amount: true },
-    }),
-    prisma.transaction.aggregate({
-      where: {
-        workspaceId,
-        removedAt: null,
-        occurredAt: { gte: from, lt: to },
-        amount: { lt: 0 },
-      },
-      _sum: { amount: true },
-    }),
-  ]);
+  const entries = await cashflowEntries(workspaceId, {
+    occurredAt: { gte: from, lt: to },
+  });
   return {
-    spend: Number(spendAgg._sum.amount ?? 0),
-    // income flows in as negative — flip sign for the user-facing number.
-    income: -Number(incomeAgg._sum.amount ?? 0),
+    spend: entries.reduce((sum, row) => sum + (row.direction === "expense" ? row.amount : 0), 0),
+    income: entries.reduce((sum, row) => sum + (row.direction === "income" ? row.amount : 0), 0),
   };
 }
 
@@ -98,33 +80,23 @@ async function spendByCategory(
   month: number,
 ): Promise<CategorySpend[]> {
   const { from, to } = monthRange(year, month);
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      ...budgetExpenseAllocationWhere({
-        workspaceId,
-        occurredAt: { gte: from, lt: to },
-      }),
-      categoryId: { not: null },
-    },
-    select: {
-      amount: true,
-      categoryId: true,
-      category: { select: { name: true, icon: true, color: true } },
-    },
-  });
+  const rows = await effectiveExpenseAllocations(
+    workspaceId,
+    { occurredAt: { gte: from, lt: to } },
+  );
   const sums = new Map<
     string,
     { name: string; icon: string | null; color: string | null; amount: number }
   >();
   for (const r of rows) {
-    if (!r.categoryId || !r.category) continue;
+    if (!r.categoryId || !r.categoryName) continue;
     const cur = sums.get(r.categoryId) ?? {
-      name: r.category.name,
-      icon: r.category.icon,
-      color: r.category.color,
+      name: r.categoryName,
+      icon: r.categoryIcon,
+      color: r.categoryColor,
       amount: 0,
     };
-    cur.amount += Number(r.amount);
+    cur.amount += r.amount;
     sums.set(r.categoryId, cur);
   }
   return Array.from(sums, ([categoryId, v]) => ({
@@ -210,7 +182,11 @@ export async function getLatestAnalysis(
   fallbackMonth: number,
 ): Promise<AnalysisResult> {
   const latest = await prisma.transaction.findFirst({
-    where: budgetExpenseTransactionWhere({ workspaceId }),
+    where: {
+      workspaceId,
+      removedAt: null,
+      budgetImpact: { in: ["expense", "income", "refund"] },
+    },
     orderBy: { occurredAt: "desc" },
     select: { occurredAt: true },
   });

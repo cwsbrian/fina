@@ -2,7 +2,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { monthlyEquivalent, occurrencesInRange } from "../recurring/occurrences.js";
 import { serverNow } from "../dev-clock.js";
-import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../transactions/budget-impact.js";
+import {
+  effectiveExpenseAllocations,
+  effectiveExpenseTransactions,
+} from "../transactions/cashflow.js";
 
 /** Sentinel date that marks the user's "default" template plan. Real
  *  monthly snapshots use the first-of-month for the period. */
@@ -201,27 +204,17 @@ export async function monthlySpendByCategory(
     month1to12 === 12 ? year + 1 : year,
     month1to12 === 12 ? 1 : month1to12 + 1,
   );
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      ...budgetExpenseAllocationWhere({
-        workspaceId,
-        occurredAt: { gte: from, lt: to },
-      }),
-    },
-    select: {
-      amount: true,
-      categoryId: true,
-      category: { select: { name: true } },
-    },
+  const rows = await effectiveExpenseAllocations(workspaceId, {
+    occurredAt: { gte: from, lt: to },
   });
   const sums = new Map<string, { name: string; spent: number }>();
   for (const r of rows) {
     const categoryId = r.categoryId ?? UNCATEGORIZED_CATEGORY_ID;
     const cur = sums.get(categoryId) ?? {
-      name: r.category?.name ?? "Uncategorized",
+      name: r.categoryName ?? "Uncategorized",
       spent: 0,
     };
-    cur.spent += Number(r.amount);
+    cur.spent += r.amount;
     sums.set(categoryId, cur);
   }
   return Array.from(sums, ([categoryId, v]) => ({
@@ -238,16 +231,12 @@ export async function recentMonthlyAvgSpend(
   workspaceId: string,
 ): Promise<number> {
   const since = new Date(serverNow().getTime() - 90 * 86_400_000);
-  const agg = await prisma.transaction.aggregate({
-    where: budgetExpenseTransactionWhere({
-      workspaceId,
-      occurredAt: { gte: since },
-    }),
-    _sum: { amount: true },
+  const rows = await effectiveExpenseTransactions(workspaceId, {
+    occurredAt: { gte: since },
   });
   // Total over ~3 months → monthly average. Round to whole dollars for
   // a friendlier comparison number.
-  const total = Number(agg._sum.amount ?? 0);
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
   return Math.round(total / 3);
 }
 
@@ -258,20 +247,15 @@ export async function recentMonthlyAvgSpendByCategory(
   const out = new Map<string, number>();
   if (categoryIds.length === 0) return out;
   const since = new Date(serverNow().getTime() - 90 * 86_400_000);
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      ...budgetExpenseAllocationWhere({
-        workspaceId,
-        occurredAt: { gte: since },
-      }),
-      categoryId: { in: categoryIds },
-    },
-    select: { amount: true, categoryId: true },
-  });
+  const rows = await effectiveExpenseAllocations(
+    workspaceId,
+    { occurredAt: { gte: since } },
+    categoryIds,
+  );
 
   for (const r of rows) {
     if (!r.categoryId) continue;
-    out.set(r.categoryId, (out.get(r.categoryId) ?? 0) + Number(r.amount));
+    out.set(r.categoryId, (out.get(r.categoryId) ?? 0) + r.amount);
   }
   return new Map(Array.from(out, ([id, total]) => [id, Math.round(total / 3)]));
 }
@@ -440,14 +424,10 @@ export async function monthlyTotalSpend(
     month1to12 === 12 ? year + 1 : year,
     month1to12 === 12 ? 1 : month1to12 + 1,
   );
-  const agg = await prisma.transaction.aggregate({
-    where: budgetExpenseTransactionWhere({
-      workspaceId,
-      occurredAt: { gte: from, lt: spendUpperBound(to) },
-    }),
-    _sum: { amount: true },
+  const rows = await effectiveExpenseTransactions(workspaceId, {
+    occurredAt: { gte: from, lt: spendUpperBound(to) },
   });
-  return Number(agg._sum.amount ?? 0);
+  return rows.reduce((sum, row) => sum + row.amount, 0);
 }
 
 export type BudgetSnapshotCategory = {
@@ -538,9 +518,9 @@ export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; mon
   return { year, month };
 }
 
-/** Per-category MEDIAN positive transaction-allocation amount over the trailing
+/** Per-category MEDIAN effective transaction-allocation amount over the trailing
  *  90 days. Used by the advisor to size plan proposals ("typical spend per
- *  transaction"). Only positive amounts are considered (refunds ignored).
+ *  transaction"). Matched refunds reduce their original purchase first.
  *  Median = middle element of sorted positives (upper-middle for even counts).
  *  Returns 0 for categories with no positive transactions in the window.
  *  Result rounded to 2 decimals. */
@@ -552,23 +532,17 @@ export async function recentTypicalAmountByCategory(
   if (categoryIds.length === 0) return out;
   const since = new Date(serverNow().getTime() - 90 * 86_400_000);
 
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      ...budgetExpenseAllocationWhere({
-        workspaceId,
-        pending: false,
-        occurredAt: { gte: since },
-      }),
-      categoryId: { in: categoryIds },
-    },
-    select: { amount: true, categoryId: true },
-  });
+  const rows = await effectiveExpenseAllocations(
+    workspaceId,
+    { pending: false, occurredAt: { gte: since } },
+    categoryIds,
+  );
 
   const byCat = new Map<string, number[]>();
   for (const r of rows) {
     if (!r.categoryId) continue;
     const arr = byCat.get(r.categoryId) ?? [];
-    arr.push(Number(r.amount));
+    arr.push(r.amount);
     byCat.set(r.categoryId, arr);
   }
 
@@ -587,8 +561,8 @@ export async function recentTypicalAmountByCategory(
 /** Per-category DISCRETIONARY daily spend rate over the trailing 90 days,
  *  for the month-end forecast. Discretionary = actual category spend with the
  *  category's recurring (subscription) monthly-equivalent removed, so fixed
- *  bills aren't double-counted against forward occurrences. Refunds are NETTED
- *  (we do NOT filter amount>0) and pending transactions are EXCLUDED to avoid
+ *  bills aren't double-counted against forward occurrences. Matched refunds
+ *  reduce their original purchase and pending transactions are EXCLUDED to avoid
  *  double-counting the later posted row. A single outlier transaction is
  *  winsorized to 3x the category's median positive spend so one big buy doesn't dominate 90 days.
  *  Returns a Map categoryId -> daily rate (>= 0). */
@@ -600,25 +574,17 @@ export async function recentDiscretionaryDailyByCategory(
   if (categoryIds.length === 0) return out;
   const since = new Date(serverNow().getTime() - 90 * 86_400_000);
 
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      transaction: {
-        workspaceId,
-        removedAt: null,
-        budgetImpact: "expense",
-        pending: false,
-        occurredAt: { gte: since },
-      },
-      categoryId: { in: categoryIds },
-    },
-    select: { amount: true, categoryId: true },
-  });
+  const rows = await effectiveExpenseAllocations(
+    workspaceId,
+    { pending: false, occurredAt: { gte: since } },
+    categoryIds,
+  );
 
   const byCat = new Map<string, number[]>();
   for (const r of rows) {
     if (!r.categoryId) continue;
     const arr = byCat.get(r.categoryId) ?? [];
-    arr.push(Number(r.amount));
+    arr.push(r.amount);
     byCat.set(r.categoryId, arr);
   }
 
@@ -641,12 +607,10 @@ export async function recentDiscretionaryDailyByCategory(
       out.set(id, 0);
       continue;
     }
-    // Winsorize cap from the median of POSITIVE amounts (robust to a single
-    // big buy, unlike a mean that the outlier itself inflates). Only positive
-    // values are capped, so refunds (negatives) net through untouched.
-    const positives = amounts.filter((a) => a > 0).sort((a, b) => a - b);
-    const cap = positives.length > 0 ? 3 * positives[Math.floor(positives.length / 2)]! : 0;
-    const winsorized = amounts.map((a) => (a > 0 && a > cap ? cap : a));
+    // Refunds have already reduced their original purchase amounts.
+    const positives = amounts.slice().sort((a, b) => a - b);
+    const cap = 3 * positives[Math.floor(positives.length / 2)]!;
+    const winsorized = amounts.map((a) => (a > cap ? cap : a));
     const net90 = winsorized.reduce((a, b) => a + b, 0);
     const discretionary90 = net90 - (recurringMonthly.get(id) ?? 0) * 3;
     out.set(id, Math.max(0, discretionary90) / 90);

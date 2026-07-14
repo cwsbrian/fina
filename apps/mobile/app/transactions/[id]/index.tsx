@@ -151,7 +151,10 @@ export default function TransactionDetail() {
 
   async function toggleBudgetImpact() {
     if (!tx || savingBudgetImpact) return;
-    const next = tx.budgetImpact === "excluded" ? "expense" : "excluded";
+    const includedImpact = money.isIncome
+      ? firstCat?.name.trim().toLowerCase() === "refund" ? "refund" : "income"
+      : "expense";
+    const next = tx.budgetImpact === "excluded" ? includedImpact : "excluded";
     setSavingBudgetImpact(true);
     try {
       const wsId = await getActiveWorkspaceId();
@@ -183,7 +186,9 @@ export default function TransactionDetail() {
               {merchant}
             </Text>
           </View>
-          <Text style={styles.heroAmount}>−{money.display}</Text>
+          <Text style={[styles.heroAmount, money.isIncome && styles.incomeAmount]}>
+            {money.isIncome ? "+" : "−"}{money.display}
+          </Text>
           <View style={styles.heroMetaRow}>
             <Text style={styles.heroMeta}>{formatDateTime(tx.occurredAt)}</Text>
             {isSplit && (
@@ -249,7 +254,9 @@ export default function TransactionDetail() {
               router.push(`/transactions/${tx.id}/edit-amount` as never)
             }
           >
-            <Text style={styles.rowValue}>−{money.display}</Text>
+            <Text style={[styles.rowValue, money.isIncome && styles.incomeAmount]}>
+              {money.isIncome ? "+" : "−"}{money.display}
+            </Text>
           </DetailRow>
           <DetailRow
             label="Date"
@@ -381,7 +388,9 @@ export default function TransactionDetail() {
                         {c?.name ?? "Uncategorized"}
                       </Text>
                     </View>
-                    <Text style={styles.allocAmount}>−{m.display}</Text>
+                    <Text style={[styles.allocAmount, m.isIncome && styles.incomeAmount]}>
+                      {m.isIncome ? "+" : "−"}{m.display}
+                    </Text>
                   </View>
                 );
               })}
@@ -617,6 +626,7 @@ const styles = StyleSheet.create({
     color: colors.ink,
     marginTop: 4,
   },
+  incomeAmount: { color: colors.up },
   heroMetaRow: { flexDirection: "row", alignItems: "center", marginTop: 6, gap: 6 },
   heroMeta: { ...type$.bodySm, color: colors.muted },
   heroDot: { width: 3, height: 3, borderRadius: 999, backgroundColor: colors.mutedSoft },

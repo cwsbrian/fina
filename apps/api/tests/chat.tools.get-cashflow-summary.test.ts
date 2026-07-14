@@ -37,10 +37,12 @@ describe("getCashflowSummary tool", () => {
     const d2 = new Date("2026-05-07T12:00:00Z");
     await prisma.transaction.createMany({
       data: [
-        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "in-1", amount: "-1000.00", merchantRaw: "Payroll", occurredAt: d1, rawData: {} },
+        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "in-1", amount: "-1000.00", merchantRaw: "Payroll", occurredAt: d1, rawData: {}, budgetImpact: "income" },
         { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "ex-1", amount: "150.00", merchantRaw: "Rent", occurredAt: d1, rawData: {} },
+        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "refund-1", amount: "-30.00", merchantRaw: "Rent refund", occurredAt: d2, rawData: {}, budgetImpact: "refund" },
         { workspaceId: wsId, accountId: a2.id, plaidTransactionId: "ex-2", amount: "50.00", merchantRaw: "Subway", occurredAt: d2, rawData: {} },
         { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "ex-3", amount: "20.00", merchantRaw: "X", occurredAt: d2, rawData: {} },
+        { workspaceId: wsId, accountId: a1.id, plaidTransactionId: "transfer-1", amount: "-500.00", merchantRaw: "Transfer from savings", occurredAt: d2, rawData: {}, budgetImpact: "excluded" },
       ],
     });
   });
@@ -52,8 +54,8 @@ describe("getCashflowSummary tool", () => {
   it("computes income, expense, and net totals", async () => {
     const res = await getCashflowSummary.run(ctx, { since: "2026-05-01", until: "2026-06-01" });
     expect(res.incomeTotal).toBe("1000.00");
-    expect(res.expenseTotal).toBe("220.00");
-    expect(res.netTotal).toBe("780.00");
+    expect(res.expenseTotal).toBe("190.00");
+    expect(res.netTotal).toBe("810.00");
   });
 
   it("groups by day with YYYY-MM-DD keys when group_by=day (default)", async () => {
@@ -69,7 +71,7 @@ describe("getCashflowSummary tool", () => {
     const savings = res.groups.find((g) => g.key === acct2Id);
     expect(chequing?.label).toBe("Chequing");
     expect(chequing?.incomeTotal).toBe("1000.00");
-    expect(chequing?.expenseTotal).toBe("170.00");
+    expect(chequing?.expenseTotal).toBe("140.00");
     expect(savings?.expenseTotal).toBe("50.00");
   });
 

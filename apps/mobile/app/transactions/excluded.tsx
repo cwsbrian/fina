@@ -15,7 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { TransactionDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
-import { formatMoney, isExpenseAmount } from "../../src/format/money";
+import { formatMoney } from "../../src/format/money";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { getSeenExcludedIds, rememberSeenExcludedIds } from "../../src/transactions/excludedSeen";
@@ -41,12 +41,13 @@ export default function ExcludedTransactions() {
       const data = await apiFetch<TxListResp>(
         `/workspaces/${wsId}/transactions?budgetImpact=excluded&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=100`,
       );
-      const visible = data.transactions.filter((tx) => isExpenseAmount(tx.amount));
       const seen = await getSeenExcludedIds();
-      const fresh = visible.filter((tx) => !seen.has(tx.id)).map((tx) => tx.id);
-      setTxs(visible);
+      const fresh = data.transactions.filter((tx) => !seen.has(tx.id)).map((tx) => tx.id);
+      setTxs(data.transactions);
       setNewIds(new Set(fresh));
-      if (visible.length > 0) await rememberSeenExcludedIds(visible.map((tx) => tx.id));
+      if (data.transactions.length > 0) {
+        await rememberSeenExcludedIds(data.transactions.map((tx) => tx.id));
+      }
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -68,7 +69,9 @@ export default function ExcludedTransactions() {
       if (!wsId) throw new Error("no_workspace");
       await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ budgetImpact: "expense" }),
+        body: JSON.stringify({
+          budgetImpact: moneyDirectionForExcluded(tx),
+        }),
       });
       setTxs((cur) => (cur ?? []).filter((x) => x.id !== tx.id));
     } catch (e) {
@@ -162,7 +165,9 @@ function ExcludedRow({
         <Text style={styles.rowMeta}>{formatDate(tx.occurredAt)}</Text>
       </View>
       <View style={styles.rowRight}>
-        <Text style={styles.rowAmount}>-{money.display}</Text>
+        <Text style={[styles.rowAmount, money.isIncome && styles.rowAmountIncome]}>
+          {money.isIncome ? "+" : "−"}{money.display}
+        </Text>
         <Pressable
           style={({ pressed }) => [styles.addBtn, pressed && { opacity: 0.65 }]}
           onPress={(e) => {
@@ -186,6 +191,13 @@ function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function moneyDirectionForExcluded(
+  tx: TransactionDTO,
+): "expense" | "income" | "refund" {
+  if (Number(tx.amount) >= 0) return "expense";
+  return tx.refundOfTransactionId ? "refund" : "income";
 }
 
 function currentMonthRange(): { from: string; to: string } {
@@ -258,6 +270,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontVariant: ["tabular-nums"],
   },
+  rowAmountIncome: { color: colors.up },
   addBtn: {
     minWidth: 48,
     height: 28,

@@ -25,11 +25,11 @@ export function CategoryFilterSheet({ visible, categories, selectedIds, onClose,
   const ref = useRef<BottomSheet>(null);
   const [draft, setDraft] = useState(() => new Set(selectedIds));
   const snapPoints = useMemo(() => ["80%"], []);
-  const expenseCategories = useMemo(
+  const activeCategories = useMemo(
     () =>
       categories
-        .filter((category) => category.type === "expense" && !category.archivedAt)
-        .sort((a, b) => a.name.localeCompare(b.name)),
+        .filter((category) => !category.archivedAt)
+        .sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name)),
     [categories],
   );
 
@@ -95,7 +95,7 @@ export function CategoryFilterSheet({ visible, categories, selectedIds, onClose,
           selected={draft.size === 0}
           onPress={() => setDraft(new Set())}
         />
-        {expenseCategories.map((category) => {
+        {activeCategories.map((category) => {
           const meta = categoryMeta(category);
           return (
             <View key={category.id}>

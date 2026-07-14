@@ -11,6 +11,7 @@ import {
 } from "./validators.js";
 import { applyAllocations, AllocationError } from "./allocations.js";
 import { maybeAutoPromote } from "../categorize/auto-promote.js";
+import { syncTransactionImpact } from "./refunds.js";
 
 export type EditTxInput = {
   amount?: number;
@@ -23,7 +24,7 @@ export type EditTxInput = {
   allocations?: Array<{ categoryId: string | null; amount: number }>;
   // NEW: reassign the tx to a different (manual) account.
   accountId?: string;
-  budgetImpact?: "expense" | "excluded";
+  budgetImpact?: "expense" | "income" | "refund" | "excluded";
 };
 
 // Type signal that the caller used the categoryId field (the route layer
@@ -49,8 +50,10 @@ export type EditTxResult = {
     note: string | null;
     removedAt: null;
     needsReclassification: boolean;
-    budgetImpact: "expense" | "excluded";
+    budgetImpact: "expense" | "income" | "refund" | "excluded";
     budgetImpactSource: "auto" | "user";
+    refundOfTransactionId: string | null;
+    refundedAmount: string;
     createdAt: string;
     updatedAt: string;
     allocations: Array<{
@@ -104,6 +107,11 @@ const TX_SELECT = {
   needsReclassification: true,
   budgetImpact: true,
   budgetImpactSource: true,
+  refundOfTransactionId: true,
+  refunds: {
+    where: { budgetImpact: "refund", removedAt: null, pending: false },
+    select: { amount: true },
+  },
   createdAt: true, updatedAt: true,
   allocations: {
     select: { id: true, categoryId: true, amount: true, source: true },
@@ -131,6 +139,10 @@ function shape(
     needsReclassification: row.needsReclassification,
     budgetImpact: row.budgetImpact,
     budgetImpactSource: row.budgetImpactSource,
+    refundOfTransactionId: row.refundOfTransactionId,
+    refundedAmount: row.refunds
+      .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
+      .toFixed(2),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     allocations: row.allocations.map((a) => ({
@@ -345,9 +357,12 @@ export async function editTransactionService(
         });
         if (updated.count > 0) {
           affectedTransactionIds.push(sibling.id);
+          await syncTransactionImpact(tx, sibling.id);
         }
       }
     }
+
+    await syncTransactionImpact(tx, txId);
 
     // 5. Read back with allocations for response.
     const finalRow = await tx.transaction.findUniqueOrThrow({

@@ -18,7 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { CategoryDTO, TransactionDTO, Cadence } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
-import { formatMoney, dateBucket, isExpenseAmount } from "../../src/format/money";
+import { formatMoney, dateBucket } from "../../src/format/money";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { categoryMeta } from "../../src/categories/meta";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
@@ -128,7 +128,7 @@ function groupByDate(txs: TransactionDTO[]): Section[] {
     arr.push(t);
     buckets.set(key, arr);
     const month = monthKey(t.occurredAt);
-    const amount = Number(t.amount);
+    const amount = effectiveExpenseAmount(t);
     if (month && amount > 0) {
       monthTotals.set(month, (monthTotals.get(month) ?? 0) + amount);
       if (dayOfMonth(t.occurredAt) <= 14) {
@@ -197,9 +197,14 @@ function formatMidMonthLabel(iso?: string): string {
 }
 
 function sectionTotal(txs: TransactionDTO[], currency: string): string {
-  const sum = txs.reduce((acc, t) => acc + Number(t.amount), 0);
+  const sum = txs.reduce((acc, t) => acc + effectiveExpenseAmount(t), 0);
   const { display } = formatMoney(sum.toString(), currency);
   return `−${display}`;
+}
+
+function effectiveExpenseAmount(tx: TransactionDTO): number {
+  if (tx.budgetImpact !== "expense") return 0;
+  return Math.max(0, Number(tx.amount) - Number(tx.refundedAmount));
 }
 
 function monthTotal(total: number, currency: string): string {
@@ -292,9 +297,8 @@ export default function Activity() {
       ]);
       setTxs(mergeActivityTransactionPages([], txResp.transactions));
       setNextCursor(txResp.nextCursor);
-      const visibleExcluded = excludedResp.transactions.filter((t) => isExpenseAmount(t.amount));
-      setExcludedCount(visibleExcluded.length);
-      setNewExcludedCount(visibleExcluded.filter((t) => !seenExcluded.has(t.id)).length);
+      setExcludedCount(excludedResp.transactions.length);
+      setNewExcludedCount(excludedResp.transactions.filter((t) => !seenExcluded.has(t.id)).length);
       setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
       setUpcoming(
         computeUpcomingSummary(schedResp.schedules, recurResp.recurring),
@@ -472,7 +476,7 @@ export default function Activity() {
             ) : null}
             <View style={styles.sectionHead}>
               <Text style={styles.sectionHeadLabel}>{section.title}</Text>
-              {section.data.length > 1 && (
+              {section.data.length > 1 && section.data.some((tx) => effectiveExpenseAmount(tx) > 0) && (
                 <Text style={styles.sectionHeadAmount}>
                   {sectionTotal(section.data, currency)}
                 </Text>
@@ -809,7 +813,9 @@ function TxRow({
         </View>
       </View>
       <View style={styles.rowRight}>
-        <Text style={styles.rowAmount}>−{money.display}</Text>
+        <Text style={[styles.rowAmount, money.isIncome && styles.rowAmountIncome]}>
+          {money.isIncome ? "+" : "−"}{money.display}
+        </Text>
       </View>
     </Pressable>
   );
@@ -1065,4 +1071,5 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontVariant: ["tabular-nums"],
   },
+  rowAmountIncome: { color: colors.up },
 });

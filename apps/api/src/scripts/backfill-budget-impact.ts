@@ -1,5 +1,6 @@
 import { prisma } from "../db.js";
 import { budgetImpactForAmount, classifyPlaidBudgetImpact } from "../transactions/budget-impact.js";
+import { ensureRefundLinks } from "../transactions/refunds.js";
 
 async function main(): Promise<void> {
   const rows = await prisma.transaction.findMany({
@@ -30,6 +31,10 @@ async function main(): Promise<void> {
       data: { budgetImpact },
     });
     classified += result.count;
+  }
+
+  for (const workspaceId of new Set(rows.map((row) => row.workspaceId))) {
+    await ensureRefundLinks(workspaceId);
   }
 
   console.log(`backfill-budget-impact classified=${classified}`);

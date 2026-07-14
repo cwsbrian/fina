@@ -6,7 +6,6 @@ import { truncateAll, disconnect } from "./helpers/db.js";
 import { buildApp } from "../src/server.js";
 import {
   createManualTransactionService,
-  CreateManualTxError,
 } from "../src/transactions/create-manual.js";
 import { testEnv } from "./helpers/test-env.js";
 
@@ -47,6 +46,17 @@ describe("createManualTransactionService", () => {
     expect(picked!.currency).toBe("CAD");
     // Cash is among the seed defaults, confirming the bootstrap path:
     expect(manualAccounts.some((a) => a.name === "Cash")).toBe(true);
+  });
+
+  it("classifies a negative manual transaction as income", async () => {
+    const { wsId, userId } = await setupEditor("mt-income@t.co");
+    const result = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      { merchantRaw: "Paycheck", amount: -1200, occurredAt: "2026-05-17" },
+    );
+
+    expect(result.transaction.budgetImpact).toBe("income");
+    expect(result.transaction.refundedAmount).toBe("0.00");
   });
 
   it("reuses the existing manual account on second call", async () => {

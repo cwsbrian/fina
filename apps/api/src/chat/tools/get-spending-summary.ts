@@ -1,11 +1,12 @@
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
-import { prisma } from "../../db.js";
 import { customRange, dateKeyInTz, resolveUserTz, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
 import type { ToolDef } from "./types.js";
-import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../../transactions/budget-impact.js";
+import {
+  effectiveExpenseAllocations,
+  effectiveExpenseTransactions,
+} from "../../transactions/cashflow.js";
 
 const Args = z.object({
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
@@ -56,47 +57,41 @@ export const getSpendingSummary: ToolDef<Args, Result> = {
     let rowLabels: Map<string, string>;
 
     if (groupBy === "category") {
-      const allocRows = await prisma.transactionAllocation.groupBy({
-        by: ["categoryId"],
-        where: budgetExpenseAllocationWhere({
-            workspaceId: ctx.workspaceId,
-            occurredAt: { gte, lt },
-        }),
-        _sum: { amount: true },
-        _count: { _all: true },
+      const rows = await effectiveExpenseAllocations(ctx.workspaceId, {
+        occurredAt: { gte, lt },
       });
-      groups = allocRows
-        .map((r) => ({
-          key: r.categoryId ?? "uncategorized",
-          total: (r._sum.amount ?? new Prisma.Decimal(0)).toFixed(2),
-          count: r._count._all,
+      const buckets = new Map<string, { total: number; count: number; label: string }>();
+      for (const row of rows) {
+        const key = row.categoryId ?? "uncategorized";
+        const bucket = buckets.get(key) ?? {
+          total: 0,
+          count: 0,
+          label: row.categoryName ?? "Uncategorized",
+        };
+        bucket.total += row.amount;
+        bucket.count += 1;
+        buckets.set(key, bucket);
+      }
+      groups = [...buckets.entries()]
+        .map(([key, value]) => ({
+          key,
+          total: value.total.toFixed(2),
+          count: value.count,
         }))
         .sort((a, b) => parseFloat(b.total) - parseFloat(a.total));
-
-      // Resolve categoryId → human-readable name. One Prisma query
-      // batched across all groups; "uncategorized" handled inline.
-      const ids = groups.map((g) => g.key).filter((k) => k !== "uncategorized");
-      const cats = ids.length
-        ? await prisma.category.findMany({
-            where: { id: { in: ids } },
-            select: { id: true, name: true },
-          })
-        : [];
-      rowLabels = new Map(cats.map((c) => [c.id, c.name]));
-      rowLabels.set("uncategorized", "Uncategorized");
+      rowLabels = new Map([...buckets.entries()].map(([key, value]) => [key, value.label]));
     } else {
-      const rows = await prisma.transaction.findMany({
-        where: budgetExpenseTransactionWhere({ workspaceId: ctx.workspaceId, occurredAt: { gte, lt } }),
-        select: { amount: true, merchantNormalized: true, occurredAt: true },
+      const rows = await effectiveExpenseTransactions(ctx.workspaceId, {
+        occurredAt: { gte, lt },
       });
-      const buckets = new Map<string, { total: Prisma.Decimal; count: number }>();
+      const buckets = new Map<string, { total: number; count: number }>();
       for (const r of rows) {
         let key: string;
         if (groupBy === "merchant") key = r.merchantNormalized ?? "unknown";
         else key = dateKeyInTz(r.occurredAt, tz);
         const cur = buckets.get(key);
-        if (cur) { cur.total = cur.total.plus(r.amount); cur.count += 1; }
-        else buckets.set(key, { total: new Prisma.Decimal(r.amount), count: 1 });
+        if (cur) { cur.total += r.amount; cur.count += 1; }
+        else buckets.set(key, { total: r.amount, count: 1 });
       }
       groups = [...buckets.entries()]
         .map(([key, v]) => ({ key, total: v.total.toFixed(2), count: v.count }))

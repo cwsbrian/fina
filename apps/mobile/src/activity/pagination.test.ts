@@ -22,8 +22,10 @@ function tx(id: string, amount: string): TransactionDTO {
     note: null,
     removedAt: null,
     needsReclassification: false,
-    budgetImpact: "expense",
+    budgetImpact: Number(amount) < 0 ? "income" : "expense",
     budgetImpactSource: "auto",
+    refundOfTransactionId: null,
+    refundedAmount: "0.00",
     allocations: [],
   };
 }
@@ -50,12 +52,12 @@ describe("activity pagination", () => {
     );
   });
 
-  it("appends expense transactions from later pages without duplicating rows", () => {
+  it("appends expense and income transactions without duplicating rows", () => {
     expect(
       mergeActivityTransactionPages(
         [tx("a", "12.00"), tx("b", "3.50")],
         [tx("b", "3.50"), tx("c", "-25.00"), tx("d", "8.25")],
       ).map((row) => row.id),
-    ).toEqual(["a", "b", "d"]);
+    ).toEqual(["a", "b", "c", "d"]);
   });
 });

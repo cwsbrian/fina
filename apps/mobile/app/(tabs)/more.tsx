@@ -19,14 +19,12 @@ import * as WebBrowser from "expo-web-browser";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Ionicons } from "@expo/vector-icons";
 import {
-  displayName,
   localPartOfEmail,
   initials,
   tierLabel,
   trialDaysLeft,
   trialRevertsTo,
   formatShortDate,
-  type BankAccountDTO,
   type MeDTO as Me,
   type TransactionDTO,
 } from "@fina/shared";
@@ -37,7 +35,6 @@ import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { getActiveWorkspaceId, clearActiveWorkspaceId } from "../../src/workspace/active";
 import { ONBOARDING_SEEN_KEY } from "../../src/onboarding/storage";
 import { colors, space, type as type$ } from "../../src/design/tokens";
-import { isExpenseAmount } from "../../src/format/money";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 import {
   copyTextToClipboard,
@@ -159,7 +156,7 @@ export default function More() {
       const r = await apiFetch<{ transactions: TransactionDTO[] }>(
         `/workspaces/${wsId}/transactions?needsReview=true&limit=50`,
       );
-      setNeedsReviewCount(r.transactions.filter((tx) => isExpenseAmount(tx.amount)).length);
+      setNeedsReviewCount(r.transactions.length);
     } catch {
       // Non-fatal — Review queue row falls back to no count.
     }

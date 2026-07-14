@@ -3,7 +3,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
-import { formatMoney, isExpenseAmount } from "../../format/money";
+import { formatMoney } from "../../format/money";
 import {
   BlockCard,
   BlockHeader,
@@ -22,9 +22,7 @@ type Props = { block: Block };
  *  transaction detail screen so the user can drill in without losing the
  *  chat context. */
 export function TransactionsListBlock({ block }: Props) {
-  const currencySymbol = currencyToSymbol(block.currency);
-  const rows = block.rows.filter((row) => isExpenseAmount(row.amount));
-  const total = rows.reduce((sum, row) => sum + Number(row.amount), 0);
+  const rows = block.rows;
   return (
     <BlockCard>
       {block.period_label ? (
@@ -34,13 +32,8 @@ export function TransactionsListBlock({ block }: Props) {
       )}
 
       {rows.length > 0 ? (
-        <Text style={styles.totalLine}>
-          Total{" "}
-          <Text style={styles.totalAmount}>
-            {currencySymbol ?? ""}
-            {total.toFixed(2)}
-          </Text>{" "}
-          <Text style={styles.totalCount}>· {rows.length} txs</Text>
+        <Text style={styles.totalCountAlone}>
+          {rows.length} {rows.length === 1 ? "transaction" : "transactions"}
         </Text>
       ) : (
         <Text style={styles.totalCountAlone}>
@@ -57,6 +50,7 @@ export function TransactionsListBlock({ block }: Props) {
               key={r.id}
               row={r}
               isLast={i === rows.length - 1}
+              currency={block.currency}
             />
           ))}
         </View>
@@ -67,10 +61,18 @@ export function TransactionsListBlock({ block }: Props) {
   );
 }
 
-function TxRow({ row, isLast }: { row: Row; isLast: boolean }) {
-  const money = formatMoney(row.amount, "CAD");
-  const amountColor = colors.ink;
-  const amountText = money.display;
+function TxRow({
+  row,
+  isLast,
+  currency,
+}: {
+  row: Row;
+  isLast: boolean;
+  currency: string | undefined;
+}) {
+  const money = formatMoney(row.amount, currency);
+  const amountColor = money.isIncome ? colors.up : colors.ink;
+  const amountText = `${money.isIncome ? "+" : "−"}${money.display}`;
 
   return (
     <Pressable
@@ -135,19 +137,6 @@ function TxRow({ row, isLast }: { row: Row; isLast: boolean }) {
   );
 }
 
-function currencyToSymbol(code: string | undefined): string | null {
-  if (!code) return null;
-  switch (code.toUpperCase()) {
-    case "CAD": return "$";
-    case "USD": return "US$";
-    case "EUR": return "€";
-    case "GBP": return "£";
-    case "JPY": return "¥";
-    case "KRW": return "₩";
-    default:    return null;
-  }
-}
-
 /** Convert a hex color to a translucent version for chip backgrounds.
  *  Returns the input unchanged if it doesn't look like #rgb / #rrggbb. */
 function withAlpha(hex: string, alpha: number): string {
@@ -169,19 +158,6 @@ function withAlpha(hex: string, alpha: number): string {
 }
 
 const styles = StyleSheet.create({
-  totalLine: {
-    ...type$.bodySm,
-    color: colors.muted,
-    marginTop: 2,
-  },
-  totalAmount: {
-    color: colors.ink,
-    fontWeight: "600",
-    fontVariant: ["tabular-nums"],
-  },
-  totalCount: {
-    color: colors.muted,
-  },
   totalCountAlone: {
     ...type$.caption,
     color: colors.muted,

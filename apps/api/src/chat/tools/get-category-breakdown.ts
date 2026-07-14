@@ -1,11 +1,10 @@
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import type { ToolDef } from "./types.js";
 import { customRange, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
-import { budgetExpenseAllocationWhere } from "../../transactions/budget-impact.js";
+import { effectiveExpenseAllocations } from "../../transactions/cashflow.js";
 
 const Args = z.object({
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
@@ -63,23 +62,12 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
       }),
     ]);
 
-    const allocWhere: Prisma.TransactionAllocationWhereInput = {
-      ...budgetExpenseAllocationWhere({
-        workspaceId: ctx.workspaceId,
-        occurredAt: { gte, lt },
-      }),
-    };
-    if (!includeUncat) allocWhere.categoryId = { not: null };
-
-    const allocRows = await prisma.transactionAllocation.groupBy({
-      by: ["categoryId"],
-      where: allocWhere,
-      _sum: { amount: true },
-      _count: { _all: true },
-    });
+    const allocRows = (await effectiveExpenseAllocations(ctx.workspaceId, {
+      occurredAt: { gte, lt },
+    })).filter((row) => includeUncat || row.categoryId !== null);
 
     // Fetch category metadata for all non-null categoryIds
-    const catIds = allocRows.map((r) => r.categoryId).filter((id): id is string => id !== null);
+    const catIds = [...new Set(allocRows.map((r) => r.categoryId).filter((id): id is string => id !== null))];
     const catMap = new Map<string, { id: string; name: string; color: string | null; icon: string | null; parentId: string | null; parent: { id: string; name: string } | null }>();
     if (catIds.length > 0) {
       const cats = await prisma.category.findMany({
@@ -96,8 +84,8 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
       for (const c of cats) catMap.set(c.id, c);
     }
 
-    const buckets = new Map<string, { meta: Omit<Bucket, "total" | "count" | "share">; total: Prisma.Decimal; count: number }>();
-    let total = new Prisma.Decimal(0);
+    const buckets = new Map<string, { meta: Omit<Bucket, "total" | "count" | "share">; total: number; count: number }>();
+    let total = 0;
     for (const r of allocRows) {
       const key = r.categoryId ?? "__uncat__";
       const cat = r.categoryId ? catMap.get(r.categoryId) : undefined;
@@ -118,19 +106,18 @@ export const getCategoryBreakdown: ToolDef<Args, Result> = {
             color: null,
             icon: null,
           };
-      // r._sum.amount is already Prisma.Decimal (or null) — fall back to a
-      // fresh zero rather than re-wrap when it's already a Decimal.
-      const rowTotal = r._sum.amount ?? new Prisma.Decimal(0);
-      const rowCount = r._count._all;
-      buckets.set(key, { meta, total: rowTotal, count: rowCount });
-      total = total.plus(rowTotal);
+      const bucket = buckets.get(key) ?? { meta, total: 0, count: 0 };
+      bucket.total += r.amount;
+      bucket.count += 1;
+      buckets.set(key, bucket);
+      total += r.amount;
     }
 
     const entries = [...buckets.values()];
 
-    const totalNum = parseFloat(total.toFixed(2));
+    const totalNum = Number(total.toFixed(2));
     entries.sort((a, b) => {
-      const diff = parseFloat(b.total.toFixed(2)) - parseFloat(a.total.toFixed(2));
+      const diff = b.total - a.total;
       if (diff !== 0) return diff;
       return a.meta.categoryName.localeCompare(b.meta.categoryName);
     });

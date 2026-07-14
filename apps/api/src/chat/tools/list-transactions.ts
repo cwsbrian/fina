@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
 import { basicPeriodRange, resolveUserTz } from "./periods.js";
@@ -8,7 +9,6 @@ import {
   txRowToBlockRow,
 } from "./tx-row-helpers.js";
 import type { ToolDef } from "./types.js";
-import { budgetExpenseTransactionWhere } from "../../transactions/budget-impact.js";
 
 const Args = z.object({
   period: z.enum(["today", "this_week", "this_month", "last_month"]).describe("Time window for the listing. Omit for all-time.").optional(),
@@ -39,7 +39,11 @@ export const listTransactions: ToolDef<Args, Result> = {
     "For text-search or date-range queries, use findTransactions instead.",
   args: Args,
   async run(ctx, args) {
-    const where = budgetExpenseTransactionWhere({ workspaceId: ctx.workspaceId });
+    const where: Prisma.TransactionWhereInput = {
+      workspaceId: ctx.workspaceId,
+      removedAt: null,
+      budgetImpact: { in: ["expense", "income", "refund"] },
+    };
     if (args.period) where.occurredAt = await basicPeriodRange(ctx.userId, args.period);
     const limit = args.limit ?? 20;
     const rows = await prisma.transaction.findMany({

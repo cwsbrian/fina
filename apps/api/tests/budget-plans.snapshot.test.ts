@@ -41,14 +41,27 @@ describe("budgetPlanSnapshot", () => {
       data: { workspaceId: wsId, accountId: acct, amount: "541.33", merchantRaw: "Resto", occurredAt: new Date("2026-05-10T12:00:00Z"), source: "manual", pending: false, rawData: {} },
     });
     await prisma.transactionAllocation.create({ data: { transactionId: tx.id, categoryId: dining, amount: "541.33" } });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: acct,
+        amount: "-41.33",
+        merchantRaw: "Resto refund",
+        occurredAt: new Date("2026-05-12T12:00:00Z"),
+        source: "manual",
+        pending: false,
+        rawData: {},
+        budgetImpact: "refund",
+      },
+    });
 
     const snap = await budgetPlanSnapshot(wsId, 2026, 5);
     expect(snap).not.toBeNull();
     expect(snap!.totalAmount).toBe("9000.00");
-    expect(snap!.totalSpent).toBe("541.33");
+    expect(snap!.totalSpent).toBe("500.00");
     const d = snap!.categories.find((c) => c.categoryId === dining)!;
     expect(d.allocated).toBe("577.00");
-    expect(d.spent).toBe("541.33");
+    expect(d.spent).toBe("500.00");
     expect(d.color).toBe("#cc33aa");
   });
 

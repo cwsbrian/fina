@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { Prisma } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../db.js";
 import { HttpError, requireWorkspaceContext } from "../auth/context.js";
@@ -14,6 +15,7 @@ import { removeTransactionService, RemoveTxError } from "../transactions/remove.
 import { checkLargeChargeAndPush } from "../push/anomaly.js";
 import { notifyTransactionAdded } from "../push/transaction-added.js";
 import { emitCategorizeConfirmed } from "../telemetry/categorize.js";
+import { ensureRefundLinks } from "../transactions/refunds.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -46,7 +48,7 @@ const PatchTxBody = z
     merchantRaw: z.string().optional(),
     occurredAt: z.string().optional(),
     note: z.string().nullable().optional(),
-    budgetImpact: z.enum(["expense", "excluded"]).optional(),
+    budgetImpact: z.enum(["expense", "income", "refund", "excluded"]).optional(),
     categoryId: z.string().nullable().optional(),
     allocations: z
       .array(z.object({
@@ -76,7 +78,7 @@ const QuerySchema = z.object({
   includeRemoved: BoolFlag,
   uncategorizedOnly: BoolFlag,
   needsReview: BoolFlag,
-  budgetImpact: z.enum(["expense", "excluded"]).optional().default("expense"),
+  budgetImpact: z.enum(["expense", "income", "refund", "excluded"]).optional(),
   categoryId: z.string().optional(),
   categoryIds: CategoryIds,
   /** Free-text search across merchantRaw + merchantNormalized
@@ -134,7 +136,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       const categoryIds = [
         ...new Set([...(q.categoryIds ?? []), ...(q.categoryId ? [q.categoryId] : [])]),
       ];
-      const where = {
+      await ensureRefundLinks(ctx.membership.workspaceId);
+      const where: Prisma.TransactionWhereInput = {
         workspaceId: ctx.membership.workspaceId,
         ...(q.accountId ? { accountId: q.accountId } : {}),
         // Build the date range in one pass — the previous two-spread approach
@@ -147,7 +150,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return {};
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
-        budgetImpact: q.budgetImpact,
+        budgetImpact: q.budgetImpact ?? { in: ["expense", "income", "refund"] as const },
         ...(q.q
           ? {
               OR: [
@@ -216,6 +219,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             },
             orderBy: { createdAt: "asc" },
           },
+          refunds: {
+            where: { budgetImpact: "refund", removedAt: null, pending: false },
+            select: { amount: true },
+          },
         },
       });
       const hasMore = rows.length > q.limit;
@@ -242,6 +249,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           needsReclassification: t.needsReclassification,
           budgetImpact: t.budgetImpact,
           budgetImpactSource: t.budgetImpactSource,
+          refundOfTransactionId: t.refundOfTransactionId,
+          refundedAmount: t.refunds
+            .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
+            .toFixed(2),
           allocations: t.allocations.map((a) => ({
             id: a.id,
             categoryId: a.categoryId,
@@ -267,6 +278,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
+        await ensureRefundLinks(ctx.membership.workspaceId);
         const [workspace, t] = await Promise.all([
           prisma.workspace.findUniqueOrThrow({
             where: { id: ctx.membership.workspaceId },
@@ -285,6 +297,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
                   dismissedUntil: true,
                 },
                 orderBy: { createdAt: "asc" },
+              },
+              refunds: {
+                where: { budgetImpact: "refund", removedAt: null, pending: false },
+                select: { amount: true },
               },
             },
           }),
@@ -308,6 +324,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             needsReclassification: t.needsReclassification,
             budgetImpact: t.budgetImpact,
             budgetImpactSource: t.budgetImpactSource,
+            refundOfTransactionId: t.refundOfTransactionId,
+            refundedAmount: t.refunds
+              .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
+              .toFixed(2),
             allocations: t.allocations.map((a) => ({
               id: a.id,
               categoryId: a.categoryId,

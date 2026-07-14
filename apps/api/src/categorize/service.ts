@@ -7,6 +7,8 @@ import { findHistoryHints } from "./history-lookup.js";
 import { computeNeedsConfirmation } from "./needs-confirmation.js";
 import { isOtherCategory } from "./other-detection.js";
 import { emitCategorizeCompleted } from "../telemetry/categorize.js";
+import { syncTransactionImpact } from "../transactions/refunds.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
 
 /**
  * Categorize a list of newly-inserted transactions in a workspace.
@@ -32,7 +34,7 @@ export async function categorizeNewTransactions(
   newTxIds: string[],
 ): Promise<void> {
   if (newTxIds.length === 0) return;
-
+  try {
   // Resolve mode from the workspace owner's user record. (Plan v3: user-level mode,
   // sync runs workspace-scoped, so owner's mode applies. v2 may revisit.)
   // We also need the owner's userId to attribute LLM spend to the right
@@ -51,7 +53,7 @@ export async function categorizeNewTransactions(
       id: { in: newTxIds },
       workspaceId,
       removedAt: null,  // don't categorize soft-removed tx
-      budgetImpact: "expense",
+      budgetImpact: { in: ["expense", "income", "refund"] },
       allocations: { some: {}, every: { categoryId: null, source: null } },
     },
     select: {
@@ -118,14 +120,20 @@ export async function categorizeNewTransactions(
             merchantNormalized: { in: normalizedSet },
             category: { archivedAt: null },
           },
-          select: { merchantNormalized: true, categoryId: true },
+          select: {
+            merchantNormalized: true,
+            categoryId: true,
+            category: { select: { type: true } },
+          },
         });
-  const mappingByNorm = new Map(mappings.map((m) => [m.merchantNormalized, m.categoryId]));
+  const mappingByNorm = new Map(mappings.map((m) => [m.merchantNormalized, m]));
 
   const unmapped: Loaded[] = [];
   for (const t of loaded) {
-    const catId = mappingByNorm.get(t.merchantNormalized);
-    if (catId) {
+    const mapping = mappingByNorm.get(t.merchantNormalized);
+    const expectedType = t.amount >= 0 ? "expense" : "income";
+    if (mapping?.category.type === expectedType) {
+      const catId = mapping.categoryId;
       // Find tx with N=1 null-cat allocation matching merchantNormalized, update
       // via per-row atomic guard. Idempotent against concurrent user PATCH.
       const candidates = await prisma.transaction.findMany({
@@ -133,7 +141,8 @@ export async function categorizeNewTransactions(
           workspaceId,
           merchantNormalized: t.merchantNormalized,
           removedAt: null,
-          budgetImpact: "expense",
+          budgetImpact: { in: ["expense", "income", "refund"] },
+          amount: expectedType === "expense" ? { gte: 0 } : { lt: 0 },
           allocations: { some: {}, every: { categoryId: null, source: null } },
         },
         include: { allocations: { select: { id: true } } },
@@ -171,7 +180,7 @@ export async function categorizeNewTransactions(
   const hintCategoryIds = [...new Set(Array.from(historyHints.values()).map((h) => h.categoryId))];
   const hintCategories = hintCategoryIds.length === 0 ? [] : await prisma.category.findMany({
     where: { id: { in: hintCategoryIds }, archivedAt: null },
-    select: { id: true, name: true, archivedAt: true },
+    select: { id: true, name: true, type: true, archivedAt: true },
   });
   const hintCatById = new Map(hintCategories.map((c) => [c.id, c]));
 
@@ -179,7 +188,11 @@ export async function categorizeNewTransactions(
   for (const t of unmapped) {
     const hint = historyHints.get(t.merchantNormalized);
     const hintCat = hint ? hintCatById.get(hint.categoryId) : undefined;
-    if (!hint || !hintCat) { stillUnmapped.push(t); continue; }
+    const expectedType = t.amount >= 0 ? "expense" : "income";
+    if (!hint || !hintCat || hintCat.type !== expectedType) {
+      stillUnmapped.push(t);
+      continue;
+    }
 
     const isOther = isOtherCategory({ name: hintCat.name, archivedAt: hintCat.archivedAt });
     const isHistoricalPlaidImport =
@@ -318,5 +331,12 @@ export async function categorizeNewTransactions(
         });
       }
     }
+  }
+  } finally {
+    await withWorkspaceLock(workspaceId, async (tx) => {
+      for (const transactionId of newTxIds) {
+        await syncTransactionImpact(tx, transactionId);
+      }
+    });
   }
 }

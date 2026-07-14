@@ -23,6 +23,7 @@ import { categoryMeta } from "../../src/categories/meta";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
 
 export default function NewTransaction() {
+  const [direction, setDirection] = useState<"expense" | "income">("expense");
   const [amount, setAmount] = useState("");
   const [merchant, setMerchant] = useState("");
   const [date, setDate] = useState<Date>(() => new Date());
@@ -43,7 +44,7 @@ export default function NewTransaction() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const signed = Math.abs(num);
+      const signed = direction === "income" ? -Math.abs(num) : Math.abs(num);
       // ISO instant — backend's parseOccurredAt accepts either YYYY-MM-DD
       // (legacy) or a full ISO 8601 with tz, which preserves the time.
       const occurredAt = date.toISOString();
@@ -67,7 +68,7 @@ export default function NewTransaction() {
       );
       setSubmitting(false);
     }
-  }, [amount, merchant, submitting]);
+  }, [amount, category, date, direction, merchant, submitting]);
 
   const canSubmit =
     !submitting &&
@@ -101,9 +102,41 @@ export default function NewTransaction() {
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.body}
         >
+          <View style={styles.seg} accessibilityRole="tablist">
+            {(["expense", "income"] as const).map((option) => {
+              const selected = direction === option;
+              return (
+                <Pressable
+                  key={option}
+                  style={[styles.segOpt, selected && styles.segActive]}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected }}
+                  onPress={() => {
+                    if (option !== direction) {
+                      setDirection(option);
+                      setCategory(null);
+                    }
+                  }}
+                  disabled={submitting}
+                >
+                  <Text style={[styles.segText, selected && styles.segTextActive]}>
+                    {option === "expense" ? "Expense" : "Income"}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
           {/* Amount hero */}
           <View style={styles.amountRow}>
-            <Text style={styles.amountAdornment}>−</Text>
+            <Text
+              style={[
+                styles.amountAdornment,
+                direction === "income" && styles.incomeAmount,
+              ]}
+            >
+              {direction === "income" ? "+" : "−"}
+            </Text>
             <Text style={[styles.amountAdornment, { marginRight: 2 }]}>$</Text>
             <View style={styles.amountInputWrap}>
               <TextInput
@@ -228,7 +261,7 @@ export default function NewTransaction() {
       <CategoryPickerSheet
         visible={categoryPickerOpen}
         selectedId={category?.id ?? null}
-        categoryType="expense"
+        categoryType={direction}
         onClose={() => setCategoryPickerOpen(false)}
         onSelect={(cat) => {
           setCategory(cat);
@@ -302,6 +335,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: colors.ink,
   },
+  incomeAmount: { color: colors.up },
   amountInputWrap: { position: "relative", justifyContent: "center" },
   amountInput: {
     fontSize: 56,

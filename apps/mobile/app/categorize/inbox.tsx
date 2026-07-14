@@ -8,7 +8,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
-import { formatMoney, isExpenseAmount } from "../../src/format/money";
+import { formatMoney } from "../../src/format/money";
 import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
 
 type LoadResult = {
@@ -35,7 +35,7 @@ export default function CategorizeInbox() {
         apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${wsId}/categories`),
       ]);
       setData({
-        txs: list.transactions.filter((tx) => isExpenseAmount(tx.amount)),
+        txs: list.transactions,
         categories: Object.fromEntries(cats.categories.map((c) => [c.id, c])),
         mode: me.user.categorizationMode,
         wsId,
@@ -137,7 +137,9 @@ export default function CategorizeInbox() {
                   </View>
                 </View>
                 <View style={styles.rowRight}>
-                  <Text style={styles.amount}>−{money.display}</Text>
+                  <Text style={[styles.amount, money.isIncome && styles.amountIncome]}>
+                    {money.isIncome ? "+" : "−"}{money.display}
+                  </Text>
                   <View style={styles.actions}>
                     <Pressable
                       accessibilityLabel={cancelLabel}
@@ -178,7 +180,9 @@ export default function CategorizeInbox() {
         visible={pickerTxId !== null}
         txId={pickerTxId ?? ""}
         selectedId={pickerSelectedId}
-        categoryType="expense"
+        categoryType={Number(data?.txs.find((tx) => tx.id === pickerTxId)?.amount) < 0
+          ? "income"
+          : "expense"}
         onClose={() => setPickerTxId(null)}
         onChange={(affectedTransactionIds) => {
           setPickerTxId(null);
@@ -250,6 +254,7 @@ const styles = StyleSheet.create({
   otherDot: { width: 6, height: 6, borderRadius: 999, backgroundColor: colors.down, flexShrink: 0 },
   rowRight: { alignItems: "flex-end", gap: 5 },
   amount: { ...type$.bodyMd, color: colors.ink, fontWeight: "600", fontVariant: ["tabular-nums"] },
+  amountIncome: { color: colors.up },
   actions: { flexDirection: "row", alignItems: "center", gap: 2 },
   actionBtn: {
     width: 26,

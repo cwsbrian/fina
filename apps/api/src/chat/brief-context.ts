@@ -236,6 +236,7 @@ async function buildWorkspaceContext(
     where: {
       workspaceId,
       removedAt: null,
+      budgetImpact: { in: ["expense", "income", "refund"] },
       occurredAt: { gte: txWindowStart },
     },
     select: {

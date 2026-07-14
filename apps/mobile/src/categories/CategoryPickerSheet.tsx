@@ -67,6 +67,7 @@ export function CategoryPickerSheet({
   onClose,
   onChange,
   onSelect,
+  categoryType = "expense",
 }: Props) {
   const ref = useRef<BottomSheet>(null);
   const swipeRefs = useRef<Map<string, Swipeable | null>>(new Map());
@@ -75,8 +76,6 @@ export function CategoryPickerSheet({
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [canManage, setCanManage] = useState(false);
-  const effectiveCategoryType = "expense";
-
   const snapPoints = useMemo(() => ["90%"], []);
 
 
@@ -85,7 +84,7 @@ export function CategoryPickerSheet({
       const workspace = await bootstrapActiveWorkspaceSummary();
       if (!workspace) throw new Error("no_workspace");
       setCanManage(hasAtLeast(workspace.role, "editor"));
-      const url = `/workspaces/${workspace.id}/categories?type=${effectiveCategoryType}`;
+      const url = `/workspaces/${workspace.id}/categories?type=${categoryType}`;
       const data = await apiFetch<CategoriesResp>(url);
       setCats(
         data.categories
@@ -96,7 +95,7 @@ export function CategoryPickerSheet({
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
     }
-  }, []);
+  }, [categoryType]);
 
   useEffect(() => {
     if (visible) load();
@@ -155,8 +154,8 @@ export function CategoryPickerSheet({
     if (!txId) return;
     // Keep the sheet open so Cancel on the new-category screen lands
     // back on the same picker; useFocusEffect refreshes on return.
-    router.push(`/transactions/${txId}/new-category?type=${effectiveCategoryType}` as never);
-  }, [txId]);
+    router.push(`/transactions/${txId}/new-category?type=${categoryType}` as never);
+  }, [categoryType, txId]);
 
   const pick = async (cat: CategoryDTO | null) => {
     if (!txId) {

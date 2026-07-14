@@ -11,6 +11,7 @@ import {
 } from "./validators.js";
 import { applyAllocations } from "./allocations.js";
 import { budgetImpactForAmount } from "./budget-impact.js";
+import { syncTransactionImpact } from "./refunds.js";
 
 export type CreateManualTxInput = {
   merchantRaw: string;
@@ -36,8 +37,10 @@ export type CreateManualTxResult = {
     note: string | null;
     removedAt: null;
     needsReclassification: false;
-    budgetImpact: "expense" | "excluded";
+    budgetImpact: "expense" | "income" | "refund" | "excluded";
     budgetImpactSource: "auto" | "user";
+    refundOfTransactionId: string | null;
+    refundedAmount: string;
     createdAt: string;
     updatedAt: string;
     allocations: Array<{
@@ -193,6 +196,16 @@ export async function createManualTransactionService(
       allocSource,
       [{ categoryId: input.categoryId ?? null, amount: input.amount }],
     );
+    await syncTransactionImpact(tx, row.id);
+
+    const impact = await tx.transaction.findUniqueOrThrow({
+      where: { id: row.id },
+      select: {
+        budgetImpact: true,
+        budgetImpactSource: true,
+        refundOfTransactionId: true,
+      },
+    });
 
     const allocs = await tx.transactionAllocation.findMany({
       where: { transactionId: row.id },
@@ -215,8 +228,10 @@ export async function createManualTransactionService(
         note: row.note,
         removedAt: null,                    // invariant: freshly created
         needsReclassification: false,
-        budgetImpact: row.budgetImpact,
-        budgetImpactSource: row.budgetImpactSource,
+        budgetImpact: impact.budgetImpact,
+        budgetImpactSource: impact.budgetImpactSource,
+        refundOfTransactionId: impact.refundOfTransactionId,
+        refundedAmount: "0.00",
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
         allocations: allocs.map((a) => ({

@@ -36,7 +36,7 @@ import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { ActionItemCard } from "../../src/home/ActionItemCard";
 import { shouldShowBudgetHero } from "../../src/home/budget-hero";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
-import { formatMoney, isExpenseAmount } from "../../src/format/money";
+import { formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 
@@ -170,7 +170,6 @@ export default function Home() {
         return;
       }
       const wsId = await bootstrapActiveWorkspace();
-      const now = new Date();
       if (!wsId) return;
 
       await Promise.all([
@@ -247,7 +246,7 @@ export default function Home() {
         )
           .then((r) => {
             if (runId !== loadRunId.current) return;
-            setNeedsReviewCount(r.transactions.filter((tx) => isExpenseAmount(tx.amount)).length);
+            setNeedsReviewCount(r.transactions.length);
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
@@ -257,7 +256,7 @@ export default function Home() {
           .then((r) => {
             if (runId !== loadRunId.current) return;
             setHasTransactions(r.transactions.length > 0);
-            setRecentTxs(r.transactions.filter((tx) => isExpenseAmount(tx.amount)).slice(0, 3));
+            setRecentTxs(r.transactions.slice(0, 3));
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
@@ -811,7 +810,9 @@ export default function Home() {
                           </Text>
                         </View>
                         <View style={styles.txRight}>
-                          <Text style={styles.txAmount}>−{money.display}</Text>
+                          <Text style={[styles.txAmount, money.isIncome && styles.txAmountIncome]}>
+                            {money.isIncome ? "+" : "−"}{money.display}
+                          </Text>
                           <Text style={styles.txTime}>{formatTime(tx.occurredAt)}</Text>
                         </View>
                       </Pressable>
@@ -1187,6 +1188,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontVariant: ["tabular-nums"],
   },
+  txAmountIncome: { color: colors.up },
   txTime: {
     ...type$.caption,
     color: colors.muted,

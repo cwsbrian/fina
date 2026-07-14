@@ -6,8 +6,8 @@ import {
 } from "../src/transactions/budget-impact.js";
 
 describe("budget impact", () => {
-  it("excludes non-expense amounts", () => {
-    expect(budgetImpactForAmount(-100)).toBe("excluded");
+  it("classifies amount direction", () => {
+    expect(budgetImpactForAmount(-100)).toBe("income");
     expect(budgetImpactForAmount(0)).toBe("excluded");
     expect(budgetImpactForAmount(100)).toBe("expense");
   });
@@ -22,6 +22,51 @@ describe("budget impact", () => {
         detailed: "LOAN_PAYMENTS_CREDIT_CARD_PAYMENT",
       },
     })).toBe("excluded");
+  });
+
+  it("excludes incoming internal transfers too", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: -500,
+      name: "TRANSFER FROM SAVINGS",
+      merchant_name: null,
+      personal_finance_category: {
+        primary: "TRANSFER_IN",
+        detailed: "TRANSFER_IN_ACCOUNT_TRANSFER",
+      },
+    })).toBe("excluded");
+    expect(classifyPlaidBudgetImpact({
+      amount: -500,
+      name: "Deposit",
+      merchant_name: null,
+      personal_finance_category: {
+        primary: "TRANSFER_IN",
+        detailed: "TRANSFER_IN_ACCOUNT_TRANSFER",
+      },
+    })).toBe("excluded");
+  });
+
+  it("keeps real deposits as income", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: -2500,
+      name: "ACME PAYROLL",
+      merchant_name: "ACME",
+      personal_finance_category: {
+        primary: "INCOME",
+        detailed: "INCOME_WAGES",
+      },
+    })).toBe("income");
+  });
+
+  it("identifies provider refunds separately from income", () => {
+    expect(classifyPlaidBudgetImpact({
+      amount: -45,
+      name: "MERCHANT REFUND",
+      merchant_name: "Merchant",
+      personal_finance_category: {
+        primary: "INCOME",
+        detailed: "INCOME_OTHER_INCOME",
+      },
+    })).toBe("refund");
   });
 
   it("keeps outgoing e-transfers as expenses", () => {

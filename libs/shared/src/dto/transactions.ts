@@ -35,8 +35,12 @@ export type TransactionDTO = {
   /** ISO 8601 timestamp; null when not soft-removed. */
   removedAt: string | null;
   needsReclassification: boolean;
-  budgetImpact: "expense" | "excluded";
+  budgetImpact: "expense" | "income" | "refund" | "excluded";
   budgetImpactSource: "auto" | "user";
+  /** Original expense linked to this refund, when confidently matched. */
+  refundOfTransactionId: string | null;
+  /** Posted refunds matched to this expense. Raw transaction amount is unchanged. */
+  refundedAmount: string;
   allocations: AllocationDTO[];
 };
 

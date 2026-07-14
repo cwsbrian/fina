@@ -2,7 +2,7 @@ import { logLlmCall } from "../llm/budget.js";
 import { prisma } from "../db.js";
 import type { Env as FinaEnv } from "../env.js";
 import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
-import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
+import { effectiveExpenseAllocations } from "../transactions/cashflow.js";
 
 export type SuggestedAllocation = {
   categoryId: string;
@@ -51,20 +51,8 @@ async function recentMonthlySpend(
   workspaceId: string,
 ): Promise<{ spend: SpendByCategory[]; monthCount: number }> {
   const since = new Date(Date.now() - 90 * 86400_000);
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      ...budgetExpenseAllocationWhere({
-        workspaceId,
-        occurredAt: { gte: since },
-      }),
-      categoryId: { not: null },
-    },
-    select: {
-      amount: true,
-      categoryId: true,
-      category: { select: { name: true } },
-      transaction: { select: { occurredAt: true } },
-    },
+  const rows = await effectiveExpenseAllocations(workspaceId, {
+    occurredAt: { gte: since },
   });
   const totals = new Map<
     string,
@@ -72,10 +60,10 @@ async function recentMonthlySpend(
   >();
   const months = new Set<string>();
   for (const r of rows) {
-    if (!r.categoryId || !r.category) continue;
-    months.add(r.transaction.occurredAt.toISOString().slice(0, 7));
-    const cur = totals.get(r.categoryId) ?? { name: r.category.name, total: 0 };
-    cur.total += Number(r.amount);
+    if (!r.categoryId || !r.categoryName) continue;
+    months.add(r.occurredAt.toISOString().slice(0, 7));
+    const cur = totals.get(r.categoryId) ?? { name: r.categoryName, total: 0 };
+    cur.total += r.amount;
     totals.set(r.categoryId, cur);
   }
   return {

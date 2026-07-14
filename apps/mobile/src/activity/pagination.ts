@@ -1,5 +1,4 @@
 import type { TransactionDTO } from "@fina/shared";
-import { isExpenseAmount } from "../format/money";
 
 export const ACTIVITY_PAGE_LIMIT = 100;
 
@@ -50,7 +49,7 @@ export function mergeActivityTransactionPages(
   const seen = new Set(current.map((tx) => tx.id));
   const next = [...current];
   for (const tx of incoming) {
-    if (seen.has(tx.id) || !isExpenseAmount(tx.amount)) continue;
+    if (seen.has(tx.id)) continue;
     seen.add(tx.id);
     next.push(tx);
   }

@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { Prisma } from "@prisma/client";
 import type { PresentationBlock } from "@fina/shared";
 import { prisma } from "../../db.js";
+import { cashflowEntries } from "../../transactions/cashflow.js";
 import type { ToolDef } from "./types.js";
 import { customRange, dateKeyInTz, resolveUserTz, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
@@ -58,27 +58,14 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
       }),
     ]);
 
-    const rows = await prisma.transaction.findMany({
-      where: {
-        workspaceId: ctx.workspaceId,
-        removedAt: null,
-        occurredAt: { gte, lt },
-      },
-      select: {
-        amount: true,
-        accountId: true,
-        account: { select: { id: true, name: true } },
-        occurredAt: true,
-      },
-    });
+    const rows = await cashflowEntries(ctx.workspaceId, { occurredAt: { gte, lt } });
 
-    type Agg = { key: string; label: string; income: Prisma.Decimal; expense: Prisma.Decimal; count: number };
+    type Agg = { key: string; label: string; income: number; expense: number; count: number };
     const buckets = new Map<string, Agg>();
-    let totalIncome = new Prisma.Decimal(0);
-    let totalExpense = new Prisma.Decimal(0);
+    let totalIncome = 0;
+    let totalExpense = 0;
 
     for (const r of rows) {
-      const amt = new Prisma.Decimal(r.amount);
       let key: string;
       let label: string;
       if (groupBy === "day") {
@@ -86,20 +73,19 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
         label = key;
       } else {
         key = r.accountId;
-        label = r.account.name;
+        label = r.accountName;
       }
       let b = buckets.get(key);
       if (!b) {
-        b = { key, label, income: new Prisma.Decimal(0), expense: new Prisma.Decimal(0), count: 0 };
+        b = { key, label, income: 0, expense: 0, count: 0 };
         buckets.set(key, b);
       }
-      if (amt.greaterThan(0)) {
-        b.expense = b.expense.plus(amt);
-        totalExpense = totalExpense.plus(amt);
-      } else if (amt.lessThan(0)) {
-        const abs = amt.abs();
-        b.income = b.income.plus(abs);
-        totalIncome = totalIncome.plus(abs);
+      if (r.direction === "expense") {
+        b.expense += r.amount;
+        totalExpense += r.amount;
+      } else {
+        b.income += r.amount;
+        totalIncome += r.amount;
       }
       b.count += 1;
     }
@@ -109,7 +95,7 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
       label: b.label,
       incomeTotal: b.income.toFixed(2),
       expenseTotal: b.expense.toFixed(2),
-      netTotal: b.income.minus(b.expense).toFixed(2),
+      netTotal: (b.income - b.expense).toFixed(2),
       count: b.count,
     }));
 
@@ -124,7 +110,7 @@ export const getCashflowSummary: ToolDef<Args, Result> = {
       });
     }
 
-    const netStr = totalIncome.minus(totalExpense).toFixed(2);
+    const netStr = (totalIncome - totalExpense).toFixed(2);
     return {
       since: args.since,
       until: args.until,

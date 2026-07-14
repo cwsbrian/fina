@@ -34,7 +34,7 @@ describe("recentDiscretionaryDailyByCategory", () => {
     amount: string,
     day: string,
     pending = false,
-    budgetImpact: "expense" | "excluded" = "expense",
+    budgetImpact: "expense" | "refund" | "excluded" = "expense",
   ) {
     const t = await prisma.transaction.create({
       data: {
@@ -57,7 +57,7 @@ describe("recentDiscretionaryDailyByCategory", () => {
 
   it("nets refunds and excludes pending in the 90-day discretionary daily rate", async () => {
     await tx("90.00", "2026-04-20T12:00:00Z"); // counts
-    await tx("-30.00", "2026-04-21T12:00:00Z"); // refund nets out
+    await tx("-30.00", "2026-04-21T12:00:00Z", false, "refund"); // refund nets out
     await tx("60.00", "2026-05-01T12:00:00Z", true); // pending excluded
     const rates = await recentDiscretionaryDailyByCategory(wsId, [dining]);
     expect(rates.get(dining)).toBeCloseTo(60 / 90, 4);
@@ -95,10 +95,12 @@ describe("recentDiscretionaryDailyByCategory", () => {
   it("a refund does not distort the winsorize cap (negatives net, never capped)", async () => {
     await tx("50.00", "2026-04-10T12:00:00Z");
     await tx("50.00", "2026-04-12T12:00:00Z");
-    await tx("-200.00", "2026-04-15T12:00:00Z"); // big refund
-    // positives [50,50] → median 50, cap 150, nothing capped; net = -100 → clamped to 0.
+    await tx("200.00", "2026-04-14T12:00:00Z");
+    await tx("-200.00", "2026-04-15T12:00:00Z", false, "refund");
+    // The $200 purchase is fully refunded. The remaining [50,50] values set
+    // the median/cap and remain $100 total.
     const rates = await recentDiscretionaryDailyByCategory(wsId, [dining]);
-    expect(rates.get(dining) ?? 0).toBeCloseTo(0, 4);
+    expect(rates.get(dining) ?? 0).toBeCloseTo(100 / 90, 4);
   });
 
   it("excludes transactions marked out of budget from the forecast rate", async () => {

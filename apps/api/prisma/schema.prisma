@@ -357,6 +357,7 @@ model Transaction {
   needsReclassification     Boolean            @default(false)
   budgetImpact              BudgetImpact       @default(expense)
   budgetImpactSource        BudgetImpactSource @default(auto)
+  refundOfTransactionId     String?
 
   workspace        Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // FK column kept as `accountId` (not `bankAccountId`) so URL/query filters
@@ -366,10 +367,13 @@ model Transaction {
   plaidItem        PlaidItem?              @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
   allocations      TransactionAllocation[]
   matchedSchedules ScheduledSpend[]        @relation("ScheduledSpendMatch")
+  refundOf         Transaction?            @relation("TransactionRefunds", fields: [refundOfTransactionId], references: [id], onDelete: SetNull)
+  refunds          Transaction[]           @relation("TransactionRefunds")
 
   @@index([workspaceId, occurredAt(sort: Desc)])
   @@index([workspaceId, budgetImpact, occurredAt(sort: Desc)])
   @@index([workspaceId, accountId, occurredAt(sort: Desc)])
+  @@index([refundOfTransactionId])
   @@map("transactions")
 }
 
@@ -423,6 +427,8 @@ enum TransactionSource {
 
 enum BudgetImpact {
   expense
+  income
+  refund
   excluded
 }
 

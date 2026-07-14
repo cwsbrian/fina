@@ -204,8 +204,6 @@ export default function AnalysisScreen() {
         ) : (
           <>
             <MonthStepper
-              year={data.current.year}
-              month={data.current.month}
               label={data.current.label}
               onPrev={() =>
                 setPeriodState({ period: prevYM(data.current.year, data.current.month) })
@@ -220,6 +218,12 @@ export default function AnalysisScreen() {
                   nextYM(data.current.year, data.current.month).month,
                 )
               }
+            />
+            <SectionLabel>Cash flow</SectionLabel>
+            <CashflowSummary
+              income={data.current.income}
+              expenses={data.current.spend}
+              net={data.current.net}
             />
             <SectionLabel>Where it went</SectionLabel>
             <SpendBreakdown
@@ -276,16 +280,53 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
   return <Text style={styles.sectionLabel}>{children}</Text>;
 }
 
+function CashflowSummary({
+  income,
+  expenses,
+  net,
+}: {
+  income: number;
+  expenses: number;
+  net: number;
+}) {
+  return (
+    <View style={[styles.card, styles.cashflowCard]}>
+      <View style={styles.cashflowItem}>
+        <Text style={styles.cashflowLabel}>Income</Text>
+        <Text style={[styles.cashflowValue, styles.cashflowIncome]}>
+          +{formatMoney(income.toFixed(2)).display}
+        </Text>
+      </View>
+      <View style={styles.cashflowDivider} />
+      <View style={styles.cashflowItem}>
+        <Text style={styles.cashflowLabel}>Expenses</Text>
+        <Text style={styles.cashflowValue}>
+          −{formatMoney(expenses.toFixed(2)).display}
+        </Text>
+      </View>
+      <View style={styles.cashflowDivider} />
+      <View style={styles.cashflowItem}>
+        <Text style={styles.cashflowLabel}>Net</Text>
+        <Text
+          style={[
+            styles.cashflowValue,
+            net > 0 && styles.cashflowIncome,
+            net < 0 && styles.cashflowNegative,
+          ]}
+        >
+          {net >= 0 ? "+" : "−"}{formatMoney(Math.abs(net).toFixed(2)).display}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 function MonthStepper({
-  year,
-  month,
   label,
   onPrev,
   onNext,
   canGoNext,
 }: {
-  year: number;
-  month: number;
   label: string;
   onPrev: () => void;
   onNext: () => void;
@@ -641,6 +682,26 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.hairlineSoft,
     padding: space.base,
+  },
+  cashflowCard: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    paddingVertical: space.base,
+  },
+  cashflowItem: { flex: 1, gap: 4 },
+  cashflowLabel: { ...type$.caption, color: colors.muted },
+  cashflowValue: {
+    ...type$.bodyMd,
+    color: colors.ink,
+    fontWeight: "700",
+    fontVariant: ["tabular-nums"],
+  },
+  cashflowIncome: { color: colors.up },
+  cashflowNegative: { color: colors.down },
+  cashflowDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.hairline,
+    marginHorizontal: space.sm,
   },
   cardEyebrow: {
     ...type$.captionStrong,

@@ -6,7 +6,10 @@ import { normalizeMerchant } from "../../categorize/normalize.js";
 import type { ToolDef } from "./types.js";
 import { customRange, SINCE_ARG_DESC, UNTIL_ARG_DESC } from "./periods.js";
 import { formatPeriodLabel } from "./recap-label.js";
-import { budgetExpenseAllocationWhere, budgetExpenseTransactionWhere } from "../../transactions/budget-impact.js";
+import {
+  effectiveExpenseAllocations,
+  effectiveExpenseTransactions,
+} from "../../transactions/cashflow.js";
 
 const Args = z.object({
   current_since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(
@@ -126,33 +129,23 @@ async function bucketizeByAllocation(
   gte: Date,
   lt: Date,
 ): Promise<{ map: Map<string, Bucket>; total: Prisma.Decimal }> {
-  const allocRows = await prisma.transactionAllocation.groupBy({
-    by: ["categoryId"],
-    where: budgetExpenseAllocationWhere({
-        workspaceId,
-        occurredAt: { gte, lt },
-    }),
-    _sum: { amount: true },
-    _count: { _all: true },
+  const allocRows = await effectiveExpenseAllocations(workspaceId, {
+    occurredAt: { gte, lt },
   });
-
-  const catIds = allocRows.map((r) => r.categoryId).filter((id): id is string => id !== null);
-  const catMap = new Map<string, string>();
-  if (catIds.length > 0) {
-    const cats = await prisma.category.findMany({
-      where: { id: { in: catIds }, workspaceId },
-      select: { id: true, name: true },
-    });
-    for (const c of cats) catMap.set(c.id, c.name);
-  }
 
   const map = new Map<string, Bucket>();
   let total = new Prisma.Decimal(0);
   for (const r of allocRows) {
     const key = r.categoryId ?? "uncategorized";
-    const label = r.categoryId ? (catMap.get(r.categoryId) ?? "Unknown") : "Uncategorized";
-    const rowTotal = r._sum.amount ?? new Prisma.Decimal(0);
-    map.set(key, { key, label, total: rowTotal, count: r._count._all });
+    const label = r.categoryName ?? "Uncategorized";
+    const rowTotal = new Prisma.Decimal(r.amount);
+    const bucket = map.get(key);
+    if (bucket) {
+      bucket.total = bucket.total.plus(rowTotal);
+      bucket.count += 1;
+    } else {
+      map.set(key, { key, label, total: rowTotal, count: 1 });
+    }
     total = total.plus(rowTotal);
   }
   return { map, total };
@@ -192,31 +185,22 @@ export const compareSpendingPeriods: ToolDef<Args, Result> = {
         bucketizeByAllocation(ctx.workspaceId, comparisonRange.gte, comparisonRange.lt),
       ]);
     } else {
-      // group_by=merchant path: category fields not needed (dropped from Transaction in Task 8)
-      const selectSpec = {
-        amount: true,
-        merchantRaw: true,
-        merchantNormalized: true,
-        occurredAt: true,
-      };
       const [currentRows, comparisonRows] = await Promise.all([
-        prisma.transaction.findMany({
-          where: budgetExpenseTransactionWhere({
-            workspaceId: ctx.workspaceId,
-            occurredAt: { gte: currentRange.gte, lt: currentRange.lt },
-          }),
-          select: selectSpec,
+        effectiveExpenseTransactions(ctx.workspaceId, {
+          occurredAt: { gte: currentRange.gte, lt: currentRange.lt },
         }),
-        prisma.transaction.findMany({
-          where: budgetExpenseTransactionWhere({
-            workspaceId: ctx.workspaceId,
-            occurredAt: { gte: comparisonRange.gte, lt: comparisonRange.lt },
-          }),
-          select: selectSpec,
+        effectiveExpenseTransactions(ctx.workspaceId, {
+          occurredAt: { gte: comparisonRange.gte, lt: comparisonRange.lt },
         }),
       ]);
-      current = bucketize(currentRows as Row[], args.group_by);
-      comparison = bucketize(comparisonRows as Row[], args.group_by);
+      current = bucketize(currentRows.map((row) => ({
+        ...row,
+        amount: new Prisma.Decimal(row.amount),
+      })), args.group_by);
+      comparison = bucketize(comparisonRows.map((row) => ({
+        ...row,
+        amount: new Prisma.Decimal(row.amount),
+      })), args.group_by);
     }
 
     const allKeys = new Set<string>([...current.map.keys(), ...comparison.map.keys()]);

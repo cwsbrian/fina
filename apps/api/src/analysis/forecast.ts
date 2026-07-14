@@ -1,5 +1,4 @@
 import type { RiskTier } from "@fina/shared";
-import { prisma } from "../db.js";
 import {
   budgetPlanSnapshot,
   recentTypicalAmountByCategory,
@@ -8,7 +7,7 @@ import {
 } from "../budget-plans/service.js";
 import { localMidnightToUtc, partsInTz, resolveUserTz } from "../chat/tools/periods.js";
 import { serverNow } from "../dev-clock.js";
-import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
+import { effectiveExpenseAllocations } from "../transactions/cashflow.js";
 
 const WATCH_FACTOR = 1.1;
 
@@ -77,30 +76,20 @@ async function completedMonthPatterns(
   const first = new Date(Date.UTC(year, month - 4, 1));
   const start = localMidnightToUtc(first.getUTCFullYear(), first.getUTCMonth() + 1, 1, tz);
   const end = localMidnightToUtc(year, month, 1, tz);
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      ...budgetExpenseAllocationWhere({
-        workspaceId,
-        pending: false,
-        occurredAt: { gte: start, lt: end },
-      }),
-      categoryId: { in: categoryIds },
-    },
-    select: {
-      categoryId: true,
-      amount: true,
-      transaction: { select: { occurredAt: true } },
-    },
-  });
+  const rows = await effectiveExpenseAllocations(
+    workspaceId,
+    { pending: false, occurredAt: { gte: start, lt: end } },
+    categoryIds,
+  );
 
   const totals = new Map<string, Map<string, { toDate: number; total: number }>>();
   for (const row of rows) {
     if (!row.categoryId) continue;
-    const p = partsInTz(row.transaction.occurredAt, tz);
+    const p = partsInTz(row.occurredAt, tz);
     const monthKey = `${p.year}-${p.month}`;
     const byMonth = totals.get(row.categoryId) ?? new Map();
     const bucket = byMonth.get(monthKey) ?? { toDate: 0, total: 0 };
-    const amount = row.amount.toNumber();
+    const amount = row.amount;
     bucket.total += amount;
     if (p.day <= currentDay) bucket.toDate += amount;
     byMonth.set(monthKey, bucket);
