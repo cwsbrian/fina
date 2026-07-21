@@ -422,7 +422,7 @@ export default function Home() {
       key: "trial",
       icon: "sparkles-outline",
       title: `Trial ends in ${days} day${days === 1 ? "" : "s"}`,
-      href: "/subscriptions",
+      href: "/plan",
     });
   }
 

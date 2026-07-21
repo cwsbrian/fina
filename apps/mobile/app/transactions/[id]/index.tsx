@@ -499,7 +499,7 @@ export default function TransactionDetail() {
         visible={pickerOpen}
         txId={tx.id}
         selectedId={firstAlloc?.categoryId ?? null}
-        categoryType="expense"
+        categoryType={money.isIncome ? "income" : "expense"}
         onClose={() => setPickerOpen(false)}
         onChange={() => {
           setPickerOpen(false);

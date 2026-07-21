@@ -67,7 +67,7 @@ export function CategoryPickerSheet({
   onClose,
   onChange,
   onSelect,
-  categoryType = "expense",
+  categoryType,
 }: Props) {
   const ref = useRef<BottomSheet>(null);
   const swipeRefs = useRef<Map<string, Swipeable | null>>(new Map());
@@ -76,15 +76,27 @@ export function CategoryPickerSheet({
   const [saving, setSaving] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [canManage, setCanManage] = useState(false);
+  const [resolvedCategoryType, setResolvedCategoryType] =
+    useState<"expense" | "income">(categoryType ?? "expense");
   const snapPoints = useMemo(() => ["90%"], []);
 
 
   const load = useCallback(async () => {
+    setCats(null);
     try {
       const workspace = await bootstrapActiveWorkspaceSummary();
       if (!workspace) throw new Error("no_workspace");
       setCanManage(hasAtLeast(workspace.role, "editor"));
-      const url = `/workspaces/${workspace.id}/categories?type=${categoryType}`;
+      let nextCategoryType = categoryType;
+      if (!nextCategoryType && txId) {
+        const detail = await apiFetch<{ transaction: { amount: string } }>(
+          `/workspaces/${workspace.id}/transactions/${txId}`,
+        );
+        nextCategoryType = Number(detail.transaction.amount) < 0 ? "income" : "expense";
+      }
+      nextCategoryType ??= "expense";
+      setResolvedCategoryType(nextCategoryType);
+      const url = `/workspaces/${workspace.id}/categories?type=${nextCategoryType}`;
       const data = await apiFetch<CategoriesResp>(url);
       setCats(
         data.categories
@@ -95,7 +107,7 @@ export function CategoryPickerSheet({
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
     }
-  }, [categoryType]);
+  }, [categoryType, txId]);
 
   useEffect(() => {
     if (visible) load();
@@ -154,8 +166,8 @@ export function CategoryPickerSheet({
     if (!txId) return;
     // Keep the sheet open so Cancel on the new-category screen lands
     // back on the same picker; useFocusEffect refreshes on return.
-    router.push(`/transactions/${txId}/new-category?type=${categoryType}` as never);
-  }, [categoryType, txId]);
+    router.push(`/transactions/${txId}/new-category?type=${resolvedCategoryType}` as never);
+  }, [resolvedCategoryType, txId]);
 
   const pick = async (cat: CategoryDTO | null) => {
     if (!txId) {

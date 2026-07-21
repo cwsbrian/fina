@@ -21,4 +21,9 @@ describe("manual-first transaction entry", () => {
     expect(activity).toContain("Bank sync is optional.");
     expect(activity).toContain('label="Connect a bank (optional)"');
   });
+
+  it("opens Plan from the expiring-trial Home action", () => {
+    const home = readMobile("app/(tabs)/index.tsx");
+    expect(home).toMatch(/key: "trial",[\s\S]*?href: "\/plan"/);
+  });
 });

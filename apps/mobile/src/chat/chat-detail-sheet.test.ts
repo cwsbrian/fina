@@ -124,6 +124,8 @@ describe("chat detail sheet", () => {
   it("uses category review copy and closes the detail sheet before opening Activity", () => {
     const threadView = readMobile("src/chat/ThreadView.tsx");
     const presentationBlock = readMobile("src/chat/PresentationBlock.tsx");
+    const categoryPicker = readMobile("src/categories/CategoryPickerSheet.tsx");
+    const transactionDetail = readMobile("app/transactions/[id]/index.tsx");
 
     expect(threadView).toContain('case "categorize_confirm_card":');
     expect(threadView).toContain('return "Review Categories";');
@@ -156,6 +158,8 @@ describe("chat detail sheet", () => {
     expect(presentationBlock).not.toContain("오늘 분류한");
     expect(presentationBlock).not.toContain("외 {block.moreCount}건");
     expect(presentationBlock).toContain("+ {block.moreCount} more");
+    expect(categoryPicker).toContain("Number(detail.transaction.amount) < 0 ? \"income\" : \"expense\"");
+    expect(transactionDetail).toContain('categoryType={money.isIncome ? "income" : "expense"}');
   });
 
   it("routes redundant detail blocks directly instead of opening the sheet", () => {
