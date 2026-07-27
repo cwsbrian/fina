@@ -26,7 +26,7 @@ type TokenOverrides = {
   kid?: string;
   privateKey?: typeof keyPair.privateKey;
   issuer?: string;
-  audience?: string;
+  audience?: string | string[];
   payload?: Record<string, unknown>;
 };
 
@@ -112,6 +112,7 @@ describe("createAdminTokenVerifier", () => {
     ["wrong signature", () => token({ privateKey: otherKeyPair.privateKey })],
     ["wrong issuer", () => token({ issuer: "https://wrong.example.com" })],
     ["wrong audience", () => token({ audience: "other-admin-api" })],
+    ["multi-valued audience", () => token({ audience: [AUDIENCE, "other-admin-api"] })],
     ["Say Better audience", () => token({ audience: "saybetter-admin-api" })],
     ["expired token", () => token({ payload: { iat: NOW - 66, nbf: NOW - 66, exp: NOW - 6 } })],
     ["future token", () => token({ payload: { iat: NOW + 6, nbf: NOW + 6, exp: NOW + 60 } })],

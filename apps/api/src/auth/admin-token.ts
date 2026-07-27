@@ -43,6 +43,9 @@ export function createAdminTokenVerifier(input: {
       throw new HttpError(401, "unauthenticated");
     }
 
+    if (payload.aud !== input.audience) {
+      throw new HttpError(401, "unauthenticated");
+    }
     if (payload.email !== input.adminEmail || payload.scope !== "admin:read") {
       throw new HttpError(403, "admin_required");
     }

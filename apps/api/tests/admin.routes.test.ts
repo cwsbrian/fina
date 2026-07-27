@@ -65,22 +65,74 @@ async function createAdmin(app: Awaited<ReturnType<typeof buildApp>>) {
 
 describe("internal admin delegation guard", () => {
   it.each([
-    ["/internal/admin/users", "findMany"],
-    ["/internal/admin/users/user-1", "findUnique"],
-  ] as const)("rejects %s before querying", async (url, queryMethod) => {
-    const verifier = vi.fn().mockRejectedValue(new HttpError(401, "unauthenticated"));
-    const query = vi.spyOn(prisma.user, queryMethod);
-    const app = await buildInternalApp(verifier);
+    ["/internal/admin/users", "findMany", "admin_users_listed"],
+    ["/internal/admin/users/user-1", "findUnique", "admin_user_detail_viewed"],
+  ] as const)(
+    "rejects %s before session resolution or querying",
+    async (url, queryMethod, action) => {
+      const verifier = vi.fn().mockRejectedValue(new HttpError(401, "unauthenticated"));
+      const query = vi.spyOn(prisma.user, queryMethod);
+      const app = await buildInternalApp(verifier);
+      const sessionResolver = vi
+        .spyOn(app.fina.auth.api, "getSession")
+        .mockRejectedValue(new Error("customer session resolver called"));
+      const infoSpy = vi.spyOn(app.log, "info");
+
+      const res = await app.inject({
+        method: "GET",
+        url,
+        headers: { authorization: "Bearer rejected", cookie: "better-auth.session_token=secret" },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.json().error).toBe("unauthenticated");
+      expect(sessionResolver).not.toHaveBeenCalled();
+      expect(verifier).toHaveBeenCalledWith("Bearer rejected");
+      expect(query).not.toHaveBeenCalled();
+      expect(infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit")?.[0]).toEqual({
+        requestId: expect.any(String),
+        action,
+        outcome: "failure",
+        status: 401,
+        latencyMs: expect.any(Number),
+      });
+      await app.close();
+    },
+  );
+
+  it.each(["/me", "/admin/users"])("keeps Better Auth session resolution on %s", async (url) => {
+    const app = await buildInternalApp();
+    const sessionResolver = vi.spyOn(app.fina.auth.api, "getSession").mockResolvedValue(null);
+
+    await app.inject({
+      method: "GET",
+      url,
+      headers: { cookie: "better-auth.session_token=customer" },
+    });
+
+    expect(sessionResolver).toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("includes the verified subject in a failed internal audit event", async () => {
+    const app = await buildInternalApp();
+    const infoSpy = vi.spyOn(app.log, "info");
 
     const res = await app.inject({
       method: "GET",
-      url,
-      headers: { authorization: "Bearer rejected" },
+      url: "/internal/admin/users?cursor=invalid",
+      headers: internalHeaders,
     });
 
-    expect(res.statusCode).toBe(401);
-    expect(res.json().error).toBe("unauthenticated");
-    expect(query).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(400);
+    expect(infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit")?.[0]).toEqual({
+      requestId,
+      adminSubject: actor.sub,
+      action: "admin_users_listed",
+      outcome: "failure",
+      status: 400,
+      latencyMs: expect.any(Number),
+    });
     await app.close();
   });
 });
@@ -321,15 +373,15 @@ describe("GET /internal/admin/users", () => {
     expect(serialized).not.toContain("stripe_secret");
     expect(serialized).not.toContain("google_secret_sub");
     expect(serialized).not.toContain("notificationPrefs");
-    expect(infoSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestId,
-        adminSubject: actor.sub,
-        limit: 10,
-        returned: expect.any(Number),
-      }),
-      "admin_users_listed",
-    );
+    expect(infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit")?.[0]).toEqual({
+      requestId,
+      adminSubject: actor.sub,
+      action: "admin_users_listed",
+      outcome: "success",
+      status: 200,
+      returned: expect.any(Number),
+      latencyMs: expect.any(Number),
+    });
     expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("paid@example.com");
     expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("delegated-token");
     await app.close();
@@ -595,11 +647,14 @@ describe("GET /internal/admin/users/:userId", () => {
     expect(serialized).not.toContain("plaid-secret");
     expect(serialized).not.toContain("ExponentPushToken");
     expect(serialized).not.toContain("secret-device-id");
-    const detailLog = infoSpy.mock.calls.find((call) => call[1] === "admin_user_detail_viewed");
-    expect(detailLog?.[0]).toMatchObject({
+    const detailLog = infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit");
+    expect(detailLog?.[0]).toEqual({
       requestId,
       adminSubject: actor.sub,
       action: "admin_user_detail_viewed",
+      outcome: "success",
+      status: 200,
+      latencyMs: expect.any(Number),
     });
     expect(JSON.stringify(detailLog)).not.toContain("detail@example.com");
     expect(JSON.stringify(detailLog)).not.toContain("delegated-token");
