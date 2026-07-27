@@ -128,6 +128,30 @@ describe("GET /admin/users", () => {
     expect(res.json().error).toBe("invalid_query");
     await app.close();
   });
+
+  it("retains Better Auth admin access to the legacy list and detail routes", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/admin/users",
+      headers: { cookie: admin.cookie },
+    });
+    const detail = await app.inject({
+      method: "GET",
+      url: `/admin/users/${admin.userId}`,
+      headers: { cookie: admin.cookie },
+    });
+
+    expect(list.statusCode).toBe(200);
+    expect(list.json().users).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: admin.userId })]),
+    );
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().user.id).toBe(admin.userId);
+    await app.close();
+  });
 });
 
 describe("GET /internal/admin/users", () => {
