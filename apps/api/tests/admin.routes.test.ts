@@ -85,6 +85,7 @@ describe("internal admin delegation guard", () => {
       });
 
       expect(res.statusCode).toBe(401);
+      expect(res.headers["cache-control"]).toBe("no-store");
       expect(res.json().error).toBe("unauthenticated");
       expect(sessionResolver).not.toHaveBeenCalled();
       expect(verifier).toHaveBeenCalledWith("Bearer rejected");

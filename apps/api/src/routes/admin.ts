@@ -264,7 +264,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
             : null,
       };
 
-      const result = reply.header("Cache-Control", "no-store").send(response);
+      const result = reply.send(response);
       return { result, returned: rows.length };
     } catch (e) {
       throw e;
@@ -465,7 +465,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         },
       };
 
-      return reply.header("Cache-Control", "no-store").send(response);
+      return reply.send(response);
     } catch (e) {
       throw e;
     }
@@ -495,6 +495,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   };
 
   app.get("/internal/admin/users", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
     const startedAt = Date.now();
     let adminSubject: string | undefined;
     try {
@@ -520,6 +521,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/internal/admin/users/:userId", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
     const startedAt = Date.now();
     let adminSubject: string | undefined;
     try {
