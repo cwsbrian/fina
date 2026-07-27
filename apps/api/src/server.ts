@@ -4,9 +4,11 @@ import sensible from "@fastify/sensible";
 import cors from "@fastify/cors";
 import rateLimit from "@fastify/rate-limit";
 import { RATE_LIMITS } from "@fina/shared";
-import type { Env } from "./env.js";
+import { parseAdminTokenPublicKeys, type Env } from "./env.js";
 import { registerSessionDecorator, ipKey } from "./auth/session-decorator.js";
 import { withRateLimit } from "./auth/rate-limit.js";
+import { createAdminTokenVerifier, type AdminTokenVerifier } from "./auth/admin-token.js";
+import { HttpError } from "./auth/context.js";
 import { healthRoutes } from "./routes/health.js";
 import { meRoutes } from "./routes/me.js";
 import { adminRoutes } from "./routes/admin.js";
@@ -36,6 +38,7 @@ import { createAuth, parseDevOrigins, type FinaAuth } from "./auth.js";
 export type AppCtx = {
   env: Env;
   auth: FinaAuth;
+  verifyAdminToken: AdminTokenVerifier;
   /** Test-injection seam — populated only when `buildApp` is called
    *  with `opts.iap`. Kept `unknown`-typed to avoid a cross-cycle import
    *  from the IAP modules; route handlers narrow it at use site. */
@@ -66,9 +69,7 @@ function makeBetterAuthHandler(auth: FinaAuth, env: Env): RouteHandler {
           ? req.body
           : JSON.stringify(req.body ?? {});
     const init: RequestInit =
-      body === undefined
-        ? { method: req.method, headers }
-        : { method: req.method, headers, body };
+      body === undefined ? { method: req.method, headers } : { method: req.method, headers, body };
     const response = await auth.handler(new Request(url, init));
 
     reply.code(response.status);
@@ -90,6 +91,7 @@ declare module "fastify" {
 }
 
 export type BuildAppOpts = {
+  adminTokenVerifier?: AdminTokenVerifier;
   /** Test seam — when present, the IAP route + webhook handlers
    *  consume these mocks via `app.fina.iap` instead of constructing
    *  real Apple/Google clients from env. Untyped here to avoid a
@@ -128,7 +130,19 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
     trustProxy: env.TRUST_PROXY,
   });
   const auth = createAuth(env);
-  app.decorate("fina", { env, auth });
+  const verifyAdminToken =
+    opts.adminTokenVerifier ??
+    (env.ADMIN_TOKEN_PUBLIC_KEYS && env.ADMIN_TOKEN_ISSUER && env.ADMIN_EMAIL
+      ? createAdminTokenVerifier({
+          issuer: env.ADMIN_TOKEN_ISSUER,
+          audience: "fina-admin-api",
+          adminEmail: env.ADMIN_EMAIL,
+          publicKeys: parseAdminTokenPublicKeys(env.ADMIN_TOKEN_PUBLIC_KEYS),
+        })
+      : async () => {
+          throw new HttpError(401, "unauthenticated");
+        });
+  app.decorate("fina", { env, auth, verifyAdminToken });
   if (opts.iap) {
     app.fina.iap = opts.iap;
   }
@@ -170,11 +184,7 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
     origin:
       env.NODE_ENV === "production"
         ? [env.WEB_APP_URL]
-        : [
-            "http://localhost:3000",
-            "http://localhost:3100",
-            ...parseDevOrigins(env.DEV_ORIGINS),
-          ],
+        : ["http://localhost:3000", "http://localhost:3100", ...parseDevOrigins(env.DEV_ORIGINS)],
     credentials: true,
     // Be explicit about methods + headers so preflight (OPTIONS) for PATCH/DELETE
     // with our custom `X-Workspace-Id` header succeeds without surprises.
@@ -192,7 +202,7 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
   // 30/min/IP bucket to accommodate get-session polling.
   app.all("/api/auth/sign-in/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
   app.all("/api/auth/sign-up/*", { config: withRateLimit("authStrict") }, betterAuthHandler);
-  app.all("/api/auth/*",         { config: withRateLimit("auth")       }, betterAuthHandler);
+  app.all("/api/auth/*", { config: withRateLimit("auth") }, betterAuthHandler);
 
   await app.register(healthRoutes);
   await app.register(meRoutes);

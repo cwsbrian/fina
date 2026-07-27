@@ -49,10 +49,7 @@ const Schema = z.object({
   // and the startup backfill task skip when absent.
   // z.preprocess converts blank string ("PLAID_WEBHOOK_URL=" in .env) → undefined,
   // so dotenv-loaded empty values don't fail the url() validator.
-  PLAID_WEBHOOK_URL: z.preprocess(
-    (v) => (v === "" ? undefined : v),
-    z.string().url().optional(),
-  ),
+  PLAID_WEBHOOK_URL: z.preprocess((v) => (v === "" ? undefined : v), z.string().url().optional()),
   // AES-256-GCM key for at-rest encryption (Plaid access_token).
   // Must base64-decode to exactly 32 bytes. Validation happens lazily inside
   // the crypto helper so tests can use a fixed value without re-running zod.
@@ -129,6 +126,9 @@ const Schema = z.object({
   GOOGLE_PUBSUB_VERIFY_AUDIENCE: z.string().optional(),
   GOOGLE_PUBSUB_VERIFY_EMAIL: z.string().optional(),
   GOOGLE_PUBSUB_SUBSCRIPTION_NAME: z.string().optional(),
+  ADMIN_TOKEN_PUBLIC_KEYS: z.string().optional(),
+  ADMIN_TOKEN_ISSUER: z.string().url().optional(),
+  ADMIN_EMAIL: z.string().email().optional(),
 });
 
 const ParsedSchema = Schema.refine(
@@ -138,6 +138,15 @@ const ParsedSchema = Schema.refine(
     return e.RESEND_API_KEY.startsWith("re_") && e.RESEND_API_KEY.length >= 24;
   },
   { message: "RESEND_API_KEY must be a real Resend key in production", path: ["RESEND_API_KEY"] },
+).refine(
+  (e) =>
+    e.NODE_ENV !== "production" ||
+    Boolean(e.ADMIN_TOKEN_PUBLIC_KEYS && e.ADMIN_TOKEN_ISSUER && e.ADMIN_EMAIL),
+  {
+    message:
+      "ADMIN_TOKEN_PUBLIC_KEYS, ADMIN_TOKEN_ISSUER, and ADMIN_EMAIL are required in production",
+    path: ["ADMIN_TOKEN_PUBLIC_KEYS"],
+  },
 );
 
 export type Env = z.infer<typeof ParsedSchema>;
@@ -145,8 +154,32 @@ export type Env = z.infer<typeof ParsedSchema>;
 export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
   const parsed = ParsedSchema.safeParse(source);
   if (!parsed.success) {
-    const issues = parsed.error.issues.map((i) => `  - ${i.path.join(".")}: ${i.message}`).join("\n");
+    const issues = parsed.error.issues
+      .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
+      .join("\n");
     throw new Error(`Invalid environment:\n${issues}`);
   }
   return parsed.data;
+}
+
+export function parseAdminTokenPublicKeys(value: string | undefined): Record<string, string> {
+  try {
+    const parsed: unknown = JSON.parse(value ?? "");
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error();
+    const entries = Object.entries(parsed);
+    if (entries.length === 0) throw new Error();
+    for (const [kid, encoded] of entries) {
+      if (
+        kid.length === 0 ||
+        typeof encoded !== "string" ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded) ||
+        !Buffer.from(encoded, "base64").toString("utf8").includes("BEGIN PUBLIC KEY")
+      ) {
+        throw new Error();
+      }
+    }
+    return Object.fromEntries(entries) as Record<string, string>;
+  } catch {
+    throw new Error("ADMIN_TOKEN_PUBLIC_KEYS is invalid");
+  }
 }
