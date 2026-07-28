@@ -119,9 +119,9 @@ Postgres 16 runs in a local Docker container (`docker-compose.yml`). Data is per
 deletes it.
 
 **Connection:**
-- Host: `localhost:5432`
+- Host: `localhost:5433`
 - User: `fina` / Password: `fina`
-- Databases: `fina` (dev), `fina_test` (vitest, auto-created via `scripts/init-db.sh`)
+- Databases: `fina` (dev), `fina_test` (vitest, auto-created by Docker Compose)
 
 **Where DB lives by environment:**
 

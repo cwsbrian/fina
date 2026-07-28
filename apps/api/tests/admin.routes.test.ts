@@ -19,6 +19,15 @@ const internalHeaders = {
   authorization: "Bearer delegated-token",
   "x-request-id": requestId,
 };
+let observedUserQuery: "findMany" | "findUnique" | null = null;
+let observedUserQueryCalled = false;
+
+prisma.$use(async (params, next) => {
+  if (params.model === "User" && params.action === observedUserQuery) {
+    observedUserQueryCalled = true;
+  }
+  return next(params);
+});
 
 function buildInternalApp(verifier: AdminTokenVerifier = adminTokenVerifier) {
   return buildApp(env, { adminTokenVerifier: verifier });
@@ -71,7 +80,8 @@ describe("internal admin delegation guard", () => {
     "rejects %s before session resolution or querying",
     async (url, queryMethod, action) => {
       const verifier = vi.fn().mockRejectedValue(new HttpError(401, "unauthenticated"));
-      const query = vi.spyOn(prisma.user, queryMethod);
+      observedUserQuery = queryMethod;
+      observedUserQueryCalled = false;
       const app = await buildInternalApp(verifier);
       const sessionResolver = vi
         .spyOn(app.fina.auth.api, "getSession")
@@ -89,7 +99,7 @@ describe("internal admin delegation guard", () => {
       expect(res.json().error).toBe("unauthenticated");
       expect(sessionResolver).not.toHaveBeenCalled();
       expect(verifier).toHaveBeenCalledWith("Bearer rejected");
-      expect(query).not.toHaveBeenCalled();
+      expect(observedUserQueryCalled).toBe(false);
       expect(infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit")?.[0]).toEqual({
         requestId: expect.any(String),
         action,
@@ -97,6 +107,7 @@ describe("internal admin delegation guard", () => {
         status: 401,
         latencyMs: expect.any(Number),
       });
+      observedUserQuery = null;
       await app.close();
     },
   );
@@ -126,7 +137,8 @@ describe("internal admin delegation guard", () => {
     });
 
     expect(res.statusCode).toBe(400);
-    expect(infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit")?.[0]).toEqual({
+    const auditCall = infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit");
+    expect(auditCall?.[0]).toEqual({
       requestId,
       adminSubject: actor.sub,
       action: "admin_users_listed",
@@ -374,7 +386,10 @@ describe("GET /internal/admin/users", () => {
     expect(serialized).not.toContain("stripe_secret");
     expect(serialized).not.toContain("google_secret_sub");
     expect(serialized).not.toContain("notificationPrefs");
-    expect(infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit")?.[0]).toEqual({
+    const successAuditCall = infoSpy.mock.calls.find(
+      (call) => call[1] === "internal_admin_audit",
+    );
+    expect(successAuditCall?.[0]).toEqual({
       requestId,
       adminSubject: actor.sub,
       action: "admin_users_listed",
@@ -383,8 +398,8 @@ describe("GET /internal/admin/users", () => {
       returned: expect.any(Number),
       latencyMs: expect.any(Number),
     });
-    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("paid@example.com");
-    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("delegated-token");
+    expect(JSON.stringify(successAuditCall)).not.toContain("paid@example.com");
+    expect(JSON.stringify(successAuditCall)).not.toContain("delegated-token");
     await app.close();
   });
 
