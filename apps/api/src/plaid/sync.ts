@@ -230,7 +230,7 @@ async function accountIdForPlaidAccount(
   return acct.id;
 }
 
-async function disconnectedAccountMatch(
+async function disconnectedAccountMatches(
   tx: Prisma.TransactionClient,
   workspaceId: string,
   currentAccount: {
@@ -239,24 +239,38 @@ async function disconnectedAccountMatch(
     type: string;
     subtype: string | null;
     currency: string;
+    plaidInstitutionId: string | null;
     plaidItem: { institutionId: string } | null;
   },
-): Promise<string | null> {
-  if (!currentAccount.plaidItem || !currentAccount.mask) return null;
+): Promise<string[]> {
+  const institutionId =
+    currentAccount.plaidInstitutionId ?? currentAccount.plaidItem?.institutionId ?? null;
+  if (!institutionId || !currentAccount.mask) return [];
   const matches = await tx.bankAccount.findMany({
     where: {
       workspaceId,
+      id: { not: currentAccount.id },
       archivedAt: { not: null },
       mask: currentAccount.mask,
       type: currentAccount.type,
       subtype: currentAccount.subtype,
       currency: currentAccount.currency,
-      plaidItem: { is: { institutionId: currentAccount.plaidItem.institutionId, status: "disconnected" } },
+      OR: [
+        { plaidInstitutionId: institutionId },
+        {
+          plaidItem: {
+            is: {
+              institutionId,
+              status: "disconnected",
+            },
+          },
+        },
+      ],
     },
     select: { id: true },
-    take: 2,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
-  return matches.length === 1 ? matches[0]!.id : null;
+  return matches.map((match) => match.id);
 }
 
 function plaidMerchantRaw(t: PlaidTxLike): string {
@@ -388,11 +402,12 @@ export async function upsertAdded(
       type: true,
       subtype: true,
       currency: true,
+      plaidInstitutionId: true,
       plaidItem: { select: { institutionId: true } },
     },
   });
-  const oldAccountId = await disconnectedAccountMatch(tx, workspaceId, currentAccount);
-  if (oldAccountId) {
+  const oldAccountIds = await disconnectedAccountMatches(tx, workspaceId, currentAccount);
+  if (oldAccountIds.length > 0) {
     const reconnectMerchantRaw = plaidReconnectMerchantRaw(t);
     const merchantNormalized = reconnectMerchantRaw ? normalizeMerchant(reconnectMerchantRaw) : "";
     if (merchantNormalized.trim()) {
@@ -402,22 +417,35 @@ export async function upsertAdded(
       const candidates = await tx.transaction.findMany({
         where: {
           workspaceId,
-          accountId: oldAccountId,
+          accountId: { in: oldAccountIds },
           source: "plaid",
           plaidTransactionId: { not: null },
-          plaidItem: { is: { status: "disconnected" } },
+          OR: [
+            { plaidItemId: null },
+            { plaidItem: { is: { status: "disconnected" } } },
+          ],
           occurredAt,
           amount: newAmount,
         },
-        select: { id: true, merchantRaw: true, merchantNormalized: true },
+        select: {
+          id: true,
+          merchantRaw: true,
+          merchantNormalized: true,
+          budgetImpactSource: true,
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
       const strongMatches = candidates.filter((candidate) => {
         const existingMerchant = candidateReconnectMerchantNormalized(candidate);
         return existingMerchant === merchantNormalized;
       });
-      if (strongMatches.length === 1) {
+      // Consume one old row at a time. Updating plaidItemId below removes the
+      // chosen row from the next lookup, so repeated identical transactions
+      // are reconciled as a multiset instead of all being inserted again.
+      if (strongMatches.length > 0) {
+        const match = strongMatches[0]!;
         await tx.transaction.update({
-          where: { id: strongMatches[0]!.id },
+          where: { id: match.id },
           data: {
             accountId,
             plaidItemId,
@@ -431,11 +459,12 @@ export async function upsertAdded(
             merchantNormalized,
             rawData: t as unknown as Prisma.InputJsonValue,
             removedAt: null,
-            budgetImpact: classifyPlaidBudgetImpact(t),
-            budgetImpactSource: "auto",
+            ...(match.budgetImpactSource === "auto"
+              ? { budgetImpact: classifyPlaidBudgetImpact(t) }
+              : {}),
           },
         });
-        return { kind: "updated", localId: strongMatches[0]!.id };
+        return { kind: "updated", localId: match.id };
       }
     }
   }

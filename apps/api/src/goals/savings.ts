@@ -5,7 +5,7 @@ import {
 } from "../budget-plans/service.js";
 import { serverNow } from "../dev-clock.js";
 import { logger } from "../logger.js";
-import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
+import { effectiveExpenseAllocations } from "../transactions/cashflow.js";
 
 const DEBUG_GOAL_SAVINGS = process.env.DEBUG_GOAL_SAVINGS === "1";
 
@@ -64,16 +64,9 @@ async function categorySpendInDateRange(
   if (opts?.asOf && Number.isNaN(new Date(opts.asOf).getTime())) {
     throw new Error("Invalid asOf date passed to categorySpendInDateRange");
   }
-  const rows = await prisma.transactionAllocation.findMany({
-    where: {
-      ...budgetExpenseAllocationWhere({
-        workspaceId,
-        pending: false,
-        occurredAt: { gte: from, lt: to },
-      }),
-      categoryId: { not: null },
-    },
-    select: { amount: true, categoryId: true },
+  const rows = await effectiveExpenseAllocations(workspaceId, {
+    pending: false,
+    occurredAt: { gte: from, lt: to },
   });
   const out = new Map<string, number>();
   for (const r of rows) {

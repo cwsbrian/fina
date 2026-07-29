@@ -41,6 +41,7 @@ import { categoryMeta } from "../../src/categories/meta";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 
 const HEADER_HEIGHT = 84;
+const BANK_RECONNECT_TOOLBAR_HEIGHT = 60;
 const CURRENCY = "CAD";
 
 type SpendByCategory = { categoryId: string; categoryName?: string; spent: number };
@@ -150,6 +151,7 @@ export default function Home() {
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [goals, setGoals] = useState<GoalSummary[]>([]);
   const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
+  const [bankReconnectRequired, setBankReconnectRequired] = useState(false);
   const [unreadFina, setUnreadFina] = useState(0);
   const [latestUnreadThreadId, setLatestUnreadThreadId] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState(0);
@@ -189,19 +191,29 @@ export default function Home() {
         apiFetch<{ threads: ChatThreadWithPreview[] }>("/chat/threads")
           .then((r) => {
             if (runId !== loadRunId.current) return;
-            // Latest workspace-less thread = the one the Brief card opens.
-            // Threads are returned newest-first by lastMessageAt.
-            const unbound = r.threads.find((t) => t.workspaceId === null) ?? null;
-            setLatestUnboundThread(unbound);
-            setUnreadFina(r.threads.reduce((s, t) => s + (t.unreadCount ?? 0), 0));
-            // Threads are returned newest-first by lastMessageAt; the first
-            // one with unread messages is what the Home action card opens.
-            setLatestUnreadThreadId(r.threads.find((t) => (t.unreadCount ?? 0) > 0)?.id ?? null);
-            // hasChatted = any thread (across all workspaces / unbound) has
-            // a user-role first message preview — i.e. the user typed at
-            // least once. Daily-brief threads carry only assistant messages
-            // so firstMessagePreview stays null for them.
-            setHasChattedState(r.threads.some((t) => t.firstMessagePreview !== null));
+            // The morning brief now lands in this workspace's one canonical
+            // conversation instead of a separate workspace-less thread.
+            const workspaceThread =
+              r.threads.find((t) => t.workspaceId === wsId) ?? null;
+            setLatestUnboundThread(workspaceThread);
+            const workspaceThreads = r.threads.filter(
+              (thread) => thread.workspaceId === wsId,
+            );
+            setUnreadFina(
+              workspaceThreads.reduce(
+                (sum, thread) => sum + (thread.unreadCount ?? 0),
+                0,
+              ),
+            );
+            setLatestUnreadThreadId(
+              workspaceThreads.find((thread) => (thread.unreadCount ?? 0) > 0)
+                ?.id ?? null,
+            );
+            setHasChattedState(
+              workspaceThreads.some(
+                (thread) => thread.firstMessagePreview !== null,
+              ),
+            );
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
@@ -210,14 +222,19 @@ export default function Home() {
             setLatestUnreadThreadId(null);
             setHasChattedState(false);
           }),
-        apiFetch<{ plaidItems: PlaidItemDTO[] }>(`/workspaces/${wsId}/plaid-items`)
+        apiFetch<{
+          plaidItems: PlaidItemDTO[];
+          reconnectRequired: boolean;
+        }>(`/workspaces/${wsId}/plaid-items`)
           .then((r) => {
             if (runId !== loadRunId.current) return;
             setPlaidItems(r.plaidItems);
+            setBankReconnectRequired(r.reconnectRequired);
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
             setPlaidItems([]);
+            setBankReconnectRequired(false);
           }),
         apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
           .then((r) => {
@@ -377,32 +394,32 @@ export default function Home() {
     href: string;
   };
   const actionItems: ActionItem[] = [];
-
-  if (bankReconnects.length === 1) {
-    actionItems.push({
-      key: "bank",
-      icon: "alert-circle-outline",
-      title: `Reconnect ${bankReconnects[0]!.institutionName}`,
-      href: "/banks",
-    });
-  } else if (bankReconnects.length > 1) {
-    actionItems.push({
-      key: "bank",
-      icon: "alert-circle-outline",
-      title: `Reconnect ${bankReconnects.length} banks`,
-      href: "/banks",
-    });
-  }
+  const bankToolbarVisible =
+    bankReconnectRequired || bankReconnects.length > 0;
+  const bankToolbarTitle =
+    bankReconnects.length === 1
+      ? `Reconnect ${bankReconnects[0]!.institutionName}`
+      : bankReconnects.length > 1
+        ? `Reconnect ${bankReconnects.length} banks`
+        : "Reconnect your bank";
+  const bankToolbarSubtitle =
+    bankReconnects.length > 0
+      ? "Bank imports are paused."
+      : "Automatic imports need your attention.";
+  const bankToolbarHeight = bankToolbarVisible
+    ? BANK_RECONNECT_TOOLBAR_HEIGHT
+    : 0;
 
   if (unreadFina > 0) {
     actionItems.push({
       key: "fina",
       icon: "chatbubble-outline",
       title: `Fina sent you ${unreadFina} message${unreadFina === 1 ? "" : "s"}`,
-      // Open the most recent unread thread directly. Fall back to the
-      // chat history if we somehow don't know which thread (shouldn't
-      // happen — unreadFina > 0 implies at least one unread thread).
-      href: latestUnreadThreadId ? `/(tabs)/chat?thread=${latestUnreadThreadId}` : "/chats",
+      // Open the canonical workspace conversation. There is no selectable
+      // thread history anymore.
+      href: latestUnreadThreadId
+        ? `/(tabs)/chat?thread=${latestUnreadThreadId}`
+        : "/(tabs)/chat",
     });
   }
 
@@ -488,7 +505,10 @@ export default function Home() {
   return (
     <View style={styles.safe}>
       <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingTop: totalHeader }]}
+        contentContainerStyle={[
+          styles.scroll,
+          { paddingTop: totalHeader + bankToolbarHeight },
+        ]}
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
       >
@@ -612,7 +632,9 @@ export default function Home() {
             )}
 
             {/* 3. Brief card — only when there's an unread brief to read */}
-            {latestUnboundThread && latestUnboundThread.unreadCount > 0 && (
+            {canUseGoals &&
+              latestUnboundThread &&
+              latestUnboundThread.unreadCount > 0 && (
               <Pressable
                 style={({ pressed }) => [styles.briefCard, pressed && { opacity: 0.85 }]}
                 onPress={() =>
@@ -656,7 +678,7 @@ export default function Home() {
             )}
 
             {/* 4. Goals summary — only when at least one active goal exists */}
-            {goals.length > 0 && (
+            {canUseGoals && goals.length > 0 && (
               <Pressable
                 style={({ pressed }) => [{ marginTop: space.lg }, pressed && { opacity: 0.85 }]}
                 onPress={() => router.push("/(tabs)/goals" as never)}
@@ -824,10 +846,42 @@ export default function Home() {
           </>
         )}
       </ScrollView>
+      {bankToolbarVisible && (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${bankToolbarTitle}. ${bankToolbarSubtitle}`}
+          style={({ pressed }) => [
+            styles.bankToolbar,
+            { top: insets.top, height: BANK_RECONNECT_TOOLBAR_HEIGHT },
+            pressed && styles.bankToolbarPressed,
+          ]}
+          onPress={() => router.push("/banks" as never)}
+        >
+          <View style={styles.bankToolbarIcon}>
+            <Ionicons
+              name="notifications-outline"
+              size={27}
+              color="#f47b61"
+            />
+          </View>
+          <View style={styles.bankToolbarCopy}>
+            <Text style={styles.bankToolbarTitle} numberOfLines={1}>
+              {bankToolbarTitle}
+            </Text>
+            <Text style={styles.bankToolbarSubtitle} numberOfLines={1}>
+              {bankToolbarSubtitle}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={19} color="#f47b61" />
+        </Pressable>
+      )}
       <Animated.View
         style={[
           styles.headerOverlay,
-          { top: insets.top, height: HEADER_HEIGHT },
+          {
+            top: insets.top + bankToolbarHeight,
+            height: HEADER_HEIGHT,
+          },
           header.headerStyle,
         ]}
       >
@@ -861,6 +915,46 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 11,
     backgroundColor: colors.canvas,
+  },
+  bankToolbar: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    zIndex: 12,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm,
+    paddingHorizontal: space.lg,
+    backgroundColor: "#fff7c7",
+    borderBottomWidth: 1,
+    borderBottomColor: "#f1e49d",
+    shadowColor: colors.navy,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  bankToolbarPressed: {
+    backgroundColor: "#f9efb5",
+  },
+  bankToolbarIcon: {
+    width: 36,
+    alignItems: "flex-start",
+    justifyContent: "center",
+  },
+  bankToolbarCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
+  bankToolbarTitle: {
+    ...type$.titleSm,
+    color: "#f47b61",
+    fontWeight: "700",
+  },
+  bankToolbarSubtitle: {
+    ...type$.bodySm,
+    color: colors.ink,
+    marginTop: 2,
   },
   head: {
     flexDirection: "row",

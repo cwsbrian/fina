@@ -120,6 +120,8 @@ describe("plaid/items service", () => {
     const acctAfter = await prisma.bankAccount.findUniqueOrThrow({ where: { id: acct.id } });
     expect(acctAfter.archivedAt).not.toBeNull();
     expect(acctAfter.plaidItemId).toBeNull(); // SetNull
+    expect(acctAfter.plaidInstitutionId).toBe("ins");
+    expect(acctAfter.plaidReconnectRequired).toBe(false);
     const txAfter = await prisma.transaction.findUniqueOrThrow({ where: { id: txRow.id } });
     expect(txAfter.plaidItemId).toBeNull();
     await app.close();
@@ -196,19 +198,16 @@ describe("removeItemForBilling", () => {
     return { wsId: ws.id, itemRowId, accountId: account.id };
   }
 
-  it("normal path: Plaid /item/remove → status='disconnected', row + transactions preserved", async () => {
+  it("normal path: Plaid /item/remove → local item deleted, transactions preserved", async () => {
     const { wsId, itemRowId, accountId } = await seedItemWithTransactions();
 
     plaidMock.itemRemove.push({ data: { request_id: "req" } });
 
     await removeItemForBilling(env, wsId, itemRowId);
 
-    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
-    expect(item.status).toBe("disconnected");
-    expect(item.errorCode).toBeNull();
-
-    // Row preserved (not deleted).
-    expect(item.id).toBe(itemRowId);
+    await expect(
+      prisma.plaidItem.findUnique({ where: { id: itemRowId } }),
+    ).resolves.toBeNull();
 
     // Transactions preserved.
     const txCount = await prisma.transaction.count({ where: { accountId } });
@@ -221,9 +220,10 @@ describe("removeItemForBilling", () => {
 
     await removeItemForBilling(env, wsId, itemRowId);
 
-    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
     const account = await prisma.bankAccount.findUniqueOrThrow({ where: { id: accountId } });
-    expect(item.status).toBe("disconnected");
+    expect(account.plaidItemId).toBeNull();
+    expect(account.plaidInstitutionId).toBe("ins_1");
+    expect(account.plaidReconnectRequired).toBe(true);
     expect(account.archivedAt).not.toBeNull();
     await expect(prisma.transaction.count({ where: { accountId } })).resolves.toBe(1);
   });
@@ -241,15 +241,16 @@ describe("removeItemForBilling", () => {
     expect(item.status).toBe("active");
   });
 
-  it("ITEM_NOT_FOUND: graceful — Plaid already removed, still sets disconnected", async () => {
+  it("ITEM_NOT_FOUND: graceful — Plaid already removed, local item is deleted", async () => {
     const { wsId, itemRowId } = await seedItemWithTransactions();
 
     plaidMock.itemRemove.push(plaidApiError({ error_code: "ITEM_NOT_FOUND" }));
 
     await removeItemForBilling(env, wsId, itemRowId);
 
-    const item = await prisma.plaidItem.findUniqueOrThrow({ where: { id: itemRowId } });
-    expect(item.status).toBe("disconnected");
+    await expect(
+      prisma.plaidItem.findUnique({ where: { id: itemRowId } }),
+    ).resolves.toBeNull();
   });
 
   it("other Plaid error: propagates (caller catches and continues)", async () => {

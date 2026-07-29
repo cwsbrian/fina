@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 
 import { prisma } from "../src/db.js";
 import { getAnalysis, getLatestAnalysis } from "../src/analysis/service.js";
+import { syncTransactionImpact } from "../src/transactions/refunds.js";
 import { disconnect, truncateAll } from "./helpers/db.js";
 
 beforeAll(async () => {
@@ -50,6 +51,7 @@ async function tx({
   occurredAt,
   merchant = "Merchant",
   budgetImpact,
+  pending = false,
 }: {
   wsId: string;
   accountId: string;
@@ -58,6 +60,7 @@ async function tx({
   occurredAt: Date;
   merchant?: string;
   budgetImpact?: "expense" | "income" | "refund" | "excluded";
+  pending?: boolean;
 }) {
   const row = await prisma.transaction.create({
     data: {
@@ -67,7 +70,7 @@ async function tx({
       merchantRaw: merchant,
       occurredAt,
       source: "manual",
-      pending: false,
+      pending,
       rawData: {},
       budgetImpact: budgetImpact ?? (Number(amount) < 0 ? "income" : "expense"),
     },
@@ -250,5 +253,99 @@ describe("analysis service", () => {
     expect(result.current.income).toBe(0);
     expect(result.current.spend).toBe(0);
     expect(result.current.net).toBe(0);
+  });
+
+  it("leaves a refund unlinked when two exact purchase candidates are ambiguous", async () => {
+    const { wsId, accountId, categoryId } = await seedWorkspace();
+    for (const day of [10, 11]) {
+      await tx({
+        wsId,
+        accountId,
+        categoryId,
+        amount: "40.00",
+        occurredAt: new Date(`2026-05-${day}T12:00:00.000Z`),
+        merchant: "Same Shop",
+      });
+    }
+    const refund = await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "-40.00",
+      occurredAt: new Date("2026-05-15T12:00:00.000Z"),
+      merchant: "Same Shop refund",
+      budgetImpact: "refund",
+    });
+
+    const first = await getAnalysis(wsId, 2026, 5);
+    const second = await getAnalysis(wsId, 2026, 5);
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: refund.id } });
+
+    expect(row.refundOfTransactionId).toBeNull();
+    expect(first.current.spend).toBe(80);
+    expect(second.current.spend).toBe(80);
+  });
+
+  it("does not link or apply a pending refund", async () => {
+    const { wsId, accountId, categoryId } = await seedWorkspace();
+    await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "100.00",
+      occurredAt: new Date("2026-05-10T12:00:00.000Z"),
+      merchant: "Pending Shop",
+    });
+    const refund = await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "-100.00",
+      occurredAt: new Date("2026-05-12T12:00:00.000Z"),
+      merchant: "Pending Shop refund",
+      budgetImpact: "refund",
+      pending: true,
+    });
+
+    const result = await getAnalysis(wsId, 2026, 5);
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: refund.id } });
+
+    expect(row.refundOfTransactionId).toBeNull();
+    expect(result.current.spend).toBe(100);
+  });
+
+  it("clears a stale refund link when a user override changes its direction", async () => {
+    const { wsId, accountId, categoryId } = await seedWorkspace();
+    const purchase = await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "100.00",
+      occurredAt: new Date("2026-05-10T12:00:00.000Z"),
+      merchant: "Override Shop",
+    });
+    const refund = await tx({
+      wsId,
+      accountId,
+      categoryId,
+      amount: "-100.00",
+      occurredAt: new Date("2026-05-12T12:00:00.000Z"),
+      merchant: "Override Shop refund",
+      budgetImpact: "refund",
+    });
+    await prisma.transaction.update({
+      where: { id: refund.id },
+      data: {
+        budgetImpact: "income",
+        budgetImpactSource: "user",
+        refundOfTransactionId: purchase.id,
+      },
+    });
+
+    await prisma.$transaction((db) => syncTransactionImpact(db, refund.id));
+    const row = await prisma.transaction.findUniqueOrThrow({ where: { id: refund.id } });
+
+    expect(row.budgetImpact).toBe("income");
+    expect(row.refundOfTransactionId).toBeNull();
   });
 });

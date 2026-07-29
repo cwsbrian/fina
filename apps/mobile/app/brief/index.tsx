@@ -18,8 +18,13 @@ import BottomSheet, {
   BottomSheetView,
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
-import type { MeDTO as Me, MorningBriefFrequency } from "@fina/shared";
+import {
+  tierAtLeast,
+  type MeDTO as Me,
+  type MorningBriefFrequency,
+} from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
+import { PaidFeatureLock } from "../../src/billing/PaidFeatureLock";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
@@ -149,6 +154,21 @@ export default function MorningBriefSettings() {
             <ActivityIndicator color={colors.primary} />
           )}
         </View>
+      </SafeAreaView>
+    );
+  }
+
+  const canUseBrief = me.trial.active || tierAtLeast(me.tier, "pro");
+  if (!canUseBrief) {
+    return (
+      <SafeAreaView style={styles.safe} edges={["top"]}>
+        <Stack.Screen options={{ headerShown: false }} />
+        <Header />
+        <PaidFeatureLock
+          icon="sunny-outline"
+          title="Morning brief is a Pro feature"
+          body="Upgrade to get AI-generated morning guidance based on your workspace activity and conversation."
+        />
       </SafeAreaView>
     );
   }

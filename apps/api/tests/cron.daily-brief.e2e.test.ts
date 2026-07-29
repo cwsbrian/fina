@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterAll, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
@@ -22,7 +22,14 @@ describe("daily-brief E2E smoke", () => {
     const nowHHmm = `${pad2(p.hour)}:${pad2(p.minute)}`;
 
     const u = await prisma.user.create({
-      data: { id: `e2e-${Date.now()}`, email: `e2e-${Date.now()}@t.co`, name: "E2E", tz, morningTime: nowHHmm },
+      data: {
+        id: `e2e-${Date.now()}`,
+        email: `e2e-${Date.now()}@t.co`,
+        name: "E2E",
+        tz,
+        morningTime: nowHHmm,
+        trialEndsAt: new Date("2099-01-01T00:00:00Z"),
+      },
     });
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
@@ -66,6 +73,6 @@ describe("daily-brief E2E smoke", () => {
 
     const thread = await prisma.chatThread.findUniqueOrThrow({ where: { id: msg.threadId } });
     expect(thread.userId).toBe(u.id);
-    expect(thread.workspaceId).toBeNull();
+    expect(thread.workspaceId).toBe(ws.id);
   });
 });

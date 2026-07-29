@@ -108,6 +108,10 @@ export async function removeItemStrict(
     await prisma.$transaction(
       async (tx) => {
         await lockPlaidItem(tx, plaidItemId); // throws SyncLockHeld on 55P03
+        const item = await tx.plaidItem.findUniqueOrThrow({
+          where: { id: plaidItemId },
+          select: { institutionId: true },
+        });
         try {
           await plaidClient(env).itemRemove({ access_token: accessToken });
         } catch (e) {
@@ -119,7 +123,11 @@ export async function removeItemStrict(
         }
         await tx.bankAccount.updateMany({
           where: { plaidItemId },
-          data: { archivedAt: new Date() },
+          data: {
+            archivedAt: new Date(),
+            plaidInstitutionId: item.institutionId,
+            plaidReconnectRequired: false,
+          },
         });
         if (opts.deleteTransactions === true) {
           await tx.transaction.deleteMany({ where: { workspaceId, plaidItemId } });
@@ -137,17 +145,15 @@ export async function removeItemStrict(
 }
 
 /**
- * Billing-side disconnect: calls Plaid /item/remove to stop recurring charges
- * (~$0.25 CAD/item/month), then sets status='disconnected' locally.
- *
- * Unlike removeItemStrict, this preserves the plaid_items row and all
- * associated bank_accounts and transactions — data is kept for historical
- * reference and potential re-subscription.
+ * Billing-side disconnect: calls Plaid /item/remove to stop recurring charges,
+ * archives linked accounts, then deletes the local Plaid item and encrypted
+ * access token. Historical transactions remain and their Plaid FK becomes
+ * NULL via SetNull.
  *
  * Uses the same Plaid item row lock as sync so a billing cleanup cannot race
  * an in-flight sync that would otherwise mark the item active again.
  *
- * Partial-failure retry: if the Plaid call succeeds but the DB update fails,
+ * Partial-failure retry: if the Plaid call succeeds but local deletion fails,
  * the item stays 'active'. Tomorrow's Step 0 retries, Plaid returns
  * ITEM_NOT_FOUND, the catch falls through, and the DB update succeeds.
  */
@@ -155,12 +161,17 @@ export async function removeItemForBilling(
   env: Env,
   workspaceId: string,
   plaidItemId: string,
+  opts: { reconnectRequired?: boolean } = {},
 ): Promise<void> {
   const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
 
   await prisma.$transaction(
     async (tx) => {
       await lockPlaidItem(tx, plaidItemId);
+      const item = await tx.plaidItem.findUniqueOrThrow({
+        where: { id: plaidItemId },
+        select: { institutionId: true },
+      });
 
       try {
         await plaidClient(env).itemRemove({ access_token: accessToken });
@@ -174,12 +185,13 @@ export async function removeItemForBilling(
 
       await tx.bankAccount.updateMany({
         where: { plaidItemId },
-        data: { archivedAt: new Date() },
+        data: {
+          archivedAt: new Date(),
+          plaidInstitutionId: item.institutionId,
+          plaidReconnectRequired: opts.reconnectRequired ?? true,
+        },
       });
-      await tx.plaidItem.update({
-        where: { id: plaidItemId },
-        data: { status: "disconnected", errorCode: null },
-      });
+      await tx.plaidItem.delete({ where: { id: plaidItemId } });
     },
     { maxWait: 5_000, timeout: 35_000 },
   );

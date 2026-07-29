@@ -41,6 +41,7 @@ async function setupRisk(previousDate = "2026-07-13") {
       tz: "Asia/Seoul",
       morningTime: "21:00",
       morningBriefFrequency: "issues_only",
+      trialEndsAt: new Date("2099-01-01T00:00:00Z"),
     },
   });
   const workspace = await prisma.workspace.create({ data: { name: "Personal", currency: "CAD" } });
@@ -71,13 +72,16 @@ async function setupRisk(previousDate = "2026-07-13") {
   const { snapshotForecastState } = await import("../src/cron/jobs/daily-brief.js");
   const context = await buildBriefContext(user.id, "daily");
   const previousState = snapshotForecastState(context);
-  const thread = await prisma.chatThread.create({ data: { userId: user.id } });
+  const thread = await prisma.chatThread.create({
+    data: { userId: user.id, workspaceId: workspace.id },
+  });
   const message = await prisma.chatMessage.create({
     data: { threadId: thread.id, role: "assistant", blocks: [{ type: "text", markdown: "old" }] },
   });
   await prisma.brief.create({
     data: {
       userId: user.id,
+      workspaceId: workspace.id,
       type: "daily",
       date: previousDate,
       messageId: message.id,

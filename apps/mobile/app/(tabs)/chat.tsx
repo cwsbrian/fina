@@ -1,152 +1,117 @@
-import { useCallback, useEffect, useState } from "react";
-import { View, Text, StyleSheet, Animated, Pressable, Keyboard } from "react-native";
-import { Ionicons } from "@expo/vector-icons";
+import { useCallback, useState } from "react";
+import { ActivityIndicator, Animated, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useLocalSearchParams, router, useNavigation } from "expo-router";
-import { useBottomTabBarHeight } from "@react-navigation/bottom-tabs";
+import type { ChatThreadDTO, MeDTO } from "@fina/shared";
+import { apiFetch, bootstrapActiveWorkspaceSummary } from "../../src/api/client";
+import { PaidFeatureLock } from "../../src/billing/PaidFeatureLock";
 import { ThreadView } from "../../src/chat/ThreadView";
-import { apiFetch } from "../../src/api/client";
 import { colors, space, type as type$ } from "../../src/design/tokens";
-import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
-import { useThreadActionsSheet } from "../../src/chat/ThreadActionsSheetHost";
 
 const HEADER_HEIGHT = 58;
 
-// Tapping the Chat tab always lands on a fresh, pending thread (no DB
-// row). The thread is created lazily on the user's first send — until
-// then nothing persists. Historical conversations live in /chats.
 export default function ChatTab() {
   const params = useLocalSearchParams<{ thread?: string }>();
-  const navigation = useNavigation();
-  const tabBarHeight = useBottomTabBarHeight();
   const insets = useSafeAreaInsets();
-  const threadActions = useThreadActionsSheet();
   const totalHeader = insets.top + HEADER_HEIGHT;
   const header = useCollapsingHeader(HEADER_HEIGHT);
-  // null = pending; a real id appears only when /chats explicitly
-  // routes the user back to a specific thread via ?thread=<id>.
-  const [currentThreadId, setCurrentThreadId] = useState<string | null>(null);
-  // Force ThreadView to fully reset (new keyed instance) when the
-  // pencil is hit while already on the pending state.
-  const [resetKey, setResetKey] = useState(0);
-  // Workspace name surfaced from ThreadView's binding / picker state.
-  // Shown under the title in the header AND inside the actions sheet
-  // for context — not editable, just informational.
-  const [headerWorkspace, setHeaderWorkspace] = useState<string | null>(null);
-  // Loaded thread for the header — null on the pending state. Drives the
-  // title text and whether the header is tappable for rename/delete.
-  const [headerThread, setHeaderThread] = useState<{
-    id: string;
-    title: string | null;
-  } | null>(null);
+  const [threadId, setThreadId] = useState<string | null>(null);
+  const [workspaceName, setWorkspaceName] = useState<string | null>(null);
+  const [paid, setPaid] = useState<boolean | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (params.thread) {
-      setCurrentThreadId(params.thread);
-      // Switching threads needs the collapsible header snapped back —
-      // the new ThreadView mounts at scrollY 0, but the hook still
-      // holds translateY from the previous thread's scroll position.
-      header.reset();
-      router.setParams({ thread: undefined } as never);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.thread]);
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setError(null);
+      (async () => {
+        try {
+          const me = await apiFetch<MeDTO>("/me");
+          if (cancelled) return;
+          const canChat = me.tier === "pro" || me.tier === "max" || me.trial.active;
+          setPaid(canChat);
+          if (!canChat) {
+            setThreadId(null);
+            return;
+          }
 
-  useEffect(() => {
-    if (!params.thread) return;
-    apiFetch(`/chat/threads/${params.thread}/read`, { method: "POST" }).catch(() => {
-      // swallow — read mark is best-effort
-    });
-  }, [params.thread]);
+          if (params.thread) {
+            const existing = await apiFetch<{ thread: ChatThreadDTO }>(
+              `/chat/threads/${params.thread}`,
+            );
+            if (!cancelled) setThreadId(existing.thread.id);
+            return;
+          }
 
-  const onNewChat = useCallback(() => {
-    setCurrentThreadId(null);
-    setResetKey((k) => k + 1);
-    setHeaderThread(null);
-    header.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+          const workspace = await bootstrapActiveWorkspaceSummary();
+          if (!workspace) throw new Error("no_workspace");
+          const canonical = await apiFetch<{ thread: ChatThreadDTO }>("/chat/threads", {
+            method: "POST",
+            body: JSON.stringify({}),
+          });
+          if (cancelled) return;
+          setWorkspaceName(workspace.name);
+          setThreadId(canonical.thread.id);
+        } catch (e) {
+          if (!cancelled) {
+            setError((e as { code?: string }).code ?? "load_error");
+            setPaid((value) => value ?? true);
+          }
+        }
+      })();
+      return () => {
+        cancelled = true;
+      };
+    }, [params.thread]),
+  );
 
-  // Tapping the Chat tab while already on it should reset to a new
-  // (pending) thread. tabPress fires for every tap; we trigger only
-  // when the tab was ALREADY focused — switching from another tab
-  // is handled by normal navigation focus.
-  useEffect(() => {
-    const unsub = navigation.addListener("tabPress" as never, (() => {
-      if ((navigation as { isFocused: () => boolean }).isFocused()) {
-        onNewChat();
-      }
-    }) as never);
-    return unsub;
-  }, [navigation, onNewChat]);
-
-  return (
-    <View style={styles.safe}>
+  const content =
+    paid === false ? (
+      <View style={[styles.content, { paddingTop: totalHeader }]}>
+        <PaidFeatureLock
+          title="Chat with Fina on Pro"
+          body="Upgrade to ask questions about your spending, budgets, and financial goals."
+          icon="chatbubble-ellipses-outline"
+        />
+      </View>
+    ) : error ? (
+      <View style={[styles.center, { paddingTop: totalHeader }]}>
+        <Text style={styles.errorTitle}>Couldn't load chat</Text>
+        <Text style={styles.errorBody}>{error}</Text>
+      </View>
+    ) : !threadId ? (
+      <View style={[styles.center, { paddingTop: totalHeader }]}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    ) : (
       <ThreadView
-        key={`${currentThreadId ?? "pending"}-${resetKey}`}
-        threadId={currentThreadId}
-        bottomInset={tabBarHeight}
+        key={threadId}
+        threadId={threadId}
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
         listTopInset={totalHeader}
-        onWorkspaceContextChange={({ workspaceName }) => {
-          setHeaderWorkspace(workspaceName);
-        }}
-        onThreadChange={setHeaderThread}
+        onWorkspaceContextChange={({ workspaceName: name }) => setWorkspaceName(name)}
       />
-      <Animated.View style={[styles.headerOverlay, { top: insets.top, height: HEADER_HEIGHT }, header.headerStyle]}>
+    );
+
+  return (
+    <View style={styles.safe}>
+      {content}
+      <Animated.View
+        style={[
+          styles.headerOverlay,
+          { top: insets.top, height: HEADER_HEIGHT },
+          header.headerStyle,
+        ]}
+      >
         <View style={styles.header}>
-          <HeaderIconButton
-            icon="time-outline"
-            variant="plain"
-            accessibilityLabel="Chat history"
-            onPress={() => router.push("/chats" as never)}
-          />
-          <Pressable
-            style={styles.headerCenter}
-            disabled={!headerThread}
-            onPress={() => {
-              if (!headerThread) return;
-              Keyboard.dismiss();
-              threadActions.open({
-                threadId: headerThread.id,
-                currentTitle: headerThread.title,
-                workspaceName: headerWorkspace,
-                onRenamed: (newTitle) =>
-                  setHeaderThread((prev) =>
-                    prev ? { ...prev, title: newTitle } : prev,
-                  ),
-                onDeleted: onNewChat,
-              });
-            }}
-            hitSlop={8}
-          >
-            <View style={styles.headerStack}>
-              <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
-                {headerThread?.title?.trim() || "Chat"}
-              </Text>
-              {headerWorkspace ? (
-                <Text style={styles.headerWorkspace} numberOfLines={1}>
-                  {headerWorkspace}
-                </Text>
-              ) : null}
-            </View>
-            {headerThread ? (
-              <Ionicons
-                name="chevron-down"
-                size={14}
-                color={colors.muted}
-                style={styles.headerCaret}
-              />
-            ) : null}
-          </Pressable>
-          <HeaderIconButton
-            icon="create-outline"
-            variant="plain"
-            accessibilityLabel="New chat"
-            onPress={onNewChat}
-          />
+          <Text style={styles.headerTitle}>Chat</Text>
+          {workspaceName ? (
+            <Text style={styles.headerWorkspace} numberOfLines={1}>
+              {workspaceName}
+            </Text>
+          ) : null}
         </View>
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
@@ -156,6 +121,15 @@ export default function ChatTab() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
+  content: { flex: 1 },
+  center: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: space.xl,
+  },
+  errorTitle: { ...type$.titleMd, color: colors.down, marginBottom: 4 },
+  errorBody: { ...type$.bodyMd, color: colors.body, textAlign: "center" },
   headerOverlay: {
     position: "absolute",
     left: 0,
@@ -173,26 +147,12 @@ const styles = StyleSheet.create({
   },
   header: {
     flex: 1,
-    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: space.base,
-    paddingVertical: space.sm,
+    justifyContent: "center",
+    paddingHorizontal: space.lg,
     borderBottomWidth: 1,
     borderBottomColor: colors.hairlineSoft,
   },
-  // Title + workspace form a vertical stack; the chevron sits to the
-  // right of the whole block (not just the title) so it visually
-  // affordances the whole unit as tappable.
-  headerCenter: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: space.sm,
-  },
-  headerStack: { alignItems: "center", flexShrink: 1, minWidth: 0 },
   headerTitle: { ...type$.titleSm, color: colors.ink },
-  headerCaret: { marginLeft: 6 },
   headerWorkspace: { ...type$.caption, color: colors.muted, marginTop: 1 },
 });

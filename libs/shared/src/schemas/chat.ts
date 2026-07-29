@@ -13,7 +13,9 @@ export const PatchChatThreadBody = z.object({
 
 export const ChatMessageBody = z.object({
   text: z.string().min(1).max(4000),
-  workspaceId: z.string().min(1).max(64),
+  // Legacy clients may still send workspaceId. New clients derive the
+  // workspace from the canonical thread and never ask the user to choose.
+  workspaceId: z.string().min(1).max(64).optional(),
 });
 
 export const ListChatThreadsQuery = z.object({

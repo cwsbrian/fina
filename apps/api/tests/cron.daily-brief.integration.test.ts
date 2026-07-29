@@ -57,12 +57,13 @@ async function makeUserMatchingNow(tz = "Asia/Seoul") {
       name: "Int",
       tz,
       morningTime: nowHHmm,
+      trialEndsAt: new Date("2099-01-01T00:00:00Z"),
     },
   });
 }
 
 describe("daily-brief integration", () => {
-  it("zero-membership user — brief is still generated (encouragement-only)", async () => {
+  it("zero-membership user — no workspace means no brief", async () => {
     const u = await makeUserMatchingNow();
     // No memberships.
     await syncMorningTimeToNow(u.id, "Asia/Seoul");  // anti-flake
@@ -71,9 +72,7 @@ describe("daily-brief integration", () => {
     await runDailyBrief(testEnv());
 
     const briefs = await prisma.brief.findMany({ where: { userId: u.id } });
-    expect(briefs).toHaveLength(1);
-    const msgs = await prisma.chatMessage.findMany({ where: { id: briefs[0]!.messageId } });
-    expect(msgs).toHaveLength(1);
+    expect(briefs).toHaveLength(0);
   });
 
   it("post-run state is consistent — exactly 1 brief + 1 chatMessage per successful tick", async () => {
@@ -94,7 +93,7 @@ describe("daily-brief integration", () => {
     expect(allMsgsInUserThreads[0]!.id).toBe(briefs[0]!.messageId);
   });
 
-  it("Plan 2-chat-user-scope lazy-binding — after user replies, next day's brief creates a new unbound thread", async () => {
+  it("after user replies, the next brief stays in the same workspace thread", async () => {
     const u = await makeUserMatchingNow();
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
@@ -103,12 +102,14 @@ describe("daily-brief integration", () => {
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
     await runDailyBrief(testEnv());
 
-    // User replies — this binds the thread.
     const briefs = await prisma.brief.findMany({ where: { userId: u.id } });
     const msg = await prisma.chatMessage.findUniqueOrThrow({ where: { id: briefs[0]!.messageId } });
-    await prisma.chatThread.update({
-      where: { id: msg.threadId },
-      data: { workspaceId: ws.id },  // lazy bind on first reply
+    await prisma.chatMessage.create({
+      data: {
+        threadId: msg.threadId,
+        role: "user",
+        blocks: [{ type: "text", markdown: "Let's reduce dining this week." }],
+      },
     });
 
     // Simulate "next day" by deleting today's brief — cron will re-fire.
@@ -121,8 +122,8 @@ describe("daily-brief integration", () => {
     expect(newBriefs).toHaveLength(1);
     const newMsg = await prisma.chatMessage.findUniqueOrThrow({ where: { id: newBriefs[0]!.messageId } });
     const newThread = await prisma.chatThread.findUniqueOrThrow({ where: { id: newMsg.threadId } });
-    expect(newThread.workspaceId).toBeNull();  // new unbound thread
-    expect(newThread.id).not.toBe(msg.threadId);
+    expect(newThread.workspaceId).toBe(ws.id);
+    expect(newThread.id).toBe(msg.threadId);
   });
 });
 
@@ -150,6 +151,7 @@ async function setupCardUser(opts?: {
       name: "CC",
       tz,
       morningTime: nowHHmm,
+      trialEndsAt: new Date("2099-01-01T00:00:00Z"),
       ...(opts?.categorizationMode ? { categorizationMode: opts.categorizationMode } : {}),
     },
   });
@@ -311,7 +313,7 @@ describe("daily-brief categorize_confirm_card block", () => {
     // Synthetic prior brief 30 days ago — older than the 7d cap.
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const priorThread = await prisma.chatThread.create({
-      data: { userId, workspaceId: null },
+      data: { userId, workspaceId: wsId },
     });
     const priorMsg = await prisma.chatMessage.create({
       data: {
@@ -323,6 +325,7 @@ describe("daily-brief categorize_confirm_card block", () => {
     await prisma.brief.create({
       data: {
         userId,
+        workspaceId: wsId,
         type: "daily",
         date: "2026-04-25",
         messageId: priorMsg.id,
@@ -391,7 +394,7 @@ describe("daily-brief categorize_confirm_card block", () => {
     // Synthetic prior brief 2 days ago — INSIDE the 7d cap so it wins.
     const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000);
     const priorThread = await prisma.chatThread.create({
-      data: { userId, workspaceId: null },
+      data: { userId, workspaceId: wsId },
     });
     const priorMsg = await prisma.chatMessage.create({
       data: {
@@ -403,6 +406,7 @@ describe("daily-brief categorize_confirm_card block", () => {
     await prisma.brief.create({
       data: {
         userId,
+        workspaceId: wsId,
         type: "daily",
         date: "2026-05-23",
         messageId: priorMsg.id,

@@ -5,7 +5,7 @@ import type { Env as FinaEnv } from "../env.js";
 import { monthlyEquivalent } from "../recurring/occurrences.js";
 import { DEFAULT_PERIOD } from "../budget-plans/service.js";
 import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
-import { budgetExpenseAllocationWhere } from "../transactions/budget-impact.js";
+import { effectiveExpenseAllocations } from "../transactions/cashflow.js";
 
 /** One row in a generated savings plan. */
 export type GoalStrategyItem = {
@@ -93,19 +93,8 @@ async function analyzeCategories(workspaceId: string): Promise<CategoryAnalysis[
   const since = new Date(Date.now() - 90 * 86_400_000);
   // 1. 90-day spend grouped by category.
   const [allocations, recurring, defaultPlan] = await Promise.all([
-    prisma.transactionAllocation.findMany({
-      where: {
-        ...budgetExpenseAllocationWhere({
-          workspaceId,
-          occurredAt: { gte: since },
-        }),
-        categoryId: { not: null },
-      },
-      select: {
-        amount: true,
-        categoryId: true,
-        category: { select: { name: true } },
-      },
+    effectiveExpenseAllocations(workspaceId, {
+      occurredAt: { gte: since },
     }),
     prisma.recurringExpense.findMany({
       where: { workspaceId, categoryId: { not: null } },
@@ -129,9 +118,9 @@ async function analyzeCategories(workspaceId: string): Promise<CategoryAnalysis[
   type Agg = { name: string; spend: number };
   const totals = new Map<string, Agg>();
   for (const r of allocations) {
-    if (!r.categoryId || !r.category) continue;
-    const cur = totals.get(r.categoryId) ?? { name: r.category.name, spend: 0 };
-    cur.spend += Number(r.amount);
+    if (!r.categoryId || !r.categoryName) continue;
+    const cur = totals.get(r.categoryId) ?? { name: r.categoryName, spend: 0 };
+    cur.spend += r.amount;
     totals.set(r.categoryId, cur);
   }
 

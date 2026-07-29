@@ -133,6 +133,8 @@ export default function TransactionDetail() {
     !isSplit && !!firstAlloc?.needsConfirmation && !!firstCat;
   const isOther =
     !!firstCat && firstCat.name.trim().toLowerCase() === "other";
+  const unmatchedRefund =
+    tx.budgetImpact === "refund" && !tx.refundOfTransactionId && !tx.pending;
 
   async function confirmCategory() {
     if (!tx) return;
@@ -203,6 +205,16 @@ export default function TransactionDetail() {
             )}
           </View>
         </View>
+
+        {unmatchedRefund && (
+          <View style={[styles.confirmBanner, styles.refundBanner]}>
+            <Text style={styles.confirmBannerTitle}>Refund needs review</Text>
+            <Text style={styles.confirmBannerSub}>
+              We couldn't confidently match this refund to a purchase. It is
+              not counted as income or applied to spending.
+            </Text>
+          </View>
+        )}
 
         {/* Confirm-category banner — above Details so it's the first thing
             the user sees after the hero. */}
@@ -657,6 +669,9 @@ const styles = StyleSheet.create({
   },
   confirmBannerOther: {
     borderLeftColor: colors.down,
+  },
+  refundBanner: {
+    borderLeftColor: colors.accentYellow,
   },
   confirmBannerTitle: { ...type$.titleSm, color: colors.ink },
   confirmBannerSub: { ...type$.bodySm, color: colors.muted },

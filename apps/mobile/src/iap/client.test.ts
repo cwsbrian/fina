@@ -28,6 +28,71 @@ describe("IAP client helpers", () => {
     expect(purchaseFlowTimeoutMessage("android")).toContain("Google Play");
   });
 
+  it("prefers the storefront-formatted price", async () => {
+    vi.doMock("react-native", () => ({ Platform: { OS: "ios" } }));
+    vi.doMock("../env", () => ({ isExpoGo: false }));
+    vi.doMock("./binding", () => ({
+      deriveAppleToken: () => "apple-token",
+      deriveGoogleToken: () => "google-token",
+    }));
+    const { __private } = await import("./client");
+
+    expect(
+      __private.formattedStorePrice({
+        displayPrice: "12,99 €",
+        price: "12.99",
+      }),
+    ).toBe("12,99 €");
+  });
+
+  it("uses Google Play's recurring base-plan phase after an introductory phase", async () => {
+    vi.doMock("react-native", () => ({ Platform: { OS: "android" } }));
+    vi.doMock("../env", () => ({ isExpoGo: false }));
+    vi.doMock("./binding", () => ({
+      deriveAppleToken: () => "apple-token",
+      deriveGoogleToken: () => "google-token",
+    }));
+    const { __private } = await import("./client");
+
+    expect(
+      __private.formattedStorePrice({
+        subscriptionOfferDetailsAndroid: [
+          {
+            pricingPhases: {
+              pricingPhaseList: [
+                { formattedPrice: "Free" },
+                { formattedPrice: "₩9,900" },
+              ],
+            },
+          },
+        ],
+      }),
+    ).toBe("₩9,900");
+  });
+
+  it("maps App Store products to localized Pro and Max plan prices", async () => {
+    vi.doMock("react-native", () => ({ Platform: { OS: "ios" } }));
+    vi.doMock("../env", () => ({ isExpoGo: false }));
+    vi.doMock("./binding", () => ({
+      deriveAppleToken: () => "apple-token",
+      deriveGoogleToken: () => "google-token",
+    }));
+    const { __private } = await import("./client");
+
+    expect(
+      __private.localizedPlanPricesFromProducts(
+        [
+          { id: "fina_pro_monthly", displayPrice: "US$7.99" },
+          { id: "max_monthly", displayPrice: "US$16.99" },
+        ],
+        "ios",
+      ),
+    ).toEqual({
+      pro: "US$7.99",
+      max: "US$16.99",
+    });
+  });
+
   it("does not turn stale iOS transaction JWS values into restorable purchases", async () => {
     const mockIap = {
       currentEntitlementIOS: vi.fn().mockResolvedValue(null),

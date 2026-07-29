@@ -53,7 +53,6 @@ function getIap(): RnIap | null {
     return _iap;
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     _iap = require("react-native-iap") as RnIap;
   } catch {
     _iap = null;
@@ -163,6 +162,80 @@ export type RestorablePurchase = {
   platform: "ios" | "android";
   purchase?: Purchase;
 };
+
+export type LocalizedPlanPrices = Partial<Record<PaidTier, string>>;
+
+function formattedStorePrice(product: any): string | null {
+  const direct = [product?.displayPrice, product?.localizedPrice].find(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+  if (typeof direct === "string") return direct.trim();
+
+  // Google Play can expose the formatted recurring price only inside a
+  // base-plan/offer pricing phase. The final phase is the ongoing monthly
+  // price after any free trial or introductory period.
+  const offers = [
+    ...(Array.isArray(product?.subscriptionOffers) ? product.subscriptionOffers : []),
+    ...(Array.isArray(product?.subscriptionOfferDetailsAndroid)
+      ? product.subscriptionOfferDetailsAndroid
+      : []),
+  ];
+  for (const offer of offers) {
+    const phases =
+      offer?.pricingPhases?.pricingPhaseList ??
+      offer?.pricingPhasesAndroid?.pricingPhaseList ??
+      [];
+    if (!Array.isArray(phases)) continue;
+    for (const phase of [...phases].reverse()) {
+      const formatted = phase?.formattedPrice ?? phase?.priceFormatted;
+      if (typeof formatted === "string" && formatted.trim().length > 0) {
+        return formatted.trim();
+      }
+    }
+  }
+  return null;
+}
+
+function localizedPlanPricesFromProducts(
+  products: readonly any[],
+  platform: NativeIapPlatform,
+): LocalizedPlanPrices {
+  const result: LocalizedPlanPrices = {};
+  for (const tier of ["pro", "max"] as const) {
+    const candidates = productIdsForTier(tier, platform);
+    const product = candidates
+      .map((candidate) =>
+        products.find((item: any) => {
+          const id = item?.id ?? item?.productId;
+          return id === candidate;
+        }),
+      )
+      .find(Boolean);
+    const displayPrice = formattedStorePrice(product);
+    if (displayPrice) result[tier] = displayPrice;
+  }
+  return result;
+}
+
+/** Fetch storefront-localized subscription prices.
+ *
+ * StoreKit / Google Play own these values, including currency formatting and
+ * regional pricing. An empty result means native IAP is unavailable (Expo Go)
+ * or the storefront did not return a product; callers must not substitute a
+ * hardcoded amount because it may be wrong for the user's country.
+ */
+export async function listLocalizedPlanPrices(): Promise<LocalizedPlanPrices> {
+  const iap = getIap();
+  if (!iap || (Platform.OS !== "ios" && Platform.OS !== "android")) return {};
+  await ensureConnected();
+
+  const platform: NativeIapPlatform = Platform.OS === "ios" ? "ios" : "android";
+  const products = await iap.fetchProducts({
+    skus: productIdsForPlatform(platform),
+    type: "subs",
+  });
+  return localizedPlanPricesFromProducts(products ?? [], platform);
+}
 
 function pushRestorablePurchase(
   out: RestorablePurchase[],
@@ -487,6 +560,8 @@ async function collectCurrentIOSEntitlements(
 
 export const __private = {
   collectCurrentIOSEntitlements,
+  formattedStorePrice,
+  localizedPlanPricesFromProducts,
 };
 
 export async function listCurrentNativeEntitlements(): Promise<RestorablePurchase[]> {

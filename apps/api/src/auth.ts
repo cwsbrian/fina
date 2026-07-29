@@ -63,6 +63,16 @@ export function createAuth(env: Env) {
         ? [env.WEB_APP_URL, "fina://"]
         : ["http://localhost:3000", "http://localhost:3100", "fina://", ...devOrigins],
     database: prismaAdapter(prisma, { provider: "postgresql" }),
+    // Fina uses Better Auth's opaque session cookie for first-party API
+    // authentication; there is no app-level access/refresh-token pair.
+    // Keep mobile sessions for 90 days and slide the expiry daily while the
+    // user is active. The previous implicit Better Auth default was 7 days,
+    // which made an otherwise healthy SecureStore cookie look like a random
+    // logout after a week away from the app.
+    session: {
+      expiresIn: 60 * 60 * 24 * 90,
+      updateAge: 60 * 60 * 24,
+    },
     emailVerification: {
       // After /email-otp/verify-email succeeds, mint a session and set the
       // cookie in the same response so the client doesn't have to re-sign-in

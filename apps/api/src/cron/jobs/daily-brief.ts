@@ -8,17 +8,18 @@ import { generateBrief, briefBlocksToText } from "../../chat/brief.js";
 import type { PresentationBlock } from "../../chat/blocks.js";
 import { sendBriefPush } from "../../push/send.js";
 import { markdownToPlainPreview } from "../../push/markdown-preview.js";
+import { effectiveTier } from "../../auth/tier.js";
+import { isPaidFeatureTier } from "@fina/shared";
+import { threadsService } from "../../chat/threads.js";
+import { selectHistoryWindow } from "../../chat/history-window.js";
+import { toLlmHistory } from "../../chat/turn.js";
 
 const CRON_NAME = "daily-brief";
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
-/** Daily-brief cron entry. Selects users whose local time matches
- *  morningTime and have no Brief row for today; for each, generates a
- *  brief and emits it atomically with a chat message in their unbound
- *  thread. Per-user try/catch isolates LLM failures so one user's
- *  LLM hiccup doesn't break the tick for others. */
+/** Generate one brief per paid user's workspace and append it to that
+ * workspace's canonical conversation. Free users never reach the LLM. */
 export async function runDailyBrief(env: Env): Promise<void> {
-  // 1. Candidate users (DB filter — fast).
   const candidates = await prisma.user.findMany({
     where: {
       pauseEnabled: false,
@@ -28,9 +29,6 @@ export async function runDailyBrief(env: Env): Promise<void> {
   });
   if (candidates.length === 0) return;
 
-  // 2. App-side filter (tz-aware time + idempotency). Synchronous —
-  //    candidates already include u.tz; resolveTz is pure CPU (validates
-  //    against IANA list, falls back to DEFAULT_TZ) so no DB roundtrip.
   type Enriched = {
     id: string;
     morningTime: string;
@@ -54,170 +52,225 @@ export async function runDailyBrief(env: Env): Promise<void> {
   const timeMatched = enriched.filter((u) => u.localHHmm === u.morningTime);
   if (timeMatched.length === 0) return;
 
-  // 3. Bulk idempotency check (single query — NOT N+1).
-  const today = await prisma.brief.findMany({
-    where: {
-      userId: { in: timeMatched.map((u) => u.id) },
-      date: { in: timeMatched.map((u) => u.localDate) },
-    },
-    select: { userId: true, date: true },
-  });
-  const briefed = new Set(today.map((b) => `${b.userId}|${b.date}`));
-  const matchUsers = timeMatched.filter((u) => !briefed.has(`${u.id}|${u.localDate}`));
-  if (matchUsers.length === 0) return;
-
-  // 4. Per-user pipeline.
-  for (const u of matchUsers) {
+  for (const u of timeMatched) {
     try {
-      const briefType = determineBriefType(u.localDate);
-      const context = await buildBriefContext(u.id, briefType);
-      let dailyForecastState: ForecastAlertState | null = null;
-      let mentionForecast = true;
-      if (briefType === "daily") {
-        dailyForecastState = snapshotForecastState(context);
-        const previous = await prisma.brief.findFirst({
-          where: {
-            userId: u.id,
-            type: "daily",
-            forecastState: { not: Prisma.DbNull },
-          },
-          orderBy: [{ date: "desc" }, { createdAt: "desc" }],
-          select: { forecastState: true },
-        });
-        mentionForecast = shouldMentionDailyForecast(
-          dailyForecastState,
-          parseForecastState(previous?.forecastState),
-        );
-        if (!mentionForecast) {
-          for (const workspace of context.workspaces) workspace.forecast.mention = false;
-        }
-      }
-      if (u.morningBriefFrequency === "issues_only" && !hasBriefIssues(context)) {
-        logInfo({ cron: CRON_NAME, userId: u.id, briefType }, "brief skipped quiet day");
+      const tier = await effectiveTier(u.id);
+      if (!isPaidFeatureTier(tier.tier)) {
+        logInfo({ cron: CRON_NAME, userId: u.id }, "free user brief skipped");
         continue;
       }
-
-      const recent = await prisma.brief.findMany({
-        where: { userId: u.id, type: briefType },
-        orderBy: { date: "desc" },
-        take: 3,
-        include: { message: { select: { blocks: true } } },
+      const memberships = await prisma.membership.findMany({
+        where: { userId: u.id },
+        select: { workspaceId: true },
       });
-      const recentTexts = recent.map((r) => briefBlocksToText(r.message.blocks));
-
-      const blocks: PresentationBlock[] = await generateBrief(env, context, recentTexts, briefType);
-
-      // Categorize confirm card (Plan 1F).
-      const u2 = await prisma.user.findUnique({
-        where: { id: u.id },
-        select: { categorizationMode: true },
-      });
-      const mode = u2?.categorizationMode ?? "flexible";
-      if (mode !== "auto") {
-        const lastBriefAgg = await prisma.brief.aggregate({
-          where: { userId: u.id },
-          _max: { createdAt: true },
-        });
-        const sinceMs = Math.max(
-          lastBriefAgg._max.createdAt?.getTime() ?? 0,
-          Date.now() - 7 * 24 * 60 * 60 * 1000,
-        );
-        const since = new Date(sinceMs);
-        const whereCard = {
-          needsConfirmation: true,
-          categoryId: { not: null },
-          OR: [{ dismissedUntil: null }, { dismissedUntil: { lt: new Date() } }],
-          transaction: {
-            removedAt: null,
-            workspace: { memberships: { some: { userId: u.id } } },
-            createdAt: { gte: since },
-          },
-        };
-        const totalCount = await prisma.transactionAllocation.count({ where: whereCard });
-        if (totalCount > 0) {
-          const rows = await prisma.transactionAllocation.findMany({
-            where: whereCard,
-            take: 5,
-            select: {
-              transaction: { select: { id: true, merchantRaw: true, merchantNormalized: true } },
-              category: { select: { name: true } },
-            },
-            orderBy: { transaction: { occurredAt: "desc" } },
-          });
-          const items = rows.map((r) => ({
-            txId: r.transaction.id,
-            merchant: r.transaction.merchantNormalized ?? r.transaction.merchantRaw,
-            categoryName: r.category?.name ?? "Unknown",
-          }));
-          blocks.push({
-            type: "categorize_confirm_card",
-            count: totalCount,
-            items,
-            moreCount: Math.max(0, totalCount - items.length),
-          });
+      for (const membership of memberships) {
+        try {
+          await emitWorkspaceBrief(env, u, membership.workspaceId);
+        } catch (err) {
+          logError(
+            { cron: CRON_NAME, userId: u.id, workspaceId: membership.workspaceId, err },
+            "workspace brief generation failed",
+          );
         }
-      }
-
-      // Find-or-create unbound thread. Race tolerated.
-      let thread = await prisma.chatThread.findFirst({
-        where: { userId: u.id, workspaceId: null, archivedAt: null },
-        orderBy: { createdAt: "desc" },
-      });
-      if (!thread) {
-        thread = await prisma.chatThread.create({
-          data: { userId: u.id, workspaceId: null },
-        });
-      }
-      const threadIdLocal = thread.id;
-
-      // Atomic emit — message + brief together.
-      const emitted = await prisma.$transaction(async (tx) => {
-        const msg = await tx.chatMessage.create({
-          data: {
-            threadId: threadIdLocal,
-            role: "assistant",
-            blocks: blocks as unknown as object,
-          },
-        });
-        const brief = await tx.brief.create({
-          data: {
-            userId: u.id,
-            type: briefType,
-            date: u.localDate,
-            messageId: msg.id,
-          },
-        });
-        logInfo(
-          { cron: CRON_NAME, userId: u.id, briefType, msgId: msg.id, threadId: threadIdLocal },
-          "brief emitted",
-        );
-        return { briefId: brief.id };
-      });
-
-      // Push notification (Plan 2C). Best-effort — brief is already in
-      // DB so push failure doesn't lose user data. sendBriefPush checks
-      // the user's notificationPrefs.morningBrief internally and skips
-      // if the user opted out of the push (the brief still landed in
-      // their chat).
-      try {
-        const briefText = briefBlocksToText(blocks);
-        const preview = markdownToPlainPreview(briefText);
-        const result = await sendBriefPush(env, u.id, preview, { threadId: threadIdLocal });
-        if (dailyForecastState && mentionForecast && result.sent > 0) {
-          await prisma.brief.update({
-            where: { id: emitted.briefId },
-            data: { forecastState: dailyForecastState as unknown as Prisma.InputJsonValue },
-          });
-        }
-      } catch (err) {
-        logError(
-          { cron: CRON_NAME, userId: u.id, err },
-          "brief push send failed (brief is durable in DB)",
-        );
       }
     } catch (err) {
       logError({ cron: CRON_NAME, userId: u.id, err }, "brief generation failed");
     }
+  }
+}
+
+type BriefUser = {
+  id: string;
+  morningTime: string;
+  morningBriefFrequency: string;
+  tz: string;
+  localHHmm: string;
+  localDate: string;
+};
+
+async function emitWorkspaceBrief(
+  env: Env,
+  u: BriefUser,
+  workspaceId: string,
+): Promise<void> {
+  const exists = await prisma.brief.findFirst({
+    where: { userId: u.id, workspaceId, date: u.localDate },
+    select: { id: true },
+  });
+  if (exists) return;
+
+  const briefType = determineBriefType(u.localDate);
+  const context = await buildBriefContext(u.id, briefType, workspaceId);
+  if (context.workspaces.length === 0) return;
+
+  let dailyForecastState: ForecastAlertState | null = null;
+  let mentionForecast = true;
+  if (briefType === "daily") {
+    dailyForecastState = snapshotForecastState(context);
+    const previous = await prisma.brief.findFirst({
+      where: {
+        userId: u.id,
+        workspaceId,
+        type: "daily",
+        forecastState: { not: Prisma.DbNull },
+      },
+      orderBy: [{ date: "desc" }, { createdAt: "desc" }],
+      select: { forecastState: true },
+    });
+    mentionForecast = shouldMentionDailyForecast(
+      dailyForecastState,
+      parseForecastState(previous?.forecastState),
+    );
+    if (!mentionForecast) {
+      for (const workspace of context.workspaces) workspace.forecast.mention = false;
+    }
+  }
+  if (u.morningBriefFrequency === "issues_only" && !hasBriefIssues(context)) {
+    logInfo(
+      { cron: CRON_NAME, userId: u.id, workspaceId, briefType },
+      "brief skipped quiet day",
+    );
+    return;
+  }
+
+  const thread = await threadsService.getOrCreateForWorkspace({
+    userId: u.id,
+    workspaceId,
+  });
+  const historyLimit = env.CHAT_HISTORY_LIMIT_MESSAGES ?? 200;
+  const [recentBriefs, recentMessages] = await Promise.all([
+    prisma.brief.findMany({
+      where: { userId: u.id, workspaceId, type: briefType },
+      orderBy: { date: "desc" },
+      take: 3,
+      include: { message: { select: { blocks: true } } },
+    }),
+    prisma.chatMessage.findMany({
+      where: { threadId: thread.id },
+      orderBy: { createdAt: "desc" },
+      take: historyLimit,
+      include: { brief: { select: { id: true, type: true, date: true } } },
+    }),
+  ]);
+  const history = selectHistoryWindow(recentMessages, {
+    limitMessages: historyLimit,
+    budgetTokens: env.CHAT_HISTORY_BUDGET_TOKENS ?? 16_000,
+  });
+  const recentTexts = recentBriefs.map((r) => briefBlocksToText(r.message.blocks));
+  const blocks: PresentationBlock[] = await generateBrief(
+    env,
+    context,
+    recentTexts,
+    briefType,
+    toLlmHistory(history),
+  );
+
+  const user = await prisma.user.findUnique({
+    where: { id: u.id },
+    select: { categorizationMode: true },
+  });
+  if ((user?.categorizationMode ?? "flexible") !== "auto") {
+    const lastBriefAgg = await prisma.brief.aggregate({
+      where: { userId: u.id, workspaceId },
+      _max: { createdAt: true },
+    });
+    const since = new Date(
+      Math.max(
+        lastBriefAgg._max.createdAt?.getTime() ?? 0,
+        Date.now() - 7 * 24 * 60 * 60 * 1000,
+      ),
+    );
+    const whereCard = {
+      needsConfirmation: true,
+      categoryId: { not: null },
+      OR: [{ dismissedUntil: null }, { dismissedUntil: { lt: new Date() } }],
+      transaction: {
+        workspaceId,
+        removedAt: null,
+        createdAt: { gte: since },
+      },
+    };
+    const totalCount = await prisma.transactionAllocation.count({ where: whereCard });
+    if (totalCount > 0) {
+      const rows = await prisma.transactionAllocation.findMany({
+        where: whereCard,
+        take: 5,
+        select: {
+          transaction: {
+            select: { id: true, merchantRaw: true, merchantNormalized: true },
+          },
+          category: { select: { name: true } },
+        },
+        orderBy: { transaction: { occurredAt: "desc" } },
+      });
+      blocks.push({
+        type: "categorize_confirm_card",
+        count: totalCount,
+        items: rows.map((row) => ({
+          txId: row.transaction.id,
+          merchant:
+            row.transaction.merchantNormalized ?? row.transaction.merchantRaw,
+          categoryName: row.category?.name ?? "Unknown",
+        })),
+        moreCount: Math.max(0, totalCount - rows.length),
+      });
+    }
+  }
+
+  const emitted = await prisma.$transaction(async (tx) => {
+    const msg = await tx.chatMessage.create({
+      data: {
+        threadId: thread.id,
+        role: "assistant",
+        blocks: blocks as unknown as object,
+      },
+    });
+    const brief = await tx.brief.create({
+      data: {
+        userId: u.id,
+        workspaceId,
+        type: briefType,
+        date: u.localDate,
+        messageId: msg.id,
+      },
+    });
+    await tx.chatThread.update({
+      where: { id: thread.id },
+      data: { lastMessageAt: msg.createdAt },
+    });
+    logInfo(
+      {
+        cron: CRON_NAME,
+        userId: u.id,
+        workspaceId,
+        briefType,
+        msgId: msg.id,
+        threadId: thread.id,
+      },
+      "brief emitted",
+    );
+    return { briefId: brief.id };
+  });
+
+  try {
+    const preview = markdownToPlainPreview(briefBlocksToText(blocks));
+    const result = await sendBriefPush(env, u.id, preview, {
+      threadId: thread.id,
+    });
+    if (dailyForecastState && mentionForecast && result.sent > 0) {
+      await prisma.brief.update({
+        where: { id: emitted.briefId },
+        data: {
+          forecastState:
+            dailyForecastState as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
+  } catch (err) {
+    logError(
+      { cron: CRON_NAME, userId: u.id, workspaceId, err },
+      "brief push send failed (brief is durable in DB)",
+    );
   }
 }
 

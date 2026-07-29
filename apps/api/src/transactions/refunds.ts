@@ -57,11 +57,13 @@ export async function matchRefund(
       occurredAt: true,
       budgetImpact: true,
       removedAt: true,
+      pending: true,
     },
   });
   if (
     !refund
     || refund.removedAt
+    || refund.pending
     || refund.budgetImpact !== "refund"
     || !refund.amount.isNegative()
   ) {
@@ -87,7 +89,12 @@ export async function matchRefund(
       merchantRaw: true,
       merchantNormalized: true,
       refunds: {
-        where: { budgetImpact: "refund", removedAt: null, id: { not: refund.id } },
+        where: {
+          budgetImpact: "refund",
+          removedAt: null,
+          pending: false,
+          id: { not: refund.id },
+        },
         select: { amount: true },
       },
     },
@@ -133,6 +140,7 @@ export async function syncTransactionImpact(
       rawData: true,
       budgetImpact: true,
       budgetImpactSource: true,
+      refundOfTransactionId: true,
       allocations: {
         select: { category: { select: { name: true, type: true } } },
       },
@@ -156,7 +164,7 @@ export async function syncTransactionImpact(
   }
 
   if (impact === "refund") await matchRefund(db, row.id);
-  else if (row.budgetImpact === "refund") {
+  else if (row.refundOfTransactionId !== null) {
     await db.transaction.update({
       where: { id: row.id },
       data: { refundOfTransactionId: null },
@@ -182,7 +190,7 @@ export async function ensureRefundLinks(workspaceId: string): Promise<void> {
             some: { category: { is: { type: "income", name: { equals: "Refund", mode: "insensitive" } } } },
           },
         },
-        { budgetImpact: "refund", refundOfTransactionId: null },
+        { budgetImpact: "refund", refundOfTransactionId: null, pending: false },
       ],
     },
     select: { id: true },
@@ -210,6 +218,7 @@ export async function ensureRefundLinks(workspaceId: string): Promise<void> {
         workspaceId,
         budgetImpact: "refund",
         refundOfTransactionId: null,
+        pending: false,
         removedAt: null,
       },
       select: { id: true },

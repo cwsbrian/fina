@@ -6,10 +6,9 @@ import {
   ChatMessageBody,
   isPaidFeatureTier,
 } from "@fina/shared";
-import { HttpError, requireSession } from "../auth/context.js";
+import { HttpError, requireSession, requireWorkspaceContext } from "../auth/context.js";
 import { withRateLimit } from "../auth/rate-limit.js";
 import { effectiveTier } from "../auth/tier.js";
-import { generateAndPersistThreadTitle } from "../chat/auto-title.js";
 import type { PresentationBlock } from "../chat/blocks.js";
 import { threadsService } from "../chat/threads.js";
 import { processChatTurn } from "../chat/turn.js";
@@ -46,11 +45,13 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const tier = await effectiveTier(session.userId);
       if (!isPaidFeatureTier(tier.tier)) return reply.code(402).send({ error: "upgrade_required" });
 
-      const thread = await threadsService.create({
-        userId: session.userId,
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });
+      const thread = await threadsService.getOrCreateForWorkspace({
+        userId: ctx.session.userId,
+        workspaceId: ctx.membership.workspaceId,
         title: parsed.data.title ?? null,
       });
-      return reply.code(201).send({ thread: serializeThread(thread) });
+      return reply.code(200).send({ thread: serializeThread(thread) });
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
@@ -289,10 +290,9 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(429).send({ error: "llm_weekly_budget_exceeded" });
       }
 
-      // Find the thread by id + userId first so we can detect workspace_mismatch
-      // (400) before the membership check (403). Order matters: a bound thread
-      // sending the wrong workspaceId should 400, not 403.
-      // archivedAt IS NULL guards against POSTing to an archived thread.
+      // New conversations are always bound at creation time. Nullable
+      // workspaceId is retained only for legacy rows and cannot receive new
+      // messages.
       const thread = await prisma.chatThread.findFirst({
         where: { id: params.tid, userId: session.userId, archivedAt: null },
         select: { id: true, workspaceId: true, title: true },
@@ -303,48 +303,28 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(403).send({ error: "forbidden" });
       }
 
-      // Early mismatch check: if thread is already bound to a different workspace,
-      // return 400 before the membership check so workspace_mismatch wins over not_member.
-      if (thread.workspaceId !== null && thread.workspaceId !== parsed.data.workspaceId) {
+      if (thread.workspaceId === null) {
+        return reply.code(409).send({ error: "thread_workspace_required" });
+      }
+      // Backward-compatible validation for clients that still send the old
+      // workspaceId field. New clients omit it.
+      if (
+        parsed.data.workspaceId !== undefined &&
+        thread.workspaceId !== parsed.data.workspaceId
+      ) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
 
-      // Membership check uses the unique constraint @@unique([userId, workspaceId])
-      // on Membership — see spec §5.2.
       const membership = await prisma.membership.findUnique({
         where: {
           userId_workspaceId: {
             userId: session.userId,
-            workspaceId: parsed.data.workspaceId,
+            workspaceId: thread.workspaceId,
           },
         },
         select: { role: true },
       });
       if (!membership) return reply.code(403).send({ error: "not_member" });
-
-      // Lazy bind — atomic conditional UPDATE wrapped in a transaction so a
-      // concurrent archive can't slip between UPDATE and refetch (see spec §6.1).
-      const boundWsId = await prisma.$transaction(async (tx) => {
-        if (thread.workspaceId !== null) {
-          // Mismatch was already caught above; this branch only runs when they match.
-          return thread.workspaceId;
-        }
-        const upd = await tx.chatThread.updateMany({
-          where: { id: thread.id, workspaceId: null, archivedAt: null },
-          data: { workspaceId: parsed.data.workspaceId },
-        });
-        if (upd.count === 1) return parsed.data.workspaceId;
-        // Lost the race: either someone else bound it, or it got archived.
-        const refetched = await tx.chatThread.findFirstOrThrow({
-          where: { id: thread.id },
-          select: { workspaceId: true, archivedAt: true },
-        });
-        if (refetched.archivedAt !== null) throw new HttpError(404, "thread_not_found");
-        if (refetched.workspaceId === null || refetched.workspaceId !== parsed.data.workspaceId) {
-          throw new HttpError(400, "workspace_mismatch");
-        }
-        return refetched.workspaceId;
-      });
 
       const userMessage = await prisma.$transaction(async (tx) => {
         const m = await tx.chatMessage.create({
@@ -365,7 +345,7 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       try {
         turn = await processChatTurn(
           app.fina.env,
-          { id: thread.id, workspaceId: boundWsId },
+          { id: thread.id, workspaceId: thread.workspaceId },
           session.userId,
           membership.role,
         );
@@ -427,27 +407,6 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
         });
         return m;
       });
-
-      // Plan 1E-title: fire-and-forget auto-title on the first user message.
-      // generateAndPersistThreadTitle no longer takes workspaceId — the
-      // conditional update gates on (id, title IS NULL), which is sufficient
-      // since threadId is a global cuid and auth is done above.
-      if (thread.title === null) {
-        try {
-          const userMsgCount = await prisma.chatMessage.count({
-            where: { threadId: thread.id, role: "user" },
-          });
-          if (userMsgCount === 1) {
-            void generateAndPersistThreadTitle(
-              app.fina.env, thread.id, session.userId, parsed.data.text,
-            ).catch(() => {
-              /* orchestrator logs internally */
-            });
-          }
-        } catch (err) {
-          logWarn({ threadId: thread.id, err }, "auto-title trigger gate failed");
-        }
-      }
 
       return {
         threadId: thread.id,

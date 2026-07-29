@@ -353,7 +353,12 @@ describe("runDailyRefresh", () => {
 
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
     expect(removeItemForBilling).toHaveBeenCalledTimes(1);
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, orphan.wsId, orphan.itemId);
+    expect(removeItemForBilling).toHaveBeenCalledWith(
+      env,
+      orphan.wsId,
+      orphan.itemId,
+      { reconnectRequired: false },
+    );
     expect(syncTransactions).not.toHaveBeenCalled();
   });
 
@@ -399,7 +404,12 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       status: "all",
       limit: 10,
     });
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
+    expect(removeItemForBilling).toHaveBeenCalledWith(
+      env,
+      expect.any(String),
+      items[5]!.id,
+      { reconnectRequired: true },
+    );
     expect(order.indexOf("stripe-list")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 
@@ -451,7 +461,12 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
 
     await runDailyRefresh(env);
 
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
+    expect(removeItemForBilling).toHaveBeenCalledWith(
+      env,
+      expect.any(String),
+      items[5]!.id,
+      { reconnectRequired: true },
+    );
     expect(syncTransactions).not.toHaveBeenCalled();
   });
 
@@ -530,7 +545,12 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     expect(providerMocks.appleClient.getSubscriptionStatus).toHaveBeenCalledWith("OT-apple-refresh");
     const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-apple-refresh" } });
     expect(sub.tier).toBe("pro");
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
+    expect(removeItemForBilling).toHaveBeenCalledWith(
+      env,
+      expect.any(String),
+      items[5]!.id,
+      { reconnectRequired: true },
+    );
     expect(order.indexOf("apple-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 
@@ -582,7 +602,12 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     });
     const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-google-refresh" } });
     expect(sub.tier).toBe("pro");
-    expect(removeItemForBilling).toHaveBeenCalledWith(env, expect.any(String), items[5]!.id);
+    expect(removeItemForBilling).toHaveBeenCalledWith(
+      env,
+      expect.any(String),
+      items[5]!.id,
+      { reconnectRequired: true },
+    );
     expect(order.indexOf("google-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 });

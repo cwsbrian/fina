@@ -1,8 +1,9 @@
 import type { ChatMessageRole, Cadence, ScheduledSpendStatus, RiskTier } from "../enums.js";
 import type { PlaidItemStatus } from "./plaid.js";
 
-/** Plan 2-chat-user-scope: threads are user-owned with nullable workspace.
- *  workspaceId is `null` until the user's first message binds the thread. */
+/** A user owns one canonical thread per workspace. `workspaceId` remains
+ * nullable only for pre-migration legacy rows that are never used for new
+ * conversations. */
 export type ChatThreadDTO = {
   id: string;
   userId: string;

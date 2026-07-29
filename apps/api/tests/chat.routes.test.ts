@@ -64,30 +64,43 @@ async function convertToPro(userId: string): Promise<void> {
 }
 
 describe("POST /chat/threads", () => {
-  it("201 — creates an unbound thread, returns DTO with workspaceId: null", async () => {
-    const { cookie } = await setup("ct1@t.co");
+  it("200 — returns the active workspace's canonical thread", async () => {
+    const { cookie, wsId } = await setup("ct1@t.co");
     const res = await app.inject({
       method: "POST",
       url: "/chat/threads",
-      headers: { cookie, "content-type": "application/json" },
+      headers: {
+        cookie,
+        "content-type": "application/json",
+        "x-workspace-id": wsId,
+      },
       payload: JSON.stringify({ title: "hello" }),
     });
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.thread.workspaceId).toBeNull();
+    expect(body.thread.workspaceId).toBe(wsId);
     expect(body.thread.title).toBe("hello");
     expect(body.thread.userId).toBeTruthy();
   });
 
-  it("201 — without title", async () => {
-    const { cookie } = await setup("ct2@t.co");
+  it("200 — repeated calls return the same thread", async () => {
+    const { cookie, wsId } = await setup("ct2@t.co");
+    const headers = {
+      cookie,
+      "content-type": "application/json",
+      "x-workspace-id": wsId,
+    };
     const res = await app.inject({
       method: "POST", url: "/chat/threads",
-      headers: { cookie, "content-type": "application/json" },
+      headers,
       payload: "{}",
     });
-    expect(res.statusCode).toBe(201);
+    const again = await app.inject({
+      method: "POST", url: "/chat/threads", headers, payload: "{}",
+    });
+    expect(res.statusCode).toBe(200);
     expect(res.json().thread.title).toBeNull();
+    expect(again.json().thread.id).toBe(res.json().thread.id);
   });
 
   it("401 — no session", async () => {
@@ -99,15 +112,15 @@ describe("POST /chat/threads", () => {
     expect(res.statusCode).toBe(401);
   });
 
-  it("201 — Pro user can create a chat thread", async () => {
-    const { userId, cookie } = await setup("ct-pro@t.co");
+  it("200 — Pro user can open canonical chat", async () => {
+    const { userId, cookie, wsId } = await setup("ct-pro@t.co");
     await convertToPro(userId);
     const res = await app.inject({
       method: "POST", url: "/chat/threads",
-      headers: { cookie, "content-type": "application/json" },
+      headers: { cookie, "content-type": "application/json", "x-workspace-id": wsId },
       payload: "{}",
     });
-    expect(res.statusCode).toBe(201);
+    expect(res.statusCode).toBe(200);
   });
 
   it("402 — Free user", async () => {
@@ -131,15 +144,14 @@ describe("POST /chat/threads", () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it("ignores X-Workspace-Id header (transport policy)", async () => {
+  it("rejects an unknown active workspace", async () => {
     const { cookie } = await setup("ct5@t.co");
     const res = await app.inject({
       method: "POST", url: "/chat/threads",
       headers: { cookie, "content-type": "application/json", "x-workspace-id": "bogus-ws-id" },
       payload: "{}",
     });
-    expect(res.statusCode).toBe(201);
-    expect(res.json().thread.workspaceId).toBeNull();
+    expect(res.statusCode).toBe(404);
   });
 });
 
@@ -325,7 +337,7 @@ describe("DELETE /chat/threads/:tid", () => {
 });
 
 describe("POST /chat/threads/:tid/messages", () => {
-  it("200 — first message binds the thread to body.workspaceId", async () => {
+  it("409 — legacy unbound threads cannot accept new messages", async () => {
     const { userId, cookie, wsId } = await setup("mt1@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     const res = await app.inject({
@@ -333,9 +345,8 @@ describe("POST /chat/threads/:tid/messages", () => {
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "hello", workspaceId: wsId }),
     });
-    expect(res.statusCode).toBe(200);
-    const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
-    expect(reload.workspaceId).toBe(wsId);
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe("thread_workspace_required");
   });
 
   it("200 — second message in a bound thread keeps the binding", async () => {
@@ -344,7 +355,7 @@ describe("POST /chat/threads/:tid/messages", () => {
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
-      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+      payload: JSON.stringify({ text: "x" }),
     });
     expect(res.statusCode).toBe(200);
   });
@@ -362,10 +373,12 @@ describe("POST /chat/threads/:tid/messages", () => {
     expect(res.json().error).toBe("workspace_mismatch");
   });
 
-  it("403 — user is not a member of body.workspaceId", async () => {
+  it("403 — user is not a member of the thread workspace", async () => {
     const { userId, cookie } = await setup("mt4@t.co");
     const strangerWs = await prisma.workspace.create({ data: { name: "stranger" } });
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const t = await prisma.chatThread.create({
+      data: { userId, workspaceId: strangerWs.id },
+    });
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
@@ -378,7 +391,7 @@ describe("POST /chat/threads/:tid/messages", () => {
   it("403 — another user's thread", async () => {
     const { cookie: cookieA } = await setup("mt5a@t.co");
     const { userId: userB, wsId: wsB } = await setup("mt5b@t.co");
-    const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
+    const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: wsB } });
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
       headers: { cookie: cookieA, "content-type": "application/json" },
@@ -389,7 +402,7 @@ describe("POST /chat/threads/:tid/messages", () => {
 
   it("402 — Free user", async () => {
     const { userId, cookie, wsId } = await setup("mt6@t.co");
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     await downgradeToFree(userId);
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
@@ -402,7 +415,7 @@ describe("POST /chat/threads/:tid/messages", () => {
   it("404 — archived thread (binding does not happen)", async () => {
     const { userId, cookie, wsId } = await setup("mt7@t.co");
     const t = await prisma.chatThread.create({
-      data: { userId, workspaceId: null, archivedAt: new Date() },
+      data: { userId, workspaceId: wsId, archivedAt: new Date() },
     });
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
@@ -412,26 +425,25 @@ describe("POST /chat/threads/:tid/messages", () => {
     expect(res.statusCode).toBe(404);
   });
 
-  it("400 — invalid_body when workspaceId is missing", async () => {
-    const { userId, cookie } = await setup("mt8@t.co");
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+  it("200 — workspaceId is derived from the canonical thread", async () => {
+    const { userId, cookie, wsId } = await setup("mt8@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x" }),
     });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe("invalid_body");
+    expect(res.statusCode).toBe(200);
   });
 
-  it("ignores X-Workspace-Id header — body wins", async () => {
+  it("ignores X-Workspace-Id header — canonical thread wins", async () => {
     const { userId, cookie, wsId } = await setup("mt9@t.co");
     const otherWs = await prisma.workspace.create({ data: { name: "other" } });
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json", "x-workspace-id": otherWs.id },
-      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
+      payload: JSON.stringify({ text: "x" }),
     });
     expect(res.statusCode).toBe(200);
     const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
@@ -440,7 +452,7 @@ describe("POST /chat/threads/:tid/messages", () => {
 
   it("429 — weekly LLM budget exceeded for this user", async () => {
     const { userId, cookie, wsId } = await setup("mt10@t.co");
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     // Fresh signup is a Pro trial, so the tier default cap is $1 CAD/week.
     // Stored LLM cost is USD and converted with the test default 1.4 CAD/USD.
     await prisma.llmCallLog.create({
@@ -467,7 +479,7 @@ describe("POST /chat/threads/:tid/messages", () => {
 
   it("200 — usage outside the 7-day window does NOT trigger the cap", async () => {
     const { userId, cookie, wsId } = await setup("mt11@t.co");
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
     await prisma.llmCallLog.create({
       data: {
@@ -507,7 +519,7 @@ describe("POST /chat/threads/:tid/messages", () => {
     });
     // Different user, with the same chat path, should NOT be gated.
     const { userId, cookie, wsId } = await setup("mt12b@t.co");
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },

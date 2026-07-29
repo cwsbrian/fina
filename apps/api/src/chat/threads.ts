@@ -4,6 +4,29 @@ import { prisma } from "../db.js";
 // User-scoped CRUD. Lazy workspace binding is the route layer's
 // responsibility — see routes/chat.ts POST /chat/threads/:tid/messages.
 export const threadsService = {
+  async getOrCreateForWorkspace(input: {
+    userId: string;
+    workspaceId: string;
+    title?: string | null;
+  }): Promise<ChatThread> {
+    return prisma.chatThread.upsert({
+      where: {
+        userId_workspaceId: {
+          userId: input.userId,
+          workspaceId: input.workspaceId,
+        },
+      },
+      create: {
+        userId: input.userId,
+        workspaceId: input.workspaceId,
+        title: input.title ?? null,
+      },
+      // A legacy client may have archived the row before canonical threads
+      // shipped. Revive it instead of creating a second conversation.
+      update: { archivedAt: null },
+    });
+  },
+
   async create(input: { userId: string; title?: string | null }): Promise<ChatThread> {
     return prisma.chatThread.create({
       data: {

@@ -1,6 +1,8 @@
 import type { Env } from "../env.js";
 import { logLlmCall } from "../llm/budget.js";
 import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
+import { effectiveTier } from "../auth/tier.js";
+import { isPaidFeatureTier } from "@fina/shared";
 
 export type LLMTransaction = {
   id: string;
@@ -38,6 +40,13 @@ export async function callLlmCategorize(
    *  we still run the call but skip accounting. */
   ownerUserId: string | null,
 ): Promise<LLMResult[]> {
+  // Categorization can be reached from asynchronous Plaid webhooks after a
+  // downgrade. Re-check billing at the final LLM boundary so Free accounts
+  // never incur an LLM call even while Plaid cleanup is retrying.
+  if (ownerUserId) {
+    const tier = await effectiveTier(ownerUserId);
+    if (!isPaidFeatureTier(tier.tier)) return [];
+  }
   const model = env.CHAT_MODEL ?? DEFAULT_LIGHT_LLM_MODEL;
 
   const userPayload = {

@@ -12,7 +12,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import type { TransactionDTO } from "@fina/shared";
+import type { CategoryDTO, TransactionDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { formatMoney } from "../../src/format/money";
@@ -27,6 +27,7 @@ type TxListResp = {
 
 export default function ExcludedTransactions() {
   const [txs, setTxs] = useState<TransactionDTO[] | null>(null);
+  const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -38,12 +39,16 @@ export default function ExcludedTransactions() {
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
       const { from, to } = currentMonthRange();
-      const data = await apiFetch<TxListResp>(
-        `/workspaces/${wsId}/transactions?budgetImpact=excluded&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=100`,
-      );
+      const [data, categoryData] = await Promise.all([
+        apiFetch<TxListResp>(
+          `/workspaces/${wsId}/transactions?budgetImpact=excluded&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&limit=100`,
+        ),
+        apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${wsId}/categories`),
+      ]);
       const seen = await getSeenExcludedIds();
       const fresh = data.transactions.filter((tx) => !seen.has(tx.id)).map((tx) => tx.id);
       setTxs(data.transactions);
+      setCategories(Object.fromEntries(categoryData.categories.map((category) => [category.id, category])));
       setNewIds(new Set(fresh));
       if (data.transactions.length > 0) {
         await rememberSeenExcludedIds(data.transactions.map((tx) => tx.id));
@@ -70,7 +75,7 @@ export default function ExcludedTransactions() {
       await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          budgetImpact: moneyDirectionForExcluded(tx),
+          budgetImpact: moneyDirectionForExcluded(tx, categories),
         }),
       });
       setTxs((cur) => (cur ?? []).filter((x) => x.id !== tx.id));
@@ -195,9 +200,12 @@ function formatDate(iso: string): string {
 
 function moneyDirectionForExcluded(
   tx: TransactionDTO,
+  categories: Record<string, CategoryDTO>,
 ): "expense" | "income" | "refund" {
   if (Number(tx.amount) >= 0) return "expense";
-  return tx.refundOfTransactionId ? "refund" : "income";
+  const categoryId = tx.allocations[0]?.categoryId;
+  const categoryName = categoryId ? categories[categoryId]?.name.trim().toLowerCase() : null;
+  return categoryName === "refund" ? "refund" : "income";
 }
 
 function currentMonthRange(): { from: string; to: string } {

@@ -46,6 +46,16 @@ describe("Better Auth integration", () => {
     await app.close();
   });
 
+  it("issues a 90-day mobile session cookie", async () => {
+    const app = await buildApp(env);
+    const user = await signUpAndGetCookie(app, {
+      email: "session-life@example.com",
+      name: "Session Life",
+    });
+    expect(user.cookie.toLowerCase()).toContain("max-age=7776000");
+    await app.close();
+  });
+
   it("rejects /me without a session", async () => {
     const app = await buildApp(env);
     const res = await app.inject({ method: "GET", url: "/me" });

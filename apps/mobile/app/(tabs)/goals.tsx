@@ -18,6 +18,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { formatMoney } from "../../src/format/money";
+import { PaidFeatureLock } from "../../src/billing/PaidFeatureLock";
 import {
   goalAccent,
   goalIcon,
@@ -280,16 +281,11 @@ function LockedGoals() {
       <View style={styles.head}>
         <Text style={styles.title}>Goals</Text>
       </View>
-      <View style={styles.body}>
-        <View style={styles.iconWrap}>
-          <Ionicons name="lock-closed" size={36} color={colors.muted} />
-        </View>
-        <Text style={styles.emptyTitle}>Pro feature</Text>
-        <Text style={styles.emptyBody}>
-          Goals are part of the Pro tier (free during your trial). Upgrade to
-          plan and save toward what you care about.
-        </Text>
-      </View>
+      <PaidFeatureLock
+        title="Goals are available with Pro"
+        body="Upgrade your plan to create savings goals and get a personalized strategy."
+        icon="flag-outline"
+      />
     </SafeAreaView>
   );
 }

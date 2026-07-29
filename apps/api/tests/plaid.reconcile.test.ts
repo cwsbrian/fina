@@ -183,6 +183,14 @@ describe("reconcilePlaidItemsForUser", () => {
 
     expect(result.kept).toEqual([]);
     expect(result.disconnected.sort()).toEqual([first.id, second.id].sort());
+    const archived = await prisma.bankAccount.findMany({
+      where: { workspaceId: ws.id },
+      select: { plaidReconnectRequired: true },
+    });
+    expect(archived).toEqual([
+      { plaidReconnectRequired: true },
+      { plaidReconnectRequired: true },
+    ]);
   });
 
   it("counts active, error, and relink_required as billable but ignores disconnected", async () => {
@@ -224,10 +232,12 @@ describe("reconcileOrphanPlaidItems", () => {
 
     expect(result.kept).toEqual([]);
     expect(result.disconnected).toEqual([legacy.id]);
-    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: legacy.id } })).resolves.toMatchObject({
-      connectedBy: null,
-      status: "disconnected",
-    });
+    await expect(
+      prisma.plaidItem.findUnique({ where: { id: legacy.id } }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.bankAccount.findFirstOrThrow({ where: { workspaceId: ws.id } }),
+    ).resolves.toMatchObject({ plaidReconnectRequired: false });
   });
 
   it("disconnects null-owner items without an owner", async () => {
@@ -240,10 +250,9 @@ describe("reconcileOrphanPlaidItems", () => {
     const result = await reconcileOrphanPlaidItems(env);
 
     expect(result.disconnected).toEqual([ambiguous.id]);
-    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: ambiguous.id } })).resolves.toMatchObject({
-      connectedBy: null,
-      status: "disconnected",
-    });
+    await expect(
+      prisma.plaidItem.findUnique({ where: { id: ambiguous.id } }),
+    ).resolves.toBeNull();
   });
 });
 
@@ -261,9 +270,13 @@ describe("retryPendingPlaidBillingCleanups", () => {
     const result = await retryPendingPlaidBillingCleanups(env);
 
     expect(result.disconnected).toEqual([pending.id]);
-    const itemAfter = await prisma.plaidItem.findUniqueOrThrow({ where: { id: pending.id } });
-    const accountAfter = await prisma.bankAccount.findFirstOrThrow({ where: { plaidItemId: pending.id } });
-    expect(itemAfter).toMatchObject({ status: "disconnected", errorCode: null });
+    await expect(
+      prisma.plaidItem.findUnique({ where: { id: pending.id } }),
+    ).resolves.toBeNull();
+    const accountAfter = await prisma.bankAccount.findFirstOrThrow({
+      where: { workspaceId: ws.id },
+    });
+    expect(accountAfter.plaidItemId).toBeNull();
     expect(accountAfter.archivedAt).not.toBeNull();
   });
 });

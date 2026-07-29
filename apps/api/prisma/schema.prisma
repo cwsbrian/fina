@@ -155,6 +155,7 @@ model Workspace {
   scheduledSpends   ScheduledSpend[]
   goals             Goal[]
   budgetPlans       BudgetPlan[]
+  briefs            Brief[]
 
   @@map("workspaces")
 }
@@ -298,26 +299,33 @@ model PlaidWebhookEvent {
 }
 
 model BankAccount {
-  id                String        @id @default(cuid())
-  workspaceId       String
-  plaidItemId       String?
+  id                 String        @id @default(cuid())
+  workspaceId        String
+  plaidItemId        String?
+  // Non-secret reconnect fingerprint retained after the billable Plaid Item
+  // and its access token are deleted on a Free-plan downgrade.
+  plaidInstitutionId String?
+  // True only when billing reconciliation removed the Plaid connection.
+  // Manual disconnects stay false so the app does not nag intentionally
+  // disconnected users.
+  plaidReconnectRequired Boolean       @default(false)
   // Plaid account_ids are globally unique per Plaid's contract — global UNIQUE
   // is fine. Transaction.plaidTransactionId uses a workspace-scoped partial
   // UNIQUE because it's only unique per workspace.
-  plaidAccountId    String?       @unique
-  name              String
-  officialName      String?
-  mask              String?
-  type              String
-  subtype           String?
-  currency          String        @default("CAD")
-  status            AccountStatus @default(active)
-  balanceCurrent    Decimal?      @db.Decimal(14, 2)
-  balanceAvailable  Decimal?      @db.Decimal(14, 2)
-  balanceLimit      Decimal?      @db.Decimal(14, 2)
-  lastBalanceSyncAt DateTime?
-  archivedAt        DateTime?
-  createdAt         DateTime      @default(now())
+  plaidAccountId     String?       @unique
+  name               String
+  officialName       String?
+  mask               String?
+  type               String
+  subtype            String?
+  currency           String        @default("CAD")
+  status             AccountStatus @default(active)
+  balanceCurrent     Decimal?      @db.Decimal(14, 2)
+  balanceAvailable   Decimal?      @db.Decimal(14, 2)
+  balanceLimit       Decimal?      @db.Decimal(14, 2)
+  lastBalanceSyncAt  DateTime?
+  archivedAt         DateTime?
+  createdAt          DateTime      @default(now())
 
   workspace    Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // SetNull (NOT Cascade) — disconnect must keep accounts (and via them, transactions)
@@ -326,6 +334,8 @@ model BankAccount {
   transactions Transaction[]
 
   @@index([workspaceId, plaidItemId])
+  @@index([workspaceId, plaidInstitutionId, archivedAt])
+  @@index([workspaceId, plaidReconnectRequired, archivedAt])
   @@map("bank_accounts")
 }
 
@@ -652,6 +662,7 @@ model ChatThread {
   workspace Workspace?    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   messages  ChatMessage[]
 
+  @@unique([userId, workspaceId])
   // Supports the chat-thread listing query at apps/api/src/chat/threads.ts:
   //   findMany WHERE userId = ? ORDER BY archivedAt ASC, lastMessageAt DESC NULLS LAST.
   // Prisma 5.5+ supports the `nulls` keyword in @@index — that's why this
@@ -768,28 +779,33 @@ enum BriefType {
   monthly
 }
 
-/// Daily-brief idempotency record. One per (userId, date) in user's tz.
+/// Daily-brief idempotency record. One per (userId, workspaceId, date) in
+/// the user's timezone.
 /// Created atomically with the ChatMessage that holds the brief content
 /// (see apps/api/src/cron/jobs/daily-brief.ts).
 model Brief {
-  id        String    @id @default(cuid())
-  userId    String
-  type      BriefType
+  id            String    @id @default(cuid())
+  userId        String
+  /// Nullable only for legacy briefs generated before workspace-scoped
+  /// canonical threads. All new brief rows set this field.
+  workspaceId   String?
+  type          BriefType
   /// ISO date "YYYY-MM-DD" in user's tz at generation time. Text not
   /// DateTime so date-portion comparisons are tz-stable even if user.tz
   /// changes between briefs. Lexical sort = chronological.
-  date      String
-  messageId String    @unique
+  date          String
+  messageId     String    @unique
   /// Structured Daily forecast state that was actually delivered by push.
   /// Null for Weekly/Monthly, suppressed repeats, and failed/skipped pushes.
   forecastState Json?
-  createdAt DateTime  @default(now())
+  createdAt     DateTime  @default(now())
 
-  user    User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  message ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace?  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  message   ChatMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, date])
-  @@index([userId, type, date])
+  @@unique([userId, workspaceId, date])
+  @@index([userId, workspaceId, type, date])
   @@map("briefs")
 }
 

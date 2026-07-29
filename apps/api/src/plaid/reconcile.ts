@@ -144,14 +144,18 @@ export async function reconcilePlaidItemsForUser(env: Env, userId: string): Prom
 
   const keep = new Set(valid.slice(0, tier.plaidItemLimit).map((row) => row.id));
   const toDisconnect = [
-    ...invalidMembership,
-    ...valid.filter((row) => !keep.has(row.id)),
+    ...invalidMembership.map((row) => ({ row, reconnectRequired: false })),
+    ...valid
+      .filter((row) => !keep.has(row.id))
+      .map((row) => ({ row, reconnectRequired: true })),
   ];
 
   const result: ReconcileResult = { kept: Array.from(keep), disconnected: [], failed: [] };
-  for (const row of toDisconnect) {
+  for (const { row, reconnectRequired } of toDisconnect) {
     try {
-      await removeItemForBilling(env, row.workspaceId, row.id);
+      await removeItemForBilling(env, row.workspaceId, row.id, {
+        reconnectRequired,
+      });
       result.disconnected.push(row.id);
     } catch (error) {
       result.failed.push({ id: row.id, error });
@@ -177,7 +181,9 @@ export async function reconcileOrphanPlaidItems(env: Env): Promise<ReconcileResu
   const result: ReconcileResult = { kept: [], disconnected: [], failed: [] };
   for (const row of rows) {
     try {
-      await removeItemForBilling(env, row.workspaceId, row.id);
+      await removeItemForBilling(env, row.workspaceId, row.id, {
+        reconnectRequired: false,
+      });
       result.disconnected.push(row.id);
     } catch (error) {
       result.failed.push({ id: row.id, error });
@@ -189,7 +195,11 @@ export async function reconcileOrphanPlaidItems(env: Env): Promise<ReconcileResu
 
 export async function retryPendingPlaidBillingCleanups(env: Env): Promise<ReconcileResult> {
   const rows = await prisma.plaidItem.findMany({
-    where: { status: "disconnected", errorCode: "billing_cleanup_pending" },
+    // Also sweep legacy "disconnected" rows created by the old downgrade
+    // behavior, which stopped syncing but retained the encrypted Plaid item.
+    // ITEM_NOT_FOUND is treated as success, so these are safe to delete even
+    // when Plaid was already removed months ago.
+    where: { status: "disconnected" },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: { id: true, workspaceId: true },
   });
@@ -198,7 +208,6 @@ export async function retryPendingPlaidBillingCleanups(env: Env): Promise<Reconc
   for (const row of rows) {
     try {
       await removeItemForBilling(env, row.workspaceId, row.id);
-      await prisma.plaidItem.update({ where: { id: row.id }, data: { errorCode: null } });
       result.disconnected.push(row.id);
     } catch (error) {
       result.failed.push({ id: row.id, error });

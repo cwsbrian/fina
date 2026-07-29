@@ -2,7 +2,11 @@ import type { BriefContext, BriefType } from "./brief-context.js";
 import type { PresentationBlock } from "./blocks.js";
 import type { Env } from "../env.js";
 import { logLlmCall } from "../llm/budget.js";
-import { DEFAULT_LIGHT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
+import {
+  DEFAULT_LIGHT_LLM_MODEL,
+  generateLlmContent,
+  type LlmContent,
+} from "../llm/provider.js";
 
 const RULES = `You are Fina, a warm, proactive personal-finance assistant. Write the brief in English.
 
@@ -64,12 +68,19 @@ export async function generateBrief(
   context: BriefContext,
   recentBriefTexts: string[],
   briefType: BriefType,
+  recentConversation: LlmContent[] = [],
 ): Promise<PresentationBlock[]> {
   const model = env.CHAT_MODEL ?? DEFAULT_LIGHT_LLM_MODEL;
 
   const response = await generateLlmContent(env, {
     model,
-    contents: [{ role: "user", parts: [{ text: buildUserMessage(context, recentBriefTexts) }] }],
+    // Preserve the exact chronological prefix from the workspace's canonical
+    // conversation. DeepSeek can reuse that stable prefix through automatic
+    // prompt caching; only the new financial snapshot is appended.
+    contents: [
+      ...recentConversation,
+      { role: "user", parts: [{ text: buildUserMessage(context, recentBriefTexts) }] },
+    ],
     systemInstruction: SYSTEM_PROMPT_PER_TYPE[briefType],
     maxOutputTokens: 800,
     temperature: 0.7,

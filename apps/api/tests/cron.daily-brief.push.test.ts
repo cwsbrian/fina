@@ -42,6 +42,7 @@ describe("daily-brief push integration", () => {
         name: "BP",
         tz,
         morningTime: await currentLocalHHmm(tz),
+        trialEndsAt: new Date("2099-01-01T00:00:00Z"),
       },
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
@@ -82,6 +83,7 @@ describe("daily-brief push integration", () => {
         name: "BPF",
         tz,
         morningTime: await currentLocalHHmm(tz),
+        trialEndsAt: new Date("2099-01-01T00:00:00Z"),
       },
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
@@ -112,6 +114,7 @@ describe("daily-brief push integration", () => {
         name: "ND",
         tz,
         morningTime: await currentLocalHHmm(tz),
+        trialEndsAt: new Date("2099-01-01T00:00:00Z"),
       },
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });

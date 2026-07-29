@@ -271,6 +271,7 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
               data: {
                 workspaceId: ctx.membership.workspaceId,
                 plaidItemId: itemRowId,
+                plaidInstitutionId: parsed.data.institutionId,
                 plaidAccountId: a.account_id,
                 name: a.name,
                 officialName: a.official_name ?? null,
@@ -285,6 +286,17 @@ export async function plaidRoutes(app: FastifyInstance): Promise<void> {
               },
             });
           }
+          // A successful link for the same institution resolves any durable
+          // billing-disconnect prompt left on historical archived accounts.
+          await userTx.bankAccount.updateMany({
+            where: {
+              workspaceId: ctx.membership.workspaceId,
+              archivedAt: { not: null },
+              plaidInstitutionId: parsed.data.institutionId,
+              plaidReconnectRequired: true,
+            },
+            data: { plaidReconnectRequired: false },
+          });
           return { rejected: false as const, itemRowId, accountCount: accountsRes.data.accounts.length };
         })
       );

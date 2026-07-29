@@ -39,43 +39,24 @@ import {
 } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../api/client";
 import { copyTextToClipboard } from "../iap/native-subscription-store";
-import { getActiveWorkspaceId } from "../workspace/active";
 import { PresentationBlock } from "./PresentationBlock";
 import { CategoryPickerSheet } from "../categories/CategoryPickerSheet";
-import {
-  WorkspacePickerSheet,
-  type WorkspaceOption,
-} from "./WorkspacePickerSheet";
+import type { WorkspaceOption } from "./WorkspacePickerSheet";
 import { colors, space, type as type$ } from "../design/tokens";
 
 type Props = {
-  /** `null` means "fresh / pending thread" — no DB row exists yet. The
-   *  thread is created lazily on the user's first send. Pass an actual
-   *  id (from /chats history) to view an existing conversation. */
+  /** The canonical thread for the active workspace. A null value is
+   *  tolerated while the parent bootstraps that workspace. */
   threadId: string | null;
-  /** Pixels at the bottom of the parent screen that the keyboard
-   *  already covers — typically the tab bar's height when embedded
-   *  in the Chat tab. The composer raises by
-   *  `keyboardHeight - bottomInset` so it sits flush against the
-   *  keyboard. Default 0 (drill-in: nothing below the view). */
-  bottomInset?: number;
-  /** Fires when a previously-pending thread is promoted to a real
-   *  DB row by the first send. The parent (Chat tab) keeps a copy of
-   *  the new id so subsequent renders pass it back down. */
+  /** Fires if this view had to bootstrap a missing canonical thread. */
   onThreadCreated?: (newId: string) => void;
   /** Forwarded to the messages FlatList — used for collapsing header. */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   onScroll?: (e: any) => void;
   scrollEventThrottle?: number;
   /** Top padding added to the messages list — usually the header height
    *  when the parent renders an absolute-positioned collapsing header. */
   listTopInset?: number;
-  /** Fires whenever the active workspace context for this thread
-   *  changes — either because a freshly-loaded thread had its
-   *  workspaceId, the user picked a different workspace in the inline
-   *  chip, or the first send just bound the thread. Parent uses this
-   *  to surface the workspace name in the screen header. `null` name
-   *  means single-workspace user or unresolved. */
+  /** Fires whenever the canonical thread's workspace context resolves. */
   onWorkspaceContextChange?: (info: {
     workspaceName: string | null;
     multipleWorkspaces: boolean;
@@ -171,7 +152,6 @@ function buildChatSupportMessage({
 
 export function ThreadView({
   threadId,
-  bottomInset = 0,
   onThreadCreated,
   onScroll,
   scrollEventThrottle,
@@ -195,13 +175,7 @@ export function ThreadView({
   const [sending, setSending] = useState(false);
   const listRef = useRef<FlatList>(null);
   const inputRef = useRef<TextInput>(null);
-  // Workspace-binding chip state. Only relevant before the thread is
-  // bound (thread === null OR thread.workspaceId === null). Once bound
-  // the chip disappears; subsequent messages must hit the bound ws and
-  // there's nothing to pick.
   const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
-  const [pickedWorkspaceId, setPickedWorkspaceId] = useState<string | null>(null);
-  const [pickerVisible, setPickerVisible] = useState(false);
   // Skips the load useEffect's GET /chat/threads/:id when we just created
   // the thread locally during a send. Without this guard the GET races
   // the in-flight POST /messages: it returns empty messages (the POST
@@ -240,49 +214,37 @@ export function ThreadView({
     supportNote.trim().length > 0 &&
     !supportSubmitting;
 
-  // Sync when the parent switches us to a different thread (e.g. tapping
-  // a row in /chats). Reset all local state so the new thread loads cleanly.
+  // Sync when the active workspace changes and the parent supplies its
+  // canonical thread. Reset local state so the conversation loads cleanly.
   useEffect(() => {
-    if (threadId !== localId) {
-      setLocalId(threadId);
-      setThread(null);
-      setMessages([]);
-      setErr(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setLocalId(threadId);
+    setThread(null);
+    setMessages([]);
+    setErr(null);
   }, [threadId]);
 
-  // Workspace list + initial pick. The chip is visible only when 2+
-  // workspaces exist AND the thread isn't bound yet. Default pick
-  // mirrors the global active workspace so silent send works in the
-  // single-workspace case (chip hidden).
+  // Workspace names are display-only. Message routing always comes from
+  // the canonical thread and can no longer be changed in the composer.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [list, activeId] = await Promise.all([
-          apiFetch<{ workspaces: WorkspaceOption[] }>("/workspaces"),
-          getActiveWorkspaceId(),
-        ]);
+        const list =
+          await apiFetch<{ workspaces: WorkspaceOption[] }>("/workspaces");
         if (cancelled) return;
         setWorkspaces(list.workspaces);
-        setPickedWorkspaceId(activeId ?? list.workspaces[0]?.id ?? null);
       } catch {
-        // Non-fatal — onSend's bootstrapActiveWorkspace fallback covers
-        // the missing-active case.
+        // Non-fatal: the thread still carries the authoritative workspace id.
       }
     })();
     return () => { cancelled = true; };
   }, []);
 
   // Notify parent about the workspace name to surface in the header.
-  // Resolves the active id (bound thread.workspaceId, else the user's
-  // current pick) against the workspace list and re-fires whenever any
-  // of those move. multipleWorkspaces lets the parent decide whether
-  // to render a tag at all — single-workspace users don't need it.
+  // Resolve the bound workspace id against the display-name list.
   useEffect(() => {
     if (!onWorkspaceContextChange) return;
-    const activeId = thread?.workspaceId ?? pickedWorkspaceId;
+    const activeId = thread?.workspaceId ?? null;
     const name = activeId
       ? workspaces.find((w) => w.id === activeId)?.name ?? null
       : null;
@@ -293,7 +255,6 @@ export function ThreadView({
   }, [
     onWorkspaceContextChange,
     workspaces,
-    pickedWorkspaceId,
     thread?.workspaceId,
   ]);
 
@@ -309,11 +270,9 @@ export function ThreadView({
     }
   }, [onThreadChange, thread]);
 
-  // KeyboardAvoidingView (below) handles all the keyboard offset math —
-  // including the iOS app-resume edge case where keyboardWillShow doesn't
-  // re-fire on restored keyboard. The `bottomInset` (tab bar height in
-  // embedded mode) is passed as keyboardVerticalOffset so the composer
-  // lands flush against the keyboard, not under the tab bar.
+  // This view already ends above the tab bar. KeyboardAvoidingView therefore
+  // needs no extra offset; adding the tab-bar height would double-count that
+  // space and leave a large gap above the iOS keyboard.
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
@@ -420,20 +379,12 @@ export function ThreadView({
     scrollToBottom();
 
     try {
-      // Use the user's pre-send pick when set (multi-workspace path);
-      // otherwise fall back to active-then-bootstrap so existing
-      // single-workspace behavior is preserved.
-      const wsId =
-        pickedWorkspaceId ??
-        (await getActiveWorkspaceId()) ??
-        (await bootstrapActiveWorkspace());
-      if (!wsId) throw new Error("no_workspace");
-
-      // Lazy-create the DB thread on the very first send so empty
-      // chats never get persisted. Once it exists, reuse for the rest
-      // of the conversation.
+      // Normally the parent creates this canonical thread before rendering.
+      // Keep a bootstrap fallback for older deep links and interrupted loads.
       let id = localId;
       if (!id) {
+        const wsId = await bootstrapActiveWorkspace();
+        if (!wsId) throw new Error("no_workspace");
         const created = await apiFetch<{ thread: ChatThreadDTO }>(
           "/chat/threads",
           { method: "POST", body: JSON.stringify({}) },
@@ -451,7 +402,7 @@ export function ThreadView({
         `/chat/threads/${id}/messages`,
         {
           method: "POST",
-          body: JSON.stringify({ text: body, workspaceId: wsId }),
+          body: JSON.stringify({ text: body }),
         },
       );
       // Server returns the canonical user+assistant pair. Swap our
@@ -461,20 +412,11 @@ export function ThreadView({
         const withoutTemp = prev.filter((m) => m.id !== tempId);
         return [...withoutTemp, resp.userMessage, resp.assistantMessage];
       });
-      // First-send binding: server lazy-binds the thread to wsId on
-      // this POST, but its response only carries the new messages, not
-      // the updated thread. Mirror the binding into local state so the
-      // "Sending to" chip disappears immediately — without this the
-      // chip lingered until a full thread reload.
-      setThread((prev) =>
-        prev && prev.workspaceId === null ? { ...prev, workspaceId: wsId } : prev,
-      );
       scrollToBottom();
       // The user is staring at the reply they just received — mark the
       // thread read so it doesn't show as unread on Home / chats list
       // when they navigate away.
       markRead(id);
-      if ((thread?.title ?? null) === null) refreshThreadTitle(id, setThread);
     } catch (e) {
       setMessages((prev) => prev.filter((m) => m.id !== tempId));
       setDraft(body);
@@ -750,36 +692,6 @@ export function ThreadView({
         ListFooterComponent={sending ? <TypingIndicator /> : null}
       />
 
-      {/* Workspace picker chip — only visible when:
-            (1) thread not yet bound (thread?.workspaceId === null OR no thread),
-            (2) user has 2+ workspaces (single-workspace users get the silent
-                active-workspace path), and
-            (3) at least one workspace has loaded.
-          After binding the chip disappears since the choice is locked. */}
-      {(thread?.workspaceId ?? null) === null &&
-        workspaces.length > 1 &&
-        !formFocused && (
-          <Pressable
-            style={({ pressed }) => [
-              styles.wsChip,
-              pressed && { backgroundColor: colors.surfaceSoft },
-            ]}
-            onPress={() => setPickerVisible(true)}
-          >
-            <Text style={styles.wsChipPrefix}>Sending to </Text>
-            <Text style={styles.wsChipName}>
-              {workspaces.find((w) => w.id === pickedWorkspaceId)?.name ??
-                "Personal"}
-            </Text>
-            <Ionicons
-              name="chevron-down"
-              size={14}
-              color={colors.muted}
-              style={{ marginLeft: 4 }}
-            />
-          </Pressable>
-        )}
-
       {/* Composer is hidden while a form card is in-edit — the user
           isn't chatting, they're filling out a form. The KeyboardAvoidingView
           still lifts the form into view; without the composer the form's
@@ -815,13 +727,6 @@ export function ThreadView({
         </Pressable>
       </View>
       )}
-      <WorkspacePickerSheet
-        visible={pickerVisible}
-        workspaces={workspaces}
-        selectedId={pickedWorkspaceId}
-        onSelect={(id) => setPickedWorkspaceId(id)}
-        onClose={() => setPickerVisible(false)}
-      />
       <BottomSheetModal
         ref={detailSheetRef}
         snapPoints={detailSnapPoints}
@@ -1141,23 +1046,6 @@ function hasDetailButtonForBlock(b: Block): boolean {
  *  slow or unreachable. */
 function markRead(threadId: string): void {
   apiFetch(`/chat/threads/${threadId}/read`, { method: "POST" }).catch(() => {});
-}
-
-function refreshThreadTitle(
-  threadId: string,
-  setThread: (update: (prev: ChatThreadDTO | null) => ChatThreadDTO | null) => void,
-  tries = 3,
-): void {
-  setTimeout(() => {
-    apiFetch<GetThreadResp>(`/chat/threads/${threadId}`)
-      .then((data) => {
-        setThread((prev) => prev ? { ...prev, title: data.thread.title } : prev);
-        if (!data.thread.title && tries > 1) {
-          refreshThreadTitle(threadId, setThread, tries - 1);
-        }
-      })
-      .catch(() => {});
-  }, 900);
 }
 
 /** Surface a clear message when an intent consume is rejected because the
@@ -1628,20 +1516,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   sendBtnDisabled: { backgroundColor: colors.primaryDisabled },
-  wsChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    alignSelf: "center",
-    paddingHorizontal: space.sm,
-    paddingVertical: 6,
-    marginBottom: 4,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: colors.hairline,
-    backgroundColor: colors.canvas,
-  },
-  wsChipPrefix: { ...type$.caption, color: colors.muted },
-  wsChipName: { ...type$.caption, color: colors.ink, fontWeight: "600" },
   modalAvoid: { flex: 1 },
   categoryPickerModal: { flex: 1 },
   modalBackdrop: {

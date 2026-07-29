@@ -83,10 +83,14 @@ describe("rate limits", () => {
     const wsId = await getOwnerWorkspaceId(u.userId);
     const create = await app.inject({
       method: "POST", url: "/chat/threads",
-      headers: { cookie: u.cookie, "content-type": "application/json" },
+      headers: {
+        cookie: u.cookie,
+        "content-type": "application/json",
+        "x-workspace-id": wsId,
+      },
       payload: "{}",
     });
-    expect(create.statusCode).toBe(201);
+    expect(create.statusCode).toBe(200);
     const threadId = create.json().thread.id;
 
     let last;

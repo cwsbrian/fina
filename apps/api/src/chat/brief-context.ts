@@ -170,6 +170,7 @@ export type BriefContext = {
 export async function buildBriefContext(
   userId: string,
   briefType: BriefType,
+  workspaceId?: string,
 ): Promise<BriefContext> {
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
@@ -179,7 +180,7 @@ export async function buildBriefContext(
   const dateIso = isoDateInTz(new Date(), tz);
 
   const memberships = await prisma.membership.findMany({
-    where: { userId },
+    where: { userId, ...(workspaceId ? { workspaceId } : {}) },
     include: {
       workspace: { select: { id: true, name: true, currency: true } },
     },

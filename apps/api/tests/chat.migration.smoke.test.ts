@@ -49,7 +49,9 @@ describe("plan 2-chat-user-scope migration smoke", () => {
         `;
       });
       const planText = plan.map((r) => r["QUERY PLAN"]).join("\n");
-      expect(planText).toMatch(/Index (Only )?Scan.*chat_threads_userId_archivedAt_lastMessageAt_idx/);
+      expect(planText).toMatch(
+        /(?:Bitmap )?Index (?:Only )?Scan.*chat_threads_(?:userId_archivedAt_lastMessageAt_idx|userId_workspaceId_key)/,
+      );
       expect(planText).not.toMatch(/Seq Scan on chat_threads/);
     } finally {
       // Guard cleanup so a failing assertion doesn't leave 500 orphan rows

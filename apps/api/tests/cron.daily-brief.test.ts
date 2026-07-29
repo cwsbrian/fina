@@ -1,9 +1,13 @@
-import { describe, expect, it, beforeEach, afterAll, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 import { currentLocalHHmm, syncMorningTimeToNow } from "./helpers/cron-time.js";
-import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
+import {
+  chatGeminiMock,
+  lastChatLlmRequest,
+  resetGeminiMock,
+} from "./helpers/gemini-mock.js";
 
 beforeEach(async () => {
   await truncateAll();
@@ -22,6 +26,7 @@ async function makeUser(tz = "America/Toronto", morningTime = "08:00") {
       name: "DB",
       tz,
       morningTime,
+      trialEndsAt: new Date("2099-01-01T00:00:00Z"),
     },
   });
 }
@@ -62,9 +67,9 @@ describe("runDailyBrief", () => {
     expect(msgs).toHaveLength(1);
     expect(msgs[0]!.role).toBe("assistant");
 
-    // Unbound thread.
+    // The brief is part of the workspace's canonical thread.
     const thread = await prisma.chatThread.findUniqueOrThrow({ where: { id: msgs[0]!.threadId } });
-    expect(thread.workspaceId).toBeNull();
+    expect(thread.workspaceId).toBe(ws.id);
     expect(thread.userId).toBe(u.id);
   });
 
@@ -83,6 +88,77 @@ describe("runDailyBrief", () => {
     expect(briefs).toHaveLength(1);
   });
 
+  it("Free users never generate a brief or call the LLM", async () => {
+    const tz = "Asia/Seoul";
+    const u = await prisma.user.create({
+      data: {
+        id: `db-free-${Date.now()}`,
+        email: `free-${Date.now()}@t.co`,
+        name: "Free",
+        tz,
+        morningTime: await currentLocalHHmm(tz),
+        trialEndsAt: new Date("2020-01-01T00:00:00Z"),
+        trialConsumed: true,
+      },
+    });
+    const ws = await prisma.workspace.create({ data: { name: "Personal" } });
+    await prisma.membership.create({
+      data: { userId: u.id, workspaceId: ws.id, role: "owner" },
+    });
+    await syncMorningTimeToNow(u.id, tz);
+
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+    await runDailyBrief(testEnv());
+
+    expect(await prisma.brief.count({ where: { userId: u.id } })).toBe(0);
+    expect(await prisma.chatThread.count({ where: { userId: u.id } })).toBe(0);
+    expect(chatGeminiMock.responses).toHaveLength(1);
+  });
+
+  it("passes recent workspace conversation into the morning brief prompt", async () => {
+    const tz = "Asia/Seoul";
+    const u = await makeUser(tz, await currentLocalHHmm(tz));
+    const ws = await prisma.workspace.create({ data: { name: "Personal" } });
+    await prisma.membership.create({
+      data: { userId: u.id, workspaceId: ws.id, role: "owner" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: { userId: u.id, workspaceId: ws.id },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        threadId: thread.id,
+        role: "user",
+        blocks: [
+          {
+            type: "text",
+            markdown: "Let's keep dining under $100 this week.",
+          },
+        ],
+      },
+    });
+    await syncMorningTimeToNow(u.id, tz);
+
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+    await runDailyBrief(testEnv());
+
+    const request = lastChatLlmRequest() as {
+      messages?: Array<{ role?: string; content?: string }>;
+    };
+    expect(
+      request.messages?.some(
+        (message) =>
+          message.role === "user" &&
+          message.content?.includes("keep dining under $100"),
+      ),
+    ).toBe(true);
+    const brief = await prisma.brief.findFirstOrThrow({
+      where: { userId: u.id, workspaceId: ws.id },
+      include: { message: true },
+    });
+    expect(brief.message.threadId).toBe(thread.id);
+  });
+
   it("skips quiet days for users who only want briefs when attention is needed", async () => {
     const tz = "Asia/Seoul";
     const u = await prisma.user.create({
@@ -93,6 +169,7 @@ describe("runDailyBrief", () => {
         tz,
         morningTime: await currentLocalHHmm(tz),
         morningBriefFrequency: "issues_only",
+        trialEndsAt: new Date("2099-01-01T00:00:00Z"),
       },
     });
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
@@ -120,6 +197,7 @@ describe("runDailyBrief", () => {
         tz,
         morningTime: await currentLocalHHmm(tz),
         morningBriefFrequency: "issues_only",
+        trialEndsAt: new Date("2099-01-01T00:00:00Z"),
       },
     });
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });

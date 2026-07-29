@@ -30,56 +30,51 @@ async function setup(email: string) {
   return { userId: u.userId, cookie: u.cookie, wsId };
 }
 
-describe("lazy binding races", () => {
-  it("two concurrent first-messages targeting DIFFERENT workspaces — exactly one binds, the other 400 workspace_mismatch", async () => {
+describe("canonical workspace thread races", () => {
+  it("concurrent opens for different workspaces return one thread per workspace", async () => {
     const { userId, cookie, wsId } = await setup("rb1@t.co");
     const otherWs = await prisma.workspace.create({ data: { name: "other" } });
     await prisma.membership.create({ data: { userId, workspaceId: otherWs.id, role: "owner" } });
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
 
-    const post = (ws: string) => app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
-      headers: { cookie, "content-type": "application/json" },
-      payload: JSON.stringify({ text: "x", workspaceId: ws }),
+    const open = (workspaceId: string) => app.inject({
+      method: "POST", url: "/chat/threads",
+      headers: {
+        cookie,
+        "content-type": "application/json",
+        "x-workspace-id": workspaceId,
+      },
+      payload: "{}",
     });
 
-    const [a, b] = await Promise.all([post(wsId), post(otherWs.id)]);
-    // Numeric sort with explicit comparator — JS default sort is
-    // lexicographic, which coincidentally works for [200, 400] but
-    // breaks if status codes ever differ in length (e.g., 200 vs 1000).
-    const statuses = [a.statusCode, b.statusCode].sort((x, y) => x - y);
-    expect(statuses).toEqual([200, 400]);
-    const loser = a.statusCode === 400 ? a : b;
-    expect(loser.json().error).toBe("workspace_mismatch");
-
-    const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
-    expect([wsId, otherWs.id]).toContain(reload.workspaceId);
-  });
-
-  it("two concurrent first-messages targeting the SAME workspace — both succeed; thread bound exactly once", async () => {
-    const { userId, cookie, wsId } = await setup("rb2@t.co");
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
-
-    const post = () => app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
-      headers: { cookie, "content-type": "application/json" },
-      payload: JSON.stringify({ text: "x", workspaceId: wsId }),
-    });
-
-    const [a, b] = await Promise.all([post(), post()]);
+    const [a, b] = await Promise.all([open(wsId), open(otherWs.id)]);
     expect(a.statusCode).toBe(200);
     expect(b.statusCode).toBe(200);
-    const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
-    expect(reload.workspaceId).toBe(wsId);
-    const userMessages = await prisma.chatMessage.count({
-      where: { threadId: t.id, role: "user" },
-    });
-    expect(userMessages).toBe(2);
+    expect(a.json().thread.workspaceId).toBe(wsId);
+    expect(b.json().thread.workspaceId).toBe(otherWs.id);
+    expect(a.json().thread.id).not.toBe(b.json().thread.id);
   });
 
-  it("archive-during-bind — DELETE racing with first-message: either archive wins (POST 404) or bind wins (DELETE archives bound thread); never archived-but-bound visible", async () => {
+  it("concurrent opens for the same workspace return the same thread", async () => {
+    const { cookie, wsId } = await setup("rb2@t.co");
+    const open = () => app.inject({
+      method: "POST", url: "/chat/threads",
+      headers: {
+        cookie,
+        "content-type": "application/json",
+        "x-workspace-id": wsId,
+      },
+      payload: "{}",
+    });
+
+    const [a, b] = await Promise.all([open(), open()]);
+    expect(a.statusCode).toBe(200);
+    expect(b.statusCode).toBe(200);
+    expect(a.json().thread.id).toBe(b.json().thread.id);
+  });
+
+  it("archive racing with a message never changes the thread's workspace", async () => {
     const { userId, cookie, wsId } = await setup("rb3@t.co");
-    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
 
     const post = app.inject({
       method: "POST", url: `/chat/threads/${t.id}/messages`,
@@ -92,19 +87,13 @@ describe("lazy binding races", () => {
     });
 
     const [p, d] = await Promise.all([post, del]);
-    // Either outcome is acceptable; both must be terminal and consistent.
-    // Validate consistency: if POST succeeded, the thread is now both
-    // bound and archived (acceptable — DELETE landed after bind).
-    // If POST 404'd, the thread is archived and unbound.
     const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
+    expect(reload.workspaceId).toBe(wsId);
+    expect(reload.archivedAt).toBeTruthy();
     if (p.statusCode === 200) {
       expect(d.statusCode).toBe(204);
-      expect(reload.workspaceId).toBe(wsId);
-      expect(reload.archivedAt).toBeTruthy();
     } else {
       expect(p.statusCode).toBe(404);
-      expect(reload.workspaceId).toBeNull();
-      expect(reload.archivedAt).toBeTruthy();
     }
   });
 });

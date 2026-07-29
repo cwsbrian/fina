@@ -139,6 +139,76 @@ describe("GET /workspaces/:id/plaid-items", () => {
       accountCount: 1,
     });
     expect(typeof list[0].id).toBe("string");
+    expect(res.json()).toMatchObject({
+      reconnectRequired: false,
+      reconnectAccountCount: 0,
+    });
+    await app.close();
+  });
+
+  it("surfaces a billing-removed bank as reconnect-required", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, {
+      email: "reconnect-required@x.com",
+      name: "Reconnect",
+    });
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { trialEndsAt: null, trialConsumed: true },
+    });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        plaidInstitutionId: "ins_old",
+        plaidAccountId: "acct_old_reconnect",
+        name: "Old checking",
+        type: "depository",
+        archivedAt: new Date(),
+        plaidReconnectRequired: true,
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/plaid-items`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      plaidItems: [],
+      reconnectRequired: true,
+      reconnectAccountCount: 1,
+      canConnectBank: false,
+    });
+    await app.close();
+  });
+
+  it("clears reconnect-required after the same institution is linked again", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, {
+      email: "reconnect-cleared@x.com",
+      name: "Reconnect",
+    });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const oldAccount = await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        plaidInstitutionId: "ins_1",
+        plaidAccountId: "acct_old_cleared",
+        name: "Old checking",
+        type: "depository",
+        archivedAt: new Date(),
+        plaidReconnectRequired: true,
+      },
+    });
+
+    await connectAItem(app, owner, wsId, "_reconnected");
+
+    await expect(
+      prisma.bankAccount.findUniqueOrThrow({ where: { id: oldAccount.id } }),
+    ).resolves.toMatchObject({ plaidReconnectRequired: false });
     await app.close();
   });
 

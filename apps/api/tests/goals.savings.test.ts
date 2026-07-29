@@ -91,7 +91,7 @@ async function spendInCategory(opts: {
   categoryId: string;
   amount: number;
   occurredAt: Date;
-}): Promise<void> {
+}): Promise<string> {
   counter++;
   let bankAccount = await prisma.bankAccount.findFirst({
     where: { workspaceId: opts.workspaceId },
@@ -128,6 +128,7 @@ async function spendInCategory(opts: {
       source: "manual",
     },
   });
+  return tx.id;
 }
 
 // "Today" anchor — 2026-06-15. June=current month and should count
@@ -194,6 +195,49 @@ describe("computeGoalSavings", () => {
     vi.setSystemTime(TODAY);
     const r = await computeGoalSavings(wsId, goalId);
     expect(r).toBe(30);
+  });
+
+  it("matched refunds reduce category spend before goal savings are calculated", async () => {
+    const wsId = await createWorkspace();
+    const catId = await createCategory(wsId);
+    const goalId = await createGoal({
+      workspaceId: wsId,
+      createdAt: new Date("2026-05-01T12:00:00Z"),
+    });
+    await createGoalAllocation({ goalId, categoryId: catId, monthlyAmount: 100 });
+    await createBudgetPlan({
+      workspaceId: wsId,
+      periodStart: firstOfMonth(2026, 5),
+      capsByCategoryId: { [catId]: 100 },
+    });
+    const purchaseId = await spendInCategory({
+      workspaceId: wsId,
+      categoryId: catId,
+      amount: 70,
+      occurredAt: new Date("2026-05-15T12:00:00Z"),
+    });
+    const account = await prisma.bankAccount.findFirstOrThrow({
+      where: { workspaceId: wsId },
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: account.id,
+        amount: new Prisma.Decimal(-20),
+        merchantRaw: "Merchant refund",
+        occurredAt: new Date("2026-05-20T12:00:00Z"),
+        pending: false,
+        source: "manual",
+        rawData: {},
+        budgetImpact: "refund",
+        refundOfTransactionId: purchaseId,
+      },
+    });
+
+    vi.setSystemTime(TODAY);
+    const result = await computeGoalSavings(wsId, goalId);
+
+    expect(result).toBe(50);
   });
 
   it("reusing the same asOf gives stable result when data is unchanged", async () => {

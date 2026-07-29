@@ -29,6 +29,8 @@ type PlaidItem = {
 
 export default function BanksScreen() {
   const [items, setItems] = useState<PlaidItem[] | null>(null);
+  const [reconnectRequired, setReconnectRequired] = useState(false);
+  const [canConnectBank, setCanConnectBank] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -37,10 +39,16 @@ export default function BanksScreen() {
       const wsId =
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
-      const data = await apiFetch<{ plaidItems: PlaidItem[] }>(
+      const data = await apiFetch<{
+        plaidItems: PlaidItem[];
+        reconnectRequired: boolean;
+        canConnectBank: boolean;
+      }>(
         `/workspaces/${wsId}/plaid-items`,
       );
       setItems(data.plaidItems);
+      setReconnectRequired(data.reconnectRequired);
+      setCanConnectBank(data.canConnectBank);
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -146,12 +154,26 @@ export default function BanksScreen() {
           <View style={styles.iconWrap}>
             <Ionicons name="card-outline" size={32} color={colors.muted} />
           </View>
-          <Text style={styles.emptyTitle}>No banks connected</Text>
-          <Text style={styles.emptyBody}>
-            Securely link your bank via Plaid so Fina can import transactions
-            automatically.
+          <Text style={styles.emptyTitle}>
+            {reconnectRequired ? "Reconnect your bank" : "No banks connected"}
           </Text>
-          <ConnectBankButton onConnected={load} />
+          <Text style={styles.emptyBody}>
+            {reconnectRequired
+              ? canConnectBank
+                ? "Your previous connection ended after a plan change. Link it again to resume automatic imports."
+                : "Your plan no longer includes automatic bank imports. Upgrade to reconnect your bank."
+              : "Securely link your bank via Plaid so Fina can import transactions automatically."}
+          </Text>
+          {reconnectRequired && !canConnectBank ? (
+            <Pressable style={styles.cta} onPress={() => router.push("/plan" as never)}>
+              <Text style={styles.ctaText}>View plans</Text>
+            </Pressable>
+          ) : (
+            <ConnectBankButton
+              onConnected={load}
+              {...(reconnectRequired ? { label: "Reconnect bank" } : {})}
+            />
+          )}
         </View>
       )}
 

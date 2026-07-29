@@ -14,7 +14,6 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import {
-  IAP_PRICING,
   TIER_LIMITS,
   formatShortDate,
   subscriptionSourceLabel,
@@ -32,7 +31,11 @@ import {
   billingRecoveryFootnote,
   isBillingLocked,
 } from "../../src/billing/recovery-ui";
-import { IapPurchaseError } from "../../src/iap/client";
+import {
+  IapPurchaseError,
+  listLocalizedPlanPrices,
+  type LocalizedPlanPrices,
+} from "../../src/iap/client";
 import { nativeBillingUnavailableMessage, openManageBilling } from "../../src/iap/manage";
 import {
   copyTextToClipboard,
@@ -161,6 +164,8 @@ export default function PlanScreen() {
   const router = useRouter();
   const [me, setMe] = useState<Me | null>(null);
   const [busy, setBusy] = useState<BusyState>(null);
+  const [localizedPrices, setLocalizedPrices] = useState<LocalizedPlanPrices>({});
+  const [pricesLoaded, setPricesLoaded] = useState(false);
   const [nativeDebug, setNativeDebug] = useState<NativeDebugState | null>(null);
   const busyRef = useRef<BusyState>(null);
   const nativeSource: SubscriptionSource =
@@ -202,6 +207,27 @@ export default function PlanScreen() {
     useCallback(() => {
       void loadMe();
     }, [loadMe]),
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      setPricesLoaded(false);
+      void listLocalizedPlanPrices()
+        .then((prices) => {
+          if (!cancelled) setLocalizedPrices(prices);
+        })
+        .catch((error) => {
+          console.warn("[iap.products] localized prices unavailable", error);
+          if (!cancelled) setLocalizedPrices({});
+        })
+        .finally(() => {
+          if (!cancelled) setPricesLoaded(true);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, []),
   );
 
   useEffect(() => {
@@ -581,6 +607,8 @@ export default function PlanScreen() {
                 tier="pro"
                 me={me}
                 busy={busy}
+                displayPrice={localizedPrices.pro ?? null}
+                pricesLoaded={pricesLoaded}
                 nativeSource={nativeSource}
                 onChoose={startNativeCheckout}
               />
@@ -588,6 +616,8 @@ export default function PlanScreen() {
                 tier="max"
                 me={me}
                 busy={busy}
+                displayPrice={localizedPrices.max ?? null}
+                pricesLoaded={pricesLoaded}
                 nativeSource={nativeSource}
                 onChoose={startNativeCheckout}
               />
@@ -631,12 +661,16 @@ function PlanCard({
   tier,
   me,
   busy,
+  displayPrice,
+  pricesLoaded,
   nativeSource,
   onChoose,
 }: {
   tier: PaidTier;
   me: Me;
   busy: BusyState;
+  displayPrice: string | null;
+  pricesLoaded: boolean;
   nativeSource: SubscriptionSource;
   onChoose: (tier: PaidTier) => void;
 }) {
@@ -661,8 +695,18 @@ function PlanCard({
           <Text style={styles.planSummary}>{copy.summary}</Text>
         </View>
         <View style={styles.priceBlock}>
-          <Text style={styles.price}>{IAP_PRICING[tier].displayPrice}</Text>
-          <Text style={styles.priceUnit}>/ mo</Text>
+          {displayPrice ? (
+            <>
+              <Text style={styles.price}>{displayPrice}</Text>
+              <Text style={styles.priceUnit}>/ mo</Text>
+            </>
+          ) : pricesLoaded ? (
+            <Text style={styles.priceUnavailable}>
+              Check in {Platform.OS === "ios" ? "App Store" : "Google Play"}
+            </Text>
+          ) : (
+            <ActivityIndicator size="small" color={colors.muted} />
+          )}
         </View>
       </View>
 
@@ -900,6 +944,12 @@ const styles = StyleSheet.create({
   priceBlock: { alignItems: "flex-end" },
   price: { ...type$.titleMd, color: colors.ink },
   priceUnit: { ...type$.caption, color: colors.muted },
+  priceUnavailable: {
+    ...type$.caption,
+    color: colors.muted,
+    maxWidth: 90,
+    textAlign: "right",
+  },
   featureList: { gap: 8 },
   featureRow: { flexDirection: "row", gap: 8, alignItems: "center" },
   featureText: { ...type$.bodySm, color: colors.body, flex: 1 },

@@ -160,6 +160,10 @@ export async function goalsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
+      const tier = await effectiveTier(ctx.session.userId);
+      if (!isPaidFeatureTier(tier.tier)) {
+        return reply.code(402).send({ error: "upgrade_required" });
+      }
       const goal = await createGoalService(
         ctx.membership.workspaceId,
         ctx.session.userId,
