@@ -13,6 +13,7 @@ declare module "fastify" {
  *  reads it. */
 export function registerSessionDecorator(app: FastifyInstance): void {
   app.addHook("onRequest", async (req) => {
+    if (req.url === "/internal/admin" || req.url.startsWith("/internal/admin/")) return;
     try {
       const headers = new Headers();
       for (const [k, v] of Object.entries(req.headers)) {

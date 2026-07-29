@@ -1,38 +1,68 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { buildApp } from "../src/server.js";
 import { prisma } from "../src/db.js";
+import { HttpError } from "../src/auth/context.js";
+import type { AdminTokenVerifier } from "../src/auth/admin-token.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { getOwnerWorkspaceId, signUpAndGetCookie } from "./helpers/auth.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv({ APPLE_ENV: "production" });
+const actor = {
+  sub: "cf-operator-1",
+  email: "operator@example.com",
+  jti: "request-token-1",
+};
+const requestId = "d9428888-122b-11e1-b85c-61cd3cbb3210";
+const adminTokenVerifier: AdminTokenVerifier = vi.fn().mockResolvedValue(actor);
+const internalHeaders = {
+  authorization: "Bearer delegated-token",
+  "x-request-id": requestId,
+};
+let observedUserQuery: "findMany" | "findUnique" | null = null;
+let observedUserQueryCalled = false;
+
+prisma.$use(async (params, next) => {
+  if (params.model === "User" && params.action === observedUserQuery) {
+    observedUserQueryCalled = true;
+  }
+  return next(params);
+});
+
+function buildInternalApp(verifier: AdminTokenVerifier = adminTokenVerifier) {
+  return buildApp(env, { adminTokenVerifier: verifier });
+}
 
 function expectSafeUserShape(row: Record<string, unknown>) {
-  expect(Object.keys(row).sort()).toEqual([
-    "activeSubscriptionCount",
-    "createdAt",
-    "deviceSummary",
-    "email",
-    "id",
-    "isPlanMismatch",
-    "name",
-    "role",
-    "subscription",
-    "tier",
-    "trial",
-  ].sort());
+  expect(Object.keys(row).sort()).toEqual(
+    [
+      "activeSubscriptionCount",
+      "createdAt",
+      "deviceSummary",
+      "email",
+      "id",
+      "isPlanMismatch",
+      "name",
+      "role",
+      "subscription",
+      "tier",
+      "trial",
+    ].sort(),
+  );
   expect(Object.keys(row.trial as Record<string, unknown>).sort()).toEqual(["active", "endsAt"]);
   if (row.subscription) {
-    expect(Object.keys(row.subscription as Record<string, unknown>).sort()).toEqual([
-      "cancelAtPeriodEnd",
-      "currentPeriodEnd",
-      "environment",
-      "pendingTier",
-      "pendingTierAt",
-      "source",
-      "status",
-      "tier",
-    ].sort());
+    expect(Object.keys(row.subscription as Record<string, unknown>).sort()).toEqual(
+      [
+        "cancelAtPeriodEnd",
+        "currentPeriodEnd",
+        "environment",
+        "pendingTier",
+        "pendingTierAt",
+        "source",
+        "status",
+        "tier",
+      ].sort(),
+    );
   }
 }
 
@@ -41,6 +71,84 @@ async function createAdmin(app: Awaited<ReturnType<typeof buildApp>>) {
   await prisma.user.update({ where: { id: admin.userId }, data: { role: "admin" } });
   return admin;
 }
+
+describe("internal admin delegation guard", () => {
+  it.each([
+    ["/internal/admin/users", "findMany", "admin_users_listed"],
+    ["/internal/admin/users/user-1", "findUnique", "admin_user_detail_viewed"],
+  ] as const)(
+    "rejects %s before session resolution or querying",
+    async (url, queryMethod, action) => {
+      const verifier = vi.fn().mockRejectedValue(new HttpError(401, "unauthenticated"));
+      observedUserQuery = queryMethod;
+      observedUserQueryCalled = false;
+      const app = await buildInternalApp(verifier);
+      const sessionResolver = vi
+        .spyOn(app.fina.auth.api, "getSession")
+        .mockRejectedValue(new Error("customer session resolver called"));
+      const infoSpy = vi.spyOn(app.log, "info");
+
+      const res = await app.inject({
+        method: "GET",
+        url,
+        headers: { authorization: "Bearer rejected", cookie: "better-auth.session_token=secret" },
+      });
+
+      expect(res.statusCode).toBe(401);
+      expect(res.headers["cache-control"]).toBe("no-store");
+      expect(res.json().error).toBe("unauthenticated");
+      expect(sessionResolver).not.toHaveBeenCalled();
+      expect(verifier).toHaveBeenCalledWith("Bearer rejected");
+      expect(observedUserQueryCalled).toBe(false);
+      expect(infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit")?.[0]).toEqual({
+        requestId: expect.any(String),
+        action,
+        outcome: "failure",
+        status: 401,
+        latencyMs: expect.any(Number),
+      });
+      observedUserQuery = null;
+      await app.close();
+    },
+  );
+
+  it.each(["/me", "/admin/users"])("keeps Better Auth session resolution on %s", async (url) => {
+    const app = await buildInternalApp();
+    const sessionResolver = vi.spyOn(app.fina.auth.api, "getSession").mockResolvedValue(null);
+
+    await app.inject({
+      method: "GET",
+      url,
+      headers: { cookie: "better-auth.session_token=customer" },
+    });
+
+    expect(sessionResolver).toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("includes the verified subject in a failed internal audit event", async () => {
+    const app = await buildInternalApp();
+    const infoSpy = vi.spyOn(app.log, "info");
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/admin/users?cursor=invalid",
+      headers: internalHeaders,
+    });
+
+    expect(res.statusCode).toBe(400);
+    const auditCall = infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit");
+    expect(auditCall?.[0]).toEqual({
+      requestId,
+      adminSubject: actor.sub,
+      action: "admin_users_listed",
+      outcome: "failure",
+      status: 400,
+      latencyMs: expect.any(Number),
+    });
+    await app.close();
+  });
+});
 
 describe("GET /admin/users", () => {
   beforeEach(async () => {
@@ -86,42 +194,98 @@ describe("GET /admin/users", () => {
     await app.close();
   });
 
-  it("paginates without skipping or duplicating users", async () => {
+  it("retains Better Auth admin access to the legacy list and detail routes", async () => {
     const app = await buildApp(env);
     const admin = await createAdmin(app);
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/admin/users",
+      headers: { cookie: admin.cookie },
+    });
+    const detail = await app.inject({
+      method: "GET",
+      url: `/admin/users/${admin.userId}`,
+      headers: { cookie: admin.cookie },
+    });
+
+    expect(list.statusCode).toBe(200);
+    expect(list.json().users).toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: admin.userId })]),
+    );
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().user.id).toBe(admin.userId);
+    await app.close();
+  });
+});
+
+describe("GET /internal/admin/users", () => {
+  beforeEach(async () => {
+    await truncateAll();
+    vi.clearAllMocks();
+  });
+
+  afterAll(async () => {
+    await disconnect();
+  });
+
+  it("rejects a valid Better Auth admin cookie without delegation", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/admin/users",
+      headers: { cookie: admin.cookie },
+    });
+
+    expect(res.statusCode).toBe(401);
+    expect(res.json().error).toBe("unauthenticated");
+    await app.close();
+  });
+
+  it("paginates without skipping or duplicating users", async () => {
+    const app = await buildInternalApp();
     const a = await signUpAndGetCookie(app, { email: "page-a@example.com" });
     const b = await signUpAndGetCookie(app, { email: "page-b@example.com" });
     const c = await signUpAndGetCookie(app, { email: "page-c@example.com" });
-    await prisma.user.update({ where: { id: admin.userId }, data: { createdAt: new Date("2026-06-12T00:00:04Z") } });
-    await prisma.user.update({ where: { id: c.userId }, data: { createdAt: new Date("2026-06-12T00:00:03Z") } });
-    await prisma.user.update({ where: { id: b.userId }, data: { createdAt: new Date("2026-06-12T00:00:02Z") } });
-    await prisma.user.update({ where: { id: a.userId }, data: { createdAt: new Date("2026-06-12T00:00:01Z") } });
+    await prisma.user.update({
+      where: { id: c.userId },
+      data: { createdAt: new Date("2026-06-12T00:00:03Z") },
+    });
+    await prisma.user.update({
+      where: { id: b.userId },
+      data: { createdAt: new Date("2026-06-12T00:00:02Z") },
+    });
+    await prisma.user.update({
+      where: { id: a.userId },
+      data: { createdAt: new Date("2026-06-12T00:00:01Z") },
+    });
 
     const page1 = await app.inject({
       method: "GET",
-      url: "/admin/users?limit=2",
-      headers: { cookie: admin.cookie },
+      url: "/internal/admin/users?limit=2",
+      headers: internalHeaders,
     });
     expect(page1.statusCode).toBe(200);
     expect(typeof page1.json().nextCursor).toBe("string");
 
     const page2 = await app.inject({
       method: "GET",
-      url: `/admin/users?limit=2&cursor=${encodeURIComponent(page1.json().nextCursor)}`,
-      headers: { cookie: admin.cookie },
+      url: `/internal/admin/users?limit=2&cursor=${encodeURIComponent(page1.json().nextCursor)}`,
+      headers: internalHeaders,
     });
     expect(page2.statusCode).toBe(200);
     expect(page2.json().nextCursor).toBeNull();
 
     const ids = [...page1.json().users, ...page2.json().users].map((u: { id: string }) => u.id);
-    expect(ids).toEqual([admin.userId, c.userId, b.userId, a.userId]);
+    expect(ids).toEqual([c.userId, b.userId, a.userId]);
     expect(new Set(ids).size).toBe(ids.length);
     await app.close();
   });
 
   it("returns safe fields and filters production subscription state", async () => {
-    const app = await buildApp(env);
-    const admin = await createAdmin(app);
+    const app = await buildInternalApp();
     const paid = await signUpAndGetCookie(app, { email: "paid@example.com", name: "Paid User" });
     const infoSpy = vi.spyOn(app.log, "info");
     await prisma.user.update({
@@ -192,8 +356,8 @@ describe("GET /admin/users", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/admin/users?limit=10",
-      headers: { cookie: admin.cookie },
+      url: "/internal/admin/users?limit=10",
+      headers: internalHeaders,
     });
 
     expect(res.statusCode).toBe(200);
@@ -222,17 +386,25 @@ describe("GET /admin/users", () => {
     expect(serialized).not.toContain("stripe_secret");
     expect(serialized).not.toContain("google_secret_sub");
     expect(serialized).not.toContain("notificationPrefs");
-    expect(infoSpy).toHaveBeenCalledWith(
-      expect.objectContaining({ adminUserId: admin.userId, limit: 10, returned: expect.any(Number) }),
-      "admin_users_listed",
+    const successAuditCall = infoSpy.mock.calls.find(
+      (call) => call[1] === "internal_admin_audit",
     );
-    expect(JSON.stringify(infoSpy.mock.calls)).not.toContain("paid@example.com");
+    expect(successAuditCall?.[0]).toEqual({
+      requestId,
+      adminSubject: actor.sub,
+      action: "admin_users_listed",
+      outcome: "success",
+      status: 200,
+      returned: expect.any(Number),
+      latencyMs: expect.any(Number),
+    });
+    expect(JSON.stringify(successAuditCall)).not.toContain("paid@example.com");
+    expect(JSON.stringify(successAuditCall)).not.toContain("delegated-token");
     await app.close();
   });
 
   it("uses Stripe as primary subscription even when IAP has a higher tier", async () => {
-    const app = await buildApp(env);
-    const admin = await createAdmin(app);
+    const app = await buildInternalApp();
     const user = await signUpAndGetCookie(app, { email: "stripe-primary@example.com" });
     await prisma.user.update({
       where: { id: user.userId },
@@ -263,11 +435,13 @@ describe("GET /admin/users", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/admin/users?limit=10",
-      headers: { cookie: admin.cookie },
+      url: "/internal/admin/users?limit=10",
+      headers: internalHeaders,
     });
 
-    const row = res.json().users.find((u: { email: string }) => u.email === "stripe-primary@example.com");
+    const row = res
+      .json()
+      .users.find((u: { email: string }) => u.email === "stripe-primary@example.com");
     expect(row.tier).toBe("max");
     expect(row.activeSubscriptionCount).toBe(2);
     expect(row.subscription).toMatchObject({ source: "stripe", tier: "pro" });
@@ -275,8 +449,7 @@ describe("GET /admin/users", () => {
   });
 
   it("uses max over pro among non-Stripe subscriptions", async () => {
-    const app = await buildApp(env);
-    const admin = await createAdmin(app);
+    const app = await buildInternalApp();
     const user = await signUpAndGetCookie(app, { email: "iap-primary@example.com" });
     await prisma.user.update({
       where: { id: user.userId },
@@ -307,11 +480,13 @@ describe("GET /admin/users", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: "/admin/users?limit=10",
-      headers: { cookie: admin.cookie },
+      url: "/internal/admin/users?limit=10",
+      headers: internalHeaders,
     });
 
-    const row = res.json().users.find((u: { email: string }) => u.email === "iap-primary@example.com");
+    const row = res
+      .json()
+      .users.find((u: { email: string }) => u.email === "iap-primary@example.com");
     expect(row.tier).toBe("max");
     expect(row.activeSubscriptionCount).toBe(2);
     expect(row.subscription).toMatchObject({ source: "iap_google", tier: "max" });
@@ -319,7 +494,7 @@ describe("GET /admin/users", () => {
   });
 });
 
-describe("GET /admin/users/:userId", () => {
+describe("GET /internal/admin/users/:userId", () => {
   beforeEach(async () => {
     await truncateAll();
   });
@@ -329,9 +504,12 @@ describe("GET /admin/users/:userId", () => {
   });
 
   it("returns device, Plaid, activity, and AI usage detail without secrets", async () => {
-    const app = await buildApp(env);
-    const admin = await createAdmin(app);
-    const user = await signUpAndGetCookie(app, { email: "detail@example.com", name: "Detail User" });
+    const app = await buildInternalApp();
+    const infoSpy = vi.spyOn(app.log, "info");
+    const user = await signUpAndGetCookie(app, {
+      email: "detail@example.com",
+      name: "Detail User",
+    });
     const wsId = await getOwnerWorkspaceId(user.userId);
     await prisma.session.updateMany({
       where: { userId: user.userId },
@@ -436,8 +614,8 @@ describe("GET /admin/users/:userId", () => {
 
     const res = await app.inject({
       method: "GET",
-      url: `/admin/users/${user.userId}`,
-      headers: { cookie: admin.cookie },
+      url: `/internal/admin/users/${user.userId}`,
+      headers: internalHeaders,
     });
 
     expect(res.statusCode).toBe(200);
@@ -452,8 +630,20 @@ describe("GET /admin/users/:userId", () => {
       aiUsage: {
         total: { callCount: 2, inputTokens: 150, outputTokens: 30, costCad: "0.042000" },
         monthly: [
-          { month: "2026-06", callCount: 1, inputTokens: 100, outputTokens: 20, costCad: "0.014000" },
-          { month: "2026-05", callCount: 1, inputTokens: 50, outputTokens: 10, costCad: "0.028000" },
+          {
+            month: "2026-06",
+            callCount: 1,
+            inputTokens: 100,
+            outputTokens: 20,
+            costCad: "0.014000",
+          },
+          {
+            month: "2026-05",
+            callCount: 1,
+            inputTokens: 50,
+            outputTokens: 10,
+            costCad: "0.028000",
+          },
         ],
       },
       plaidItems: [
@@ -464,12 +654,26 @@ describe("GET /admin/users/:userId", () => {
         },
       ],
     });
-    expect(res.json().devices.map((d: { platform: string }) => d.platform)).toEqual(["ios", "android"]);
+    expect(res.json().devices.map((d: { platform: string }) => d.platform)).toEqual([
+      "ios",
+      "android",
+    ]);
     const serialized = JSON.stringify(res.json());
     expect(serialized).not.toContain("access-secret-token");
     expect(serialized).not.toContain("plaid-secret");
     expect(serialized).not.toContain("ExponentPushToken");
     expect(serialized).not.toContain("secret-device-id");
+    const detailLog = infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit");
+    expect(detailLog?.[0]).toEqual({
+      requestId,
+      adminSubject: actor.sub,
+      action: "admin_user_detail_viewed",
+      outcome: "success",
+      status: 200,
+      latencyMs: expect.any(Number),
+    });
+    expect(JSON.stringify(detailLog)).not.toContain("detail@example.com");
+    expect(JSON.stringify(detailLog)).not.toContain("delegated-token");
     await app.close();
   });
 });

@@ -23,6 +23,12 @@ function baseEnv(): NodeJS.ProcessEnv {
   };
 }
 
+const adminEnv = {
+  ADMIN_TOKEN_PUBLIC_KEYS: '{"test":"non-secret-test-value"}',
+  ADMIN_TOKEN_ISSUER: "https://admin.buildingintent.com",
+  ADMIN_EMAIL: "operator@example.com",
+};
+
 describe("loadEnv RESEND_API_KEY refine", () => {
   it("rejects production startup with missing RESEND_API_KEY", () => {
     const old = process.env;
@@ -44,6 +50,7 @@ describe("loadEnv RESEND_API_KEY refine", () => {
     const old = process.env;
     process.env = {
       ...baseEnv(),
+      ...adminEnv,
       NODE_ENV: "production",
       RESEND_API_KEY: "re_" + "a".repeat(24),
     };
@@ -62,6 +69,16 @@ describe("loadEnv RESEND_API_KEY refine", () => {
 });
 
 describe("loadEnv new keys", () => {
+  it("requires all admin delegation variables in production", () => {
+    expect(() =>
+      loadEnv({
+        ...baseEnv(),
+        NODE_ENV: "production",
+        RESEND_API_KEY: "re_" + "a".repeat(24),
+      }),
+    ).toThrow(/ADMIN_TOKEN_PUBLIC_KEYS.*ADMIN_TOKEN_ISSUER.*ADMIN_EMAIL/);
+  });
+
   it("PRISMA_CONNECTION_LIMIT defaults to 10", () => {
     const old = process.env;
     process.env = { ...baseEnv(), NODE_ENV: "development" };
@@ -111,6 +128,7 @@ describe("loadEnv TRUST_PROXY strict opt-in", () => {
     const old = process.env;
     process.env = {
       ...baseEnv(),
+      ...adminEnv,
       NODE_ENV: "production",
       RESEND_API_KEY: "re_" + "a".repeat(24),
       TRUST_PROXY: "true",

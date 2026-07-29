@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, type $Enums } from "@prisma/client";
 import {
   ACTIVE_SUBSCRIPTION_STATUSES,
@@ -14,6 +14,7 @@ import { filterEnvironmentRows, pickPrimarySub } from "../billing/precedence.js"
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 type Cursor = {
   createdAt: string;
@@ -83,9 +84,7 @@ function inferPlatform(userAgent: string | null): string {
 }
 
 function maxIso(values: Array<Date | null | undefined>): string | null {
-  const times = values
-    .filter((v): v is Date => v instanceof Date)
-    .map((v) => v.getTime());
+  const times = values.filter((v): v is Date => v instanceof Date).map((v) => v.getTime());
   if (times.length === 0) return null;
   return new Date(Math.max(...times)).toISOString();
 }
@@ -106,6 +105,11 @@ function deviceSummary(
       platform,
       lastSeenAt: lastSeenAt?.toISOString() ?? null,
     }));
+}
+
+function auditRequestId(req: FastifyRequest): string {
+  const value = req.headers["x-request-id"];
+  return typeof value === "string" && UUID_RE.test(value) ? value : req.id;
 }
 
 function adminUserDTO(
@@ -155,9 +159,8 @@ function adminUserDTO(
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
-  app.get("/admin/users", async (req, reply) => {
+  const listUsers = async (req: FastifyRequest, reply: FastifyReply) => {
     try {
-      const admin = await requireAdminSession(req, app);
       const query = req.query as { limit?: string; cursor?: string };
       const limit = parseLimit(query.limit);
       const cursor = decodeCursor(query.cursor);
@@ -192,7 +195,9 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         ? await prisma.subscription.findMany({
             where: {
               userId: { in: userIds },
-              status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+              status: {
+                in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[],
+              },
             },
             select: {
               userId: true,
@@ -253,22 +258,21 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
       const last = pageUsers.at(-1);
       const response: AdminUsersResponse = {
         users: rows,
-        nextCursor: hasMore && last
-          ? encodeCursor({ createdAt: last.createdAt.toISOString(), id: last.id })
-          : null,
+        nextCursor:
+          hasMore && last
+            ? encodeCursor({ createdAt: last.createdAt.toISOString(), id: last.id })
+            : null,
       };
 
-      app.log.info({ adminUserId: admin.userId, limit, returned: rows.length }, "admin_users_listed");
-      return reply.header("Cache-Control", "no-store").send(response);
+      const result = reply.send(response);
+      return { result, returned: rows.length };
     } catch (e) {
-      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
     }
-  });
+  };
 
-  app.get("/admin/users/:userId", async (req, reply) => {
+  const userDetail = async (req: FastifyRequest, reply: FastifyReply) => {
     try {
-      const admin = await requireAdminSession(req, app);
       const { userId } = req.params as { userId: string };
       const user = await prisma.user.findUnique({
         where: { id: userId },
@@ -302,10 +306,12 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           createdAt: true,
         },
       });
-      const workspaceIds = (await prisma.membership.findMany({
-        where: { userId },
-        select: { workspaceId: true },
-      })).map((m) => m.workspaceId);
+      const workspaceIds = (
+        await prisma.membership.findMany({
+          where: { userId },
+          select: { workspaceId: true },
+        })
+      ).map((m) => m.workspaceId);
       const [
         devices,
         sessions,
@@ -459,8 +465,93 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         },
       };
 
-      app.log.info({ adminUserId: admin.userId, viewedUserId: userId }, "admin_user_detail_viewed");
-      return reply.header("Cache-Control", "no-store").send(response);
+      return reply.send(response);
+    } catch (e) {
+      throw e;
+    }
+  };
+
+  const logInternalAudit = (
+    req: FastifyRequest,
+    startedAt: number,
+    action: "admin_users_listed" | "admin_user_detail_viewed",
+    outcome: "success" | "failure",
+    status: number,
+    adminSubject?: string,
+    returned?: number,
+  ) => {
+    app.log.info(
+      {
+        requestId: auditRequestId(req),
+        ...(adminSubject === undefined ? {} : { adminSubject }),
+        action,
+        outcome,
+        status,
+        ...(returned === undefined ? {} : { returned }),
+        latencyMs: Math.max(0, Date.now() - startedAt),
+      },
+      "internal_admin_audit",
+    );
+  };
+
+  app.get("/internal/admin/users", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const startedAt = Date.now();
+    let adminSubject: string | undefined;
+    try {
+      const actor = await app.fina.verifyAdminToken(req.headers.authorization);
+      adminSubject = actor.sub;
+      const { result, returned } = await listUsers(req, reply);
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_users_listed",
+        "success",
+        200,
+        adminSubject,
+        returned,
+      );
+      return result;
+    } catch (e) {
+      const status = e instanceof HttpError ? e.statusCode : 500;
+      logInternalAudit(req, startedAt, "admin_users_listed", "failure", status, adminSubject);
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/internal/admin/users/:userId", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const startedAt = Date.now();
+    let adminSubject: string | undefined;
+    try {
+      const actor = await app.fina.verifyAdminToken(req.headers.authorization);
+      adminSubject = actor.sub;
+      const result = await userDetail(req, reply);
+      logInternalAudit(req, startedAt, "admin_user_detail_viewed", "success", 200, adminSubject);
+      return result;
+    } catch (e) {
+      const status = e instanceof HttpError ? e.statusCode : 500;
+      logInternalAudit(req, startedAt, "admin_user_detail_viewed", "failure", status, adminSubject);
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/admin/users", async (req, reply) => {
+    try {
+      await requireAdminSession(req, app);
+      return (await listUsers(req, reply)).result;
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/admin/users/:userId", async (req, reply) => {
+    try {
+      await requireAdminSession(req, app);
+      return await userDetail(req, reply);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
