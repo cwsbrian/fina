@@ -154,7 +154,8 @@ describe("multi-currency grouping", () => {
       data: { workspaceId: ws.id, name: "CAD Acct", type: "depository", currency: "CAD" },
     });
 
-    // 4 USD transactions, monthly cadence (one per month, Jan-Apr 2026)
+    const base = new Date();
+    // 4 USD transactions, monthly cadence within the requested lookback window.
     for (let i = 0; i < 4; i++) {
       await prisma.transaction.create({
         data: {
@@ -164,7 +165,7 @@ describe("multi-currency grouping", () => {
           amount: "9.99",
           merchantRaw: "Netflix",
           merchantNormalized: "netflix",
-          occurredAt: new Date(`2026-0${i + 1}-15T00:00:00.000Z`),
+          occurredAt: new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - i, 15)),
           rawData: {},
         },
       });
@@ -179,7 +180,7 @@ describe("multi-currency grouping", () => {
           amount: "13.99",
           merchantRaw: "Netflix",
           merchantNormalized: "netflix",
-          occurredAt: new Date(`2026-0${i + 1}-20T00:00:00.000Z`),
+          occurredAt: new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() - i, 20)),
           rawData: {},
         },
       });

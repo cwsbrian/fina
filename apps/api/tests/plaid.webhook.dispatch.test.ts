@@ -49,7 +49,7 @@ async function seedUser(opts: { email: string; trialEndsAt: Date | null }): Prom
 async function seedItem(opts: { connectedBy?: string | null } = {}): Promise<{ wsId: string; itemId: string; eventId: string }> {
   const connectedBy =
     opts.connectedBy === undefined
-      ? await seedUser({ email: `webhook-${randomUUID()}@example.com`, trialEndsAt: new Date("2026-07-01T00:00:00Z") })
+      ? await seedUser({ email: `webhook-${randomUUID()}@example.com`, trialEndsAt: new Date("2099-01-01T00:00:00Z") })
       : opts.connectedBy;
   const ws = await prisma.workspace.create({ data: { name: "W" } });
   if (connectedBy) {
