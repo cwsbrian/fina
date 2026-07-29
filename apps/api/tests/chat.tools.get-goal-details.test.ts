@@ -35,6 +35,7 @@ describe("getGoalDetails chat tool", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    await prisma.goalAllocation.deleteMany({ where: { goal: { workspaceId: wsId } } });
     await prisma.workspace.deleteMany({ where: { id: wsId } });
   });
 
