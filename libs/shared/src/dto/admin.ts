@@ -27,6 +27,12 @@ export type AdminUserDTO = {
 export type AdminUsersResponse = {
   users: AdminUserDTO[];
   nextCursor: string | null;
+  summary: {
+    userCount: number;
+    proUserCount: number;
+    maxUserCount: number;
+    activeTrialCount: number;
+  };
 };
 
 export type AdminUserDetailDTO = {

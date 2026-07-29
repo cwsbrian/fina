@@ -65,16 +65,22 @@ describe("admin page model", () => {
   });
 
   it("merges additional pages without dropping prior rows", () => {
-    const first: AdminUsersResponse = { users: [row], nextCursor: "cursor-1" };
+    const first: AdminUsersResponse = {
+      users: [row],
+      nextCursor: "cursor-1",
+      summary: { userCount: 1, proUserCount: 1, maxUserCount: 0, activeTrialCount: 0 },
+    };
     const second: AdminUsersResponse = {
       users: [{ ...row, id: "user-2", email: "second@example.com" }],
       nextCursor: null,
+      summary: { userCount: 2, proUserCount: 2, maxUserCount: 0, activeTrialCount: 0 },
     };
 
     expect(mergeAdminUsersPage(null, first, false)).toEqual(first);
     expect(mergeAdminUsersPage(first, second, true)).toEqual({
       users: [row, { ...row, id: "user-2", email: "second@example.com" }],
       nextCursor: null,
+      summary: second.summary,
     });
   });
 

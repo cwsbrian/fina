@@ -134,10 +134,9 @@ function adminUserDTO(
     environment: string;
     createdAt: Date;
   }>,
-  runtimeEnv: "production" | "sandbox",
   devices: AdminUserDTO["deviceSummary"] = [],
 ): AdminUserDTO {
-  const filtered = filterEnvironmentRows(subs, runtimeEnv);
+  const filtered = filterEnvironmentRows(subs, "production");
   const tier = computeEffectiveTier(user, filtered);
   const primary = pickPrimarySub(filtered);
   return {
@@ -158,6 +157,30 @@ function adminUserDTO(
   };
 }
 
+function adminUsersSummary(
+  users: Array<{
+    trialEndsAt: Date | null;
+    subscriptions: Array<{ tier: string; environment: string }>;
+  }>,
+): AdminUsersResponse["summary"] {
+  const summary: AdminUsersResponse["summary"] = {
+    userCount: users.length,
+    proUserCount: 0,
+    maxUserCount: 0,
+    activeTrialCount: 0,
+  };
+
+  for (const user of users) {
+    const subscriptions = filterEnvironmentRows(user.subscriptions, "production");
+    const tier = computeEffectiveTier(user, subscriptions);
+    if (tier.tier === "pro") summary.proUserCount += 1;
+    if (tier.tier === "max") summary.maxUserCount += 1;
+    if (tier.trialActive) summary.activeTrialCount += 1;
+  }
+
+  return summary;
+}
+
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   const listUsers = async (req: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -173,21 +196,37 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           }
         : {};
 
-      const users = await prisma.user.findMany({
-        where: cursorWhere,
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: limit + 1,
-        select: {
-          id: true,
-          email: true,
-          name: true,
-          createdAt: true,
-          role: true,
-          trialEndsAt: true,
-          trialConsumed: true,
-          isPlanMismatch: true,
-        },
-      });
+      const [users, summaryUsers] = await Promise.all([
+        prisma.user.findMany({
+          where: cursorWhere,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: limit + 1,
+          select: {
+            id: true,
+            email: true,
+            name: true,
+            createdAt: true,
+            role: true,
+            trialEndsAt: true,
+            trialConsumed: true,
+            isPlanMismatch: true,
+          },
+        }),
+        prisma.user.findMany({
+          select: {
+            trialEndsAt: true,
+            subscriptions: {
+              where: {
+                status: {
+                  in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[],
+                },
+                environment: "Production",
+              },
+              select: { tier: true, environment: true },
+            },
+          },
+        }),
+      ]);
 
       const pageUsers = users.slice(0, limit);
       const userIds = pageUsers.map((u) => u.id);
@@ -198,6 +237,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
               status: {
                 in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[],
               },
+              environment: "Production",
             },
             select: {
               userId: true,
@@ -244,12 +284,10 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         devicesByUser.set(session.userId, rows);
       }
 
-      const runtimeEnv = app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox";
       const rows: AdminUserDTO[] = pageUsers.map((user) =>
         adminUserDTO(
           user,
           subsByUser.get(user.id) ?? [],
-          runtimeEnv,
           deviceSummary(devicesByUser.get(user.id) ?? []),
         ),
       );
@@ -262,6 +300,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           hasMore && last
             ? encodeCursor({ createdAt: last.createdAt.toISOString(), id: last.id })
             : null,
+        summary: adminUsersSummary(summaryUsers),
       };
 
       const result = reply.send(response);
@@ -293,6 +332,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         where: {
           userId,
           status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
+          environment: "Production",
         },
         select: {
           tier: true,
@@ -402,11 +442,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
       const chatDates = chatThreads.map((t) => t.lastMessageAt);
       const response: AdminUserDetailDTO = {
-        user: adminUserDTO(
-          user,
-          activeSubs,
-          app.fina.env.APPLE_ENV === "production" ? "production" : "sandbox",
-        ),
+        user: adminUserDTO(user, activeSubs),
         devices: devices.map((d) => ({
           platform: d.platform,
           lastSeenAt: d.lastSeenAt.toISOString(),

@@ -66,6 +66,7 @@ export function mergeAdminUsersPage(
   return {
     users: [...previous.users, ...page.users],
     nextCursor: page.nextCursor,
+    summary: page.summary,
   };
 }
 

@@ -8,6 +8,7 @@ import { getOwnerWorkspaceId, signUpAndGetCookie } from "./helpers/auth.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv({ APPLE_ENV: "production" });
+const sandboxEnv = testEnv({ APPLE_ENV: "sandbox" });
 const actor = {
   sub: "cf-operator-1",
   email: "operator@example.com",
@@ -281,6 +282,182 @@ describe("GET /internal/admin/users", () => {
     const ids = [...page1.json().users, ...page2.json().users].map((u: { id: string }) => u.id);
     expect(ids).toEqual([c.userId, b.userId, a.userId]);
     expect(new Set(ids).size).toBe(ids.length);
+    await app.close();
+  });
+
+  it("returns the same whole-database summary on every page without double-counting users", async () => {
+    const app = await buildInternalApp();
+    const trial = await signUpAndGetCookie(app, { email: "summary-trial@example.com" });
+    const pro = await signUpAndGetCookie(app, { email: "summary-pro@example.com" });
+    const max = await signUpAndGetCookie(app, { email: "summary-max@example.com" });
+    const sandbox = await signUpAndGetCookie(app, { email: "summary-sandbox@example.com" });
+    const free = await signUpAndGetCookie(app, { email: "summary-free@example.com" });
+    const expiredTrial = new Date("2026-01-01T00:00:00Z");
+
+    await prisma.user.updateMany({
+      where: { id: { in: [pro.userId, max.userId, sandbox.userId, free.userId] } },
+      data: { trialEndsAt: expiredTrial, trialConsumed: true },
+    });
+    await prisma.user.update({
+      where: { id: trial.userId },
+      data: { trialEndsAt: new Date("2099-01-01T00:00:00Z") },
+    });
+    await prisma.subscription.createMany({
+      data: [
+        {
+          userId: trial.userId,
+          tier: "max",
+          source: "iap_google",
+          sourceSubscriptionId: "summary-trial-over-max",
+          status: "active",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: pro.userId,
+          tier: "pro",
+          source: "stripe",
+          sourceSubscriptionId: "summary-prod-pro",
+          status: "active",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: max.userId,
+          tier: "pro",
+          source: "iap_apple",
+          sourceSubscriptionId: "summary-overlap-pro",
+          status: "past_due",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: max.userId,
+          tier: "max",
+          source: "iap_google",
+          sourceSubscriptionId: "summary-overlap-max",
+          status: "active",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: sandbox.userId,
+          tier: "max",
+          source: "iap_apple",
+          sourceSubscriptionId: "summary-sandbox-max",
+          status: "active",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Sandbox",
+        },
+        {
+          userId: free.userId,
+          tier: "max",
+          source: "stripe",
+          sourceSubscriptionId: "summary-canceled-max",
+          status: "canceled",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Production",
+        },
+      ],
+    });
+
+    const page1 = await app.inject({
+      method: "GET",
+      url: "/internal/admin/users?limit=2",
+      headers: internalHeaders,
+    });
+    const page2 = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users?limit=2&cursor=${encodeURIComponent(page1.json().nextCursor)}`,
+      headers: internalHeaders,
+    });
+
+    const expectedSummary = {
+      userCount: 5,
+      proUserCount: 2,
+      maxUserCount: 1,
+      activeTrialCount: 1,
+    };
+    expect(page1.statusCode).toBe(200);
+    expect(page2.statusCode).toBe(200);
+    expect(page1.json().summary).toEqual(expectedSummary);
+    expect(page2.json().summary).toEqual(expectedSummary);
+
+    const fullPage = await app.inject({
+      method: "GET",
+      url: "/internal/admin/users?limit=10",
+      headers: internalHeaders,
+    });
+    const sandboxRow = fullPage
+      .json()
+      .users.find((user: { id: string }) => user.id === sandbox.userId);
+    expect(sandboxRow).toMatchObject({
+      tier: "free",
+      subscription: null,
+      activeSubscriptionCount: 0,
+    });
+    await app.close();
+  });
+
+  it("uses only Production subscriptions even when the API runtime is sandbox", async () => {
+    const app = await buildApp(sandboxEnv, { adminTokenVerifier });
+    const user = await signUpAndGetCookie(app, { email: "admin-production-only@example.com" });
+    await prisma.user.update({
+      where: { id: user.userId },
+      data: { trialEndsAt: new Date("2026-01-01T00:00:00Z"), trialConsumed: true },
+    });
+    await prisma.subscription.createMany({
+      data: [
+        {
+          userId: user.userId,
+          tier: "pro",
+          source: "stripe",
+          sourceSubscriptionId: "admin-production-pro",
+          status: "active",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Production",
+        },
+        {
+          userId: user.userId,
+          tier: "max",
+          source: "iap_apple",
+          sourceSubscriptionId: "admin-sandbox-max",
+          status: "active",
+          currentPeriodEnd: new Date("2099-02-01T00:00:00Z"),
+          environment: "Sandbox",
+        },
+      ],
+    });
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/internal/admin/users",
+      headers: internalHeaders,
+    });
+    const detail = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users/${user.userId}`,
+      headers: internalHeaders,
+    });
+
+    expect(list.statusCode).toBe(200);
+    expect(list.json().summary).toEqual({
+      userCount: 1,
+      proUserCount: 1,
+      maxUserCount: 0,
+      activeTrialCount: 0,
+    });
+    expect(list.json().users[0]).toMatchObject({
+      tier: "pro",
+      activeSubscriptionCount: 1,
+      subscription: { tier: "pro", source: "stripe", environment: "Production" },
+    });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().user).toMatchObject({
+      tier: "pro",
+      activeSubscriptionCount: 1,
+      subscription: { tier: "pro", source: "stripe", environment: "Production" },
+    });
     await app.close();
   });
 
