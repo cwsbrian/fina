@@ -17,7 +17,7 @@ afterAll(async () => {
 });
 
 describe("reconnect duplicate transaction cleanup", () => {
-  it("dry-runs first, then preserves user metadata while hiding the historical duplicate", async () => {
+  it("dry-runs first, then preserves the original row while hard-deleting the new duplicate", async () => {
     const email = "reconnect-cleanup@example.com";
     const user = await prisma.user.create({
       data: { id: randomUUID(), email, name: "Reconnect User", emailVerified: true },
@@ -145,22 +145,27 @@ describe("reconnect duplicate transaction cleanup", () => {
     });
 
     const dryRun = await dedupeReconnectTransactionsByEmail(email);
-    expect(dryRun).toMatchObject({ softRemoved: 0, skipped: 0 });
+    expect(dryRun).toMatchObject({ hardDeletedCurrent: 0, skipped: 0 });
     await expect(
       prisma.transaction.findUniqueOrThrow({ where: { id: historical.id } }),
     ).resolves.toMatchObject({ removedAt: null });
 
     const applied = await dedupeReconnectTransactionsByEmail(email, { apply: true });
 
-    expect(applied).toMatchObject({ softRemoved: 1, skipped: 0 });
+    expect(applied).toMatchObject({ hardDeletedCurrent: 1, skipped: 0 });
     await expect(
-      prisma.transaction.findUniqueOrThrow({ where: { id: historical.id } }),
-    ).resolves.toMatchObject({ removedAt: expect.any(Date) });
+      prisma.transaction.findUnique({ where: { id: current.id } }),
+    ).resolves.toBeNull();
     const kept = await prisma.transaction.findUniqueOrThrow({
-      where: { id: current.id },
+      where: { id: historical.id },
       include: { allocations: true },
     });
     expect(kept).toMatchObject({
+      id: historical.id,
+      accountId: currentAccount.id,
+      plaidItemId: currentItem.id,
+      plaidTransactionId: "new_transaction_id",
+      removedAt: null,
       note: "Keep this note",
       budgetImpact: "excluded",
       budgetImpactSource: "user",
@@ -172,7 +177,7 @@ describe("reconnect duplicate transaction cleanup", () => {
     });
     await expect(
       prisma.scheduledSpend.findUniqueOrThrow({ where: { id: schedule.id } }),
-    ).resolves.toMatchObject({ matchedTxId: current.id });
+    ).resolves.toMatchObject({ matchedTxId: historical.id });
   });
 
   it("does not match different account masks or merchants", async () => {

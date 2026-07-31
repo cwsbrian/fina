@@ -12,16 +12,18 @@ function readFlag(argv: string[], name: string): string | null {
 export function parseDedupeReconnectArgs(argv: string[]): {
   email: string;
   apply: boolean;
+  hardDeleteCurrent: boolean;
   dateWindowDays: number;
 } {
   const email = (readFlag(argv, "--email") ?? "").trim().toLowerCase();
   const apply = argv.includes("--apply");
+  const hardDeleteCurrent = argv.includes("--hard-delete-current");
   const confirmEmail = (readFlag(argv, "--confirm-email") ?? "").trim().toLowerCase();
   const dateWindowRaw = readFlag(argv, "--date-window-days") ?? "0";
   const dateWindowDays = Number(dateWindowRaw);
   if (!email.includes("@")) {
     throw new Error(
-      "Usage: pnpm --filter @fina/api prod:dedupe-reconnect-transactions -- --email user@example.com [--date-window-days 0] [--apply --confirm-email user@example.com]",
+      "Usage: pnpm --filter @fina/api prod:dedupe-reconnect-transactions -- --email user@example.com [--date-window-days 0] [--apply --hard-delete-current --confirm-email user@example.com]",
     );
   }
   if (!Number.isInteger(dateWindowDays) || dateWindowDays < 0 || dateWindowDays > 3) {
@@ -30,7 +32,10 @@ export function parseDedupeReconnectArgs(argv: string[]): {
   if (apply && confirmEmail !== email) {
     throw new Error("--apply requires --confirm-email with the exact same email address");
   }
-  return { email, apply, dateWindowDays };
+  if (apply && !hardDeleteCurrent) {
+    throw new Error("--apply requires --hard-delete-current");
+  }
+  return { email, apply, hardDeleteCurrent, dateWindowDays };
 }
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
@@ -64,11 +69,16 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       );
     }
     if (args.apply) {
-      console.log(`Soft-removed historical duplicates: ${result.softRemoved}`);
+      console.log(
+        `Hard-deleted newly imported duplicates: ${result.hardDeletedCurrent}`,
+      );
+      console.log(
+        `Preserved and re-linked original transactions: ${result.hardDeletedCurrent}`,
+      );
       console.log(`Skipped after safety re-check: ${result.skipped}`);
     } else if (result.candidates.length > 0) {
       console.log(
-        `Review the table, then rerun with --apply --confirm-email ${result.email}`,
+        `Review the table, then rerun with --apply --hard-delete-current --confirm-email ${result.email}`,
       );
     }
   } finally {

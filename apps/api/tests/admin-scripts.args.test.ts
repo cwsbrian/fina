@@ -27,6 +27,7 @@ describe("admin script arguments", () => {
     ).toEqual({
       email: "jane@example.com",
       apply: false,
+      hardDeleteCurrent: false,
       dateWindowDays: 0,
     });
   });
@@ -37,6 +38,7 @@ describe("admin script arguments", () => {
         "--email",
         "jane@example.com",
         "--apply",
+        "--hard-delete-current",
         "--confirm-email",
         "someone@example.com",
       ]),
@@ -49,13 +51,27 @@ describe("admin script arguments", () => {
         "--date-window-days",
         "1",
         "--apply",
+        "--hard-delete-current",
         "--confirm-email",
         "JANE@example.com",
       ]),
     ).toEqual({
       email: "jane@example.com",
       apply: true,
+      hardDeleteCurrent: true,
       dateWindowDays: 1,
     });
+  });
+
+  it("requires an explicit hard-delete flag before applying cleanup", () => {
+    expect(() =>
+      parseDedupeReconnectArgs([
+        "--email",
+        "jane@example.com",
+        "--apply",
+        "--confirm-email",
+        "jane@example.com",
+      ]),
+    ).toThrow("--apply requires --hard-delete-current");
   });
 });

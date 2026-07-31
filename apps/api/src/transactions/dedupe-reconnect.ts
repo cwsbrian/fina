@@ -61,7 +61,7 @@ export type ReconnectDuplicateCandidate = {
 export type ReconnectDedupeResult = {
   email: string;
   candidates: ReconnectDuplicateCandidate[];
-  softRemoved: number;
+  hardDeletedCurrent: number;
   skipped: number;
 };
 
@@ -316,7 +316,7 @@ function allocationRank(
   return allocations.length > 1 ? rank + 10 : rank;
 }
 
-async function reconcileCandidate(
+async function hardDeleteCurrentCandidate(
   candidate: ReconnectDuplicateCandidate,
   dateWindowDays: number,
 ): Promise<boolean> {
@@ -344,11 +344,11 @@ async function reconcileCandidate(
       return false;
     }
 
-    if (allocationRank(historical.allocations) > allocationRank(current.allocations)) {
-      await tx.transactionAllocation.deleteMany({ where: { transactionId: current.id } });
+    if (allocationRank(current.allocations) > allocationRank(historical.allocations)) {
+      await tx.transactionAllocation.deleteMany({ where: { transactionId: historical.id } });
       await tx.transactionAllocation.createMany({
-        data: historical.allocations.map((allocation) => ({
-          transactionId: current.id,
+        data: current.allocations.map((allocation) => ({
+          transactionId: historical.id,
           categoryId: allocation.categoryId,
           amount: allocation.amount,
           source: allocation.source,
@@ -359,35 +359,56 @@ async function reconcileCandidate(
     }
 
     await tx.scheduledSpend.updateMany({
-      where: { matchedTxId: historical.id },
-      data: { matchedTxId: current.id },
+      where: { matchedTxId: current.id },
+      data: { matchedTxId: historical.id },
     });
     await tx.transaction.updateMany({
-      where: { refundOfTransactionId: historical.id, id: { not: current.id } },
-      data: { refundOfTransactionId: current.id },
+      where: { refundOfTransactionId: current.id, id: { not: historical.id } },
+      data: { refundOfTransactionId: historical.id },
     });
+    const refundOfTransactionId =
+      historical.refundOfTransactionId &&
+      historical.refundOfTransactionId !== current.id &&
+      historical.refundOfTransactionId !== historical.id
+        ? historical.refundOfTransactionId
+        : current.refundOfTransactionId &&
+            current.refundOfTransactionId !== current.id &&
+            current.refundOfTransactionId !== historical.id
+          ? current.refundOfTransactionId
+          : null;
+    const keepCurrentBudgetImpact =
+      historical.budgetImpactSource !== "user" && current.budgetImpactSource === "user";
+
+    // The newly imported row owns the current Plaid transaction ID. Delete it
+    // first to release the workspace-scoped unique key, then attach that Plaid
+    // identity to the preserved historical row.
+    await tx.transaction.delete({ where: { id: current.id } });
     await tx.transaction.update({
-      where: { id: current.id },
+      where: { id: historical.id },
       data: {
-        ...(current.note === null && historical.note !== null ? { note: historical.note } : {}),
-        ...(current.budgetImpactSource !== "user" && historical.budgetImpactSource === "user"
+        accountId: current.accountId,
+        plaidItemId: current.plaidItemId,
+        plaidTransactionId: current.plaidTransactionId,
+        plaidPendingTransactionId: current.plaidPendingTransactionId,
+        amount: current.amount,
+        merchantRaw: current.merchantRaw,
+        merchantNormalized: current.merchantNormalized,
+        occurredAt: current.occurredAt,
+        postedAt: current.postedAt,
+        pending: current.pending,
+        rawData: current.rawData as Prisma.InputJsonValue,
+        removedAt: null,
+        note: historical.note ?? current.note,
+        ...(keepCurrentBudgetImpact
           ? {
-              budgetImpact: historical.budgetImpact,
-              budgetImpactSource: historical.budgetImpactSource,
+              budgetImpact: current.budgetImpact,
+              budgetImpactSource: current.budgetImpactSource,
             }
           : {}),
-        ...(current.refundOfTransactionId === null &&
-        historical.refundOfTransactionId !== null &&
-        historical.refundOfTransactionId !== current.id
-          ? { refundOfTransactionId: historical.refundOfTransactionId }
-          : {}),
+        refundOfTransactionId,
         needsReclassification:
           current.needsReclassification || historical.needsReclassification,
       },
-    });
-    await tx.transaction.update({
-      where: { id: historical.id },
-      data: { removedAt: new Date() },
     });
     return true;
   });
@@ -400,14 +421,14 @@ export async function dedupeReconnectTransactionsByEmail(
   const dateWindowDays = options.dateWindowDays ?? 0;
   const found = await findReconnectDuplicateCandidatesByEmail(email, { dateWindowDays });
   if (!options.apply) {
-    return { ...found, softRemoved: 0, skipped: 0 };
+    return { ...found, hardDeletedCurrent: 0, skipped: 0 };
   }
 
-  let softRemoved = 0;
+  let hardDeletedCurrent = 0;
   let skipped = 0;
   for (const candidate of found.candidates) {
-    if (await reconcileCandidate(candidate, dateWindowDays)) softRemoved++;
+    if (await hardDeleteCurrentCandidate(candidate, dateWindowDays)) hardDeletedCurrent++;
     else skipped++;
   }
-  return { ...found, softRemoved, skipped };
+  return { ...found, hardDeletedCurrent, skipped };
 }
