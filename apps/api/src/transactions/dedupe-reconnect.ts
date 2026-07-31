@@ -1,0 +1,400 @@
+import type {
+  CategorizationSource,
+  Prisma,
+  PrismaClient,
+} from "@prisma/client";
+
+import { normalizeMerchant } from "../categorize/normalize.js";
+import { prisma } from "../db.js";
+import { withWorkspaceLock } from "../locks/workspace.js";
+
+const DAY_MS = 86_400_000;
+
+type AccountRow = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  mask: string | null;
+  type: string;
+  subtype: string | null;
+  currency: string;
+  plaidItemId: string | null;
+  plaidInstitutionId: string | null;
+  archivedAt: Date | null;
+  createdAt: Date;
+  plaidItem: { institutionId: string; status: string } | null;
+};
+
+type TransactionRow = {
+  id: string;
+  workspaceId: string;
+  accountId: string;
+  plaidItemId: string | null;
+  plaidTransactionId: string | null;
+  amount: Prisma.Decimal;
+  merchantRaw: string;
+  merchantNormalized: string | null;
+  occurredAt: Date;
+  postedAt: Date | null;
+  createdAt: Date;
+};
+
+export type ReconnectDuplicateCandidate = {
+  workspaceId: string;
+  historicalTransactionId: string;
+  currentTransactionId: string;
+  historicalPlaidTransactionId: string;
+  currentPlaidTransactionId: string;
+  historicalAccountId: string;
+  currentAccountId: string;
+  historicalAccountName: string;
+  currentAccountName: string;
+  amount: string;
+  merchant: string;
+  historicalOccurredAt: Date;
+  currentOccurredAt: Date;
+  matchBasis: "occurred_date" | "posted_date";
+  dateDeltaDays: number;
+  subtypeChanged: boolean;
+};
+
+export type ReconnectDedupeResult = {
+  email: string;
+  candidates: ReconnectDuplicateCandidate[];
+  softRemoved: number;
+  skipped: number;
+};
+
+function institutionId(account: AccountRow): string | null {
+  return account.plaidInstitutionId ?? account.plaidItem?.institutionId ?? null;
+}
+
+function sameReconnectedAccount(historical: AccountRow, current: AccountRow): boolean {
+  const historicalInstitution = institutionId(historical);
+  const currentInstitution = institutionId(current);
+  return (
+    historical.archivedAt !== null &&
+    current.archivedAt === null &&
+    current.plaidItemId !== null &&
+    current.plaidItem?.status !== "disconnected" &&
+    historicalInstitution !== null &&
+    historicalInstitution === currentInstitution &&
+    historical.mask !== null &&
+    historical.mask === current.mask &&
+    historical.type === current.type &&
+    historical.currency === current.currency &&
+    current.createdAt >= historical.archivedAt
+  );
+}
+
+function merchantKey(row: Pick<TransactionRow, "merchantRaw" | "merchantNormalized">): string {
+  const raw = row.merchantRaw.trim();
+  if (!raw || raw.toLowerCase() === "unknown") return "";
+  return row.merchantNormalized?.trim() || normalizeMerchant(raw);
+}
+
+function utcDayNumber(value: Date): number {
+  return Math.floor(
+    Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()) / DAY_MS,
+  );
+}
+
+function transactionDateMatch(
+  historical: TransactionRow,
+  current: TransactionRow,
+  dateWindowDays: number,
+): Pick<ReconnectDuplicateCandidate, "matchBasis" | "dateDeltaDays"> | null {
+  const options: Array<Pick<ReconnectDuplicateCandidate, "matchBasis" | "dateDeltaDays">> = [
+    {
+      matchBasis: "occurred_date",
+      dateDeltaDays: Math.abs(
+        utcDayNumber(historical.occurredAt) - utcDayNumber(current.occurredAt),
+      ),
+    },
+  ];
+  if (historical.postedAt && current.postedAt) {
+    options.push({
+      matchBasis: "posted_date",
+      dateDeltaDays: Math.abs(
+        utcDayNumber(historical.postedAt) - utcDayNumber(current.postedAt),
+      ),
+    });
+  }
+  const best = options.sort((a, b) => a.dateDeltaDays - b.dateDeltaDays)[0]!;
+  return best.dateDeltaDays <= dateWindowDays ? best : null;
+}
+
+function duplicateMatch(
+  historical: TransactionRow,
+  current: TransactionRow,
+  dateWindowDays: number,
+): Pick<ReconnectDuplicateCandidate, "matchBasis" | "dateDeltaDays"> | null {
+  if (
+    historical.id === current.id ||
+    historical.plaidTransactionId === null ||
+    current.plaidTransactionId === null ||
+    historical.plaidTransactionId === current.plaidTransactionId ||
+    historical.amount.comparedTo(current.amount) !== 0 ||
+    historical.createdAt > current.createdAt
+  ) {
+    return null;
+  }
+  const historicalMerchant = merchantKey(historical);
+  if (!historicalMerchant || historicalMerchant !== merchantKey(current)) return null;
+  return transactionDateMatch(historical, current, dateWindowDays);
+}
+
+export async function findReconnectDuplicateCandidatesByEmail(
+  email: string,
+  options: { dateWindowDays?: number } = {},
+  client: PrismaClient = prisma,
+): Promise<{ email: string; candidates: ReconnectDuplicateCandidate[] }> {
+  const normalizedEmail = email.trim().toLowerCase();
+  const dateWindowDays = options.dateWindowDays ?? 0;
+  if (!normalizedEmail.includes("@")) throw new Error("A valid --email is required");
+  if (!Number.isInteger(dateWindowDays) || dateWindowDays < 0 || dateWindowDays > 3) {
+    throw new Error("--date-window-days must be an integer from 0 to 3");
+  }
+
+  const user = await client.user.findUnique({
+    where: { email: normalizedEmail },
+    select: {
+      email: true,
+      memberships: { select: { workspaceId: true } },
+    },
+  });
+  if (!user) throw new Error(`User not found: ${normalizedEmail}`);
+  const workspaceIds = [...new Set(user.memberships.map((membership) => membership.workspaceId))];
+  if (workspaceIds.length === 0) return { email: user.email, candidates: [] };
+
+  const accounts = await client.bankAccount.findMany({
+    where: {
+      workspaceId: { in: workspaceIds },
+      plaidAccountId: { not: null },
+    },
+    select: {
+      id: true,
+      workspaceId: true,
+      name: true,
+      mask: true,
+      type: true,
+      subtype: true,
+      currency: true,
+      plaidItemId: true,
+      plaidInstitutionId: true,
+      archivedAt: true,
+      createdAt: true,
+      plaidItem: { select: { institutionId: true, status: true } },
+    },
+    orderBy: [{ workspaceId: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+  });
+  const historicalAccounts = accounts.filter((account) => account.archivedAt !== null);
+  const currentAccounts = accounts.filter((account) => account.archivedAt === null);
+  const accountIds = accounts.map((account) => account.id);
+  if (accountIds.length === 0) return { email: user.email, candidates: [] };
+
+  const transactions = await client.transaction.findMany({
+    where: {
+      workspaceId: { in: workspaceIds },
+      accountId: { in: accountIds },
+      source: "plaid",
+      plaidTransactionId: { not: null },
+      removedAt: null,
+    },
+    select: {
+      id: true,
+      workspaceId: true,
+      accountId: true,
+      plaidItemId: true,
+      plaidTransactionId: true,
+      amount: true,
+      merchantRaw: true,
+      merchantNormalized: true,
+      occurredAt: true,
+      postedAt: true,
+      createdAt: true,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  const transactionsByAccount = new Map<string, TransactionRow[]>();
+  for (const transaction of transactions) {
+    const rows = transactionsByAccount.get(transaction.accountId) ?? [];
+    rows.push(transaction);
+    transactionsByAccount.set(transaction.accountId, rows);
+  }
+
+  type Edge = {
+    historicalAccount: AccountRow;
+    currentAccount: AccountRow;
+    historical: TransactionRow;
+    current: TransactionRow;
+    date: NonNullable<ReturnType<typeof duplicateMatch>>;
+  };
+  const edges: Edge[] = [];
+  for (const currentAccount of currentAccounts) {
+    for (const historicalAccount of historicalAccounts) {
+      if (
+        historicalAccount.workspaceId !== currentAccount.workspaceId ||
+        !sameReconnectedAccount(historicalAccount, currentAccount)
+      ) {
+        continue;
+      }
+      for (const current of transactionsByAccount.get(currentAccount.id) ?? []) {
+        if (current.createdAt < historicalAccount.archivedAt!) continue;
+        for (const historical of transactionsByAccount.get(historicalAccount.id) ?? []) {
+          const date = duplicateMatch(historical, current, dateWindowDays);
+          if (date) {
+            edges.push({ historicalAccount, currentAccount, historical, current, date });
+          }
+        }
+      }
+    }
+  }
+
+  edges.sort((a, b) =>
+    a.date.dateDeltaDays - b.date.dateDeltaDays ||
+    a.current.createdAt.getTime() - b.current.createdAt.getTime() ||
+    a.historical.createdAt.getTime() - b.historical.createdAt.getTime() ||
+    a.current.id.localeCompare(b.current.id) ||
+    a.historical.id.localeCompare(b.historical.id),
+  );
+  const usedHistorical = new Set<string>();
+  const usedCurrent = new Set<string>();
+  const candidates: ReconnectDuplicateCandidate[] = [];
+  for (const edge of edges) {
+    if (usedHistorical.has(edge.historical.id) || usedCurrent.has(edge.current.id)) continue;
+    usedHistorical.add(edge.historical.id);
+    usedCurrent.add(edge.current.id);
+    candidates.push({
+      workspaceId: edge.current.workspaceId,
+      historicalTransactionId: edge.historical.id,
+      currentTransactionId: edge.current.id,
+      historicalPlaidTransactionId: edge.historical.plaidTransactionId!,
+      currentPlaidTransactionId: edge.current.plaidTransactionId!,
+      historicalAccountId: edge.historicalAccount.id,
+      currentAccountId: edge.currentAccount.id,
+      historicalAccountName: edge.historicalAccount.name,
+      currentAccountName: edge.currentAccount.name,
+      amount: edge.current.amount.toString(),
+      merchant: edge.current.merchantNormalized?.trim() || edge.current.merchantRaw,
+      historicalOccurredAt: edge.historical.occurredAt,
+      currentOccurredAt: edge.current.occurredAt,
+      matchBasis: edge.date.matchBasis,
+      dateDeltaDays: edge.date.dateDeltaDays,
+      subtypeChanged: edge.historicalAccount.subtype !== edge.currentAccount.subtype,
+    });
+  }
+  return { email: user.email, candidates };
+}
+
+function allocationRank(
+  allocations: Array<{ source: CategorizationSource | null }>,
+): number {
+  const sourceRank: Record<CategorizationSource, number> = {
+    manual: 4,
+    mapping: 3,
+    history: 2,
+    ai: 1,
+  };
+  const rank = allocations.reduce(
+    (best, allocation) => Math.max(best, allocation.source ? sourceRank[allocation.source] : 0),
+    0,
+  );
+  return allocations.length > 1 ? rank + 10 : rank;
+}
+
+async function reconcileCandidate(
+  candidate: ReconnectDuplicateCandidate,
+  dateWindowDays: number,
+): Promise<boolean> {
+  return await withWorkspaceLock(candidate.workspaceId, async (tx) => {
+    const [historical, current] = await Promise.all([
+      tx.transaction.findUnique({
+        where: { id: candidate.historicalTransactionId },
+        include: { account: { include: { plaidItem: true } }, allocations: true },
+      }),
+      tx.transaction.findUnique({
+        where: { id: candidate.currentTransactionId },
+        include: { account: { include: { plaidItem: true } }, allocations: true },
+      }),
+    ]);
+    if (
+      !historical ||
+      !current ||
+      historical.workspaceId !== candidate.workspaceId ||
+      current.workspaceId !== candidate.workspaceId ||
+      historical.removedAt !== null ||
+      current.removedAt !== null ||
+      !sameReconnectedAccount(historical.account, current.account) ||
+      !duplicateMatch(historical, current, dateWindowDays)
+    ) {
+      return false;
+    }
+
+    if (allocationRank(historical.allocations) > allocationRank(current.allocations)) {
+      await tx.transactionAllocation.deleteMany({ where: { transactionId: current.id } });
+      await tx.transactionAllocation.createMany({
+        data: historical.allocations.map((allocation) => ({
+          transactionId: current.id,
+          categoryId: allocation.categoryId,
+          amount: allocation.amount,
+          source: allocation.source,
+          needsConfirmation: allocation.needsConfirmation,
+          dismissedUntil: allocation.dismissedUntil,
+        })),
+      });
+    }
+
+    await tx.scheduledSpend.updateMany({
+      where: { matchedTxId: historical.id },
+      data: { matchedTxId: current.id },
+    });
+    await tx.transaction.updateMany({
+      where: { refundOfTransactionId: historical.id, id: { not: current.id } },
+      data: { refundOfTransactionId: current.id },
+    });
+    await tx.transaction.update({
+      where: { id: current.id },
+      data: {
+        ...(current.note === null && historical.note !== null ? { note: historical.note } : {}),
+        ...(current.budgetImpactSource !== "user" && historical.budgetImpactSource === "user"
+          ? {
+              budgetImpact: historical.budgetImpact,
+              budgetImpactSource: historical.budgetImpactSource,
+            }
+          : {}),
+        ...(current.refundOfTransactionId === null &&
+        historical.refundOfTransactionId !== null &&
+        historical.refundOfTransactionId !== current.id
+          ? { refundOfTransactionId: historical.refundOfTransactionId }
+          : {}),
+        needsReclassification:
+          current.needsReclassification || historical.needsReclassification,
+      },
+    });
+    await tx.transaction.update({
+      where: { id: historical.id },
+      data: { removedAt: new Date() },
+    });
+    return true;
+  });
+}
+
+export async function dedupeReconnectTransactionsByEmail(
+  email: string,
+  options: { apply?: boolean; dateWindowDays?: number } = {},
+): Promise<ReconnectDedupeResult> {
+  const dateWindowDays = options.dateWindowDays ?? 0;
+  const found = await findReconnectDuplicateCandidatesByEmail(email, { dateWindowDays });
+  if (!options.apply) {
+    return { ...found, softRemoved: 0, skipped: 0 };
+  }
+
+  let softRemoved = 0;
+  let skipped = 0;
+  for (const candidate of found.candidates) {
+    if (await reconcileCandidate(candidate, dateWindowDays)) softRemoved++;
+    else skipped++;
+  }
+  return { ...found, softRemoved, skipped };
+}

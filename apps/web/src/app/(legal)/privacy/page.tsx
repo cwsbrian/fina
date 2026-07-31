@@ -240,8 +240,8 @@ export default function Privacy() {
         </li>
         <li>
           <strong>Marketing email</strong> — Fina sends only transactional
-          email (verification, password reset, important account notices)
-          today. We do not send marketing email.
+          email (verification, account onboarding, password reset, important
+          account notices) today. We do not send marketing email.
         </li>
         <li>
           <strong>California residents (CCPA)</strong> — you have the right

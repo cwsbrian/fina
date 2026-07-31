@@ -219,6 +219,130 @@ describe("syncTransactions", () => {
     await app.close();
   });
 
+  it("reconnect dedupe tolerates Plaid subtype changes for the same masked account", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "reconnect-subtype@x.com", name: "R" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const oldItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "old_acct_subtype",
+      subtype: "checking",
+      archivedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    const oldTx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: oldItem.accountId,
+        plaidItemId: oldItem.plaidItemId,
+        plaidTransactionId: "old_tx_subtype",
+        amount: "12.34",
+        merchantRaw: "Coffee Shop",
+        occurredAt: new Date("2026-05-10T12:00:00.000Z"),
+        postedAt: new Date("2026-05-10T08:30:00.000Z"),
+        pending: false,
+        source: "plaid",
+        rawData: {},
+      },
+    });
+    await prisma.plaidItem.delete({ where: { id: oldItem.plaidItemId } });
+    const newItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "new_acct_subtype",
+      subtype: "cash management",
+    });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          tx({
+            transaction_id: "new_tx_subtype",
+            account_id: "new_acct_subtype",
+            amount: 12.34,
+            date: "2026-05-10",
+            merchant: "Coffee Shop",
+          }),
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: "reconnected-subtype",
+        has_more: false,
+      },
+    });
+
+    const result = await syncTransactions(env, wsId, newItem.plaidItemId);
+
+    expect(result).toMatchObject({ added: 1, newTxIds: [] });
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(1);
+    await expect(
+      prisma.transaction.findUniqueOrThrow({ where: { id: oldTx.id } }),
+    ).resolves.toMatchObject({
+      plaidTransactionId: "new_tx_subtype",
+      accountId: newItem.accountId,
+    });
+    await app.close();
+  });
+
+  it("reconnect dedupe falls back to the stable posted date when authorized date changes", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "reconnect-posted-date@x.com", name: "R" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const oldItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "old_acct_posted",
+      archivedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    const oldTx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: oldItem.accountId,
+        plaidItemId: oldItem.plaidItemId,
+        plaidTransactionId: "old_tx_posted",
+        amount: "12.34",
+        merchantRaw: "Coffee Shop",
+        occurredAt: new Date("2026-05-08T12:00:00.000Z"),
+        postedAt: new Date("2026-05-10T08:30:00.000Z"),
+        pending: false,
+        source: "plaid",
+        rawData: {},
+      },
+    });
+    await prisma.plaidItem.delete({ where: { id: oldItem.plaidItemId } });
+    const newItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "new_acct_posted",
+    });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          tx({
+            transaction_id: "new_tx_posted",
+            account_id: "new_acct_posted",
+            amount: 12.34,
+            date: "2026-05-10",
+            authorized_date: "2026-05-09",
+            merchant: "Coffee Shop",
+          }),
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: "reconnected-posted",
+        has_more: false,
+      },
+    });
+
+    const result = await syncTransactions(env, wsId, newItem.plaidItemId);
+
+    expect(result).toMatchObject({ added: 1, newTxIds: [] });
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(1);
+    await expect(
+      prisma.transaction.findUniqueOrThrow({ where: { id: oldTx.id } }),
+    ).resolves.toMatchObject({
+      plaidTransactionId: "new_tx_posted",
+      occurredAt: new Date("2026-05-09T12:00:00.000Z"),
+      postedAt: new Date("2026-05-10T12:00:00.000Z"),
+    });
+    await app.close();
+  });
+
   it("reconnect dedupe consumes repeated identical historical transactions without duplicates", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "reconnect-multiset@x.com", name: "R" });

@@ -253,7 +253,6 @@ async function disconnectedAccountMatches(
       archivedAt: { not: null },
       mask: currentAccount.mask,
       type: currentAccount.type,
-      subtype: currentAccount.subtype,
       currency: currentAccount.currency,
       OR: [
         { plaidInstitutionId: institutionId },
@@ -292,6 +291,15 @@ function candidateReconnectMerchantNormalized(candidate: {
   if (!raw || raw.toLowerCase() === "unknown") return null;
   const normalized = candidate.merchantNormalized?.trim();
   return normalized ? normalized : normalizeMerchant(candidate.merchantRaw);
+}
+
+function utcDayRange(value: Date): { gte: Date; lt: Date } {
+  const gte = new Date(Date.UTC(
+    value.getUTCFullYear(),
+    value.getUTCMonth(),
+    value.getUTCDate(),
+  ));
+  return { gte, lt: new Date(gte.getTime() + 86_400_000) };
 }
 
 export async function upsertAdded(
@@ -420,11 +428,24 @@ export async function upsertAdded(
           accountId: { in: oldAccountIds },
           source: "plaid",
           plaidTransactionId: { not: null },
-          OR: [
-            { plaidItemId: null },
-            { plaidItem: { is: { status: "disconnected" } } },
+          AND: [
+            {
+              OR: [
+                { plaidItemId: null },
+                { plaidItem: { is: { status: "disconnected" } } },
+              ],
+            },
+            {
+              // Plaid can change authorized_date when an Item is re-created
+              // even though the posted transaction is unchanged. Match on
+              // either stable date signal; amount + merchant + account
+              // fingerprint still have to match below.
+              OR: [
+                { occurredAt: utcDayRange(occurredAt) },
+                ...(postedAt ? [{ postedAt: utcDayRange(postedAt) }] : []),
+              ],
+            },
           ],
-          occurredAt,
           amount: newAmount,
         },
         select: {

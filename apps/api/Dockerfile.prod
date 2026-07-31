@@ -98,6 +98,16 @@ RUN printf '%s\n' \
   && chmod +x /usr/local/bin/fina-admin-grant-pro-trial \
   && printf '%s\n' \
   '#!/bin/sh' \
+  'exec pnpm exec tsx /app/src/scripts/send-welcome-email.ts "$@"' \
+  > /usr/local/bin/fina-admin-send-welcome-email \
+  && chmod +x /usr/local/bin/fina-admin-send-welcome-email \
+  && printf '%s\n' \
+  '#!/bin/sh' \
+  'exec pnpm exec tsx /app/src/scripts/dedupe-reconnect-transactions.ts "$@"' \
+  > /usr/local/bin/fina-admin-dedupe-reconnect-transactions \
+  && chmod +x /usr/local/bin/fina-admin-dedupe-reconnect-transactions \
+  && printf '%s\n' \
+  '#!/bin/sh' \
   'exec pnpm exec tsx /app/src/scripts/reset-iap-test-user.ts "$@"' \
   > /usr/local/bin/fina-admin-reset-iap-test-user \
   && chmod +x /usr/local/bin/fina-admin-reset-iap-test-user

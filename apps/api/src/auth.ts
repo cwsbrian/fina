@@ -6,6 +6,8 @@ import { expo } from "@better-auth/expo";
 import { prisma } from "./db.js";
 import type { Env } from "./env.js";
 import { sendEmail } from "./email/send.js";
+import { sendWelcomeEmail } from "./email/welcome.js";
+import { logError } from "./logger.js";
 import { startTrialAndBootstrapWorkspace } from "./workspaces/bootstrap.js";
 
 export type FinaAuth = ReturnType<typeof createAuth>;
@@ -16,6 +18,24 @@ export function parseDevOrigins(value: string | undefined): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+async function deliverWelcomeEmail(
+  env: Env,
+  user: { id: string; email: string; name?: string | null },
+): Promise<void> {
+  try {
+    await sendWelcomeEmail({
+      apiKey: env.RESEND_API_KEY,
+      from: env.EMAIL_FROM,
+      email: user.email,
+      ...(user.name !== undefined ? { name: user.name } : {}),
+    });
+  } catch (err) {
+    // A temporary email-provider failure must never leave a verified user
+    // unable to finish signup. The error remains visible to operations.
+    logError({ err, userId: user.id }, "welcome email send failed");
+  }
 }
 
 function parseCsv(value: string | undefined): string[] {
@@ -79,6 +99,11 @@ export function createAuth(env: Env) {
       // with the password they just typed. Default Better Auth would leave the
       // user verified-but-signed-out, and our /home would 401.
       autoSignInAfterVerification: true,
+      // Password signups start unverified, so welcome them only after the OTP
+      // succeeds instead of landing the welcome message beside the OTP email.
+      afterEmailVerification: async (user) => {
+        await deliverWelcomeEmail(env, user);
+      },
     },
     emailAndPassword: {
       enabled: true,
@@ -137,6 +162,9 @@ export function createAuth(env: Env) {
         create: {
           after: async (user) => {
             await startTrialAndBootstrapWorkspace({ userId: user.id });
+            // Google, Apple, and magic-link users are already verified when
+            // Better Auth creates them and never enter afterEmailVerification.
+            if (user.emailVerified) await deliverWelcomeEmail(env, user);
           },
         },
       },
