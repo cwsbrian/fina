@@ -41,7 +41,7 @@ import { categoryMeta } from "../../src/categories/meta";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 
 const HEADER_HEIGHT = 84;
-const BANK_RECONNECT_TOOLBAR_HEIGHT = 60;
+const BANK_GRACE_TOOLBAR_HEIGHT = 60;
 const CURRENCY = "CAD";
 
 type SpendByCategory = { categoryId: string; categoryName?: string; spent: number };
@@ -151,7 +151,6 @@ export default function Home() {
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [goals, setGoals] = useState<GoalSummary[]>([]);
   const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
-  const [bankReconnectRequired, setBankReconnectRequired] = useState(false);
   const [unreadFina, setUnreadFina] = useState(0);
   const [latestUnreadThreadId, setLatestUnreadThreadId] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState(0);
@@ -224,17 +223,14 @@ export default function Home() {
           }),
         apiFetch<{
           plaidItems: PlaidItemDTO[];
-          reconnectRequired: boolean;
         }>(`/workspaces/${wsId}/plaid-items`)
           .then((r) => {
             if (runId !== loadRunId.current) return;
             setPlaidItems(r.plaidItems);
-            setBankReconnectRequired(r.reconnectRequired);
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
             setPlaidItems([]);
-            setBankReconnectRequired(false);
           }),
         apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
           .then((r) => {
@@ -367,12 +363,11 @@ export default function Home() {
     .slice(0, 4);
 
   // ── Action Items derive ────────────────────────────────────
-  const bankReconnects = (plaidItems ?? []).filter(
-    (p) =>
-      p.status === "error" ||
-      p.errorCode === "ITEM_LOGIN_REQUIRED" ||
-      p.errorCode === "PENDING_EXPIRATION",
-  );
+  const bankGraceItems = (plaidItems ?? []).filter((item) => {
+    if (!item.billingGraceEndsAt) return false;
+    const deadline = new Date(item.billingGraceEndsAt).getTime();
+    return Number.isFinite(deadline) && deadline > Date.now();
+  });
   const trialUrgent = !!(me?.trial?.active && days !== null && days <= 5);
   const hasBudget = budgetCurrent?.plan !== null && budgetCurrent?.plan !== undefined;
   // Effective tier: trial active grants Pro features regardless of base tier.
@@ -394,20 +389,16 @@ export default function Home() {
     href: string;
   };
   const actionItems: ActionItem[] = [];
-  const bankToolbarVisible =
-    bankReconnectRequired || bankReconnects.length > 0;
-  const bankToolbarTitle =
-    bankReconnects.length === 1
-      ? `Reconnect ${bankReconnects[0]!.institutionName}`
-      : bankReconnects.length > 1
-        ? `Reconnect ${bankReconnects.length} banks`
-        : "Reconnect your bank";
-  const bankToolbarSubtitle =
-    bankReconnects.length > 0
-      ? "Bank imports are paused."
-      : "Automatic imports need your attention.";
+  const bankGraceDeadline = bankGraceItems
+    .map((item) => item.billingGraceEndsAt!)
+    .sort()[0] ?? null;
+  const bankToolbarVisible = bankGraceItems.length > 0 && bankGraceDeadline !== null;
+  const bankToolbarTitle = "Bank connection grace period";
+  const bankToolbarSubtitle = bankGraceDeadline
+    ? `Ends ${formatMonthDay(new Date(bankGraceDeadline))} · upgrade to stay linked.`
+    : "";
   const bankToolbarHeight = bankToolbarVisible
-    ? BANK_RECONNECT_TOOLBAR_HEIGHT
+    ? BANK_GRACE_TOOLBAR_HEIGHT
     : 0;
 
   if (unreadFina > 0) {
@@ -852,14 +843,14 @@ export default function Home() {
           accessibilityLabel={`${bankToolbarTitle}. ${bankToolbarSubtitle}`}
           style={({ pressed }) => [
             styles.bankToolbar,
-            { top: insets.top, height: BANK_RECONNECT_TOOLBAR_HEIGHT },
+            { top: insets.top, height: BANK_GRACE_TOOLBAR_HEIGHT },
             pressed && styles.bankToolbarPressed,
           ]}
           onPress={() => router.push("/banks" as never)}
         >
           <View style={styles.bankToolbarIcon}>
             <Ionicons
-              name="notifications-outline"
+              name="time-outline"
               size={27}
               color="#f47b61"
             />
