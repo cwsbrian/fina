@@ -235,6 +235,7 @@ async function disconnectedAccountMatches(
   workspaceId: string,
   currentAccount: {
     id: string;
+    name: string;
     mask: string | null;
     type: string;
     subtype: string | null;
@@ -263,6 +264,14 @@ async function disconnectedAccountMatches(
               status: "disconnected",
             },
           },
+        },
+        // Legacy free-plan disconnects could remove the Plaid Item before
+        // plaidInstitutionId was preserved. Exact name + subtype supplement
+        // mask/type/currency when that institution fingerprint is missing.
+        {
+          plaidInstitutionId: null,
+          name: { equals: currentAccount.name, mode: "insensitive" },
+          subtype: currentAccount.subtype,
         },
       ],
     },
@@ -406,6 +415,7 @@ export async function upsertAdded(
     where: { id: accountId },
     select: {
       id: true,
+      name: true,
       mask: true,
       type: true,
       subtype: true,

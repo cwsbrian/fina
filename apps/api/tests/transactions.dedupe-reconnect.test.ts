@@ -244,4 +244,95 @@ describe("reconnect duplicate transaction cleanup", () => {
     const found = await findReconnectDuplicateCandidatesByEmail(email);
     expect(found.candidates).toEqual([]);
   });
+
+  it("matches legacy archived accounts whose institution fingerprint is missing", async () => {
+    const email = "legacy-reconnect-cleanup@example.com";
+    const user = await prisma.user.create({
+      data: { id: randomUUID(), email, name: "Legacy reconnect" },
+    });
+    const workspace = await prisma.workspace.create({
+      data: {
+        name: "Legacy reconnect workspace",
+        memberships: { create: { userId: user.id, role: "owner" } },
+      },
+    });
+    const archivedAt = new Date("2026-07-29T00:00:00.000Z");
+    const historicalAccount = await prisma.bankAccount.create({
+      data: {
+        workspaceId: workspace.id,
+        plaidInstitutionId: null,
+        plaidAccountId: "legacy_old_account",
+        name: "TD UNLIMITED CHEQUING ACCOUNT",
+        mask: "1127",
+        type: "depository",
+        subtype: "checking",
+        currency: "CAD",
+        archivedAt,
+        createdAt: new Date("2026-06-27T00:00:00.000Z"),
+      },
+    });
+    const currentItem = await prisma.plaidItem.create({
+      data: {
+        workspaceId: workspace.id,
+        itemId: "legacy_new_item",
+        institutionId: "ins_42",
+        institutionName: "TD",
+        accessTokenCiphertext: Buffer.from("unused"),
+        accessTokenIv: Buffer.from("unused"),
+      },
+    });
+    const currentAccount = await prisma.bankAccount.create({
+      data: {
+        workspaceId: workspace.id,
+        plaidItemId: currentItem.id,
+        plaidInstitutionId: "ins_42",
+        plaidAccountId: "legacy_new_account",
+        name: "TD UNLIMITED CHEQUING ACCOUNT",
+        mask: "1127",
+        type: "depository",
+        subtype: "checking",
+        currency: "CAD",
+        createdAt: new Date("2026-07-31T00:00:00.000Z"),
+      },
+    });
+    await prisma.transaction.createMany({
+      data: [
+        {
+          id: "legacy_old_transaction",
+          workspaceId: workspace.id,
+          accountId: historicalAccount.id,
+          plaidTransactionId: "old_plaid_transaction_id",
+          amount: "49.99",
+          merchantRaw: "Fortisbc Energy Bpy",
+          occurredAt: new Date("2026-05-14T12:00:00.000Z"),
+          postedAt: new Date("2026-05-14T12:00:00.000Z"),
+          source: "plaid",
+          rawData: {},
+          createdAt: new Date("2026-05-15T00:00:00.000Z"),
+        },
+        {
+          id: "legacy_new_transaction",
+          workspaceId: workspace.id,
+          accountId: currentAccount.id,
+          plaidItemId: currentItem.id,
+          plaidTransactionId: "new_plaid_transaction_id",
+          amount: "49.99",
+          merchantRaw: "Fortisbc Energy Bpy",
+          occurredAt: new Date("2026-05-14T12:00:00.000Z"),
+          postedAt: new Date("2026-05-14T12:00:00.000Z"),
+          source: "plaid",
+          rawData: {},
+          createdAt: new Date("2026-07-31T01:00:00.000Z"),
+        },
+      ],
+    });
+
+    const found = await findReconnectDuplicateCandidatesByEmail(email);
+
+    expect(found.candidates).toHaveLength(1);
+    expect(found.candidates[0]).toMatchObject({
+      historicalTransactionId: "legacy_old_transaction",
+      currentTransactionId: "legacy_new_transaction",
+    });
+  });
 });

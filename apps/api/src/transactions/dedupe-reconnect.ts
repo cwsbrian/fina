@@ -69,16 +69,29 @@ function institutionId(account: AccountRow): string | null {
   return account.plaidInstitutionId ?? account.plaidItem?.institutionId ?? null;
 }
 
+function normalizedAccountName(value: string): string {
+  return value.trim().toLocaleLowerCase("en-CA").replace(/\s+/g, " ");
+}
+
 function sameReconnectedAccount(historical: AccountRow, current: AccountRow): boolean {
   const historicalInstitution = institutionId(historical);
   const currentInstitution = institutionId(current);
+  const institutionMatches =
+    historicalInstitution !== null && historicalInstitution === currentInstitution;
+  // Some accounts were archived before plaidInstitutionId was backfilled. In
+  // that legacy case, use the remaining exact Plaid account fingerprint. Keep
+  // subtype in this fallback because the institution safety signal is absent.
+  const legacyFingerprintMatches =
+    historicalInstitution === null &&
+    currentInstitution !== null &&
+    normalizedAccountName(historical.name) === normalizedAccountName(current.name) &&
+    historical.subtype === current.subtype;
   return (
     historical.archivedAt !== null &&
     current.archivedAt === null &&
     current.plaidItemId !== null &&
     current.plaidItem?.status !== "disconnected" &&
-    historicalInstitution !== null &&
-    historicalInstitution === currentInstitution &&
+    (institutionMatches || legacyFingerprintMatches) &&
     historical.mask !== null &&
     historical.mask === current.mask &&
     historical.type === current.type &&

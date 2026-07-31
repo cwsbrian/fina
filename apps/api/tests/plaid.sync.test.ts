@@ -219,6 +219,72 @@ describe("syncTransactions", () => {
     await app.close();
   });
 
++  it("reconnect dedupe handles legacy accounts with no preserved institution id", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, {
+      email: "reconnect-legacy-institution@x.com",
+      name: "R",
+    });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const oldItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "old_acct_legacy_institution",
+      archivedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    const oldTx = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId,
+        accountId: oldItem.accountId,
+        plaidItemId: oldItem.plaidItemId,
+        plaidTransactionId: "old_tx_legacy_institution",
+        amount: "49.99",
+        merchantRaw: "Fortisbc Energy Bpy",
+        occurredAt: new Date("2026-05-14T12:00:00.000Z"),
+        source: "plaid",
+        rawData: {},
+      },
+    });
+    await prisma.bankAccount.update({
+      where: { id: oldItem.accountId },
+      data: { plaidInstitutionId: null },
+    });
+    await prisma.plaidItem.delete({ where: { id: oldItem.plaidItemId } });
+    const newItem = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "new_acct_legacy_institution",
+    });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          tx({
+            transaction_id: "new_tx_legacy_institution",
+            account_id: "new_acct_legacy_institution",
+            amount: 49.99,
+            date: "2026-05-14",
+            merchant: "Fortisbc Energy Bpy",
+          }),
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: "reconnected-legacy-institution",
+        has_more: false,
+      },
+    });
+
+    const result = await syncTransactions(env, wsId, newItem.plaidItemId);
+
+    expect(result).toMatchObject({ added: 1, newTxIds: [] });
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(1);
+    await expect(
+      prisma.transaction.findUniqueOrThrow({ where: { id: oldTx.id } }),
+    ).resolves.toMatchObject({
+      plaidTransactionId: "new_tx_legacy_institution",
+      accountId: newItem.accountId,
+    });
+    await app.close();
+  });
+
+
   it("reconnect dedupe tolerates Plaid subtype changes for the same masked account", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "reconnect-subtype@x.com", name: "R" });
