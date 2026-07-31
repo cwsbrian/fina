@@ -10,6 +10,7 @@ vi.mock("../src/cron/jobs/daily-refresh.js", () => ({ runDailyRefresh: vi.fn() }
 vi.mock("../src/cron/jobs/retry-unprocessed.js", () => ({ runRetryUnprocessed: vi.fn() }));
 vi.mock("../src/cron/jobs/cleanup-events.js", () => ({ runCleanupEvents: vi.fn() }));
 vi.mock("../src/cron/jobs/scheduled-spend-match.js", () => ({ runScheduledSpendMatch: vi.fn() }));
+vi.mock("../src/cron/jobs/plaid-billing-reconcile.js", () => ({ runPlaidBillingReconcile: vi.fn() }));
 
 import { Cron } from "croner";
 import { startScheduler, stopScheduler, safe } from "../src/cron/scheduler.js";
@@ -37,11 +38,12 @@ describe("scheduler", () => {
 
   it("CRON_ENABLED=true → registers the expected Cron jobs", () => {
     startScheduler({ ...env, CRON_ENABLED: true });
-    expect(Cron).toHaveBeenCalledTimes(9);
+    expect(Cron).toHaveBeenCalledTimes(10);
     expect(vi.mocked(Cron).mock.calls.map((call) => call[1]?.name)).toEqual([
       "daily-brief",
       "push-receipts",
       "sweep-expired-intents",
+      "plaid-billing-reconcile",
       "daily-refresh",
       "retry-unprocessed",
       "cleanup-events",
@@ -49,6 +51,10 @@ describe("scheduler", () => {
       "trial-expiring",
       "goal-milestones",
     ]);
+    const billingJob = vi.mocked(Cron).mock.calls.find(
+      (call) => call[1]?.name === "plaid-billing-reconcile",
+    );
+    expect(billingJob?.[0]).toBe("45 8 * * *");
   });
 
   it("stopScheduler calls stop() on all registered jobs", () => {

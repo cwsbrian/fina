@@ -14,18 +14,22 @@ export async function checkBackgroundSyncGate(
   plaidItemId?: string,
 ): Promise<GateResult> {
   const t = await effectiveTier(userId);
-  if (t.plaidItemLimit > 0) return { ok: true };
   if (plaidItemId) {
     const item = await prisma.plaidItem.findFirst({
       where: {
         id: plaidItemId,
         connectedBy: userId,
-        billingGraceEndsAt: { gt: new Date() },
         status: { not: "disconnected" },
+        workspace: { memberships: { some: { userId } } },
       },
-      select: { id: true },
+      select: { billingGraceEndsAt: true },
     });
-    if (item) return { ok: true, billingGrace: true };
+    if (!item) return { ok: false, reason: "invalid_plaid_item_owner" };
+    if (t.plaidItemLimit > 0) return { ok: true };
+    if (item.billingGraceEndsAt && item.billingGraceEndsAt > new Date()) {
+      return { ok: true, billingGrace: true };
+    }
   }
+  if (t.plaidItemLimit > 0) return { ok: true };
   return { ok: false, reason: "no_plaid_entitlement" };
 }

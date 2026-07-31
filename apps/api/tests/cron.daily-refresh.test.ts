@@ -75,6 +75,7 @@ import { syncTransactions } from "../src/plaid/sync.js";
 import { categorizeNewTransactions } from "../src/categorize/service.js";
 import { checkBackgroundSyncGate } from "../src/cron/tier-gate.js";
 import { runDailyRefresh } from "../src/cron/jobs/daily-refresh.js";
+import { runPlaidBillingReconcile } from "../src/cron/jobs/plaid-billing-reconcile.js";
 import { resetPlaidMock } from "./helpers/plaid-mock.js";
 import { testEnv } from "./helpers/test-env.js";
 
@@ -358,20 +359,14 @@ describe("runDailyRefresh", () => {
     expect(addedMod.notifyTransactionAdded).not.toHaveBeenCalled();
   });
 
-  it("null connectedBy: does not sync orphan items after orphan reconciliation path", async () => {
-    const orphan = await seedActiveItem(null); // connectedBy = null
+  it("null connectedBy: ignores orphan items because billing reconciliation owns cleanup", async () => {
+    await seedActiveItem(null); // connectedBy = null
     vi.mocked(syncTransactions).mockResolvedValue(syncOk);
 
     await runDailyRefresh(env);
 
     expect(checkBackgroundSyncGate).not.toHaveBeenCalled();
-    expect(removeItemForBilling).toHaveBeenCalledTimes(1);
-    expect(removeItemForBilling).toHaveBeenCalledWith(
-      env,
-      orphan.wsId,
-      orphan.itemId,
-      { reconnectRequired: false, deleteGraceHiddenTransactions: true },
-    );
+    expect(removeItemForBilling).not.toHaveBeenCalled();
     expect(syncTransactions).not.toHaveBeenCalled();
   });
 
@@ -385,7 +380,7 @@ describe("runDailyRefresh", () => {
   });
 });
 
-describe("runDailyRefresh — provider refresh and reconciliation", () => {
+describe("runPlaidBillingReconcile", () => {
   it("lists Stripe subscriptions before Plaid reconciliation", async () => {
     const order: string[] = [];
     const { items } = await seedUserWithActiveItems({
@@ -410,7 +405,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     });
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
-    await runDailyRefresh(env);
+    await runPlaidBillingReconcile(env);
 
     expect(providerMocks.stripe.subscriptions.list).toHaveBeenCalledWith({
       customer: "cus_refresh",
@@ -426,7 +421,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     expect(order.indexOf("stripe-list")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
 
-  it("provider refresh failure does not reconcile, disconnect, or sync that user's active item", async () => {
+  it("provider refresh failure does not reconcile or disconnect that user's active item", async () => {
     await seedUserWithActiveItems({
       userId: "u-provider-fail",
       email: "provider-fail@test.fina",
@@ -447,13 +442,13 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     providerMocks.stripe.subscriptions.list.mockRejectedValueOnce(new Error("stripe unavailable"));
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
-    await runDailyRefresh(env);
+    await runPlaidBillingReconcile(env);
 
     expect(removeItemForBilling).not.toHaveBeenCalled();
     expect(syncTransactions).not.toHaveBeenCalled();
   });
 
-  it("reconciliation cleanup failure prevents that user's active items from syncing in the same run", async () => {
+  it("records reconciliation cleanup failure without aborting the cron", async () => {
     const { items } = await seedUserWithActiveItems({
       userId: "u-cleanup-fail",
       email: "cleanup-fail@test.fina",
@@ -472,7 +467,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     vi.mocked(removeItemForBilling).mockRejectedValueOnce(new Error("plaid cleanup failed"));
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
-    await runDailyRefresh(env);
+    await runPlaidBillingReconcile(env);
 
     expect(removeItemForBilling).toHaveBeenCalledWith(
       env,
@@ -480,10 +475,9 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       items[5]!.id,
       { reconnectRequired: true, deleteGraceHiddenTransactions: true },
     );
-    expect(syncTransactions).not.toHaveBeenCalled();
   });
 
-  it("production refresh skips stale Sandbox IAP rows and still syncs valid Stripe-entitled user", async () => {
+  it("production refresh skips stale Sandbox IAP rows for a valid Stripe-entitled user", async () => {
     process.env.APPLE_ENV = "production";
     await seedUserWithActiveItems({
       userId: "u-prod-stale-sandbox",
@@ -515,10 +509,10 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     providerMocks.appleClient.getSubscriptionStatus.mockRejectedValue(new Error("sandbox row should not refresh in prod"));
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
-    await runDailyRefresh(env);
+    await runPlaidBillingReconcile(env);
 
     expect(providerMocks.appleClient.getSubscriptionStatus).not.toHaveBeenCalled();
-    expect(syncTransactions).toHaveBeenCalledTimes(1);
+    expect(removeItemForBilling).not.toHaveBeenCalled();
   });
 
   it("refreshes Apple IAP status before Plaid reconciliation", async () => {
@@ -553,7 +547,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     });
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
-    await runDailyRefresh(env);
+    await runPlaidBillingReconcile(env);
 
     expect(providerMocks.appleClient.getSubscriptionStatus).toHaveBeenCalledWith("OT-apple-refresh");
     const sub = await prisma.subscription.findFirstOrThrow({ where: { userId: "u-apple-refresh" } });
@@ -605,7 +599,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
     });
     vi.mocked(syncTransactions).mockResolvedValue({ added: 0, modified: 0, removed: 0, newTxIds: [] });
 
-    await runDailyRefresh(env);
+    await runPlaidBillingReconcile(env);
 
     expect(providerMocks.googleClient.fetchAndNormalize).toHaveBeenCalledWith("pt-google-refresh");
     expect(providerMocks.googleClient.acknowledgeIfPending).toHaveBeenCalledWith({
@@ -622,6 +616,19 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       { reconnectRequired: true, deleteGraceHiddenTransactions: true },
     );
     expect(order.indexOf("google-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
+  });
+
+  it("cleans up Plaid items without an owner", async () => {
+    const orphan = await seedActiveItem(null);
+
+    await runPlaidBillingReconcile(env);
+
+    expect(removeItemForBilling).toHaveBeenCalledWith(
+      env,
+      orphan.wsId,
+      orphan.itemId,
+      { reconnectRequired: false, deleteGraceHiddenTransactions: true },
+    );
   });
 });
 
