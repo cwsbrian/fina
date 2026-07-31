@@ -25,6 +25,7 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
             status: true,
             errorCode: true,
             lastSyncAt: true,
+            billingGraceEndsAt: true,
             user: { select: { id: true, name: true, email: true } },
             _count: { select: { bankAccounts: true } },
           },
@@ -45,6 +46,7 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
           status: i.status,
           errorCode: i.errorCode,
           lastSyncAt: i.lastSyncAt?.toISOString() ?? null,
+          billingGraceEndsAt: i.billingGraceEndsAt?.toISOString() ?? null,
           accountCount: i._count.bankAccounts,
           connectedByUserId: i.user?.id ?? null,
           connectedByName: i.user?.name ?? i.user?.email ?? null,
@@ -52,6 +54,9 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
         reconnectRequired: reconnectAccountCount > 0,
         reconnectAccountCount,
         canConnectBank: tier.plaidItemLimit > 0,
+        billingGraceActive: items.some(
+          (item) => item.billingGraceEndsAt !== null && item.billingGraceEndsAt > new Date(),
+        ),
       };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });

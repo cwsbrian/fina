@@ -12,6 +12,7 @@ import { requireAppleIapEnv, requireGoogleReceiptIapEnv } from "../iap/env-guard
 import { AppleClient } from "../iap/apple-client.js";
 import { GoogleClient } from "../iap/google-client.js";
 import { filterEnvironmentRows } from "../billing/precedence.js";
+import { categorizeNewTransactions } from "../categorize/service.js";
 
 export type ReconcileResult = {
   kept: string[];
@@ -20,6 +21,8 @@ export type ReconcileResult = {
 };
 
 const billableStatuses: PlaidItemStatus[] = ["active", "error", "relink_required"];
+export const PLAID_BILLING_GRACE_DAYS = 30;
+const PLAID_BILLING_GRACE_MS = PLAID_BILLING_GRACE_DAYS * 86_400_000;
 const refreshableIapStatuses: SubscriptionStatus[] = [
   "trialing",
   "active",
@@ -114,6 +117,7 @@ export async function refreshBillingStateForUser(env: Env, userId: string): Prom
 
 export async function reconcilePlaidItemsForUser(env: Env, userId: string): Promise<ReconcileResult> {
   const tier = await effectiveTier(userId);
+  const now = new Date();
   const rows = await prisma.plaidItem.findMany({
     where: {
       connectedBy: userId,
@@ -123,6 +127,7 @@ export async function reconcilePlaidItemsForUser(env: Env, userId: string): Prom
     select: {
       id: true,
       workspaceId: true,
+      billingGraceEndsAt: true,
       workspace: {
         select: {
           memberships: {
@@ -142,25 +147,83 @@ export async function reconcilePlaidItemsForUser(env: Env, userId: string): Prom
     else valid.push(row);
   }
 
-  const keep = new Set(valid.slice(0, tier.plaidItemLimit).map((row) => row.id));
-  const toDisconnect = [
-    ...invalidMembership.map((row) => ({ row, reconnectRequired: false })),
-    ...valid
-      .filter((row) => !keep.has(row.id))
-      .map((row) => ({ row, reconnectRequired: true })),
-  ];
-
-  const result: ReconcileResult = { kept: Array.from(keep), disconnected: [], failed: [] };
-  for (const { row, reconnectRequired } of toDisconnect) {
+  const result: ReconcileResult = { kept: [], disconnected: [], failed: [] };
+  const disconnect = async (
+    row: (typeof rows)[number],
+    reconnectRequired: boolean,
+  ): Promise<void> => {
     try {
       await removeItemForBilling(env, row.workspaceId, row.id, {
         reconnectRequired,
+        deleteGraceHiddenTransactions: true,
       });
       result.disconnected.push(row.id);
     } catch (error) {
       result.failed.push({ id: row.id, error });
-      logError({ plaidItemId: row.id, err: sanitizePlaidError(error) }, "plaid reconciliation disconnect failed");
+      logError(
+        { plaidItemId: row.id, err: sanitizePlaidError(error) },
+        "plaid reconciliation disconnect failed",
+      );
     }
+  };
+
+  // Losing workspace access is not a billing downgrade and must revoke the
+  // connection immediately regardless of grace state.
+  for (const row of invalidMembership) await disconnect(row, false);
+
+  if (tier.plaidItemLimit <= 0) {
+    for (const row of valid) {
+      if (row.billingGraceEndsAt === null) {
+        await prisma.plaidItem.updateMany({
+          where: { id: row.id, billingGraceEndsAt: null },
+          data: { billingGraceEndsAt: new Date(now.getTime() + PLAID_BILLING_GRACE_MS) },
+        });
+        result.kept.push(row.id);
+        continue;
+      }
+      if (row.billingGraceEndsAt > now) {
+        result.kept.push(row.id);
+        continue;
+      }
+      await disconnect(row, true);
+    }
+    return result;
+  }
+
+  const keep = new Set(valid.slice(0, tier.plaidItemLimit).map((row) => row.id));
+  for (const row of valid) {
+    if (!keep.has(row.id)) {
+      await disconnect(row, true);
+      continue;
+    }
+    if (row.billingGraceEndsAt !== null) {
+      const hiddenTransactions = await prisma.transaction.findMany({
+        where: { plaidItemId: row.id, billingGraceHiddenAt: { not: null } },
+        select: { id: true },
+        orderBy: [{ occurredAt: "asc" }, { id: "asc" }],
+      });
+      await prisma.$transaction([
+        prisma.transaction.updateMany({
+          where: { plaidItemId: row.id, billingGraceHiddenAt: { not: null } },
+          data: { billingGraceHiddenAt: null, removedAt: null },
+        }),
+        prisma.plaidItem.update({
+          where: { id: row.id },
+          data: { billingGraceEndsAt: null },
+        }),
+      ]);
+      await categorizeNewTransactions(
+        env,
+        row.workspaceId,
+        hiddenTransactions.map((transaction) => transaction.id),
+      ).catch((error) => {
+        logError(
+          { plaidItemId: row.id, err: error },
+          "categorize restored billing-grace transactions failed",
+        );
+      });
+    }
+    result.kept.push(row.id);
   }
   return result;
 }
@@ -183,6 +246,7 @@ export async function reconcileOrphanPlaidItems(env: Env): Promise<ReconcileResu
     try {
       await removeItemForBilling(env, row.workspaceId, row.id, {
         reconnectRequired: false,
+        deleteGraceHiddenTransactions: true,
       });
       result.disconnected.push(row.id);
     } catch (error) {

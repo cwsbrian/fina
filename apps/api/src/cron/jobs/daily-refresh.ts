@@ -77,7 +77,7 @@ export async function runDailyRefresh(env: Env): Promise<void> {
 
   for (const item of items) {
     if (!item.connectedBy) continue;
-    const gate = await checkBackgroundSyncGate(item.connectedBy);
+    const gate = await checkBackgroundSyncGate(item.connectedBy, item.id);
     if (!gate.ok) { gated++; continue; }
 
     try {
@@ -87,7 +87,7 @@ export async function runDailyRefresh(env: Env): Promise<void> {
       } else {
         synced++;
       }
-      if ("newTxIds" in r && r.newTxIds.length > 0) {
+      if (!gate.billingGrace && "newTxIds" in r && r.newTxIds.length > 0) {
         await categorizeNewTransactions(env, item.workspaceId, r.newTxIds).catch((e) =>
           logError(
             { cron: CRON_NAME, plaidItemId: item.id, err: e },

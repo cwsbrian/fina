@@ -164,6 +164,62 @@ describe("syncTransactions", () => {
     await app.close();
   });
 
+  it("stores newly imported grace-period transactions as hidden", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, { email: "grace-sync@x.com", name: "G" });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const item = await makeItemWithFingerprint({
+      workspaceId: wsId,
+      plaidAccountId: "grace_sync_account",
+    });
+    await prisma.plaidItem.update({
+      where: { id: item.plaidItemId },
+      data: { billingGraceEndsAt: new Date(Date.now() + 30 * 86_400_000) },
+    });
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [
+          tx({
+            transaction_id: "grace_sync_tx",
+            account_id: item.plaidAccountId,
+            amount: 42,
+            date: "2026-07-31",
+            merchant: "Grace merchant",
+          }),
+        ],
+        modified: [],
+        removed: [],
+        next_cursor: "grace_cursor",
+        has_more: false,
+      },
+    });
+
+    const result = await syncTransactions(env, wsId, item.plaidItemId);
+
+    expect(result).toMatchObject({ added: 1, newTxIds: [expect.any(String)] });
+    await expect(
+      prisma.transaction.findFirstOrThrow({ where: { plaidTransactionId: "grace_sync_tx" } }),
+    ).resolves.toMatchObject({
+      removedAt: expect.any(Date),
+      billingGraceHiddenAt: expect.any(Date),
+    });
+
+    plaidMock.transactionsSync.push({
+      data: {
+        added: [],
+        modified: [],
+        removed: [{ transaction_id: "grace_sync_tx" }],
+        next_cursor: "grace_cursor_2",
+        has_more: false,
+      },
+    });
+    await syncTransactions(env, wsId, item.plaidItemId);
+    await expect(
+      prisma.transaction.findFirst({ where: { plaidTransactionId: "grace_sync_tx" } }),
+    ).resolves.toBeNull();
+    await app.close();
+  });
+
   it("reconnect dedupe survives deletion of the old Plaid Item", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, { email: "reconnect-dedupe@x.com", name: "R" });

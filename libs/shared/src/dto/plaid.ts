@@ -9,6 +9,9 @@ export type PlaidItemDTO = {
   errorCode: string | null;
   /** ISO 8601 timestamp; null if never synced. */
   lastSyncAt: string | null;
+  /** ISO 8601 deadline for Free-plan connection retention. While present,
+   * newly imported transactions are stored but hidden from product reads. */
+  billingGraceEndsAt: string | null;
   accountCount: number;
   connectedByUserId: string | null;
   connectedByName: string | null;

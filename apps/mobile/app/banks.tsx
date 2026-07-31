@@ -24,6 +24,7 @@ type PlaidItem = {
   status: string;
   errorCode: string | null;
   lastSyncAt: string | null;
+  billingGraceEndsAt: string | null;
   accountCount: number;
 };
 
@@ -119,6 +120,16 @@ export default function BanksScreen() {
     );
   };
 
+  const graceItems =
+    items?.filter(
+      (item) =>
+        item.billingGraceEndsAt !== null &&
+        new Date(item.billingGraceEndsAt).getTime() > Date.now(),
+    ) ?? [];
+  const graceEndsAt = graceItems
+    .map((item) => item.billingGraceEndsAt!)
+    .sort()[0] ?? null;
+
   return (
     <SafeAreaView style={styles.safe} edges={["top", "bottom"]}>
       <Stack.Screen options={{ headerShown: false }} />
@@ -190,7 +201,12 @@ export default function BanksScreen() {
             />
           }
           renderItem={({ item }) => (
-            <View style={styles.row}>
+            <View
+              style={[
+                styles.row,
+                item.billingGraceEndsAt ? styles.rowGrace : null,
+              ]}
+            >
               <View style={styles.rowGlyph}>
                 <Ionicons name="card-outline" size={18} color={colors.muted} />
               </View>
@@ -206,17 +222,22 @@ export default function BanksScreen() {
                   {item.status === "error" || item.errorCode
                     ? ` · ${item.errorCode ?? "needs attention"}`
                     : ""}
+                  {item.billingGraceEndsAt
+                    ? ` · disconnects ${new Date(item.billingGraceEndsAt).toLocaleDateString()}`
+                    : ""}
                 </Text>
               </View>
-              <Pressable
-                style={({ pressed }) => [
-                  styles.rowAction,
-                  pressed && { opacity: 0.6 },
-                ]}
-                onPress={() => onSync(item.id)}
-              >
-                <Ionicons name="refresh" size={18} color={colors.primary} />
-              </Pressable>
+              {!item.billingGraceEndsAt && (
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.rowAction,
+                    pressed && { opacity: 0.6 },
+                  ]}
+                  onPress={() => onSync(item.id)}
+                >
+                  <Ionicons name="refresh" size={18} color={colors.primary} />
+                </Pressable>
+              )}
               <Pressable
                 style={({ pressed }) => [
                   styles.rowAction,
@@ -229,10 +250,33 @@ export default function BanksScreen() {
             </View>
           )}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
+          ListHeaderComponent={
+            graceEndsAt ? (
+              <View style={styles.graceBanner}>
+                <Ionicons name="time-outline" size={20} color={colors.accentYellow} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.graceTitle}>Bank connection in 30-day grace period</Text>
+                  <Text style={styles.graceBody}>
+                    New transactions are saved securely but hidden on Free. Upgrade by{" "}
+                    {new Date(graceEndsAt).toLocaleDateString()} to restore them without
+                    reconnecting your bank.
+                  </Text>
+                  <Pressable
+                    style={styles.graceCta}
+                    onPress={() => router.push("/plan" as never)}
+                  >
+                    <Text style={styles.graceCtaText}>View plans</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null
+          }
           ListFooterComponent={
-            <View style={{ padding: space.lg }}>
-              <ConnectBankButton onConnected={load} label="Connect another bank" />
-            </View>
+            canConnectBank ? (
+              <View style={{ padding: space.lg }}>
+                <ConnectBankButton onConnected={load} label="Connect another bank" />
+              </View>
+            ) : null
           }
         />
       )}
@@ -287,6 +331,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.lg,
     paddingVertical: 14,
   },
+  rowGrace: { opacity: 0.58 },
   rowGlyph: {
     width: 40,
     height: 40,
@@ -305,4 +350,19 @@ const styles = StyleSheet.create({
     borderRadius: 999,
   },
   sep: { height: 1, backgroundColor: colors.hairlineSoft, marginLeft: 24 + 40 + 12 },
+  graceBanner: {
+    flexDirection: "row",
+    gap: space.sm,
+    marginHorizontal: space.lg,
+    marginVertical: space.sm,
+    padding: space.base,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceSoft,
+    borderWidth: 1,
+    borderColor: colors.hairlineSoft,
+  },
+  graceTitle: { ...type$.titleSm, color: colors.ink },
+  graceBody: { ...type$.bodySm, color: colors.body, marginTop: 4 },
+  graceCta: { alignSelf: "flex-start", marginTop: space.sm },
+  graceCtaText: { ...type$.button, color: colors.primary },
 });

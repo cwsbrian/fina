@@ -51,6 +51,7 @@ import {
 type PlaidItemSummary = {
   status: string;
   errorCode: string | null;
+  billingGraceEndsAt: string | null;
 };
 
 type ActiveWorkspace = {
@@ -315,9 +316,11 @@ export default function More() {
   const bankSubtitle = banks
     ? banks.length === 0
       ? "Optional · No banks connected"
-      : `${banks.length} connected${
-          banks.some((b) => b.status === "error" || b.errorCode) ? " · needs attention" : ""
-        }`
+      : banks.some((b) => b.billingGraceEndsAt)
+        ? `${banks.length} connected · grace period`
+        : `${banks.length} connected${
+            banks.some((b) => b.status === "error" || b.errorCode) ? " · needs attention" : ""
+          }`
     : "—";
 
   const insets = useSafeAreaInsets();

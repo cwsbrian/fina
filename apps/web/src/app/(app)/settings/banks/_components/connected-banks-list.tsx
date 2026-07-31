@@ -137,9 +137,12 @@ export function ConnectedBanksList({
     <div>
       <div className={styles.group}>
         {items.map((it) => {
-          const pill = statusPill(it.status);
+          const inGrace = it.billingGraceEndsAt !== null;
+          const pill = inGrace
+            ? { className: `${styles.pill} ${styles.pillWarn}`, label: "Grace period" }
+            : statusPill(it.status);
           return (
-            <div key={it.id} className={styles.row}>
+            <div key={it.id} className={styles.row} style={inGrace ? { opacity: 0.62 } : undefined}>
               <span className={styles.rowGlyph}>
                 <WebIcon name="bank" size={20} />
               </span>
@@ -163,18 +166,23 @@ export function ConnectedBanksList({
                   {it.status === "error" && it.errorCode
                     ? ` · ${it.errorCode}`
                     : ""}
+                  {it.billingGraceEndsAt
+                    ? ` · disconnects ${new Date(it.billingGraceEndsAt).toLocaleDateString()}`
+                    : ""}
                 </div>
               </div>
               {isOwner && (
                 <>
-                  <button
-                    type="button"
-                    className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`}
-                    onClick={() => refresh(it.id)}
-                    disabled={busyId === it.id}
-                  >
-                    {busyId === it.id ? "Refreshing…" : "Refresh"}
-                  </button>
+                  {!inGrace && (
+                    <button
+                      type="button"
+                      className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`}
+                      onClick={() => refresh(it.id)}
+                      disabled={busyId === it.id}
+                    >
+                      {busyId === it.id ? "Refreshing…" : "Refresh"}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`}

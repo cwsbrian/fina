@@ -185,6 +185,52 @@ describe("GET /workspaces/:id/plaid-items", () => {
     await app.close();
   });
 
+  it("surfaces an active Free-plan grace deadline without requiring reconnect", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, {
+      email: "billing-grace@x.com",
+      name: "Grace",
+    });
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { trialEndsAt: null, trialConsumed: true },
+    });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    const graceEndsAt = new Date(Date.now() + 30 * 86_400_000);
+    await prisma.plaidItem.create({
+      data: {
+        workspaceId: wsId,
+        connectedBy: owner.userId,
+        accessTokenCiphertext: Buffer.from([1]),
+        accessTokenIv: Buffer.from(new Array(12).fill(2)),
+        itemId: "item_billing_grace",
+        institutionId: "ins_grace",
+        institutionName: "Grace Bank",
+        billingGraceEndsAt: graceEndsAt,
+      },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/plaid-items`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      reconnectRequired: false,
+      canConnectBank: false,
+      billingGraceActive: true,
+      plaidItems: [
+        {
+          institutionName: "Grace Bank",
+          billingGraceEndsAt: graceEndsAt.toISOString(),
+        },
+      ],
+    });
+    await app.close();
+  });
+
   it("clears reconnect-required after the same institution is linked again", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, {
@@ -965,6 +1011,26 @@ describe("GET /workspaces/:id/transactions", () => {
       headers: { cookie: owner.cookie, "x-workspace-id": wsId },
     });
     expect(include.json().transactions).toHaveLength(3);
+    await app.close();
+  });
+
+  it("never exposes billing-grace transactions, even with includeRemoved", async () => {
+    const app = await buildApp(env);
+    const { owner, wsId } = await setupItemAndTxs(app, 1);
+    const hiddenAt = new Date();
+    await prisma.transaction.updateMany({
+      where: { workspaceId: wsId },
+      data: { removedAt: hiddenAt, billingGraceHiddenAt: hiddenAt },
+    });
+
+    const res = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?includeRemoved=true`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().transactions).toEqual([]);
     await app.close();
   });
 

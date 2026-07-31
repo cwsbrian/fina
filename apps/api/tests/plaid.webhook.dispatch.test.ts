@@ -181,6 +181,29 @@ describe("dispatchWebhookSync", () => {
     expect(row.processError).toBe("tier_gated:no_plaid_entitlement");
   });
 
+  it("syncs but does not categorize or notify product flows during billing grace", async () => {
+    const userId = await seedUser({ email: "webhook-grace@example.com", trialEndsAt: null });
+    const { wsId, itemId, eventId } = await seedItem({ connectedBy: userId });
+    await prisma.plaidItem.update({
+      where: { id: itemId },
+      data: { billingGraceEndsAt: new Date(Date.now() + 30 * 86_400_000) },
+    });
+    vi.mocked(syncTransactions).mockResolvedValue({
+      added: 1,
+      modified: 0,
+      removed: 0,
+      newTxIds: ["hidden-grace-tx"],
+    });
+
+    await dispatchWebhookSync(env, wsId, itemId, eventId);
+
+    expect(syncTransactions).toHaveBeenCalledWith(env, wsId, itemId);
+    expect(categorizeNewTransactions).not.toHaveBeenCalled();
+    await expect(
+      prisma.plaidWebhookEvent.findUniqueOrThrow({ where: { id: eventId } }),
+    ).resolves.toMatchObject({ processedAt: expect.any(Date), processError: null });
+  });
+
   it("still categorizes newTxIds from a lock_held result if any were committed", async () => {
     const { wsId, itemId, eventId } = await seedItem();
     vi.mocked(syncTransactions).mockResolvedValue({

@@ -162,7 +162,7 @@ describe("reconcilePlaidItemsForUser", () => {
     expect(result.disconnected).toEqual([rows[5]!.id]);
   });
 
-  it("canceled/free user disconnects all owned billable items", async () => {
+  it("canceled/free user starts a 30-day grace period without disconnecting", async () => {
     const u = await userWithTrial("free@example.com", null);
     await prisma.subscription.create({
       data: {
@@ -177,20 +177,117 @@ describe("reconcilePlaidItemsForUser", () => {
     const ws = await workspaceForOwner(u.id);
     const first = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-01T00:00:00Z"), itemId: "free_a" });
     const second = await item({ workspaceId: ws.id, connectedBy: u.id, createdAt: new Date("2026-01-02T00:00:00Z"), itemId: "free_b" });
-    plaidMock.itemRemove.push({ data: { request_id: "remove-a" } }, { data: { request_id: "remove-b" } });
+    const before = Date.now();
+    const result = await reconcilePlaidItemsForUser(env, u.id);
+
+    expect(result.kept.sort()).toEqual([first.id, second.id].sort());
+    expect(result.disconnected).toEqual([]);
+    const graceItems = await prisma.plaidItem.findMany({
+      where: { id: { in: [first.id, second.id] } },
+      select: { billingGraceEndsAt: true },
+    });
+    for (const row of graceItems) {
+      expect(row.billingGraceEndsAt?.getTime()).toBeGreaterThanOrEqual(
+        before + 30 * 86_400_000,
+      );
+    }
+    expect(plaidMock.itemRemove).toHaveLength(0);
+  });
+
+  it("disconnects after grace expires and deletes transactions imported during grace", async () => {
+    const u = await userWithTrial("expired-grace@example.com", null);
+    const ws = await workspaceForOwner(u.id);
+    const row = await item({
+      workspaceId: ws.id,
+      connectedBy: u.id,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      itemId: "expired_grace",
+    });
+    await prisma.plaidItem.update({
+      where: { id: row.id },
+      data: { billingGraceEndsAt: new Date(Date.now() - 1_000) },
+    });
+    const account = await prisma.bankAccount.findFirstOrThrow({
+      where: { plaidItemId: row.id },
+    });
+    const hidden = await prisma.transaction.create({
+      data: {
+        workspaceId: ws.id,
+        accountId: account.id,
+        plaidItemId: row.id,
+        plaidTransactionId: "expired_grace_tx",
+        amount: "10",
+        merchantRaw: "Hidden grace transaction",
+        occurredAt: new Date(),
+        source: "plaid",
+        rawData: {},
+        removedAt: new Date(),
+        billingGraceHiddenAt: new Date(),
+      },
+    });
+    plaidMock.itemRemove.push({ data: { request_id: "remove-expired-grace" } });
 
     const result = await reconcilePlaidItemsForUser(env, u.id);
 
-    expect(result.kept).toEqual([]);
-    expect(result.disconnected.sort()).toEqual([first.id, second.id].sort());
-    const archived = await prisma.bankAccount.findMany({
-      where: { workspaceId: ws.id },
-      select: { plaidReconnectRequired: true },
+    expect(result.disconnected).toEqual([row.id]);
+    await expect(prisma.plaidItem.findUnique({ where: { id: row.id } })).resolves.toBeNull();
+    await expect(prisma.transaction.findUnique({ where: { id: hidden.id } })).resolves.toBeNull();
+    await expect(
+      prisma.bankAccount.findUniqueOrThrow({ where: { id: account.id } }),
+    ).resolves.toMatchObject({
+      archivedAt: expect.any(Date),
+      plaidReconnectRequired: true,
     });
-    expect(archived).toEqual([
-      { plaidReconnectRequired: true },
-      { plaidReconnectRequired: true },
-    ]);
+  });
+
+  it("upgrade during grace restores hidden transactions without reconnecting", async () => {
+    const u = await userWithTrial("grace-upgrade@example.com", null);
+    const ws = await workspaceForOwner(u.id);
+    const row = await item({
+      workspaceId: ws.id,
+      connectedBy: u.id,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      itemId: "grace_upgrade",
+    });
+    await prisma.plaidItem.update({
+      where: { id: row.id },
+      data: { billingGraceEndsAt: new Date(Date.now() + 10 * 86_400_000) },
+    });
+    const account = await prisma.bankAccount.findFirstOrThrow({ where: { plaidItemId: row.id } });
+    const hiddenAt = new Date();
+    const hidden = await prisma.transaction.create({
+      data: {
+        workspaceId: ws.id,
+        accountId: account.id,
+        plaidItemId: row.id,
+        plaidTransactionId: "grace_upgrade_tx",
+        amount: "12",
+        merchantRaw: "Grace upgrade",
+        occurredAt: new Date(),
+        source: "plaid",
+        rawData: {},
+        removedAt: hiddenAt,
+        billingGraceHiddenAt: hiddenAt,
+      },
+    });
+    await prisma.subscription.create({
+      data: {
+        userId: u.id,
+        tier: "pro",
+        source: "stripe",
+        sourceSubscriptionId: "sub_grace_upgrade",
+        status: "active",
+        currentPeriodEnd: new Date(Date.now() + 30 * 86_400_000),
+      },
+    });
+
+    const result = await reconcilePlaidItemsForUser(env, u.id);
+
+    expect(result.kept).toEqual([row.id]);
+    await expect(prisma.plaidItem.findUniqueOrThrow({ where: { id: row.id } })).resolves
+      .toMatchObject({ billingGraceEndsAt: null });
+    await expect(prisma.transaction.findUniqueOrThrow({ where: { id: hidden.id } })).resolves
+      .toMatchObject({ removedAt: null, billingGraceHiddenAt: null });
   });
 
   it("counts active, error, and relink_required as billable but ignores disconnected", async () => {

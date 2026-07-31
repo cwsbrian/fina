@@ -353,7 +353,10 @@ export async function upsertAdded(
           amount: newAmount,
           merchantRaw: plaidMerchantRaw(t),
           rawData: t as unknown as Prisma.InputJsonValue,
-          removedAt: null, // promote restores any earlier soft-removal
+          // A pending row first imported during billing grace must stay
+          // hidden when it posts. Non-grace promotion still restores an
+          // earlier ordinary soft-removal as before.
+          removedAt: promotion.billingGraceHiddenAt ? promotion.removedAt : null,
           ...(promotion.budgetImpactSource === "auto" ? { budgetImpact } : {}),
         },
       });
@@ -421,7 +424,7 @@ export async function upsertAdded(
       subtype: true,
       currency: true,
       plaidInstitutionId: true,
-      plaidItem: { select: { institutionId: true } },
+      plaidItem: { select: { institutionId: true, billingGraceEndsAt: true } },
     },
   });
   const oldAccountIds = await disconnectedAccountMatches(tx, workspaceId, currentAccount);
@@ -499,6 +502,11 @@ export async function upsertAdded(
       }
     }
   }
+  const billingGraceHiddenAt =
+    currentAccount.plaidItem?.billingGraceEndsAt &&
+    currentAccount.plaidItem.billingGraceEndsAt > new Date()
+      ? new Date()
+      : null;
   const created = await tx.transaction.create({
     data: {
       workspaceId,
@@ -513,6 +521,8 @@ export async function upsertAdded(
       pending: t.pending,
       rawData: t as unknown as Prisma.InputJsonValue,
       budgetImpact: classifyPlaidBudgetImpact(t),
+      billingGraceHiddenAt,
+      removedAt: billingGraceHiddenAt,
     },
     select: { id: true, amount: true },
   });
@@ -595,10 +605,20 @@ export async function markRemoved(
 ): Promise<void> {
   // First select the local tx to get its id (so we can clear schedule matches).
   const target = await tx.transaction.findFirst({
-    where: { workspaceId, plaidTransactionId, removedAt: null },
-    select: { id: true },
+    where: {
+      workspaceId,
+      plaidTransactionId,
+      OR: [{ removedAt: null }, { billingGraceHiddenAt: { not: null } }],
+    },
+    select: { id: true, billingGraceHiddenAt: true },
   });
   if (!target) return; // nothing to remove
+  if (target.billingGraceHiddenAt) {
+    // Grace imports were never shown or edited. If Plaid removes one before
+    // upgrade, delete it so reconciliation cannot later reveal stale data.
+    await tx.transaction.delete({ where: { id: target.id } });
+    return;
+  }
   await clearScheduleMatch(tx, target.id);
   await tx.transaction.update({
     where: { id: target.id },

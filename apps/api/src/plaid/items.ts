@@ -131,6 +131,12 @@ export async function removeItemStrict(
         });
         if (opts.deleteTransactions === true) {
           await tx.transaction.deleteMany({ where: { workspaceId, plaidItemId } });
+        } else {
+          // Grace imports were never visible and cannot be restored after the
+          // user intentionally removes the owning Plaid Item.
+          await tx.transaction.deleteMany({
+            where: { workspaceId, plaidItemId, billingGraceHiddenAt: { not: null } },
+          });
         }
         await tx.plaidItem.delete({ where: { id: plaidItemId } });
       },
@@ -161,7 +167,10 @@ export async function removeItemForBilling(
   env: Env,
   workspaceId: string,
   plaidItemId: string,
-  opts: { reconnectRequired?: boolean } = {},
+  opts: {
+    reconnectRequired?: boolean;
+    deleteGraceHiddenTransactions?: boolean;
+  } = {},
 ): Promise<void> {
   const { accessToken } = await readAccessToken(env, workspaceId, plaidItemId);
 
@@ -191,6 +200,11 @@ export async function removeItemForBilling(
           plaidReconnectRequired: opts.reconnectRequired ?? true,
         },
       });
+      if (opts.deleteGraceHiddenTransactions === true) {
+        await tx.transaction.deleteMany({
+          where: { plaidItemId, billingGraceHiddenAt: { not: null } },
+        });
+      }
       await tx.plaidItem.delete({ where: { id: plaidItemId } });
     },
     { maxWait: 5_000, timeout: 35_000 },

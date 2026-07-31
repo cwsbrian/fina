@@ -57,7 +57,7 @@ export async function dispatchWebhookSync(
       return;
     }
 
-    const gate = await checkBackgroundSyncGate(item.connectedBy);
+    const gate = await checkBackgroundSyncGate(item.connectedBy, plaidItemId);
     if (!gate.ok) {
       await prisma.plaidWebhookEvent.update({
         where: { id: webhookEventId },
@@ -68,7 +68,7 @@ export async function dispatchWebhookSync(
 
     const r = await syncTransactions(env, workspaceId, plaidItemId);
 
-    if (r.newTxIds.length > 0) {
+    if (!gate.billingGrace && r.newTxIds.length > 0) {
       // Categorize is best-effort and must not affect the lock_held retry sentinel.
       // A DB error here would otherwise jump to the catch block and set processedAt,
       // losing the NULL that signals cron to retry the unfinished sync.

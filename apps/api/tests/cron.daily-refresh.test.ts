@@ -345,6 +345,19 @@ describe("runDailyRefresh", () => {
     expect(categorizeNewTransactions).not.toHaveBeenCalled();
   });
 
+  it("stores grace-period sync results without categorization or notifications", async () => {
+    await seedActiveItem();
+    vi.mocked(checkBackgroundSyncGate).mockResolvedValue({ ok: true, billingGrace: true });
+    vi.mocked(syncTransactions).mockResolvedValue(syncOk);
+
+    await runDailyRefresh(env);
+
+    expect(syncTransactions).toHaveBeenCalledTimes(1);
+    expect(categorizeNewTransactions).not.toHaveBeenCalled();
+    expect(anomalyMod.checkLargeChargeAndPush).not.toHaveBeenCalled();
+    expect(addedMod.notifyTransactionAdded).not.toHaveBeenCalled();
+  });
+
   it("null connectedBy: does not sync orphan items after orphan reconciliation path", async () => {
     const orphan = await seedActiveItem(null); // connectedBy = null
     vi.mocked(syncTransactions).mockResolvedValue(syncOk);
@@ -357,7 +370,7 @@ describe("runDailyRefresh", () => {
       env,
       orphan.wsId,
       orphan.itemId,
-      { reconnectRequired: false },
+      { reconnectRequired: false, deleteGraceHiddenTransactions: true },
     );
     expect(syncTransactions).not.toHaveBeenCalled();
   });
@@ -408,7 +421,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       env,
       expect.any(String),
       items[5]!.id,
-      { reconnectRequired: true },
+      { reconnectRequired: true, deleteGraceHiddenTransactions: true },
     );
     expect(order.indexOf("stripe-list")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
@@ -465,7 +478,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       env,
       expect.any(String),
       items[5]!.id,
-      { reconnectRequired: true },
+      { reconnectRequired: true, deleteGraceHiddenTransactions: true },
     );
     expect(syncTransactions).not.toHaveBeenCalled();
   });
@@ -549,7 +562,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       env,
       expect.any(String),
       items[5]!.id,
-      { reconnectRequired: true },
+      { reconnectRequired: true, deleteGraceHiddenTransactions: true },
     );
     expect(order.indexOf("apple-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });
@@ -606,7 +619,7 @@ describe("runDailyRefresh — provider refresh and reconciliation", () => {
       env,
       expect.any(String),
       items[5]!.id,
-      { reconnectRequired: true },
+      { reconnectRequired: true, deleteGraceHiddenTransactions: true },
     );
     expect(order.indexOf("google-refresh")).toBeLessThan(order.indexOf("plaid-reconcile"));
   });

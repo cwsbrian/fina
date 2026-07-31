@@ -139,6 +139,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       await ensureRefundLinks(ctx.membership.workspaceId);
       const where: Prisma.TransactionWhereInput = {
         workspaceId: ctx.membership.workspaceId,
+        billingGraceHiddenAt: null,
         ...(q.accountId ? { accountId: q.accountId } : {}),
         // Build the date range in one pass — the previous two-spread approach
         // relied on the second spread silently overwriting the first when both
@@ -285,7 +286,11 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             select: { currency: true },
           }),
           prisma.transaction.findFirst({
-            where: { id: req.params.txId, workspaceId: ctx.membership.workspaceId },
+            where: {
+              id: req.params.txId,
+              workspaceId: ctx.membership.workspaceId,
+              billingGraceHiddenAt: null,
+            },
             include: {
               allocations: {
                 select: {

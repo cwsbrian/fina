@@ -68,6 +68,10 @@ export default function BanksPage() {
   const plaidItemLimit = TIER_LIMITS[me.tier].plaidItems;
   const remainingBanks = Math.max(plaidItemLimit - ownedBankCount, 0);
   const hasPaidPlaidEntitlement = plaidItemLimit > 0;
+  const graceEndsAt = (items ?? [])
+    .map((item) => item.billingGraceEndsAt)
+    .filter((value): value is string => value !== null)
+    .sort()[0] ?? null;
 
   return (
     <div className={styles.container}>
@@ -89,6 +93,23 @@ export default function BanksPage() {
             </div>
           </div>
         </div>
+        {graceEndsAt && (
+          <div className={styles.card} style={{ marginBottom: 12 }}>
+            <div className={styles.sectionTitle}>Bank connection in 30-day grace period</div>
+            <div className={styles.sectionSub} style={{ marginTop: 6 }}>
+              New transactions are saved securely but hidden on Free. Upgrade by{" "}
+              {new Date(graceEndsAt).toLocaleDateString()} to restore them without
+              reconnecting your bank.
+            </div>
+            <a
+              href="/settings/plan"
+              className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`}
+              style={{ display: "inline-flex", marginTop: 12 }}
+            >
+              View plans
+            </a>
+          </div>
+        )}
         <ConnectedBanksList
           items={items ?? []}
           workspaceId={wsId}

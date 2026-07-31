@@ -39,7 +39,7 @@ export async function runRetryUnprocessed(env: Env): Promise<void> {
 
     // Positive-condition form avoids an empty-if lint warning.
     if (item.connectedBy) {
-      const gate = await checkBackgroundSyncGate(item.connectedBy);
+      const gate = await checkBackgroundSyncGate(item.connectedBy, item.id);
       if (!gate.ok) {
         // Stamp the row so it stops appearing in the NULL retry set.
         await prisma.plaidWebhookEvent.update({

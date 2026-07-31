@@ -228,6 +228,9 @@ model PlaidItem {
   // Webhook URL registered with Plaid for this item (per §1B-webhooks).
   // NULL for items connected before the webhook feature shipped — startup task backfills them.
   webhookUrl            String?
+  // Free-plan downgrade grace: keep the Plaid connection and continue
+  // ingesting hidden transactions until this deadline. Cleared on upgrade.
+  billingGraceEndsAt    DateTime?
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
 
@@ -240,6 +243,7 @@ model PlaidItem {
 
   @@index([workspaceId])
   @@index([connectedBy])
+  @@index([billingGraceEndsAt])
   @@map("plaid_items")
 }
 
@@ -303,7 +307,7 @@ model BankAccount {
   workspaceId        String
   plaidItemId        String?
   // Non-secret reconnect fingerprint retained after the billable Plaid Item
-  // and its access token are deleted on a Free-plan downgrade.
+  // and its access token are deleted after the Free-plan grace period.
   plaidInstitutionId String?
   // True only when billing reconciliation removed the Plaid connection.
   // Manual disconnects stay false so the app does not nag intentionally
@@ -360,6 +364,9 @@ model Transaction {
   pending                   Boolean            @default(false)
   source                    TransactionSource  @default(plaid)
   rawData                   Json
+  // Transactions first imported while their Plaid Item is in billing grace.
+  // They remain hidden from product reads and are restored on upgrade.
+  billingGraceHiddenAt      DateTime?
   note                      String?
   removedAt                 DateTime?
   createdAt                 DateTime           @default(now())
@@ -383,6 +390,7 @@ model Transaction {
   @@index([workspaceId, occurredAt(sort: Desc)])
   @@index([workspaceId, budgetImpact, occurredAt(sort: Desc)])
   @@index([workspaceId, accountId, occurredAt(sort: Desc)])
+  @@index([plaidItemId, billingGraceHiddenAt])
   @@index([refundOfTransactionId])
   @@map("transactions")
 }

@@ -112,6 +112,14 @@ describe("plaid/items service", () => {
         plaidTransactionId: "tx_rm", amount: 1, merchantRaw: "X", occurredAt: new Date(), rawData: {},
       },
     });
+    const hiddenAt = new Date();
+    const graceRow = await prisma.transaction.create({
+      data: {
+        workspaceId: wsId, accountId: acct.id, plaidItemId: id,
+        plaidTransactionId: "tx_rm_grace", amount: 2, merchantRaw: "Hidden", occurredAt: new Date(), rawData: {},
+        removedAt: hiddenAt, billingGraceHiddenAt: hiddenAt,
+      },
+    });
 
     plaidMock.itemRemove.push({ data: { request_id: "r" } });
     await removeItemStrict(env, wsId, id);
@@ -124,6 +132,7 @@ describe("plaid/items service", () => {
     expect(acctAfter.plaidReconnectRequired).toBe(false);
     const txAfter = await prisma.transaction.findUniqueOrThrow({ where: { id: txRow.id } });
     expect(txAfter.plaidItemId).toBeNull();
+    await expect(prisma.transaction.findUnique({ where: { id: graceRow.id } })).resolves.toBeNull();
     await app.close();
   });
 
