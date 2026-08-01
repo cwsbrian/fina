@@ -8,6 +8,7 @@ import {
   type CategoryAllocation,
 } from "../../budget-plans/service.js";
 import type { ToolDef } from "./types.js";
+import { resolveUserTz } from "./periods.js";
 
 const Args = z
   .object({
@@ -54,7 +55,8 @@ export const setBudget: ToolDef<
       categoryName = cat.name;
     }
     const period = args.period ?? "this_month";
-    const { year, month } = periodToYearMonth(period);
+    const tz = await resolveUserTz(ctx.userId);
+    const { year, month } = periodToYearMonth(period, tz);
     // Read-modify-write on the month's BudgetPlan. Two near-simultaneous
     // setBudget consumes for the same month could clobber each other's
     // categoryAllocations (last write wins the whole JSON column). Postgres

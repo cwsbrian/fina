@@ -3,6 +3,7 @@ import type { PresentationBlock, RiskTier } from "@fina/shared";
 import { budgetPlanSnapshot, periodToYearMonth } from "../../budget-plans/service.js";
 import { projectMonthEnd, type CategoryForecast } from "../../analysis/forecast.js";
 import type { ToolDef } from "./types.js";
+import { resolveUserTz } from "./periods.js";
 
 const Args = z.object({
   period: z.enum(["this_month", "last_month", "next_month"]).optional(),
@@ -54,7 +55,8 @@ export const compareSpendingVsBudget: ToolDef<Args, Result> = {
   args: Args,
   async run(ctx, args) {
     const period = args.period ?? "this_month";
-    const { year, month } = periodToYearMonth(period);
+    const tz = await resolveUserTz(ctx.userId);
+    const { year, month } = periodToYearMonth(period, tz);
     const snap = await budgetPlanSnapshot(ctx.workspaceId, year, month);
 
     const todayPct = todayPctFor(period, year, month);

@@ -16,8 +16,10 @@ import {
   recentMonthlyAvgSpend,
   type CategoryAllocation,
   type SetBudgetInput,
+  periodToYearMonth,
 } from "../budget-plans/service.js";
 import { suggestBudgetSplit } from "../budget-plans/suggest-split.js";
+import { resolveUserTz } from "../chat/tools/periods.js";
 
 const MAX_TOTAL = 9_999_999.99;
 
@@ -44,13 +46,6 @@ function toSetBudgetInput(data: z.infer<typeof SetBudgetBody>): SetBudgetInput {
     totalAmount: data.totalAmount,
     ...(data.categoryAllocations ? { categoryAllocations: data.categoryAllocations } : {}),
   };
-}
-
-function currentYM(): { year: number; month: number } {
-  // Use UTC for now — Plaid sync + transactions use UTC noon anchors.
-  // Workspace-tz-aware month boundaries can come later if it matters.
-  const d = new Date();
-  return { year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 };
 }
 
 function parseYearMonth(s: string): { year: number; month: number } | null {
@@ -94,7 +89,8 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
       // When the user opted to push the new default into the current
       // month too, overwrite that month's snapshot with the same values.
       if (parsed.data.scope === "default_and_current") {
-        const { year, month } = currentYM();
+        const tz = await resolveUserTz(ctx.session.userId);
+        const { year, month } = periodToYearMonth("this_month", tz);
         await setMonthBudget(ctx.membership.workspaceId, year, month, budgetInput);
       }
       return reply.code(200).send({ plan });
@@ -113,7 +109,8 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
       if ((req.params as { id: string }).id !== ctx.membership.workspaceId) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const { year, month } = currentYM();
+      const tz = await resolveUserTz(ctx.session.userId);
+      const { year, month } = periodToYearMonth("this_month", tz);
       const plan = await getOrSnapshotMonthBudget(
         ctx.membership.workspaceId,
         year,

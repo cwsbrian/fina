@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
 import { monthlyEquivalent, occurrencesInRange } from "../recurring/occurrences.js";
 import { serverNow } from "../dev-clock.js";
+import { partsInTz } from "../chat/tools/periods.js";
 import {
   effectiveExpenseAllocations,
   effectiveExpenseTransactions,
@@ -502,12 +503,15 @@ export async function budgetPlanSnapshot(
 
 export type ChatBudgetPeriod = "this_month" | "last_month" | "next_month";
 
-/** Map the chat period enum to a calendar year/month on the same UTC basis
- *  budget-plans/current uses, so chat and Home agree on which month. */
-export function periodToYearMonth(period: ChatBudgetPeriod): { year: number; month: number } {
-  const d = serverNow();
-  let year = d.getUTCFullYear();
-  let month = d.getUTCMonth() + 1; // 1..12
+/** Map the chat period enum to the user's calendar year/month so chat,
+ *  Home, and the Budget screen agree at timezone month boundaries. */
+export function periodToYearMonth(
+  period: ChatBudgetPeriod,
+  tz: string,
+  now: Date = serverNow(),
+): { year: number; month: number } {
+  const current = partsInTz(now, tz);
+  let { year, month } = current;
   if (period === "last_month") {
     month -= 1;
     if (month === 0) { month = 12; year -= 1; }

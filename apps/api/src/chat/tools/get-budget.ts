@@ -8,6 +8,7 @@ import {
   type BudgetSnapshotCategory,
 } from "../../budget-plans/service.js";
 import type { ToolDef } from "./types.js";
+import { resolveUserTz } from "./periods.js";
 
 const Args = z.object({
   category_id: z.string().min(1).optional(),
@@ -30,7 +31,8 @@ export const getBudget: ToolDef<
   async run(ctx, args) {
     if (args.category_id && args.category_name) throw new Error("invalid_body");
     const period = args.period ?? "this_month";
-    const { year, month } = periodToYearMonth(period);
+    const tz = await resolveUserTz(ctx.userId);
+    const { year, month } = periodToYearMonth(period, tz);
 
     const [snap, workspace] = await Promise.all([
       budgetPlanSnapshot(ctx.workspaceId, year, month),

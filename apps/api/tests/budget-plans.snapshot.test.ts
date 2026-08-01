@@ -94,9 +94,9 @@ describe("budgetPlanSnapshot", () => {
   });
 
   it("periodToYearMonth maps relative to UTC now", () => {
-    expect(periodToYearMonth("this_month")).toEqual({ year: 2026, month: 5 });
-    expect(periodToYearMonth("last_month")).toEqual({ year: 2026, month: 4 });
-    expect(periodToYearMonth("next_month")).toEqual({ year: 2026, month: 6 });
+    expect(periodToYearMonth("this_month", "UTC")).toEqual({ year: 2026, month: 5 });
+    expect(periodToYearMonth("last_month", "UTC")).toEqual({ year: 2026, month: 4 });
+    expect(periodToYearMonth("next_month", "UTC")).toEqual({ year: 2026, month: 6 });
   });
 
   it("includes unmatched scheduled spend in totalScheduled + per-category", async () => {
@@ -113,8 +113,16 @@ describe("budgetPlanSnapshot", () => {
 
   it("periodToYearMonth handles the year boundary", () => {
     vi.setSystemTime(new Date("2026-01-15T12:00:00Z"));
-    expect(periodToYearMonth("last_month")).toEqual({ year: 2025, month: 12 });
+    expect(periodToYearMonth("last_month", "UTC")).toEqual({ year: 2025, month: 12 });
     vi.setSystemTime(new Date("2026-12-15T12:00:00Z"));
-    expect(periodToYearMonth("next_month")).toEqual({ year: 2027, month: 1 });
+    expect(periodToYearMonth("next_month", "UTC")).toEqual({ year: 2027, month: 1 });
+  });
+
+  it("keeps the device-timezone month when UTC is already next month", () => {
+    vi.setSystemTime(new Date("2026-08-01T03:30:00Z"));
+    expect(periodToYearMonth("this_month", "America/Vancouver")).toEqual({
+      year: 2026,
+      month: 7,
+    });
   });
 });
