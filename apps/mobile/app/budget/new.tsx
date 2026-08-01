@@ -44,11 +44,6 @@ type Plan = {
 
 type Scope = "month" | "default";
 
-function currentYearMonth(): string {
-  const d = new Date();
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
 type CurrentResp = {
   yearMonth: string;
   plan: Plan | null;
@@ -65,6 +60,7 @@ export default function NewBudget() {
   const [categories, setCategories] = useState<CategoryDTO[]>([]);
   const [defaultPlan, setDefaultPlan] = useState<Plan | null>(null);
   const [monthPlan, setMonthPlan] = useState<Plan | null>(null);
+  const [currentYearMonth, setCurrentYearMonth] = useState<string | null>(null);
   const [recentAvg, setRecentAvg] = useState<number | null>(null);
   const [bankCount, setBankCount] = useState<number | null>(null);
   const [scope, setScope] = useState<Scope>("month");
@@ -139,6 +135,7 @@ export default function NewBudget() {
         await loadCategories(wsId);
         setDefaultPlan(defResp.plan);
         setMonthPlan(curResp.plan);
+        setCurrentYearMonth(curResp.yearMonth);
         setBankCount(plaidResp.plaidItems.length);
         if (typeof defResp.recentMonthlyAvgSpend === "number") {
           setRecentAvg(defResp.recentMonthlyAvgSpend);
@@ -278,8 +275,9 @@ export default function NewBudget() {
           categoryAllocations: sanitized,
         };
         if (target === "month_only") {
+          if (!currentYearMonth) throw new Error("budget_month_unavailable");
           await apiFetch<{ plan: Plan }>(
-            `/workspaces/${wsId}/budget-plans/months/${currentYearMonth()}`,
+            `/workspaces/${wsId}/budget-plans/months/${currentYearMonth}`,
             { method: "POST", body: JSON.stringify(body) },
           );
         } else {
@@ -304,7 +302,7 @@ export default function NewBudget() {
         setSubmitting(false);
       }
     },
-    [total, allocs, submitting],
+    [total, allocs, submitting, currentYearMonth],
   );
 
   const submit = useCallback(() => {
