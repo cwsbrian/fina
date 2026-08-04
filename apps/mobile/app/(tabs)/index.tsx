@@ -46,12 +46,19 @@ const CURRENCY = "CAD";
 
 type SpendByCategory = { categoryId: string; categoryName?: string; spent: number };
 type BudgetCurrent = {
+  yearMonth: string;
   plan: {
     totalAmount?: number;
     categoryAllocations?: Array<{ categoryId: string; amount: number }>;
   } | null;
   totalSpent: string;
   spendByCategory: SpendByCategory[];
+};
+
+type HomeAnalysisResponse = {
+  current: {
+    income: number;
+  };
 };
 
 type ChatThreadWithPreview = ChatThreadDTO & {
@@ -85,27 +92,6 @@ function monthName(date: Date): string {
 
 function formatMonthDay(date: Date): string {
   return date.toLocaleDateString("en-CA", { month: "short", day: "numeric" });
-}
-
-/** Split a decimal-string amount into the formatted dollar portion (no
- *  decimals, with currency symbol + thousands separators) and the ".NN"
- *  cents suffix, so the hero can render them at different sizes. */
-function splitMoney(amount: string, currency = CURRENCY): { dollars: string; cents: string } {
-  const n = Number(amount);
-  if (!Number.isFinite(n)) return { dollars: amount, cents: "" };
-  const abs = Math.abs(n);
-  const intDollars = Math.floor(abs);
-  const cents = Math.round((abs - intDollars) * 100);
-  const intl = new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency,
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  });
-  return {
-    dollars: intl.format(intDollars),
-    cents: `.${cents.toString().padStart(2, "0")}`,
-  };
 }
 
 /** Friendly "Just now / 5m / 2h / yesterday / May 12" relative time for
@@ -142,6 +128,7 @@ export default function Home() {
   const [err, setErr] = useState<string | null>(null);
   const [backendUnavailable, setBackendUnavailable] = useState(false);
   const [budgetCurrent, setBudgetCurrent] = useState<BudgetCurrent | null>(null);
+  const [monthlyIncome, setMonthlyIncome] = useState(0);
   const [latestUnboundThread, setLatestUnboundThread] = useState<ChatThreadWithPreview | null>(
     null,
   );
@@ -175,43 +162,51 @@ export default function Home() {
 
       await Promise.all([
         apiFetch<BudgetCurrent>(`/workspaces/${wsId}/budget-plans/current`)
-          .then((r) => {
+          .then(async (r) => {
             if (runId !== loadRunId.current) return;
             setBudgetCurrent({
+              yearMonth: r.yearMonth,
               plan: r.plan,
               totalSpent: r.totalSpent,
               spendByCategory: Array.isArray(r.spendByCategory) ? r.spendByCategory : [],
             });
+            const [year, month] = r.yearMonth.split("-").map(Number);
+            if (!Number.isFinite(year) || !Number.isFinite(month)) {
+              setMonthlyIncome(0);
+              return;
+            }
+            const analysis = await apiFetch<HomeAnalysisResponse>(
+              `/workspaces/${wsId}/analysis?year=${year}&month=${month}`,
+            ).catch(() => null);
+            if (runId !== loadRunId.current) return;
+            setMonthlyIncome(analysis?.current.income ?? 0);
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
-            setBudgetCurrent({ plan: null, totalSpent: "0.00", spendByCategory: [] });
+            setBudgetCurrent({
+              yearMonth: "",
+              plan: null,
+              totalSpent: "0.00",
+              spendByCategory: [],
+            });
+            setMonthlyIncome(0);
           }),
         apiFetch<{ threads: ChatThreadWithPreview[] }>("/chat/threads")
           .then((r) => {
             if (runId !== loadRunId.current) return;
             // The morning brief now lands in this workspace's one canonical
             // conversation instead of a separate workspace-less thread.
-            const workspaceThread =
-              r.threads.find((t) => t.workspaceId === wsId) ?? null;
+            const workspaceThread = r.threads.find((t) => t.workspaceId === wsId) ?? null;
             setLatestUnboundThread(workspaceThread);
-            const workspaceThreads = r.threads.filter(
-              (thread) => thread.workspaceId === wsId,
-            );
+            const workspaceThreads = r.threads.filter((thread) => thread.workspaceId === wsId);
             setUnreadFina(
-              workspaceThreads.reduce(
-                (sum, thread) => sum + (thread.unreadCount ?? 0),
-                0,
-              ),
+              workspaceThreads.reduce((sum, thread) => sum + (thread.unreadCount ?? 0), 0),
             );
             setLatestUnreadThreadId(
-              workspaceThreads.find((thread) => (thread.unreadCount ?? 0) > 0)
-                ?.id ?? null,
+              workspaceThreads.find((thread) => (thread.unreadCount ?? 0) > 0)?.id ?? null,
             );
             setHasChattedState(
-              workspaceThreads.some(
-                (thread) => thread.firstMessagePreview !== null,
-              ),
+              workspaceThreads.some((thread) => thread.firstMessagePreview !== null),
             );
           })
           .catch(() => {
@@ -345,7 +340,8 @@ export default function Home() {
   const remainingNum = cap !== null ? cap - spentNum : null;
   const pct = cap && cap > 0 ? Math.min(999, (spentNum / cap) * 100) : 0;
   const over = pct > 100;
-  const spentSplit = splitMoney(spentNum.toFixed(2));
+  const spentDisplay = formatMoney(spentNum.toFixed(2), CURRENCY).display;
+  const incomeDisplay = formatMoney(monthlyIncome.toFixed(2), CURRENCY).display;
   const capDisplay = cap !== null ? formatMoney(cap.toFixed(2), CURRENCY).display : null;
   const remainingDisplay =
     remainingNum !== null ? formatMoney(Math.abs(remainingNum).toFixed(2), CURRENCY).display : null;
@@ -389,17 +385,14 @@ export default function Home() {
     href: string;
   };
   const actionItems: ActionItem[] = [];
-  const bankGraceDeadline = bankGraceItems
-    .map((item) => item.billingGraceEndsAt!)
-    .sort()[0] ?? null;
+  const bankGraceDeadline =
+    bankGraceItems.map((item) => item.billingGraceEndsAt!).sort()[0] ?? null;
   const bankToolbarVisible = bankGraceItems.length > 0 && bankGraceDeadline !== null;
   const bankToolbarTitle = "Bank connection grace period";
   const bankToolbarSubtitle = bankGraceDeadline
     ? `Ends ${formatMonthDay(new Date(bankGraceDeadline))} · upgrade to stay linked.`
     : "";
-  const bankToolbarHeight = bankToolbarVisible
-    ? BANK_GRACE_TOOLBAR_HEIGHT
-    : 0;
+  const bankToolbarHeight = bankToolbarVisible ? BANK_GRACE_TOOLBAR_HEIGHT : 0;
 
   if (unreadFina > 0) {
     actionItems.push({
@@ -408,9 +401,7 @@ export default function Home() {
       title: `Fina sent you ${unreadFina} message${unreadFina === 1 ? "" : "s"}`,
       // Open the canonical workspace conversation. There is no selectable
       // thread history anymore.
-      href: latestUnreadThreadId
-        ? `/(tabs)/chat?thread=${latestUnreadThreadId}`
-        : "/(tabs)/chat",
+      href: latestUnreadThreadId ? `/(tabs)/chat?thread=${latestUnreadThreadId}` : "/(tabs)/chat",
     });
   }
 
@@ -491,15 +482,13 @@ export default function Home() {
   // Hero (This month) appears once the budget summary loads and either
   // a plan exists or there is spending to summarize.
   const heroVisible =
-    budgetCurrent !== null && shouldShowBudgetHero({ hasBudget, spent: spentNum });
+    budgetCurrent !== null &&
+    shouldShowBudgetHero({ hasBudget, spent: spentNum, income: monthlyIncome });
 
   return (
     <View style={styles.safe}>
       <ScrollView
-        contentContainerStyle={[
-          styles.scroll,
-          { paddingTop: totalHeader + bankToolbarHeight },
-        ]}
+        contentContainerStyle={[styles.scroll, { paddingTop: totalHeader + bankToolbarHeight }]}
         onScroll={header.onScroll}
         scrollEventThrottle={header.scrollEventThrottle}
       >
@@ -546,21 +535,30 @@ export default function Home() {
 
         {me && (
           <>
-            {/* 2. Hero — month spending; only when there is actual spend */}
+            {/* 2. Hero — this month's income and expenses */}
             {heroVisible && (
               <View style={styles.hero}>
                 <View style={styles.heroHead}>
-                  <Text style={styles.heroLabel}>{monthLabel} spending</Text>
+                  <Text style={styles.heroLabel}>{monthLabel} cash flow</Text>
                   {cap !== null && (
                     <Pressable onPress={() => router.push("/budget" as never)}>
                       <Text style={styles.heroCta}>See Budget →</Text>
                     </Pressable>
                   )}
                 </View>
-                <Text style={styles.heroValue}>
-                  {spentSplit.dollars}
-                  <Text style={styles.heroValueDecimal}>{spentSplit.cents}</Text>
-                </Text>
+                <View style={styles.heroCashflow}>
+                  <View style={styles.heroMetric}>
+                    <Text style={styles.heroMetricLabel}>Income</Text>
+                    <Text style={[styles.heroMetricValue, styles.heroMetricIncome]}>
+                      +{incomeDisplay}
+                    </Text>
+                  </View>
+                  <View style={styles.heroMetricDivider} />
+                  <View style={styles.heroMetric}>
+                    <Text style={styles.heroMetricLabel}>Expenses</Text>
+                    <Text style={styles.heroMetricValue}>−{spentDisplay}</Text>
+                  </View>
+                </View>
                 {cap !== null && capDisplay && remainingDisplay ? (
                   <View style={styles.heroMeta}>
                     <Text style={styles.heroMetaText}>of {capDisplay} budget</Text>
@@ -623,9 +621,7 @@ export default function Home() {
             )}
 
             {/* 3. Brief card — only when there's an unread brief to read */}
-            {canUseGoals &&
-              latestUnboundThread &&
-              latestUnboundThread.unreadCount > 0 && (
+            {canUseGoals && latestUnboundThread && latestUnboundThread.unreadCount > 0 && (
               <Pressable
                 style={({ pressed }) => [styles.briefCard, pressed && { opacity: 0.85 }]}
                 onPress={() =>
@@ -726,12 +722,14 @@ export default function Home() {
                         key={c.categoryId}
                         style={({ pressed }) => [styles.catRow, pressed && { opacity: 0.7 }]}
                         onPress={() =>
-                          router.push(analysisCategoryRoute({
-                            categoryId: c.categoryId,
-                            categoryName: name,
-                            year: now.getFullYear(),
-                            month: now.getMonth() + 1,
-                          }) as never)
+                          router.push(
+                            analysisCategoryRoute({
+                              categoryId: c.categoryId,
+                              categoryName: name,
+                              year: now.getFullYear(),
+                              month: now.getMonth() + 1,
+                            }) as never,
+                          )
                         }
                       >
                         <View style={[styles.catGlyph, { backgroundColor: meta.bg }]}>
@@ -824,7 +822,8 @@ export default function Home() {
                         </View>
                         <View style={styles.txRight}>
                           <Text style={[styles.txAmount, money.isIncome && styles.txAmountIncome]}>
-                            {money.isIncome ? "+" : "−"}{money.display}
+                            {money.isIncome ? "+" : "−"}
+                            {money.display}
                           </Text>
                           <Text style={styles.txTime}>{formatTime(tx.occurredAt)}</Text>
                         </View>
@@ -849,11 +848,7 @@ export default function Home() {
           onPress={() => router.push("/banks" as never)}
         >
           <View style={styles.bankToolbarIcon}>
-            <Ionicons
-              name="time-outline"
-              size={27}
-              color="#f47b61"
-            />
+            <Ionicons name="time-outline" size={27} color="#f47b61" />
           </View>
           <View style={styles.bankToolbarCopy}>
             <Text style={styles.bankToolbarTitle} numberOfLines={1}>
@@ -1005,20 +1000,30 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textTransform: "uppercase",
   },
-  heroValue: {
-    fontSize: 40,
-    lineHeight: 44,
-    fontWeight: "500",
-    letterSpacing: -0.8,
+  heroCashflow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    marginTop: space.sm,
+    marginBottom: 2,
+  },
+  heroMetric: { flex: 1 },
+  heroMetricDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: colors.hairline,
+    marginHorizontal: space.base,
+  },
+  heroMetricLabel: {
+    ...type$.captionStrong,
+    color: colors.muted,
+    textTransform: "uppercase",
+  },
+  heroMetricValue: {
+    ...type$.titleLg,
     color: colors.ink,
+    marginTop: 3,
     fontVariant: ["tabular-nums"],
   },
-  heroValueDecimal: {
-    fontSize: 22,
-    lineHeight: 28,
-    fontWeight: "500",
-    color: colors.muted,
-  },
+  heroMetricIncome: { color: colors.up },
   heroMeta: {
     flexDirection: "row",
     alignItems: "center",

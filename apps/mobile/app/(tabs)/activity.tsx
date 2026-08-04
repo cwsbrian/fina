@@ -24,7 +24,6 @@ import { categoryMeta } from "../../src/categories/meta";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { type DateRange } from "../../src/datetime/DateRangeSheet";
-import { useDateRangeSheet } from "../../src/datetime/DateRangeSheetHost";
 import { ConnectBankButton } from "../../src/plaid/ConnectBankButton";
 import { NeedsReviewDot } from "../../src/categorize/NeedsReviewPill";
 import { getSeenExcludedIds } from "../../src/transactions/excludedSeen";
@@ -36,10 +35,12 @@ import {
 import {
   CategoryFilterSheet,
   UNCATEGORIZED_FILTER_ID,
+  type ActivityDirectionFilter,
+  type ActivityFilters,
 } from "../../src/activity/CategoryFilterSheet";
 
 const HEADER_HEIGHT = 84;
-const categoryFiltersByWorkspace = new Map<string, string[]>();
+const activityFiltersByWorkspace = new Map<string, ActivityFilters>();
 
 type TxListResp = {
   transactions: TransactionDTO[];
@@ -83,9 +84,7 @@ function computeUpcomingSummary(
   subscriptions: Recurring[],
 ): UpcomingSummary {
   const now = new Date();
-  const today = new Date(
-    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
-  );
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
   const year = today.getUTCFullYear();
   const month = today.getUTCMonth();
 
@@ -93,11 +92,7 @@ function computeUpcomingSummary(
   let count = 0;
   for (const s of schedules) {
     const d = parseDateOnly(s.scheduledDate);
-    if (
-      d.getUTCFullYear() === year &&
-      d.getUTCMonth() === month &&
-      d >= today
-    ) {
+    if (d.getUTCFullYear() === year && d.getUTCMonth() === month && d >= today) {
       total += Number(s.amount);
       count += 1;
     }
@@ -105,11 +100,7 @@ function computeUpcomingSummary(
   for (const r of subscriptions) {
     for (const ymd of r.remainingThisMonth) {
       const d = parseDateOnly(ymd);
-      if (
-        d.getUTCFullYear() === year &&
-        d.getUTCMonth() === month &&
-        d >= today
-      ) {
+      if (d.getUTCFullYear() === year && d.getUTCMonth() === month && d >= today) {
         total += Number(r.amount);
         count += 1;
       }
@@ -118,7 +109,7 @@ function computeUpcomingSummary(
   return { total, count };
 }
 
-function groupByDate(txs: TransactionDTO[]): Section[] {
+function groupByDate(txs: TransactionDTO[], direction: ActivityDirectionFilter): Section[] {
   const buckets = new Map<string, TransactionDTO[]>();
   const monthTotals = new Map<string, number>();
   const midMonthTotals = new Map<string, number>();
@@ -128,7 +119,7 @@ function groupByDate(txs: TransactionDTO[]): Section[] {
     arr.push(t);
     buckets.set(key, arr);
     const month = monthKey(t.occurredAt);
-    const amount = effectiveExpenseAmount(t);
+    const amount = activitySummaryAmount(t, direction);
     if (month && amount > 0) {
       monthTotals.set(month, (monthTotals.get(month) ?? 0) + amount);
       if (dayOfMonth(t.occurredAt) <= 14) {
@@ -145,12 +136,14 @@ function groupByDate(txs: TransactionDTO[]): Section[] {
     const day = dayOfMonth(data[0]?.occurredAt);
     const isPastMonth = month !== "" && month !== currentMonth;
     const midPeriodPassed = isPastMonth || today.getDate() > 14;
-    const monthLabel = isPastMonth && (index === 0 || month !== lastMonth)
-      ? formatMonthLabel(data[0]?.occurredAt)
-      : null;
-    const midMonthLabel = month && midPeriodPassed && month === lastMonth && lastDay > 14 && day <= 14
-      ? formatMidMonthLabel(data[0]?.occurredAt)
-      : null;
+    const monthLabel =
+      isPastMonth && (index === 0 || month !== lastMonth)
+        ? formatMonthLabel(data[0]?.occurredAt)
+        : null;
+    const midMonthLabel =
+      month && midPeriodPassed && month === lastMonth && lastDay > 14 && day <= 14
+        ? formatMidMonthLabel(data[0]?.occurredAt)
+        : null;
     lastMonth = month || lastMonth;
     lastDay = day || lastDay;
     return {
@@ -196,10 +189,14 @@ function formatMidMonthLabel(iso?: string): string {
   return `Through ${date.toLocaleDateString("en-CA", { month: "short" })} 14`;
 }
 
-function sectionTotal(txs: TransactionDTO[], currency: string): string {
-  const sum = txs.reduce((acc, t) => acc + effectiveExpenseAmount(t), 0);
+function sectionTotal(
+  txs: TransactionDTO[],
+  currency: string,
+  direction: ActivityDirectionFilter,
+): string {
+  const sum = txs.reduce((acc, tx) => acc + activitySummaryAmount(tx, direction), 0);
   const { display } = formatMoney(sum.toString(), currency);
-  return `−${display}`;
+  return `${direction === "income" ? "+" : "−"}${display}`;
 }
 
 function effectiveExpenseAmount(tx: TransactionDTO): number {
@@ -207,9 +204,16 @@ function effectiveExpenseAmount(tx: TransactionDTO): number {
   return Math.max(0, Number(tx.amount) - Number(tx.refundedAmount));
 }
 
-function monthTotal(total: number, currency: string): string {
+function activitySummaryAmount(tx: TransactionDTO, direction: ActivityDirectionFilter): number {
+  if (direction === "income") {
+    return tx.budgetImpact === "income" ? Math.abs(Number(tx.amount)) : 0;
+  }
+  return effectiveExpenseAmount(tx);
+}
+
+function monthTotal(total: number, currency: string, direction: ActivityDirectionFilter): string {
   const { display } = formatMoney(total.toFixed(2), currency);
-  return `−${display}`;
+  return `${direction === "income" ? "+" : "−"}${display}`;
 }
 
 function currentMonthRange(): { from: string; to: string } {
@@ -235,17 +239,18 @@ export default function Activity() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [categoryFilterOpen, setCategoryFilterOpen] = useState(false);
+  const [filterOpen, setFilterOpen] = useState(false);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
+  const [directionFilter, setDirectionFilter] = useState<ActivityDirectionFilter>("all");
   const [query, setQuery] = useState("");
   const [range, setRange] = useState<DateRange>({});
-  const dateRangeSheet = useDateRangeSheet();
   // Mirror query + range into refs so load() can always read the latest
   // values without putting them in its closure (keeps useFocusEffect
   // deps stable across renders).
   const queryRef = useRef("");
   const rangeRef = useRef<DateRange>({});
   const categoryFilterRef = useRef<string[]>([]);
+  const directionFilterRef = useRef<ActivityDirectionFilter>("all");
   const filterWorkspaceRef = useRef<string | null>(null);
   queryRef.current = query;
   rangeRef.current = range;
@@ -261,10 +266,18 @@ export default function Activity() {
         return;
       }
       if (filterWorkspaceRef.current !== id) {
-        const savedFilter = categoryFiltersByWorkspace.get(id) ?? [];
+        const savedFilter = activityFiltersByWorkspace.get(id) ?? {
+          direction: "all" as const,
+          range: {},
+          selectedCategoryIds: [],
+        };
         filterWorkspaceRef.current = id;
-        categoryFilterRef.current = savedFilter;
-        setSelectedCategoryIds(savedFilter);
+        categoryFilterRef.current = savedFilter.selectedCategoryIds;
+        directionFilterRef.current = savedFilter.direction;
+        rangeRef.current = savedFilter.range;
+        setSelectedCategoryIds(savedFilter.selectedCategoryIds);
+        setDirectionFilter(savedFilter.direction);
+        setRange(savedFilter.range);
       }
       setWsId(id);
       setNextCursor(null);
@@ -277,32 +290,35 @@ export default function Activity() {
         query: trimmed,
         range: r,
         categoryFilter: splitCategoryFilter(categoryFilterRef.current),
+        ...(directionFilterRef.current === "all" ? {} : { direction: directionFilterRef.current }),
       });
       const excludedParams = new URLSearchParams({
         budgetImpact: "excluded",
         limit: String(ACTIVITY_PAGE_LIMIT),
         ...currentMonthRange(),
       });
-      const [txResp, catResp, schedResp, recurResp, excludedResp, seenExcluded] = await Promise.all([
-        apiFetch<TxListResp>(txPath),
-        apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
-        apiFetch<{ schedules: Schedule[] }>(
-          `/workspaces/${id}/schedules?status=upcoming`,
-        ).catch(() => ({ schedules: [] as Schedule[] })),
-        apiFetch<{ recurring: Recurring[] }>(
-          `/workspaces/${id}/recurring`,
-        ).catch(() => ({ recurring: [] as Recurring[] })),
-        apiFetch<TxListResp>(`/workspaces/${id}/transactions?${excludedParams.toString()}`).catch(() => ({ transactions: [], nextCursor: null })),
-        getSeenExcludedIds(),
-      ]);
+      const [txResp, catResp, schedResp, recurResp, excludedResp, seenExcluded] = await Promise.all(
+        [
+          apiFetch<TxListResp>(txPath),
+          apiFetch<{ categories: CategoryDTO[] }>(`/workspaces/${id}/categories`),
+          apiFetch<{ schedules: Schedule[] }>(`/workspaces/${id}/schedules?status=upcoming`).catch(
+            () => ({ schedules: [] as Schedule[] }),
+          ),
+          apiFetch<{ recurring: Recurring[] }>(`/workspaces/${id}/recurring`).catch(() => ({
+            recurring: [] as Recurring[],
+          })),
+          apiFetch<TxListResp>(`/workspaces/${id}/transactions?${excludedParams.toString()}`).catch(
+            () => ({ transactions: [], nextCursor: null }),
+          ),
+          getSeenExcludedIds(),
+        ],
+      );
       setTxs(mergeActivityTransactionPages([], txResp.transactions));
       setNextCursor(txResp.nextCursor);
       setExcludedCount(excludedResp.transactions.length);
       setNewExcludedCount(excludedResp.transactions.filter((t) => !seenExcluded.has(t.id)).length);
       setCategories(Object.fromEntries(catResp.categories.map((c) => [c.id, c])));
-      setUpcoming(
-        computeUpcomingSummary(schedResp.schedules, recurResp.recurring),
-      );
+      setUpcoming(computeUpcomingSummary(schedResp.schedules, recurResp.recurring));
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -321,6 +337,7 @@ export default function Activity() {
         query: queryRef.current.trim(),
         range: rangeRef.current,
         categoryFilter: splitCategoryFilter(categoryFilterRef.current),
+        ...(directionFilterRef.current === "all" ? {} : { direction: directionFilterRef.current }),
       });
       const resp = await apiFetch<TxListResp>(path);
       setTxs((current) =>
@@ -352,24 +369,27 @@ export default function Activity() {
     return () => clearTimeout(t);
   }, [query, load]);
 
-  // Date-range changes reload immediately (no debounce — preset taps
-  // and Apply are discrete events, not a stream).
-  useEffect(() => {
-    load();
-  }, [range, load]);
-
   const onRefresh = async () => {
     setRefreshing(true);
     await load();
     setRefreshing(false);
   };
 
-  const applyCategoryFilter = (ids: string[]) => {
-    const next = [...new Set(ids)];
-    categoryFilterRef.current = next;
-    setSelectedCategoryIds(next);
-    if (wsId) categoryFiltersByWorkspace.set(wsId, next);
+  const applyFilters = (filters: ActivityFilters) => {
+    const nextCategories = [...new Set(filters.selectedCategoryIds)];
+    const nextFilters = { ...filters, selectedCategoryIds: nextCategories };
+    categoryFilterRef.current = nextCategories;
+    directionFilterRef.current = filters.direction;
+    rangeRef.current = filters.range;
+    setSelectedCategoryIds(nextCategories);
+    setDirectionFilter(filters.direction);
+    setRange(filters.range);
+    if (wsId) activityFiltersByWorkspace.set(wsId, nextFilters);
     load();
+  };
+
+  const clearFilters = () => {
+    applyFilters({ direction: "all", range: {}, selectedCategoryIds: [] });
   };
 
   if (err && txs === null) {
@@ -398,13 +418,18 @@ export default function Activity() {
     );
   }
 
-  const sections = groupByDate(txs);
+  const sections = groupByDate(txs, directionFilter);
   const isSearching = query.trim().length > 0;
   const hasCategoryFilter = selectedCategoryIds.length > 0;
-  const categoryFilterLabel = formatCategoryFilterLabel(
+  const hasDateFilter = !!(range.from || range.to);
+  const hasDirectionFilter = directionFilter !== "all";
+  const hasActiveFilters = hasCategoryFilter || hasDateFilter || hasDirectionFilter;
+  const filterLabel = formatFilterLabel({
     selectedCategoryIds,
     categories,
-  );
+    direction: directionFilter,
+    range,
+  });
 
   // Pick a currency for section totals — Plaid items live in one
   // workspace and share its currency, so safe to read from first tx.
@@ -431,27 +456,20 @@ export default function Activity() {
         }
         ListHeaderComponent={
           <View>
-            {hasCategoryFilter ? (
+            {hasActiveFilters ? (
               <Pressable
-                style={({ pressed }) => [
-                  styles.filterPill,
-                  pressed && { opacity: 0.7 },
-                ]}
-                onPress={() => setCategoryFilterOpen(true)}
+                style={({ pressed }) => [styles.filterPill, pressed && { opacity: 0.7 }]}
+                onPress={() => setFilterOpen(true)}
               >
                 <Ionicons name="funnel" size={13} color={colors.primary} />
                 <Text style={styles.filterPillText} numberOfLines={1}>
-                  {categoryFilterLabel}
+                  {filterLabel}
                 </Text>
                 <Ionicons name="chevron-down" size={14} color={colors.primary} />
               </Pressable>
             ) : null}
             {upcoming.count > 0 ? (
-              <UpcomingBanner
-                total={upcoming.total}
-                count={upcoming.count}
-                currency={currency}
-              />
+              <UpcomingBanner total={upcoming.total} count={upcoming.count} currency={currency} />
             ) : null}
             {excludedCount > 0 ? <ExcludedBanner hasNew={newExcludedCount > 0} /> : null}
           </View>
@@ -462,7 +480,7 @@ export default function Activity() {
               <View style={styles.monthHead}>
                 <Text style={styles.monthHeadLabel}>{section.monthLabel}</Text>
                 <Text style={styles.monthHeadAmount}>
-                  {monthTotal(section.monthTotal, currency)}
+                  {monthTotal(section.monthTotal, currency, directionFilter)}
                 </Text>
               </View>
             ) : null}
@@ -470,23 +488,22 @@ export default function Activity() {
               <View style={styles.midMonthHead}>
                 <Text style={styles.midMonthHeadLabel}>{section.midMonthLabel}</Text>
                 <Text style={styles.midMonthHeadAmount}>
-                  {monthTotal(section.midMonthTotal, currency)}
+                  {monthTotal(section.midMonthTotal, currency, directionFilter)}
                 </Text>
               </View>
             ) : null}
             <View style={styles.sectionHead}>
               <Text style={styles.sectionHeadLabel}>{section.title}</Text>
-              {section.data.length > 1 && section.data.some((tx) => effectiveExpenseAmount(tx) > 0) && (
-                <Text style={styles.sectionHeadAmount}>
-                  {sectionTotal(section.data, currency)}
-                </Text>
-              )}
+              {section.data.length > 1 &&
+                section.data.some((tx) => activitySummaryAmount(tx, directionFilter) > 0) && (
+                  <Text style={styles.sectionHeadAmount}>
+                    {sectionTotal(section.data, currency, directionFilter)}
+                  </Text>
+                )}
             </View>
           </View>
         )}
-        renderItem={({ item }) => (
-          <TxRow tx={item} categories={categories} />
-        )}
+        renderItem={({ item }) => <TxRow tx={item} categories={categories} />}
         ListFooterComponent={
           loadingMore ? (
             <View style={styles.footerLoading}>
@@ -495,20 +512,18 @@ export default function Activity() {
           ) : null
         }
         ListEmptyComponent={
-          hasCategoryFilter ? (
+          hasActiveFilters ? (
             <View style={styles.empty}>
               <View style={styles.iconWrap}>
                 <Ionicons name="funnel-outline" size={32} color={colors.muted} />
               </View>
               <Text style={styles.emptyTitle}>No matching transactions</Text>
-              <Text style={styles.emptyBody}>
-                No transactions match the selected categories and other filters.
-              </Text>
+              <Text style={styles.emptyBody}>No transactions match the selected filters.</Text>
               <Pressable
                 style={({ pressed }) => [styles.cta, pressed && { opacity: 0.85 }]}
-                onPress={() => applyCategoryFilter([])}
+                onPress={clearFilters}
               >
-                <Text style={styles.ctaText}>Clear category filter</Text>
+                <Text style={styles.ctaText}>Clear filters</Text>
               </Pressable>
             </View>
           ) : isSearching ? (
@@ -517,18 +532,12 @@ export default function Activity() {
                 <Ionicons name="search" size={32} color={colors.muted} />
               </View>
               <Text style={styles.emptyTitle}>No matches</Text>
-              <Text style={styles.emptyBody}>
-                No transactions matched "{query.trim()}".
-              </Text>
+              <Text style={styles.emptyBody}>No transactions matched "{query.trim()}".</Text>
             </View>
           ) : (
             <View style={styles.empty}>
               <View style={styles.iconWrap}>
-                <Ionicons
-                  name="receipt-outline"
-                  size={36}
-                  color={colors.muted}
-                />
+                <Ionicons name="receipt-outline" size={36} color={colors.muted} />
               </View>
               <Text style={styles.emptyTitle}>No transactions yet</Text>
               <Text style={styles.emptyBody}>
@@ -551,7 +560,13 @@ export default function Activity() {
           )
         }
       />
-      <Animated.View style={[styles.headerOverlay, { top: insets.top, height: HEADER_HEIGHT }, header.headerStyle]}>
+      <Animated.View
+        style={[
+          styles.headerOverlay,
+          { top: insets.top, height: HEADER_HEIGHT },
+          header.headerStyle,
+        ]}
+      >
         {searchOpen ? (
           <View style={styles.head}>
             <View style={styles.searchWrap}>
@@ -573,11 +588,7 @@ export default function Activity() {
                   hitSlop={8}
                   style={({ pressed }) => pressed && { opacity: 0.6 }}
                 >
-                  <Ionicons
-                    name="close-circle"
-                    size={18}
-                    color={colors.mutedSoft}
-                  />
+                  <Ionicons name="close-circle" size={18} color={colors.mutedSoft} />
                 </Pressable>
               )}
             </View>
@@ -595,28 +606,28 @@ export default function Activity() {
         ) : (
           <ActivityHeader
             onSearch={() => setSearchOpen(true)}
-            onRange={() => dateRangeSheet.open(range, setRange)}
-            onCategories={() => setCategoryFilterOpen(true)}
-            rangeActive={!!(range.from || range.to)}
-            categoriesActive={hasCategoryFilter}
+            onFilters={() => setFilterOpen(true)}
+            filtersActive={hasActiveFilters}
             count={txs?.length}
           />
         )}
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
       <Modal
-        visible={categoryFilterOpen}
+        visible={filterOpen}
         transparent
         animationType="none"
-        onRequestClose={() => setCategoryFilterOpen(false)}
+        onRequestClose={() => setFilterOpen(false)}
       >
         <View style={styles.categoryFilterModal}>
           <CategoryFilterSheet
-            visible={categoryFilterOpen}
+            visible={filterOpen}
             categories={Object.values(categories)}
-            selectedIds={selectedCategoryIds}
-            onClose={() => setCategoryFilterOpen(false)}
-            onApply={applyCategoryFilter}
+            selectedCategoryIds={selectedCategoryIds}
+            direction={directionFilter}
+            range={range}
+            onClose={() => setFilterOpen(false)}
+            onApply={applyFilters}
           />
         </View>
       </Modal>
@@ -631,14 +642,40 @@ function splitCategoryFilter(selectedIds: string[]) {
   };
 }
 
-function formatCategoryFilterLabel(
-  selectedIds: string[],
-  categories: Record<string, CategoryDTO>,
-): string {
-  if (selectedIds.length !== 1) return `${selectedIds.length} categories`;
-  const id = selectedIds[0];
-  if (id === UNCATEGORIZED_FILTER_ID) return "Uncategorized";
-  return (id && categories[id]?.name) || "1 category";
+function formatFilterLabel({
+  selectedCategoryIds,
+  categories,
+  direction,
+  range,
+}: {
+  selectedCategoryIds: string[];
+  categories: Record<string, CategoryDTO>;
+  direction: ActivityDirectionFilter;
+  range: DateRange;
+}): string {
+  const labels: string[] = [];
+  if (direction === "expense") labels.push("Expenses");
+  if (direction === "income") labels.push("Income");
+  if (range.from || range.to) {
+    labels.push(
+      range.from && range.to
+        ? `${range.from} – ${range.to}`
+        : range.from
+          ? `From ${range.from}`
+          : `Through ${range.to}`,
+    );
+  }
+  if (selectedCategoryIds.length === 1) {
+    const id = selectedCategoryIds[0];
+    labels.push(
+      id === UNCATEGORIZED_FILTER_ID
+        ? "Uncategorized"
+        : (id && categories[id]?.name) || "1 category",
+    );
+  } else if (selectedCategoryIds.length > 1) {
+    labels.push(`${selectedCategoryIds.length} categories`);
+  }
+  return labels.join(" · ");
 }
 
 function UpcomingBanner({
@@ -653,10 +690,7 @@ function UpcomingBanner({
   const { display } = formatMoney(total.toFixed(2), currency);
   return (
     <Pressable
-      style={({ pressed }) => [
-        styles.banner,
-        pressed && { opacity: 0.7 },
-      ]}
+      style={({ pressed }) => [styles.banner, pressed && { opacity: 0.7 }]}
       onPress={() => router.push("/scheduled" as never)}
     >
       <View style={styles.bannerGlyph}>
@@ -667,11 +701,7 @@ function UpcomingBanner({
       </Text>
       <Text style={styles.bannerAmount}>−{display}</Text>
       <Text style={styles.bannerCount}>· {count}</Text>
-      <Ionicons
-        name="chevron-forward"
-        size={14}
-        color={colors.mutedSoft}
-      />
+      <Ionicons name="chevron-forward" size={14} color={colors.mutedSoft} />
     </Pressable>
   );
 }
@@ -679,10 +709,7 @@ function UpcomingBanner({
 function ExcludedBanner({ hasNew }: { hasNew: boolean }) {
   return (
     <Pressable
-      style={({ pressed }) => [
-        styles.banner,
-        pressed && { opacity: 0.7 },
-      ]}
+      style={({ pressed }) => [styles.banner, pressed && { opacity: 0.7 }]}
       onPress={() => router.push("/transactions/excluded" as never)}
     >
       <View style={styles.bannerGlyph}>
@@ -692,28 +719,20 @@ function ExcludedBanner({ hasNew }: { hasNew: boolean }) {
         Excluded transactions
       </Text>
       {hasNew && <View style={styles.bannerDot} />}
-      <Ionicons
-        name="chevron-forward"
-        size={14}
-        color={colors.mutedSoft}
-      />
+      <Ionicons name="chevron-forward" size={14} color={colors.mutedSoft} />
     </Pressable>
   );
 }
 
 function ActivityHeader({
   onSearch,
-  onRange,
-  onCategories,
-  rangeActive,
-  categoriesActive,
+  onFilters,
+  filtersActive,
   count,
 }: {
   onSearch?: () => void;
-  onRange?: () => void;
-  onCategories?: () => void;
-  rangeActive?: boolean;
-  categoriesActive?: boolean;
+  onFilters?: () => void;
+  filtersActive?: boolean;
   count?: number;
 } = {}) {
   return (
@@ -728,16 +747,10 @@ function ActivityHeader({
       </View>
       <View style={styles.headActions}>
         <HeaderIconButton
-          icon="calendar-outline"
-          accessibilityLabel="Date range"
-          {...(onRange ? { onPress: onRange } : {})}
-          {...(rangeActive ? { color: colors.primary } : {})}
-        />
-        <HeaderIconButton
           icon="funnel-outline"
-          accessibilityLabel="Filter categories"
-          {...(onCategories ? { onPress: onCategories } : {})}
-          {...(categoriesActive ? { color: colors.primary } : {})}
+          accessibilityLabel="Filter transactions"
+          {...(onFilters ? { onPress: onFilters } : {})}
+          {...(filtersActive ? { color: colors.primary } : {})}
         />
         <HeaderIconButton
           icon="search-outline"
@@ -765,24 +778,16 @@ function TxRow({
   const money = formatMoney(tx.amount, tx.currency);
   const isSplit = tx.allocations.length > 1;
   const firstAlloc = tx.allocations[0];
-  const firstAllocCat = firstAlloc?.categoryId
-    ? categories[firstAlloc.categoryId]
-    : null;
+  const firstAllocCat = firstAlloc?.categoryId ? categories[firstAlloc.categoryId] : null;
   const merchant = tx.merchantNormalized || tx.merchantRaw || "—";
-  const categoryLabel = isSplit
-    ? "Split"
-    : firstAllocCat?.name ?? "Uncategorized";
+  const categoryLabel = isSplit ? "Split" : (firstAllocCat?.name ?? "Uncategorized");
   const uncategorized = !isSplit && !firstAllocCat?.id;
   const meta = categoryMeta(firstAllocCat);
   // Needs-review dot: only on single-allocation rows with a categorized
   // allocation that needs confirmation. Visual only — row tap navigates
   // to the transaction detail where the confirm banner lives.
-  const showDot =
-    !isSplit &&
-    !!firstAlloc?.needsConfirmation &&
-    !!firstAllocCat;
-  const isOther =
-    !!firstAllocCat && firstAllocCat.name.trim().toLowerCase() === "other";
+  const showDot = !isSplit && !!firstAlloc?.needsConfirmation && !!firstAllocCat;
+  const isOther = !!firstAllocCat && firstAllocCat.name.trim().toLowerCase() === "other";
   return (
     <Pressable
       style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
@@ -803,10 +808,7 @@ function TxRow({
           )}
         </View>
         <View style={styles.rowMetaLine}>
-          <Text
-            style={[styles.rowMeta, uncategorized && styles.rowMetaUncat]}
-            numberOfLines={1}
-          >
+          <Text style={[styles.rowMeta, uncategorized && styles.rowMetaUncat]} numberOfLines={1}>
             {categoryLabel}
           </Text>
           {showDot && <NeedsReviewDot isOther={isOther} />}
@@ -814,7 +816,8 @@ function TxRow({
       </View>
       <View style={styles.rowRight}>
         <Text style={[styles.rowAmount, money.isIncome && styles.rowAmountIncome]}>
-          {money.isIncome ? "+" : "−"}{money.display}
+          {money.isIncome ? "+" : "−"}
+          {money.display}
         </Text>
       </View>
     </Pressable>
@@ -880,27 +883,37 @@ const styles = StyleSheet.create({
   loading: { flex: 1, alignItems: "center", justifyContent: "center" },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xl },
   iconWrap: {
-    width: 72, height: 72, borderRadius: 999,
+    width: 72,
+    height: 72,
+    borderRadius: 999,
     backgroundColor: colors.surfaceSoft,
-    alignItems: "center", justifyContent: "center",
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: space.base,
   },
   emptyTitle: { ...type$.titleMd, color: colors.ink, marginBottom: 6, textAlign: "center" },
   emptyBody: {
-    ...type$.bodyMd, color: colors.body, textAlign: "center",
-    maxWidth: 320, marginBottom: space.lg,
+    ...type$.bodyMd,
+    color: colors.body,
+    textAlign: "center",
+    maxWidth: 320,
+    marginBottom: space.lg,
   },
   emptyActions: { alignItems: "center", gap: space.sm },
   cta: {
     backgroundColor: colors.primary,
-    paddingHorizontal: space.xl, paddingVertical: 14,
+    paddingHorizontal: space.xl,
+    paddingVertical: 14,
     borderRadius: 999,
   },
   ctaText: { ...type$.button, color: colors.onPrimary },
   errTitle: { ...type$.titleMd, color: colors.down, marginBottom: 4, textAlign: "center" },
   errBody: {
-    ...type$.bodyMd, color: colors.body, textAlign: "center",
-    maxWidth: 320, marginBottom: space.lg,
+    ...type$.bodyMd,
+    color: colors.body,
+    textAlign: "center",
+    maxWidth: 320,
+    marginBottom: space.lg,
   },
   listContent: { padding: space.lg, paddingTop: space.sm, flexGrow: 1 },
   filterPill: {
@@ -1029,9 +1042,12 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
   rowGlyph: {
-    width: 36, height: 36, borderRadius: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 12,
     backgroundColor: colors.surfaceSoft,
-    alignItems: "center", justifyContent: "center",
+    alignItems: "center",
+    justifyContent: "center",
     marginTop: 2,
   },
   // flex: 1 + minWidth: 0 lets the mid column shrink so the right

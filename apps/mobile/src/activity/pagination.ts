@@ -12,6 +12,8 @@ export type ActivityCategoryFilter = {
   includeUncategorized?: boolean;
 };
 
+export type ActivityDirection = "expense" | "income";
+
 export function buildActivityTransactionsPath({
   workspaceId,
   limit = ACTIVITY_PAGE_LIMIT,
@@ -19,6 +21,7 @@ export function buildActivityTransactionsPath({
   query,
   range = {},
   categoryFilter = {},
+  direction,
 }: {
   workspaceId: string;
   limit?: number;
@@ -26,6 +29,7 @@ export function buildActivityTransactionsPath({
   query?: string;
   range?: ActivityRange;
   categoryFilter?: ActivityCategoryFilter;
+  direction?: ActivityDirection;
 }): string {
   const params = new URLSearchParams({ limit: String(limit) });
   const trimmed = query?.trim();
@@ -38,6 +42,7 @@ export function buildActivityTransactionsPath({
   if (categoryFilter.includeUncategorized) {
     params.set("uncategorizedOnly", "true");
   }
+  if (direction) params.set("budgetImpact", direction);
   if (cursor) params.set("cursor", cursor);
   return `/workspaces/${workspaceId}/transactions?${params.toString()}`;
 }
