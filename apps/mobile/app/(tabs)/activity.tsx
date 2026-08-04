@@ -10,7 +10,7 @@ import {
   Animated,
   TextInput,
   Keyboard,
-  Modal,
+  ScrollView,
 } from "react-native";
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
@@ -33,13 +33,14 @@ import {
   mergeActivityTransactionPages,
 } from "../../src/activity/pagination";
 import {
-  CategoryFilterSheet,
   UNCATEGORIZED_FILTER_ID,
   type ActivityDirectionFilter,
   type ActivityFilters,
 } from "../../src/activity/CategoryFilterSheet";
+import { prepareActivityFilterNavigation } from "../../src/activity/filter-navigation";
 
 const HEADER_HEIGHT = 84;
+const FILTER_BADGE_BAR_HEIGHT = 46;
 const activityFiltersByWorkspace = new Map<string, ActivityFilters>();
 
 type TxListResp = {
@@ -239,7 +240,6 @@ export default function Activity() {
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [filterOpen, setFilterOpen] = useState(false);
   const [selectedCategoryIds, setSelectedCategoryIds] = useState<string[]>([]);
   const [directionFilter, setDirectionFilter] = useState<ActivityDirectionFilter>("all");
   const [query, setQuery] = useState("");
@@ -254,9 +254,15 @@ export default function Activity() {
   const filterWorkspaceRef = useRef<string | null>(null);
   queryRef.current = query;
   rangeRef.current = range;
+  const hasCategoryFilter = selectedCategoryIds.length > 0;
+  const hasDateFilter = !!(range.from || range.to);
+  const hasDirectionFilter = directionFilter !== "all";
+  const hasActiveFilters = hasCategoryFilter || hasDateFilter || hasDirectionFilter;
   const insets = useSafeAreaInsets();
-  const totalHeader = insets.top + HEADER_HEIGHT;
-  const header = useCollapsingHeader(HEADER_HEIGHT);
+  const currentHeaderHeight =
+    HEADER_HEIGHT + (hasActiveFilters && !searchOpen ? FILTER_BADGE_BAR_HEIGHT : 0);
+  const totalHeader = insets.top + currentHeaderHeight;
+  const header = useCollapsingHeader(currentHeaderHeight);
 
   const load = useCallback(async () => {
     try {
@@ -390,6 +396,38 @@ export default function Activity() {
 
   const clearFilters = () => {
     applyFilters({ direction: "all", range: {}, selectedCategoryIds: [] });
+    header.reset();
+  };
+
+  const clearDirectionFilter = () => {
+    applyFilters({ direction: "all", range, selectedCategoryIds });
+    header.reset();
+  };
+
+  const clearDateFilter = () => {
+    applyFilters({ direction: directionFilter, range: {}, selectedCategoryIds });
+    header.reset();
+  };
+
+  const clearCategoryFilter = (categoryId: string) => {
+    applyFilters({
+      direction: directionFilter,
+      range,
+      selectedCategoryIds: selectedCategoryIds.filter((id) => id !== categoryId),
+    });
+    header.reset();
+  };
+
+  const openFilters = () => {
+    prepareActivityFilterNavigation({
+      filters: { direction: directionFilter, range, selectedCategoryIds },
+      categories: Object.values(categories),
+      onApply: (filters) => {
+        applyFilters(filters);
+        header.reset();
+      },
+    });
+    router.push("/activity/filters" as never);
   };
 
   if (err && txs === null) {
@@ -420,16 +458,6 @@ export default function Activity() {
 
   const sections = groupByDate(txs, directionFilter);
   const isSearching = query.trim().length > 0;
-  const hasCategoryFilter = selectedCategoryIds.length > 0;
-  const hasDateFilter = !!(range.from || range.to);
-  const hasDirectionFilter = directionFilter !== "all";
-  const hasActiveFilters = hasCategoryFilter || hasDateFilter || hasDirectionFilter;
-  const filterLabel = formatFilterLabel({
-    selectedCategoryIds,
-    categories,
-    direction: directionFilter,
-    range,
-  });
 
   // Pick a currency for section totals — Plaid items live in one
   // workspace and share its currency, so safe to read from first tx.
@@ -456,18 +484,6 @@ export default function Activity() {
         }
         ListHeaderComponent={
           <View>
-            {hasActiveFilters ? (
-              <Pressable
-                style={({ pressed }) => [styles.filterPill, pressed && { opacity: 0.7 }]}
-                onPress={() => setFilterOpen(true)}
-              >
-                <Ionicons name="funnel" size={13} color={colors.primary} />
-                <Text style={styles.filterPillText} numberOfLines={1}>
-                  {filterLabel}
-                </Text>
-                <Ionicons name="chevron-down" size={14} color={colors.primary} />
-              </Pressable>
-            ) : null}
             {upcoming.count > 0 ? (
               <UpcomingBanner total={upcoming.total} count={upcoming.count} currency={currency} />
             ) : null}
@@ -563,7 +579,7 @@ export default function Activity() {
       <Animated.View
         style={[
           styles.headerOverlay,
-          { top: insets.top, height: HEADER_HEIGHT },
+          { top: insets.top, height: currentHeaderHeight },
           header.headerStyle,
         ]}
       >
@@ -604,33 +620,28 @@ export default function Activity() {
             </Pressable>
           </View>
         ) : (
-          <ActivityHeader
-            onSearch={() => setSearchOpen(true)}
-            onFilters={() => setFilterOpen(true)}
-            filtersActive={hasActiveFilters}
-            count={txs?.length}
-          />
+          <>
+            <ActivityHeader
+              onSearch={() => setSearchOpen(true)}
+              onFilters={openFilters}
+              filtersActive={hasActiveFilters}
+              count={txs?.length}
+            />
+            {hasActiveFilters ? (
+              <ActivityFilterBadges
+                direction={directionFilter}
+                range={range}
+                selectedCategoryIds={selectedCategoryIds}
+                categories={categories}
+                onClearDirection={clearDirectionFilter}
+                onClearDate={clearDateFilter}
+                onClearCategory={clearCategoryFilter}
+              />
+            ) : null}
+          </>
         )}
       </Animated.View>
       <View style={[styles.statusBarBg, { height: insets.top }]} />
-      <Modal
-        visible={filterOpen}
-        transparent
-        animationType="none"
-        onRequestClose={() => setFilterOpen(false)}
-      >
-        <View style={styles.categoryFilterModal}>
-          <CategoryFilterSheet
-            visible={filterOpen}
-            categories={Object.values(categories)}
-            selectedCategoryIds={selectedCategoryIds}
-            direction={directionFilter}
-            range={range}
-            onClose={() => setFilterOpen(false)}
-            onApply={applyFilters}
-          />
-        </View>
-      </Modal>
     </View>
   );
 }
@@ -642,40 +653,74 @@ function splitCategoryFilter(selectedIds: string[]) {
   };
 }
 
-function formatFilterLabel({
-  selectedCategoryIds,
-  categories,
+function ActivityFilterBadges({
   direction,
   range,
+  selectedCategoryIds,
+  categories,
+  onClearDirection,
+  onClearDate,
+  onClearCategory,
 }: {
-  selectedCategoryIds: string[];
-  categories: Record<string, CategoryDTO>;
   direction: ActivityDirectionFilter;
   range: DateRange;
-}): string {
-  const labels: string[] = [];
-  if (direction === "expense") labels.push("Expenses");
-  if (direction === "income") labels.push("Income");
-  if (range.from || range.to) {
-    labels.push(
-      range.from && range.to
-        ? `${range.from} – ${range.to}`
-        : range.from
-          ? `From ${range.from}`
-          : `Through ${range.to}`,
-    );
-  }
-  if (selectedCategoryIds.length === 1) {
-    const id = selectedCategoryIds[0];
-    labels.push(
-      id === UNCATEGORIZED_FILTER_ID
-        ? "Uncategorized"
-        : (id && categories[id]?.name) || "1 category",
-    );
-  } else if (selectedCategoryIds.length > 1) {
-    labels.push(`${selectedCategoryIds.length} categories`);
-  }
-  return labels.join(" · ");
+  selectedCategoryIds: string[];
+  categories: Record<string, CategoryDTO>;
+  onClearDirection: () => void;
+  onClearDate: () => void;
+  onClearCategory: (categoryId: string) => void;
+}) {
+  const dateBadge =
+    range.from && range.to
+      ? `${range.from} – ${range.to}`
+      : range.from
+        ? `From ${range.from}`
+        : `Through ${range.to}`;
+
+  return (
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.filterBadgeBar}
+      contentContainerStyle={styles.filterBadgeContent}
+    >
+      {direction !== "all" ? (
+        <FilterBadge
+          label={direction === "expense" ? "Expenses" : "Income"}
+          onRemove={onClearDirection}
+        />
+      ) : null}
+      {range.from || range.to ? <FilterBadge label={dateBadge} onRemove={onClearDate} /> : null}
+      {selectedCategoryIds.map((id) => (
+        <FilterBadge
+          key={id}
+          label={
+            id === UNCATEGORIZED_FILTER_ID ? "Uncategorized" : (categories[id]?.name ?? "Category")
+          }
+          onRemove={() => onClearCategory(id)}
+        />
+      ))}
+    </ScrollView>
+  );
+}
+
+function FilterBadge({ label, onRemove }: { label: string; onRemove: () => void }) {
+  return (
+    <View style={styles.filterBadge}>
+      <Text style={styles.filterBadgeText} numberOfLines={1}>
+        {label}
+      </Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Remove ${label} filter`}
+        onPress={onRemove}
+        hitSlop={8}
+        style={({ pressed }) => pressed && { opacity: 0.55 }}
+      >
+        <Ionicons name="close" size={14} color={colors.primary} />
+      </Pressable>
+    </View>
+  );
 }
 
 function UpcomingBanner({
@@ -826,7 +871,6 @@ function TxRow({
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.canvas },
-  categoryFilterModal: { flex: 1 },
   headerOverlay: {
     position: "absolute",
     left: 0,
@@ -916,20 +960,28 @@ const styles = StyleSheet.create({
     marginBottom: space.lg,
   },
   listContent: { padding: space.lg, paddingTop: space.sm, flexGrow: 1 },
-  filterPill: {
-    alignSelf: "flex-start",
-    maxWidth: "100%",
+  filterBadgeBar: { height: FILTER_BADGE_BAR_HEIGHT },
+  filterBadgeContent: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: space.sm,
-    marginBottom: 4,
+    gap: 8,
+    paddingHorizontal: space.lg,
+    paddingBottom: 10,
+  },
+  filterBadge: {
+    maxWidth: 240,
+    minHeight: 30,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    paddingLeft: 11,
+    paddingRight: 8,
     backgroundColor: colors.surfaceSoft,
     borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.hairline,
   },
-  filterPillText: {
+  filterBadgeText: {
     ...type$.bodySm,
     color: colors.primary,
     fontWeight: "600",
