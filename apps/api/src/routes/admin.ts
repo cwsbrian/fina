@@ -21,6 +21,27 @@ type Cursor = {
   id: string;
 };
 
+type EnvironmentFilter = "production" | "test" | "unknown" | "all";
+
+function parseEnvironmentFilter(value: unknown): EnvironmentFilter {
+  if (value === undefined) return "production";
+  if (value === "production" || value === "test" || value === "unknown" || value === "all") {
+    return value;
+  }
+  throw new HttpError(400, "invalid_query");
+}
+
+function signupEnvironmentWhere(filter: EnvironmentFilter): Prisma.UserWhereInput {
+  if (filter === "all") return {};
+  return { signupEnvironment: filter.toUpperCase() as $Enums.SignupEnvironment };
+}
+
+function subscriptionRuntimeEnvironment(
+  signupEnvironment: $Enums.SignupEnvironment,
+): "sandbox" | "production" {
+  return signupEnvironment === "TEST" ? "sandbox" : "production";
+}
+
 function parseLimit(value: unknown): number {
   if (typeof value !== "string") return DEFAULT_LIMIT;
   const parsed = Number(value);
@@ -119,6 +140,11 @@ function adminUserDTO(
     name: string | null;
     createdAt: Date;
     role: $Enums.UserRole;
+    signupEnvironment: $Enums.SignupEnvironment;
+    signupPlatform: string | null;
+    signupBuildNumber: string | null;
+    appleStoreEnvironment: string | null;
+    environmentVerifiedAt: Date | null;
     trialEndsAt: Date | null;
     trialConsumed: boolean;
     isPlanMismatch: boolean;
@@ -136,7 +162,10 @@ function adminUserDTO(
   }>,
   devices: AdminUserDTO["deviceSummary"] = [],
 ): AdminUserDTO {
-  const filtered = filterEnvironmentRows(subs, "production");
+  const filtered = filterEnvironmentRows(
+    subs,
+    subscriptionRuntimeEnvironment(user.signupEnvironment),
+  );
   const tier = computeEffectiveTier(user, filtered);
   const primary = pickPrimarySub(filtered);
   return {
@@ -145,6 +174,11 @@ function adminUserDTO(
     name: user.name,
     createdAt: user.createdAt.toISOString(),
     role: user.role,
+    signupEnvironment: user.signupEnvironment,
+    signupPlatform: user.signupPlatform,
+    signupBuildNumber: user.signupBuildNumber,
+    appleStoreEnvironment: user.appleStoreEnvironment,
+    environmentVerifiedAt: user.environmentVerifiedAt?.toISOString() ?? null,
     tier: tier.tier,
     trial: {
       active: tier.trialActive,
@@ -160,6 +194,7 @@ function adminUserDTO(
 function adminUsersSummary(
   users: Array<{
     trialEndsAt: Date | null;
+    signupEnvironment: $Enums.SignupEnvironment;
     subscriptions: Array<{ tier: string; environment: string }>;
   }>,
 ): AdminUsersResponse["summary"] {
@@ -171,7 +206,10 @@ function adminUsersSummary(
   };
 
   for (const user of users) {
-    const subscriptions = filterEnvironmentRows(user.subscriptions, "production");
+    const subscriptions = filterEnvironmentRows(
+      user.subscriptions,
+      subscriptionRuntimeEnvironment(user.signupEnvironment),
+    );
     const tier = computeEffectiveTier(user, subscriptions);
     if (tier.tier === "pro") summary.proUserCount += 1;
     if (tier.tier === "max") summary.maxUserCount += 1;
@@ -184,9 +222,11 @@ function adminUsersSummary(
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
   const listUsers = async (req: FastifyRequest, reply: FastifyReply) => {
     try {
-      const query = req.query as { limit?: string; cursor?: string };
+      const query = req.query as { limit?: string; cursor?: string; environment?: string };
       const limit = parseLimit(query.limit);
       const cursor = decodeCursor(query.cursor);
+      const environment = parseEnvironmentFilter(query.environment);
+      const environmentWhere = signupEnvironmentWhere(environment);
       const cursorWhere = cursor
         ? {
             OR: [
@@ -198,7 +238,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
 
       const [users, summaryUsers] = await Promise.all([
         prisma.user.findMany({
-          where: cursorWhere,
+          where: { ...cursorWhere, ...environmentWhere },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: limit + 1,
           select: {
@@ -207,20 +247,26 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
             name: true,
             createdAt: true,
             role: true,
+            signupEnvironment: true,
+            signupPlatform: true,
+            signupBuildNumber: true,
+            appleStoreEnvironment: true,
+            environmentVerifiedAt: true,
             trialEndsAt: true,
             trialConsumed: true,
             isPlanMismatch: true,
           },
         }),
         prisma.user.findMany({
+          where: environmentWhere,
           select: {
             trialEndsAt: true,
+            signupEnvironment: true,
             subscriptions: {
               where: {
                 status: {
                   in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[],
                 },
-                environment: "Production",
               },
               select: { tier: true, environment: true },
             },
@@ -237,7 +283,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
               status: {
                 in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[],
               },
-              environment: "Production",
             },
             select: {
               userId: true,
@@ -321,6 +366,11 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           name: true,
           createdAt: true,
           role: true,
+          signupEnvironment: true,
+          signupPlatform: true,
+          signupBuildNumber: true,
+          appleStoreEnvironment: true,
+          environmentVerifiedAt: true,
           trialEndsAt: true,
           trialConsumed: true,
           isPlanMismatch: true,
@@ -332,7 +382,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         where: {
           userId,
           status: { in: ACTIVE_SUBSCRIPTION_STATUSES as unknown as $Enums.SubscriptionStatus[] },
-          environment: "Production",
         },
         select: {
           tier: true,

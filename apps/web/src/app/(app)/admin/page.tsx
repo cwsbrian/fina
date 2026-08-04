@@ -15,6 +15,8 @@ import {
 } from "./admin-page-model";
 import styles from "./admin.module.css";
 
+type EnvironmentFilter = "production" | "test" | "unknown" | "all";
+
 export default function AdminPage() {
   const [data, setData] = useState<AdminUsersResponse | null>(null);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -23,12 +25,18 @@ export default function AdminPage() {
   const [detail, setDetail] = useState<AdminUserDetailDTO | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);
   const [detailLoadingId, setDetailLoadingId] = useState<string | null>(null);
+  const [environment, setEnvironment] = useState<EnvironmentFilter>("production");
 
-  const load = async (nextCursor: string | null = null) => {
+  const load = async (
+    nextCursor: string | null = null,
+    requestedEnvironment: EnvironmentFilter = environment,
+  ) => {
     setLoading(true);
     setErr(null);
     try {
-      const qs = nextCursor ? `?cursor=${encodeURIComponent(nextCursor)}` : "";
+      const params = new URLSearchParams({ environment: requestedEnvironment });
+      if (nextCursor) params.set("cursor", nextCursor);
+      const qs = `?${params.toString()}`;
       const page = await apiFetch<AdminUsersResponse>(`/admin/users${qs}`);
       const merged = mergeAdminUsersPage(data, page, Boolean(nextCursor));
       setData(merged);
@@ -44,8 +52,10 @@ export default function AdminPage() {
   };
 
   useEffect(() => {
-    void load();
-  }, []);
+    setData(null);
+    setCursor(null);
+    void load(null, environment);
+  }, [environment]);
 
   const loadDetail = async (userId: string) => {
     setDetailLoadingId(userId);
@@ -86,8 +96,23 @@ export default function AdminPage() {
   return (
     <div className={styles.container}>
       <div className={styles.head}>
-        <h1 className={styles.title}>Admin</h1>
-        <p className={styles.sub}>{users.length} users loaded</p>
+        <div>
+          <h1 className={styles.title}>Admin</h1>
+          <p className={styles.sub}>{users.length} users loaded</p>
+        </div>
+        <label className={styles.filterLabel}>
+          Environment
+          <select
+            className={styles.select}
+            value={environment}
+            onChange={(event) => setEnvironment(event.target.value as EnvironmentFilter)}
+          >
+            <option value="production">Production</option>
+            <option value="test">Test</option>
+            <option value="unknown">Unknown</option>
+            <option value="all">All</option>
+          </select>
+        </label>
       </div>
 
       <div className={styles.tableWrap}>
@@ -96,6 +121,7 @@ export default function AdminPage() {
             <tr>
               <th>User</th>
               <th>Role</th>
+              <th>Environment</th>
               <th>Tier</th>
               <th>Device</th>
               <th>Subscription</th>
@@ -119,9 +145,24 @@ export default function AdminPage() {
                 </td>
                 <td>{user.role}</td>
                 <td>
+                  <span
+                    className={
+                      user.signupEnvironment === "PRODUCTION" ? styles.badge : styles.badgeNeutral
+                    }
+                  >
+                    {user.signupEnvironment}
+                  </span>
+                  <div className={styles.muted}>
+                    {[user.signupPlatform, user.signupBuildNumber].filter(Boolean).join(" · ") ||
+                      "Not verified"}
+                  </div>
+                </td>
+                <td>
                   <div className={styles.primary}>{user.tier}</div>
                   <div className={styles.muted}>
-                    {user.trial.active ? `Trial ends ${formatAdminDate(user.trial.endsAt)}` : "No active trial"}
+                    {user.trial.active
+                      ? `Trial ends ${formatAdminDate(user.trial.endsAt)}`
+                      : "No active trial"}
                   </div>
                 </td>
                 <td>
@@ -132,7 +173,9 @@ export default function AdminPage() {
                 </td>
                 <td>
                   <div className={styles.primary}>{formatAdminSubscription(user)}</div>
-                  <div className={styles.muted}>{user.subscription?.environment ?? "No environment"}</div>
+                  <div className={styles.muted}>
+                    {user.subscription?.environment ?? "No environment"}
+                  </div>
                 </td>
                 <td>{user.activeSubscriptionCount}</td>
                 <td>
@@ -166,6 +209,10 @@ export default function AdminPage() {
             <div>
               <h2 className={styles.detailTitle}>{detail.user.email}</h2>
               <p className={styles.sub}>{usageSignal(detail)}</p>
+              <p className={styles.sub}>
+                {detail.user.signupEnvironment} ·{" "}
+                {detail.user.appleStoreEnvironment ?? "Unverified store"}
+              </p>
             </div>
             <button className={styles.closeButton} type="button" onClick={() => setDetail(null)}>
               Close
@@ -176,23 +223,51 @@ export default function AdminPage() {
             <div>
               <h3 className={styles.sectionTitle}>Activity</h3>
               <dl className={styles.kv}>
-                <div><dt>Last seen</dt><dd>{formatAdminDateTime(detail.activity.lastSeenAt)}</dd></div>
-                <div><dt>Last transaction</dt><dd>{formatAdminDateTime(detail.activity.lastTransactionAt)}</dd></div>
-                <div><dt>Transactions</dt><dd>{detail.activity.transactionCount}</dd></div>
-                <div><dt>Chat</dt><dd>{detail.activity.chatMessageCount} messages</dd></div>
+                <div>
+                  <dt>Last seen</dt>
+                  <dd>{formatAdminDateTime(detail.activity.lastSeenAt)}</dd>
+                </div>
+                <div>
+                  <dt>Last transaction</dt>
+                  <dd>{formatAdminDateTime(detail.activity.lastTransactionAt)}</dd>
+                </div>
+                <div>
+                  <dt>Transactions</dt>
+                  <dd>{detail.activity.transactionCount}</dd>
+                </div>
+                <div>
+                  <dt>Chat</dt>
+                  <dd>{detail.activity.chatMessageCount} messages</dd>
+                </div>
               </dl>
             </div>
 
             <div>
               <h3 className={styles.sectionTitle}>AI Usage</h3>
               <dl className={styles.kv}>
-                <div><dt>Total calls</dt><dd>{detail.aiUsage.total.callCount}</dd></div>
-                <div><dt>Total tokens</dt><dd>{detail.aiUsage.total.inputTokens + detail.aiUsage.total.outputTokens}</dd></div>
-                <div><dt>Total cost</dt><dd>{formatCad(detail.aiUsage.total.costCad)}</dd></div>
+                <div>
+                  <dt>Total calls</dt>
+                  <dd>{detail.aiUsage.total.callCount}</dd>
+                </div>
+                <div>
+                  <dt>Total tokens</dt>
+                  <dd>{detail.aiUsage.total.inputTokens + detail.aiUsage.total.outputTokens}</dd>
+                </div>
+                <div>
+                  <dt>Total cost</dt>
+                  <dd>{formatCad(detail.aiUsage.total.costCad)}</dd>
+                </div>
               </dl>
               <div className={styles.miniTableWrap}>
                 <table className={styles.miniTable}>
-                  <thead><tr><th>Month</th><th>Calls</th><th>Tokens</th><th>Cost</th></tr></thead>
+                  <thead>
+                    <tr>
+                      <th>Month</th>
+                      <th>Calls</th>
+                      <th>Tokens</th>
+                      <th>Cost</th>
+                    </tr>
+                  </thead>
                   <tbody>
                     {detail.aiUsage.monthly.map((month) => (
                       <tr key={month.month}>
@@ -215,7 +290,11 @@ export default function AdminPage() {
                 {[...detail.devices, ...detail.sessions].map((device, index) => (
                   <li key={`${device.platform}-${index}`}>
                     <span className={styles.primary}>{device.platform}</span>
-                    <span className={styles.muted}>{formatAdminDateTime("lastSeenAt" in device ? device.lastSeenAt : device.updatedAt)}</span>
+                    <span className={styles.muted}>
+                      {formatAdminDateTime(
+                        "lastSeenAt" in device ? device.lastSeenAt : device.updatedAt,
+                      )}
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -228,8 +307,14 @@ export default function AdminPage() {
                   item.accounts.length
                     ? item.accounts.map((account) => (
                         <li key={account.id}>
-                          <span className={styles.primary}>{account.name}{account.mask ? ` - ${account.mask}` : ""}</span>
-                          <span className={styles.muted}>{item.institutionName} - {item.status} - {account.type}{account.subtype ? `/${account.subtype}` : ""}</span>
+                          <span className={styles.primary}>
+                            {account.name}
+                            {account.mask ? ` - ${account.mask}` : ""}
+                          </span>
+                          <span className={styles.muted}>
+                            {item.institutionName} - {item.status} - {account.type}
+                            {account.subtype ? `/${account.subtype}` : ""}
+                          </span>
                         </li>
                       ))
                     : [

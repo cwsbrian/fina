@@ -38,9 +38,18 @@ type FinaNativeSubscriptionStoreModule = {
     appAccountToken: string,
   ): Promise<NativeSubscriptionPurchase | null>;
   copyText?(text: string): Promise<boolean>;
+  appTransaction?(): Promise<{ signedAppTransaction: string } | null>;
   currentEntitlements?(productIds: string[]): Promise<NativeSubscriptionPurchase[]>;
   products?(productIds: string[]): Promise<NativeSubscriptionProduct[]>;
 };
+
+export async function getSignedAppleAppTransaction(): Promise<string | null> {
+  if (Platform.OS !== "ios" || isExpoGo) return null;
+  const mod = nativeSubscriptionStoreModule();
+  if (typeof mod?.appTransaction !== "function") return null;
+  const result = await mod.appTransaction();
+  return result?.signedAppTransaction || null;
+}
 
 function nativeSubscriptionStoreModule(): FinaNativeSubscriptionStoreModule | null {
   const mod = NativeModules.FinaNativeSubscriptionStore as
@@ -87,9 +96,7 @@ export async function presentNativeSubscriptionStore(
   return await mod.present(nativeSubscriptionProductIds(), deriveAppleToken(userId));
 }
 
-export async function presentNativeSubscriptionStoreAndSync(
-  userId: string,
-): Promise<MeDTO | null> {
+export async function presentNativeSubscriptionStoreAndSync(userId: string): Promise<MeDTO | null> {
   const purchase = await presentNativeSubscriptionStore(userId);
   if (!purchase) return null;
 
@@ -118,9 +125,7 @@ export async function listNativeSubscriptionStoreEntitlements(): Promise<
   return await mod.currentEntitlements(nativeSubscriptionProductIds());
 }
 
-export async function listNativeSubscriptionStoreProducts(): Promise<
-  NativeSubscriptionProduct[]
-> {
+export async function listNativeSubscriptionStoreProducts(): Promise<NativeSubscriptionProduct[]> {
   if (Platform.OS !== "ios") return [];
   const mod = nativeSubscriptionStoreModule();
   if (!mod?.products || isExpoGo) return [];

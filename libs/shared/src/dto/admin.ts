@@ -2,20 +2,29 @@ import type { Tier } from "../tier.js";
 import type { UserRole } from "../user-role.js";
 import type { SubscriptionDTO } from "./subscription.js";
 
+export type SignupEnvironment = "UNKNOWN" | "TEST" | "PRODUCTION";
+
 export type AdminUserDTO = {
   id: string;
   email: string;
   name: string | null;
   createdAt: string;
   role: UserRole;
+  signupEnvironment: SignupEnvironment;
+  signupPlatform: string | null;
+  signupBuildNumber: string | null;
+  appleStoreEnvironment: string | null;
+  environmentVerifiedAt: string | null;
   tier: Tier;
   trial: {
     active: boolean;
     endsAt: string | null;
   };
-  subscription: (SubscriptionDTO & {
-    environment: string;
-  }) | null;
+  subscription:
+    | (SubscriptionDTO & {
+        environment: string;
+      })
+    | null;
   deviceSummary: {
     platform: string;
     lastSeenAt: string | null;

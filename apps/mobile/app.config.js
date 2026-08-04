@@ -9,11 +9,7 @@
 //    exhaust RAM and thrash swap to a disk-I/O standstill on a small machine
 //    (e.g. a ~10 GB WSL2). EAS cloud / production builds leave this unset and
 //    keep full ABIs + parallelism.
-const {
-  withDangerousMod,
-  withGradleProperties,
-  withXcodeProject,
-} = require("expo/config-plugins");
+const { withDangerousMod, withGradleProperties, withXcodeProject } = require("expo/config-plugins");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -114,6 +110,30 @@ class FinaNativeSubscriptionStore: NSObject {
     DispatchQueue.main.async {
       UIPasteboard.general.string = text
       resolve(true)
+    }
+  }
+
+  @objc(appTransaction:rejecter:)
+  func appTransaction(
+    _ resolve: @escaping RCTPromiseResolveBlock,
+    rejecter reject: @escaping RCTPromiseRejectBlock
+  ) {
+    guard #available(iOS 16.0, *) else {
+      resolve(NSNull())
+      return
+    }
+
+    Task {
+      do {
+        let result = try await StoreKit.AppTransaction.shared
+        guard case .verified = result else {
+          reject("E_APP_TRANSACTION_UNVERIFIED", "The App Store app transaction could not be verified.", nil)
+          return
+        }
+        resolve(["signedAppTransaction": result.jwsRepresentation])
+      } catch {
+        reject("E_APP_TRANSACTION", "Could not load the App Store app transaction.", error)
+      }
     }
   }
 
@@ -290,6 +310,9 @@ RCT_EXTERN_METHOD(copyText:(NSString *)text
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 
+RCT_EXTERN_METHOD(appTransaction:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
 RCT_EXTERN_METHOD(currentEntitlements:(NSArray *)productIds
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
@@ -308,9 +331,7 @@ RCT_EXTERN_METHOD(present:(NSArray *)productIds
 
 /** Set (replacing any existing) a gradle.properties key. */
 function setGradleProperty(props, key, value) {
-  const next = props.filter(
-    (item) => !(item.type === "property" && item.key === key),
-  );
+  const next = props.filter((item) => !(item.type === "property" && item.key === key));
   next.push({ type: "property", key, value });
   return next;
 }
@@ -327,11 +348,7 @@ const withLocalBuildLimits = (config) =>
     // effect — the prebuild template's default won) so this mod, which runs
     // last, overwrites the default. arm64-v8a covers modern test devices + the
     // Play internal track.
-    cfg.modResults = setGradleProperty(
-      cfg.modResults,
-      "reactNativeArchitectures",
-      "arm64-v8a",
-    );
+    cfg.modResults = setGradleProperty(cfg.modResults, "reactNativeArchitectures", "arm64-v8a");
     cfg.modResults = setGradleProperty(
       cfg.modResults,
       "org.gradle.jvmargs",
@@ -407,11 +424,7 @@ const withNativeSubscriptionStore = (config) => {
       throw new Error(`Unable to find ${projectName} group in ios project`);
     }
 
-    ensureXcodeSource(
-      cfg.modResults,
-      groupKey,
-      `${projectName}/FinaNativeSubscriptionStore.swift`,
-    );
+    ensureXcodeSource(cfg.modResults, groupKey, `${projectName}/FinaNativeSubscriptionStore.swift`);
     ensureXcodeSource(
       cfg.modResults,
       groupKey,
@@ -457,10 +470,7 @@ module.exports = ({ config }) => {
   if (googleUrlScheme) {
     config.plugins = [
       ...(config.plugins || []),
-      [
-        "@react-native-google-signin/google-signin",
-        { iosUrlScheme: googleUrlScheme },
-      ],
+      ["@react-native-google-signin/google-signin", { iosUrlScheme: googleUrlScheme }],
     ];
   }
 

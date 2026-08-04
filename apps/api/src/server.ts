@@ -11,6 +11,7 @@ import { createAdminTokenVerifier, type AdminTokenVerifier } from "./auth/admin-
 import { HttpError } from "./auth/context.js";
 import { healthRoutes } from "./routes/health.js";
 import { meRoutes } from "./routes/me.js";
+import { distributionRoutes } from "./routes/distribution.js";
 import { adminRoutes } from "./routes/admin.js";
 import { devicesRoutes } from "./routes/devices.js";
 import { workspacesRoutes } from "./routes/workspaces.js";
@@ -43,6 +44,8 @@ export type AppCtx = {
    *  with `opts.iap`. Kept `unknown`-typed to avoid a cross-cycle import
    *  from the IAP modules; route handlers narrow it at use site. */
   iap?: unknown;
+  /** Test injection seam for Apple-signed install classification. */
+  distribution?: unknown;
 };
 
 /**
@@ -97,6 +100,7 @@ export type BuildAppOpts = {
    *  real Apple/Google clients from env. Untyped here to avoid a
    *  cross-cycle import; the IAP routes do the precise narrowing. */
   iap?: { appleClient: unknown; googleClient: unknown; oidcClient: unknown };
+  distribution?: { appleAppTransactionVerifier: unknown };
 };
 
 export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<FastifyInstance> {
@@ -121,6 +125,8 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
                 "*.appAccountToken",
                 "*.receipt",
                 "*.jwsRepresentation",
+                "*.signedAppTransaction",
+                "*.body.signedAppTransaction",
                 "*.body.appAccountToken",
                 "*.body.obf",
               ],
@@ -145,6 +151,9 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
   app.decorate("fina", { env, auth, verifyAdminToken });
   if (opts.iap) {
     app.fina.iap = opts.iap;
+  }
+  if (opts.distribution) {
+    app.fina.distribution = opts.distribution;
   }
 
   await app.register(helmet, {
@@ -206,6 +215,7 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
 
   await app.register(healthRoutes);
   await app.register(meRoutes);
+  await app.register(distributionRoutes);
   await app.register(adminRoutes);
   await app.register(devicesRoutes);
   await app.register(workspacesRoutes);

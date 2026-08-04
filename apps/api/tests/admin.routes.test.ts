@@ -4,7 +4,11 @@ import { prisma } from "../src/db.js";
 import { HttpError } from "../src/auth/context.js";
 import type { AdminTokenVerifier } from "../src/auth/admin-token.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { getOwnerWorkspaceId, signUpAndGetCookie } from "./helpers/auth.js";
+import {
+  getOwnerWorkspaceId,
+  signUpAndGetCookie as signUpFixtureUser,
+  type SignedUpUser,
+} from "./helpers/auth.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv({ APPLE_ENV: "production" });
@@ -22,6 +26,18 @@ const internalHeaders = {
 };
 let observedUserQuery: "findMany" | "findUnique" | null = null;
 let observedUserQueryCalled = false;
+
+async function signUpAndGetCookie(
+  app: Parameters<typeof signUpFixtureUser>[0],
+  opts?: Parameters<typeof signUpFixtureUser>[1],
+): Promise<SignedUpUser> {
+  const user = await signUpFixtureUser(app, opts);
+  await prisma.user.update({
+    where: { id: user.userId },
+    data: { signupEnvironment: "PRODUCTION" },
+  });
+  return user;
+}
 
 prisma.$use(async (params, next) => {
   if (params.model === "User" && params.action === observedUserQuery) {
@@ -45,6 +61,11 @@ function expectSafeUserShape(row: Record<string, unknown>) {
       "isPlanMismatch",
       "name",
       "role",
+      "signupEnvironment",
+      "signupPlatform",
+      "signupBuildNumber",
+      "appleStoreEnvironment",
+      "environmentVerifiedAt",
       "subscription",
       "tier",
       "trial",
@@ -216,6 +237,47 @@ describe("GET /admin/users", () => {
     );
     expect(detail.statusCode).toBe(200);
     expect(detail.json().user.id).toBe(admin.userId);
+    await app.close();
+  });
+
+  it("shows production by default and keeps test and unknown users separate", async () => {
+    const app = await buildApp(env);
+    const admin = await createAdmin(app);
+    const testUser = await signUpAndGetCookie(app, { email: "test-user@example.com" });
+    const unknownUser = await signUpAndGetCookie(app, { email: "unknown-user@example.com" });
+    await prisma.user.update({
+      where: { id: testUser.userId },
+      data: { signupEnvironment: "TEST" },
+    });
+    await prisma.user.update({
+      where: { id: unknownUser.userId },
+      data: { signupEnvironment: "UNKNOWN" },
+    });
+
+    const production = await app.inject({
+      method: "GET",
+      url: "/admin/users",
+      headers: { cookie: admin.cookie },
+    });
+    expect(production.json().users.map((user: { id: string }) => user.id)).toEqual([admin.userId]);
+
+    const test = await app.inject({
+      method: "GET",
+      url: "/admin/users?environment=test",
+      headers: { cookie: admin.cookie },
+    });
+    expect(test.json().users).toEqual([
+      expect.objectContaining({ id: testUser.userId, signupEnvironment: "TEST" }),
+    ]);
+
+    const unknown = await app.inject({
+      method: "GET",
+      url: "/admin/users?environment=unknown",
+      headers: { cookie: admin.cookie },
+    });
+    expect(unknown.json().users).toEqual([
+      expect.objectContaining({ id: unknownUser.userId, signupEnvironment: "UNKNOWN" }),
+    ]);
     await app.close();
   });
 });
@@ -563,9 +625,7 @@ describe("GET /internal/admin/users", () => {
     expect(serialized).not.toContain("stripe_secret");
     expect(serialized).not.toContain("google_secret_sub");
     expect(serialized).not.toContain("notificationPrefs");
-    const successAuditCall = infoSpy.mock.calls.find(
-      (call) => call[1] === "internal_admin_audit",
-    );
+    const successAuditCall = infoSpy.mock.calls.find((call) => call[1] === "internal_admin_audit");
     expect(successAuditCall?.[0]).toEqual({
       requestId,
       adminSubject: actor.sub,

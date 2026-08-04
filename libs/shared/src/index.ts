@@ -43,6 +43,7 @@ export * from "./schemas/categories.js";
 export * from "./schemas/goals.js";
 export * from "./schemas/chat.js";
 export * from "./schemas/devices.js";
+export * from "./schemas/distribution.js";
 export * from "./schemas/invites.js";
 export * from "./schemas/me.js";
 export * from "./schemas/recurring.js";

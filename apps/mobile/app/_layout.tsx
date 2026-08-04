@@ -17,6 +17,7 @@ import {
 import { useSession } from "../src/auth/client";
 import { syncDeviceTz } from "../src/api/tz-sync";
 import { notificationRouteForData } from "../src/api/push-routing";
+import { syncAppleSignupEnvironment } from "../src/distribution/sync";
 
 export default function RootLayout() {
   const { data: session } = useSession();
@@ -39,6 +40,7 @@ export default function RootLayout() {
   useEffect(() => {
     if (!session?.user?.id) return;
     registerForPushNotifications().catch(() => {});
+    syncAppleSignupEnvironment().catch(() => {});
   }, [session?.user?.id]);
 
   useEffect(() => {

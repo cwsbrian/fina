@@ -16,6 +16,11 @@ const row: AdminUserDTO = {
   name: "Paid User",
   createdAt: "2026-06-12T00:00:00.000Z",
   role: "user",
+  signupEnvironment: "PRODUCTION",
+  signupPlatform: "ios",
+  signupBuildNumber: "42",
+  appleStoreEnvironment: "Production",
+  environmentVerifiedAt: "2026-08-04T00:00:00.000Z",
   tier: "pro",
   trial: { active: false, endsAt: null },
   subscription: {
@@ -45,23 +50,40 @@ describe("admin page model", () => {
   });
 
   it("formats device and usage summaries", () => {
-    expect(formatAdminDevices({ ...row, deviceSummary: [{ platform: "ios", lastSeenAt: null }] })).toBe("ios");
+    expect(
+      formatAdminDevices({ ...row, deviceSummary: [{ platform: "ios", lastSeenAt: null }] }),
+    ).toBe("ios");
     expect(formatCad("0.123456")).toBe("$0.1235 CAD");
-    expect(usageSignal({
-      user: row,
-      devices: [],
-      sessions: [],
-      plaidItems: [{ id: "p1", institutionName: "Bank", status: "active", errorCode: null, lastSyncAt: null, createdAt: row.createdAt, accounts: [] }],
-      activity: {
-        lastSeenAt: row.createdAt,
-        transactionCount: 2,
-        lastTransactionAt: row.createdAt,
-        chatThreadCount: 1,
-        chatMessageCount: 3,
-        lastChatAt: row.createdAt,
-      },
-      aiUsage: { total: { callCount: 1, inputTokens: 10, outputTokens: 5, costCad: "0.010000" }, monthly: [] },
-    })).toBe("1/1 Plaid active, 2 tx, 3 chat msgs");
+    expect(
+      usageSignal({
+        user: row,
+        devices: [],
+        sessions: [],
+        plaidItems: [
+          {
+            id: "p1",
+            institutionName: "Bank",
+            status: "active",
+            errorCode: null,
+            lastSyncAt: null,
+            createdAt: row.createdAt,
+            accounts: [],
+          },
+        ],
+        activity: {
+          lastSeenAt: row.createdAt,
+          transactionCount: 2,
+          lastTransactionAt: row.createdAt,
+          chatThreadCount: 1,
+          chatMessageCount: 3,
+          lastChatAt: row.createdAt,
+        },
+        aiUsage: {
+          total: { callCount: 1, inputTokens: 10, outputTokens: 5, costCad: "0.010000" },
+          monthly: [],
+        },
+      }),
+    ).toBe("1/1 Plaid active, 2 tx, 3 chat msgs");
   });
 
   it("merges additional pages without dropping prior rows", () => {

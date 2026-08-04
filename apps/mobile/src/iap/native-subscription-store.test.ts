@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   present: vi.fn(),
   copyText: vi.fn(),
+  appTransaction: vi.fn(),
   currentEntitlements: vi.fn(),
   products: vi.fn(),
   openManageBilling: vi.fn(),
@@ -17,6 +18,7 @@ vi.mock("react-native", () => ({
     FinaNativeSubscriptionStore: {
       present: mocks.present,
       copyText: mocks.copyText,
+      appTransaction: mocks.appTransaction,
       currentEntitlements: mocks.currentEntitlements,
       products: mocks.products,
     },
@@ -31,6 +33,7 @@ vi.mock("./binding", () => ({ deriveAppleToken: () => "apple-token" }));
 
 import {
   copyTextToClipboard,
+  getSignedAppleAppTransaction,
   hasNativeSubscriptionStoreEntitlementReader,
   listNativeSubscriptionStoreProducts,
   listNativeSubscriptionStoreEntitlements,
@@ -82,6 +85,14 @@ describe("native subscription store", () => {
     await expect(listNativeSubscriptionStoreEntitlements()).resolves.toEqual([entitlement]);
 
     expect(mocks.currentEntitlements).toHaveBeenCalledWith(["pro_monthly", "max_monthly"]);
+  });
+
+  it("reads the Apple-signed AppTransaction used for environment classification", async () => {
+    mocks.appTransaction.mockResolvedValue({ signedAppTransaction: "signed.app.transaction" });
+
+    await expect(getSignedAppleAppTransaction()).resolves.toBe("signed.app.transaction");
+
+    expect(mocks.appTransaction).toHaveBeenCalledOnce();
   });
 
   it("reads StoreKit product metadata from the native subscription module", async () => {
