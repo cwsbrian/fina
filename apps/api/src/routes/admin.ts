@@ -2,6 +2,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { Prisma, type $Enums } from "@prisma/client";
 import {
   ACTIVE_SUBSCRIPTION_STATUSES,
+  type AdminChatMessagesResponse,
+  type AdminChatThreadsResponse,
+  type AdminTransactionsResponse,
   type AdminUserDetailDTO,
   type AdminUserDTO,
   type AdminUsersResponse,
@@ -70,6 +73,11 @@ function decodeCursor(value: unknown): Cursor | null {
   } catch {
     throw new HttpError(400, "invalid_query");
   }
+}
+
+async function ensureUserExists(userId: string): Promise<void> {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true } });
+  if (!user) throw new HttpError(404, "not_found");
 }
 
 function toSubscriptionDTO(
@@ -449,11 +457,19 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
           },
         }),
         prisma.transaction.aggregate({
-          where: { workspaceId: { in: workspaceIds }, removedAt: null },
+          where: {
+            workspaceId: { in: workspaceIds },
+            billingGraceHiddenAt: null,
+            removedAt: null,
+          },
           _count: true,
         }),
         prisma.transaction.findFirst({
-          where: { workspaceId: { in: workspaceIds }, removedAt: null },
+          where: {
+            workspaceId: { in: workspaceIds },
+            billingGraceHiddenAt: null,
+            removedAt: null,
+          },
           orderBy: { occurredAt: "desc" },
           select: { occurredAt: true },
         }),
@@ -556,10 +572,166 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
   };
 
+  const userTransactions = async (req: FastifyRequest, reply: FastifyReply) => {
+    const { userId } = req.params as { userId: string };
+    const query = req.query as { limit?: string; cursor?: string };
+    const limit = parseLimit(query.limit);
+    const cursor = decodeCursor(query.cursor);
+    await ensureUserExists(userId);
+
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        workspace: { memberships: { some: { userId } } },
+        billingGraceHiddenAt: null,
+        removedAt: null,
+        ...(cursor
+          ? {
+              OR: [
+                { occurredAt: { lt: new Date(cursor.createdAt) } },
+                { occurredAt: new Date(cursor.createdAt), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ occurredAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      select: {
+        id: true,
+        amount: true,
+        merchantRaw: true,
+        occurredAt: true,
+        pending: true,
+        source: true,
+        note: true,
+        removedAt: true,
+        budgetImpact: true,
+        workspace: { select: { id: true, name: true, currency: true } },
+        account: { select: { id: true, name: true, mask: true } },
+        allocations: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            amount: true,
+            category: { select: { name: true } },
+          },
+        },
+      },
+    });
+    const page = transactions.slice(0, limit);
+    const last = page.at(-1);
+    const response: AdminTransactionsResponse = {
+      transactions: page.map((transaction) => ({
+        id: transaction.id,
+        workspace: {
+          id: transaction.workspace.id,
+          name: transaction.workspace.name,
+        },
+        account: transaction.account,
+        amount: transaction.amount.toFixed(2),
+        currency: transaction.workspace.currency,
+        merchantRaw: transaction.merchantRaw,
+        occurredAt: transaction.occurredAt.toISOString(),
+        pending: transaction.pending,
+        source: transaction.source,
+        note: transaction.note,
+        removedAt: transaction.removedAt?.toISOString() ?? null,
+        budgetImpact: transaction.budgetImpact,
+        allocations: transaction.allocations.map((allocation) => ({
+          amount: allocation.amount.toFixed(2),
+          categoryName: allocation.category?.name ?? null,
+        })),
+      })),
+      nextCursor:
+        transactions.length > limit && last
+          ? encodeCursor({ createdAt: last.occurredAt.toISOString(), id: last.id })
+          : null,
+    };
+    return reply.send(response);
+  };
+
+  const userChatThreads = async (req: FastifyRequest, reply: FastifyReply) => {
+    const { userId } = req.params as { userId: string };
+    await ensureUserExists(userId);
+    const threads = await prisma.chatThread.findMany({
+      where: { userId },
+      orderBy: [{ lastMessageAt: { sort: "desc", nulls: "last" } }, { createdAt: "desc" }],
+      select: {
+        id: true,
+        title: true,
+        lastMessageAt: true,
+        archivedAt: true,
+        createdAt: true,
+        workspace: { select: { id: true, name: true } },
+        _count: { select: { messages: true } },
+      },
+    });
+    const response: AdminChatThreadsResponse = {
+      threads: threads.map((thread) => ({
+        id: thread.id,
+        title: thread.title,
+        workspace: thread.workspace,
+        lastMessageAt: thread.lastMessageAt?.toISOString() ?? null,
+        archivedAt: thread.archivedAt?.toISOString() ?? null,
+        createdAt: thread.createdAt.toISOString(),
+        messageCount: thread._count.messages,
+      })),
+    };
+    return reply.send(response);
+  };
+
+  const userChatMessages = async (req: FastifyRequest, reply: FastifyReply) => {
+    const { userId, threadId } = req.params as { userId: string; threadId: string };
+    const query = req.query as { limit?: string; cursor?: string };
+    const limit = parseLimit(query.limit);
+    const cursor = decodeCursor(query.cursor);
+    const thread = await prisma.chatThread.findFirst({
+      where: { id: threadId, userId },
+      select: { id: true },
+    });
+    if (!thread) throw new HttpError(404, "not_found");
+
+    const messages = await prisma.chatMessage.findMany({
+      where: {
+        threadId,
+        ...(cursor
+          ? {
+              OR: [
+                { createdAt: { lt: new Date(cursor.createdAt) } },
+                { createdAt: new Date(cursor.createdAt), id: { lt: cursor.id } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      select: { id: true, role: true, blocks: true, createdAt: true },
+    });
+    const page = messages.slice(0, limit);
+    const oldest = page.at(-1);
+    const response: AdminChatMessagesResponse = {
+      threadId,
+      messages: page.reverse().map((message) => ({
+        id: message.id,
+        role: message.role,
+        blocks: message.blocks,
+        createdAt: message.createdAt.toISOString(),
+      })),
+      nextCursor:
+        messages.length > limit && oldest
+          ? encodeCursor({ createdAt: oldest.createdAt.toISOString(), id: oldest.id })
+          : null,
+    };
+    return reply.send(response);
+  };
+
   const logInternalAudit = (
     req: FastifyRequest,
     startedAt: number,
-    action: "admin_users_listed" | "admin_user_detail_viewed",
+    action:
+      | "admin_users_listed"
+      | "admin_user_detail_viewed"
+      | "admin_user_transactions_viewed"
+      | "admin_user_chat_threads_viewed"
+      | "admin_user_chat_messages_viewed",
     outcome: "success" | "failure",
     status: number,
     adminSubject?: string,
@@ -618,6 +790,102 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       const status = e instanceof HttpError ? e.statusCode : 500;
       logInternalAudit(req, startedAt, "admin_user_detail_viewed", "failure", status, adminSubject);
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/internal/admin/users/:userId/transactions", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const startedAt = Date.now();
+    let adminSubject: string | undefined;
+    try {
+      const actor = await app.fina.verifyAdminToken(req.headers.authorization);
+      adminSubject = actor.sub;
+      const result = await userTransactions(req, reply);
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_user_transactions_viewed",
+        "success",
+        200,
+        adminSubject,
+      );
+      return result;
+    } catch (e) {
+      const status = e instanceof HttpError ? e.statusCode : 500;
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_user_transactions_viewed",
+        "failure",
+        status,
+        adminSubject,
+      );
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/internal/admin/users/:userId/chat-threads", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const startedAt = Date.now();
+    let adminSubject: string | undefined;
+    try {
+      const actor = await app.fina.verifyAdminToken(req.headers.authorization);
+      adminSubject = actor.sub;
+      const result = await userChatThreads(req, reply);
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_user_chat_threads_viewed",
+        "success",
+        200,
+        adminSubject,
+      );
+      return result;
+    } catch (e) {
+      const status = e instanceof HttpError ? e.statusCode : 500;
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_user_chat_threads_viewed",
+        "failure",
+        status,
+        adminSubject,
+      );
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/internal/admin/users/:userId/chat-threads/:threadId/messages", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const startedAt = Date.now();
+    let adminSubject: string | undefined;
+    try {
+      const actor = await app.fina.verifyAdminToken(req.headers.authorization);
+      adminSubject = actor.sub;
+      const result = await userChatMessages(req, reply);
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_user_chat_messages_viewed",
+        "success",
+        200,
+        adminSubject,
+      );
+      return result;
+    } catch (e) {
+      const status = e instanceof HttpError ? e.statusCode : 500;
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_user_chat_messages_viewed",
+        "failure",
+        status,
+        adminSubject,
+      );
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
     }

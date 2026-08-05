@@ -1,6 +1,7 @@
 import type { Tier } from "../tier.js";
 import type { UserRole } from "../user-role.js";
 import type { SubscriptionDTO } from "./subscription.js";
+import type { ChatMessageRole } from "../enums.js";
 
 export type SignupEnvironment = "UNKNOWN" | "TEST" | "PRODUCTION";
 
@@ -97,4 +98,65 @@ export type AdminUserDetailDTO = {
       costCad: string;
     }[];
   };
+};
+
+export type AdminTransactionDTO = {
+  id: string;
+  workspace: {
+    id: string;
+    name: string;
+  };
+  account: {
+    id: string;
+    name: string;
+    mask: string | null;
+  };
+  amount: string;
+  currency: string;
+  merchantRaw: string;
+  occurredAt: string;
+  pending: boolean;
+  source: "plaid" | "manual" | "csv";
+  note: string | null;
+  removedAt: string | null;
+  budgetImpact: "expense" | "income" | "refund" | "excluded";
+  allocations: {
+    amount: string;
+    categoryName: string | null;
+  }[];
+};
+
+export type AdminTransactionsResponse = {
+  transactions: AdminTransactionDTO[];
+  nextCursor: string | null;
+};
+
+export type AdminChatThreadDTO = {
+  id: string;
+  title: string | null;
+  workspace: {
+    id: string;
+    name: string;
+  } | null;
+  lastMessageAt: string | null;
+  archivedAt: string | null;
+  createdAt: string;
+  messageCount: number;
+};
+
+export type AdminChatThreadsResponse = {
+  threads: AdminChatThreadDTO[];
+};
+
+export type AdminChatMessageDTO = {
+  id: string;
+  role: ChatMessageRole;
+  blocks: unknown;
+  createdAt: string;
+};
+
+export type AdminChatMessagesResponse = {
+  threadId: string;
+  messages: AdminChatMessageDTO[];
+  nextCursor: string | null;
 };

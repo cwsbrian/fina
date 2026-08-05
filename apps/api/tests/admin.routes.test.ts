@@ -914,3 +914,237 @@ describe("GET /internal/admin/users/:userId", () => {
     await app.close();
   });
 });
+
+describe("internal admin user transactions and chat content", () => {
+  beforeEach(async () => {
+    await truncateAll();
+  });
+
+  afterAll(async () => {
+    await disconnect();
+  });
+
+  it("requires delegated authorization for every content route", async () => {
+    const verifier = vi.fn().mockRejectedValue(new HttpError(401, "unauthenticated"));
+    const app = await buildInternalApp(verifier);
+    const sessionResolver = vi
+      .spyOn(app.fina.auth.api, "getSession")
+      .mockRejectedValue(new Error("customer session resolver called"));
+    const routes = [
+      "/internal/admin/users/user-1/transactions",
+      "/internal/admin/users/user-1/chat-threads",
+      "/internal/admin/users/user-1/chat-threads/thread-1/messages",
+    ];
+
+    for (const url of routes) {
+      const res = await app.inject({
+        method: "GET",
+        url,
+        headers: { authorization: "Bearer rejected" },
+      });
+      expect(res.statusCode).toBe(401);
+      expect(res.headers["cache-control"]).toBe("no-store");
+      expect(res.json().error).toBe("unauthenticated");
+    }
+    expect(verifier).toHaveBeenCalledTimes(3);
+    expect(sessionResolver).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it("paginates safe transaction and message content without crossing users", async () => {
+    const app = await buildInternalApp();
+    const infoSpy = vi.spyOn(app.log, "info");
+    const target = await signUpAndGetCookie(app, { email: "content-target@example.com" });
+    const other = await signUpAndGetCookie(app, { email: "content-other@example.com" });
+    const targetWorkspaceId = await getOwnerWorkspaceId(target.userId);
+    const otherWorkspaceId = await getOwnerWorkspaceId(other.userId);
+    const targetAccount = await prisma.bankAccount.create({
+      data: {
+        workspaceId: targetWorkspaceId,
+        name: "Daily chequing",
+        mask: "4242",
+        type: "depository",
+      },
+    });
+    const otherAccount = await prisma.bankAccount.create({
+      data: {
+        workspaceId: otherWorkspaceId,
+        name: "Other account",
+        type: "depository",
+      },
+    });
+    const category = await prisma.category.create({
+      data: { workspaceId: targetWorkspaceId, name: "Coffee" },
+    });
+    const olderTransaction = await prisma.transaction.create({
+      data: {
+        workspaceId: targetWorkspaceId,
+        accountId: targetAccount.id,
+        amount: "4.50",
+        merchantRaw: "Old cafe",
+        occurredAt: new Date("2026-07-01T12:00:00Z"),
+        rawData: { secret: "plaid-raw-secret" },
+        note: "Morning coffee",
+        allocations: {
+          create: { amount: "4.50", categoryId: category.id, source: "manual" },
+        },
+      },
+    });
+    const newerTransaction = await prisma.transaction.create({
+      data: {
+        workspaceId: targetWorkspaceId,
+        accountId: targetAccount.id,
+        amount: "18.25",
+        merchantRaw: "New cafe",
+        occurredAt: new Date("2026-07-02T12:00:00Z"),
+        rawData: { secret: "another-raw-secret" },
+      },
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: otherWorkspaceId,
+        accountId: otherAccount.id,
+        amount: "99.00",
+        merchantRaw: "Other user merchant",
+        occurredAt: new Date("2026-07-03T12:00:00Z"),
+        rawData: {},
+      },
+    });
+
+    const firstTransactions = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users/${target.userId}/transactions?limit=1`,
+      headers: internalHeaders,
+    });
+    expect(firstTransactions.statusCode).toBe(200);
+    expect(firstTransactions.json()).toMatchObject({
+      transactions: [
+        {
+          id: newerTransaction.id,
+          merchantRaw: "New cafe",
+          account: { name: "Daily chequing", mask: "4242" },
+        },
+      ],
+    });
+    expect(firstTransactions.json().nextCursor).toEqual(expect.any(String));
+
+    const secondTransactions = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users/${target.userId}/transactions?limit=1&cursor=${encodeURIComponent(firstTransactions.json().nextCursor)}`,
+      headers: internalHeaders,
+    });
+    expect(secondTransactions.statusCode).toBe(200);
+    expect(secondTransactions.json()).toMatchObject({
+      transactions: [
+        {
+          id: olderTransaction.id,
+          note: "Morning coffee",
+          allocations: [{ amount: "4.50", categoryName: "Coffee" }],
+        },
+      ],
+      nextCursor: null,
+    });
+    const serializedTransactions = JSON.stringify([
+      firstTransactions.json(),
+      secondTransactions.json(),
+    ]);
+    expect(serializedTransactions).not.toContain("Other user merchant");
+    expect(serializedTransactions).not.toContain("raw-secret");
+
+    const targetThread = await prisma.chatThread.create({
+      data: {
+        userId: target.userId,
+        workspaceId: targetWorkspaceId,
+        title: "Budget check-in",
+        lastMessageAt: new Date("2026-07-05T12:00:00Z"),
+      },
+    });
+    const otherThread = await prisma.chatThread.create({
+      data: {
+        userId: other.userId,
+        workspaceId: otherWorkspaceId,
+        title: "Other private chat",
+      },
+    });
+    await prisma.chatMessage.createMany({
+      data: [
+        {
+          id: "content-message-1",
+          threadId: targetThread.id,
+          role: "user",
+          blocks: [{ type: "text", markdown: "oldest" }],
+          createdAt: new Date("2026-07-05T10:00:00Z"),
+        },
+        {
+          id: "content-message-2",
+          threadId: targetThread.id,
+          role: "assistant",
+          blocks: [{ type: "text", markdown: "middle" }],
+          createdAt: new Date("2026-07-05T11:00:00Z"),
+        },
+        {
+          id: "content-message-3",
+          threadId: targetThread.id,
+          role: "user",
+          blocks: [{ type: "text", markdown: "newest" }],
+          createdAt: new Date("2026-07-05T12:00:00Z"),
+        },
+        {
+          id: "other-private-message",
+          threadId: otherThread.id,
+          role: "user",
+          blocks: [{ type: "text", markdown: "private" }],
+        },
+      ],
+    });
+
+    const threads = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users/${target.userId}/chat-threads`,
+      headers: internalHeaders,
+    });
+    expect(threads.statusCode).toBe(200);
+    expect(threads.json().threads).toEqual([
+      expect.objectContaining({ id: targetThread.id, title: "Budget check-in", messageCount: 3 }),
+    ]);
+
+    const firstMessages = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users/${target.userId}/chat-threads/${targetThread.id}/messages?limit=2`,
+      headers: internalHeaders,
+    });
+    expect(firstMessages.statusCode).toBe(200);
+    expect(firstMessages.json().messages.map((message: { id: string }) => message.id)).toEqual([
+      "content-message-2",
+      "content-message-3",
+    ]);
+    expect(firstMessages.json().nextCursor).toEqual(expect.any(String));
+
+    const olderMessages = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users/${target.userId}/chat-threads/${targetThread.id}/messages?limit=2&cursor=${encodeURIComponent(firstMessages.json().nextCursor)}`,
+      headers: internalHeaders,
+    });
+    expect(olderMessages.statusCode).toBe(200);
+    expect(olderMessages.json().messages.map((message: { id: string }) => message.id)).toEqual([
+      "content-message-1",
+    ]);
+    expect(olderMessages.json().nextCursor).toBeNull();
+
+    const crossUserMessages = await app.inject({
+      method: "GET",
+      url: `/internal/admin/users/${target.userId}/chat-threads/${otherThread.id}/messages`,
+      headers: internalHeaders,
+    });
+    expect(crossUserMessages.statusCode).toBe(404);
+    const auditCalls = infoSpy.mock.calls.filter((call) => call[1] === "internal_admin_audit");
+    expect(
+      auditCalls.some(
+        (call) => (call[0] as { action?: string }).action === "admin_user_transactions_viewed",
+      ),
+    ).toBe(true);
+    expect(JSON.stringify(auditCalls)).not.toContain("plaid-raw-secret");
+    expect(JSON.stringify(auditCalls)).not.toContain("delegated-token");
+    await app.close();
+  });
+});
