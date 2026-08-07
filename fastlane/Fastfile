@@ -1,0 +1,251 @@
+require "fileutils"
+require "json"
+require "tmpdir"
+
+ROOT_DIR = File.expand_path("..", __dir__)
+IOS_APP_IDENTIFIER = "com.withfina.app"
+APPLE_KEY_ID = "ZH5Y96UGRV"
+APPLE_KEY_PATH = File.expand_path("~/.config/fina/apple/AuthKey_#{APPLE_KEY_ID}.p8")
+GOOGLE_KEY_PATH = File.expand_path("~/.config/fina/google-play-service-account.json")
+ANDROID_PACKAGE_NAME = "com.withfina.app"
+
+def local_env(name)
+  value = ENV[name]
+  return value unless value.to_s.empty?
+
+  env_path = File.join(ROOT_DIR, ".env")
+  return nil unless File.file?(env_path)
+
+  prefix = "#{name}="
+  line = File.foreach(env_path).find { |entry| entry.start_with?(prefix) }
+  return nil unless line
+
+  value = line.delete_prefix(prefix).strip
+  if value.length >= 2 && ["'", '"'].include?(value[0]) && value[-1] == value[0]
+    value = value[1...-1]
+  end
+  value
+end
+
+def release_version(options)
+  requested = options[:version].to_s.strip
+  return requested unless requested.empty?
+
+  app_config = JSON.parse(File.read(File.join(ROOT_DIR, "apps/mobile/app.json")))
+  app_config.fetch("expo").fetch("version")
+end
+
+def store_release_notes(options)
+  version = release_version(options)
+  path = File.join(ROOT_DIR, "patch-notes", "#{version}.md")
+  UI.user_error!("Missing patch notes: #{path}") unless File.file?(path)
+
+  content = File.read(path)
+  match = content.match(/^## App Store — What.s New\s*$\n(.*?)(?=^## |\z)/m)
+  UI.user_error!("Missing the App Store What's New section in #{path}") unless match
+
+  notes = match[1].strip
+  UI.user_error!("Store release notes are empty in #{path}") if notes.empty?
+  UI.user_error!("Store release notes are #{notes.length} characters; keep them at 500 or fewer for Google Play") if notes.length > 500
+
+  [version, notes]
+end
+
+def apple_api_key
+  issuer_id = local_env("FINA_ASC_ISSUER_ID") || local_env("APPLE_ASC_ISSUER_ID")
+  UI.user_error!("Missing FINA_ASC_ISSUER_ID or APPLE_ASC_ISSUER_ID") if issuer_id.to_s.empty?
+  UI.user_error!("Missing Apple API key: #{APPLE_KEY_PATH}") unless File.file?(APPLE_KEY_PATH)
+
+  app_store_connect_api_key(
+    key_id: ENV.fetch("FINA_ASC_KEY_ID", APPLE_KEY_ID),
+    issuer_id: issuer_id,
+    key_filepath: ENV.fetch("FINA_ASC_KEY_PATH", APPLE_KEY_PATH),
+    duration: 1_200,
+    in_house: false
+  )
+end
+
+def google_key_path
+  path = ENV.fetch("FINA_GOOGLE_PLAY_KEY_PATH", GOOGLE_KEY_PATH)
+  UI.user_error!("Missing Google Play service account key: #{path}") unless File.file?(path)
+  path
+end
+
+def current_app_store_version(version)
+  app = Spaceship::ConnectAPI.get_apps(filter: { bundleId: IOS_APP_IDENTIFIER }).to_models.first
+  UI.user_error!("App not found in App Store Connect: #{IOS_APP_IDENTIFIER}") unless app
+
+  store_version = app.get_app_store_versions(
+    filter: { platform: "IOS", versionString: version },
+    includes: "appStoreVersionSubmission,build"
+  ).first
+  [app, store_version]
+end
+
+def matching_app_store_notes_locales(store_version, notes)
+  Spaceship::ConnectAPI::AppStoreVersionLocalization.all(
+    app_store_version_id: store_version.id
+  ).filter_map do |localization|
+    localization.locale if localization.whats_new == notes
+  end
+end
+
+desc "Validate the shared Apple and Google release notes"
+lane :validate_notes do |options|
+  version, notes = store_release_notes(options)
+  UI.success("Fina #{version} store release notes are valid (#{notes.length}/500 characters)")
+end
+
+platform :android do
+  desc "Update the current Google Play production release notes"
+  lane :notes do |options|
+    version, notes = store_release_notes(options)
+    key_path = google_key_path
+    version_code = options[:version_code].to_s.strip
+
+    if version_code.empty?
+      version_codes = google_play_track_version_codes(
+        package_name: ANDROID_PACKAGE_NAME,
+        track: "production",
+        json_key: key_path
+      )
+      UI.user_error!("No Google Play production release found") if version_codes.empty?
+      version_code = version_codes.max.to_s
+    end
+
+    Dir.mktmpdir("fina-play-notes") do |metadata_path|
+      changelog_dir = File.join(metadata_path, "en-US", "changelogs")
+      FileUtils.mkdir_p(changelog_dir)
+      File.write(File.join(changelog_dir, "#{version_code}.txt"), "#{notes}\n")
+
+      supply(
+        package_name: ANDROID_PACKAGE_NAME,
+        track: "production",
+        version_code: version_code,
+        json_key: key_path,
+        metadata_path: metadata_path,
+        skip_upload_apk: true,
+        skip_upload_aab: true,
+        skip_upload_metadata: true,
+        skip_upload_changelogs: false,
+        skip_upload_images: true,
+        skip_upload_screenshots: true
+      )
+    end
+
+    UI.success("Updated Google Play production notes for Fina #{version} (versionCode #{version_code})")
+  end
+end
+
+platform :ios do
+  desc "Show the latest processed TestFlight build for the current app version"
+  lane :status do |options|
+    version = release_version(options)
+    _, expected_notes = store_release_notes(options)
+    api_key = apple_api_key
+    build_number = latest_testflight_build_number(
+      api_key: api_key,
+      app_identifier: IOS_APP_IDENTIFIER,
+      version: version,
+      platform: "ios"
+    )
+    UI.success("Latest TestFlight build for Fina #{version}: #{build_number}")
+
+    _, store_version = current_app_store_version(version)
+    if store_version
+      selected_build = store_version.build
+      selected_label = selected_build ? "#{selected_build.version}" : "none"
+      UI.message(
+        "App Store version state: #{store_version.app_version_state}; " \
+        "selected build: #{selected_label}; release type: #{store_version.release_type}"
+      )
+
+      matching_locales = matching_app_store_notes_locales(store_version, expected_notes)
+      UI.user_error!("App Store release notes do not match patch-notes/#{version}.md") if matching_locales.empty?
+      UI.success("App Store release notes match for #{matching_locales.join(', ')}")
+    end
+  end
+
+  desc "Submit the latest processed TestFlight build for review and release automatically after approval"
+  lane :review do |options|
+    version, notes = store_release_notes(options)
+    api_key = apple_api_key
+    build_number = options[:build_number].to_s.strip
+    if build_number.empty?
+      build_number = latest_testflight_build_number(
+        api_key: api_key,
+        app_identifier: IOS_APP_IDENTIFIER,
+        version: version,
+        platform: "ios"
+      ).to_s
+    end
+
+    _, store_version = current_app_store_version(version)
+    submitted_states = %w[
+      WAITING_FOR_REVIEW
+      IN_REVIEW
+      PENDING_APPLE_RELEASE
+      PROCESSING_FOR_DISTRIBUTION
+    ]
+    if store_version && submitted_states.include?(store_version.app_version_state)
+      selected_build = store_version.build&.version.to_s
+      UI.user_error!(
+        "Fina #{version} is already submitted with build #{selected_build}, not #{build_number}"
+      ) unless selected_build == build_number
+      UI.user_error!(
+        "Fina #{version} is already submitted but release type is #{store_version.release_type}, not AFTER_APPROVAL"
+      ) unless store_version.release_type == "AFTER_APPROVAL"
+      UI.user_error!(
+        "Fina #{version} is already submitted but its App Store release notes do not match patch-notes/#{version}.md"
+      ) if matching_app_store_notes_locales(store_version, notes).empty?
+
+      UI.success(
+        "Fina #{version} (#{build_number}) is already #{store_version.app_version_state} " \
+        "and will release automatically after approval"
+      )
+      next
+    end
+
+    deliver(
+      api_key: api_key,
+      app_identifier: IOS_APP_IDENTIFIER,
+      app_version: version,
+      build_number: build_number,
+      skip_binary_upload: true,
+      skip_screenshots: true,
+      release_notes: { "default" => notes },
+      submit_for_review: true,
+      automatic_release: true,
+      phased_release: false,
+      submission_information: {
+        export_compliance_uses_encryption: false
+      },
+      precheck_include_in_app_purchases: false,
+      force: true
+    )
+  end
+
+  desc "Upload a local IPA, submit it for review, and release automatically after approval"
+  lane :release do |options|
+    version, notes = store_release_notes(options)
+    ipa_path = File.expand_path(options.fetch(:ipa, "dist/fina-ios-latest.ipa"), ROOT_DIR)
+    UI.user_error!("Missing IPA: #{ipa_path}") unless File.file?(ipa_path)
+
+    deliver(
+      api_key: apple_api_key,
+      app_identifier: IOS_APP_IDENTIFIER,
+      app_version: version,
+      ipa: ipa_path,
+      skip_screenshots: true,
+      release_notes: { "default" => notes },
+      submit_for_review: true,
+      automatic_release: true,
+      phased_release: false,
+      submission_information: {
+        export_compliance_uses_encryption: false
+      },
+      precheck_include_in_app_purchases: false,
+      force: true
+    )
+  end
+end
