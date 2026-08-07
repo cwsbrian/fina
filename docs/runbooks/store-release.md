@@ -22,6 +22,16 @@ Local credential directories should use mode `700`; private key files should use
 pnpm release:notes:validate
 ```
 
+## Release both stores
+
+Validate the shared notes, then build and submit iOS and Android in sequence:
+
+```bash
+pnpm release
+```
+
+If either platform fails, the command stops without starting the next platform.
+
 ## Google Play
 
 Build locally, submit to production, and update the production release notes:
