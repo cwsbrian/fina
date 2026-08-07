@@ -20,6 +20,7 @@ import {
 } from "../budget-plans/service.js";
 import { suggestBudgetSplit } from "../budget-plans/suggest-split.js";
 import { resolveUserTz } from "../chat/tools/periods.js";
+import { prisma } from "../db.js";
 
 const MAX_TOTAL = 9_999_999.99;
 
@@ -65,11 +66,15 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
       if ((req.params as { id: string }).id !== ctx.membership.workspaceId) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const [plan, recentAvg] = await Promise.all([
+      const [plan, recentAvg, workspace] = await Promise.all([
         getDefaultBudget(ctx.membership.workspaceId),
         recentMonthlyAvgSpend(ctx.membership.workspaceId),
+        prisma.workspace.findUniqueOrThrow({
+          where: { id: ctx.membership.workspaceId },
+          select: { currency: true },
+        }),
       ]);
-      return { plan, recentMonthlyAvgSpend: recentAvg };
+      return { plan, recentMonthlyAvgSpend: recentAvg, currency: workspace.currency };
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
@@ -116,14 +121,19 @@ export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
         year,
         month,
       );
-      const [byCategory, totalSpent, scheduledByCat, totalScheduled] =
+      const [byCategory, totalSpent, scheduledByCat, totalScheduled, workspace] =
         await Promise.all([
           monthlySpendByCategory(ctx.membership.workspaceId, year, month),
           monthlyTotalSpend(ctx.membership.workspaceId, year, month),
           monthlyScheduledByCategory(ctx.membership.workspaceId, year, month),
           monthlyScheduledTotal(ctx.membership.workspaceId, year, month),
+          prisma.workspace.findUniqueOrThrow({
+            where: { id: ctx.membership.workspaceId },
+            select: { currency: true },
+          }),
         ]);
       return reply.code(200).send({
+        currency: workspace.currency,
         yearMonth: `${year}-${String(month).padStart(2, "0")}`,
         plan,
         spendByCategory: byCategory,

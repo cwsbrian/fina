@@ -15,7 +15,7 @@
     "@testing-library/jest-native": "*",
     "@testing-library/react-native": "*",
     "better-auth": "^1.6.9",
-    "expo": "^54.0.35",
+    "expo": "^54.0.36",
     "expo-apple-authentication": "~8.0.8",
     "expo-build-properties": "~1.0.10",
     "expo-constants": "^18.0.13",

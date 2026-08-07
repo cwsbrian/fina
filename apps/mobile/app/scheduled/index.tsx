@@ -17,6 +17,7 @@ import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import { categoryMeta } from "../../src/categories/meta";
 
 type ScheduleStatus =
@@ -168,6 +169,7 @@ function buildMerged(
 }
 
 export default function ScheduledScreen() {
+  const currency = useWorkspaceCurrency();
   const [data, setData] = useState<{
     schedules: Schedule[];
     subscriptions: Recurring[];
@@ -299,7 +301,7 @@ export default function ScheduledScreen() {
         <View style={styles.hero}>
           <Text style={styles.heroLabel}>{monthHeroLabel()}</Text>
           <Text style={styles.heroAmount}>
-            {formatMoney(monthTotal.toFixed(2)).display}
+            {formatMoney(monthTotal.toFixed(2), currency).display}
           </Text>
           <View style={styles.heroMeta}>
             <Text style={styles.heroMetaText}>
@@ -318,6 +320,7 @@ export default function ScheduledScreen() {
               <ScheduledRow
                 key={m.key}
                 item={m}
+                currency={currency}
                 category={
                   m.categoryId ? categories[m.categoryId] ?? null : null
                 }
@@ -333,9 +336,11 @@ export default function ScheduledScreen() {
 function ScheduledRow({
   item,
   category,
+  currency,
 }: {
   item: MergedItem;
   category: CategoryDTO | null;
+  currency: string;
 }) {
   const meta = categoryMeta(category);
   const d = parseDateOnly(item.scheduledDate);
@@ -372,7 +377,7 @@ function ScheduledRow({
       </View>
       <View style={styles.rowRight}>
         <Text style={styles.rowAmount}>
-          −{formatMoney(item.amount).display}
+          −{formatMoney(item.amount, currency).display}
         </Text>
         <Text style={styles.rowDate}>{formatDateLabel(d)}</Text>
       </View>

@@ -7,7 +7,6 @@ import {
 } from "@fina/shared";
 import { prisma } from "../db.js";
 import { HttpError, requireSession, requireWorkspaceContext } from "../auth/context.js";
-import { DEFAULT_ACCOUNTS } from "../accounts/seed.js";
 import {
   listMembers,
   updateMemberRole,
@@ -16,8 +15,6 @@ import {
   MembersServiceError,
 } from "../workspaces/members.js";
 import { createWorkspaceForUser } from "../workspaces/bootstrap.js";
-
-const DEFAULT_ACCOUNT_NAMES = DEFAULT_ACCOUNTS.map((a) => a.name);
 
 function mapMembersError(e: unknown): { statusCode: number; code: string } {
   if (e instanceof MembersServiceError) {
@@ -145,33 +142,8 @@ export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
         const wsId = ctx.membership.workspaceId;
         const updated = await prisma.$transaction(async (tx) => {
           await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${wsId}))`;
-          const [txCount, customAcctCount, recurringCount, budgetCount] = await Promise.all([
-            tx.transaction.count({ where: { workspaceId: wsId } }),
-            tx.bankAccount.count({
-              where: {
-                workspaceId: wsId,
-                OR: [
-                  { plaidItemId: { not: null } },
-                  { name: { notIn: DEFAULT_ACCOUNT_NAMES } },
-                ],
-              },
-            }),
-            tx.recurringExpense.count({ where: { workspaceId: wsId } }),
-            tx.budgetPlan.count({
-              where: {
-                workspaceId: wsId,
-                OR: [
-                  { totalAmount: { gt: 0 } },
-                  { categoryAllocations: { not: [] } },
-                ],
-              },
-            }),
-          ]);
-          if (txCount + customAcctCount + recurringCount + budgetCount > 0) {
-            throw new HttpError(409, "workspace_has_data");
-          }
           await tx.bankAccount.updateMany({
-            where: { workspaceId: wsId, name: { in: DEFAULT_ACCOUNT_NAMES } },
+            where: { workspaceId: wsId },
             data: { currency: parsed.data.currency },
           });
           return await tx.workspace.update({

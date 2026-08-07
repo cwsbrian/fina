@@ -17,6 +17,7 @@ import type { TransactionDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../src/api/client";
 import { getActiveWorkspaceId } from "../../../src/workspace/active";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
+import { currencySymbol } from "../../../src/format/money";
 
 type SingleTxResp = { transaction: TransactionDTO };
 
@@ -26,6 +27,7 @@ export default function EditAmount() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [currency, setCurrency] = useState("CAD");
 
   useEffect(() => {
     if (!id) return;
@@ -41,6 +43,7 @@ export default function EditAmount() {
         if (cancelled) return;
         const n = Number(data.transaction.amount);
         setAmount(Number.isFinite(n) ? Math.abs(n).toFixed(2) : "");
+        setCurrency(data.transaction.currency);
       } catch {
         if (!cancelled) {
           Alert.alert("Couldn't load transaction");
@@ -119,7 +122,9 @@ export default function EditAmount() {
           >
             <View style={styles.amountRow}>
               <Text style={styles.adornment}>−</Text>
-              <Text style={[styles.adornment, { marginRight: 2 }]}>$</Text>
+              <Text style={[styles.adornment, { marginRight: 2 }]}>
+                {currencySymbol(currency)}
+              </Text>
               <TextInput
                 style={styles.amountInput}
                 value={amount}

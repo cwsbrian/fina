@@ -160,7 +160,7 @@ export type WorkspaceContext = {
 };
 
 export type BriefContext = {
-  user: { id: string; name: string | null; tz: string; morningTime: string };
+  user: { id: string; name: string | null; tz: string; morningTime: string; locale: string };
   briefType: BriefType;
   /** ISO date in user's tz at generation time. */
   date: string;
@@ -174,7 +174,7 @@ export async function buildBriefContext(
 ): Promise<BriefContext> {
   const user = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
-    select: { id: true, name: true, tz: true, morningTime: true },
+    select: { id: true, name: true, tz: true, morningTime: true, locale: true },
   });
   const tz = await resolveUserTz(userId);
   const dateIso = isoDateInTz(new Date(), tz);

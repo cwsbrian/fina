@@ -233,6 +233,35 @@ describe("createManualTransactionService", () => {
     expect(acct.name).toBe("Cash");
   });
 
+  it("rejects a different currency unless workspace relabeling was confirmed", async () => {
+    const { wsId, userId } = await setupEditor("mt-eur@t.co");
+    await expect(
+      createManualTransactionService(
+        { workspaceId: wsId, userId },
+        { merchantRaw: "Antonino", amount: 4.5, currency: "eur", occurredAt: "2026-07-23" },
+      ),
+    ).rejects.toMatchObject({ code: "currency_mismatch" });
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(0);
+  });
+
+  it("atomically relabels the workspace before creating when explicitly confirmed", async () => {
+    const { wsId, userId } = await setupEditor("mt-currency-mismatch@t.co");
+    const result = await createManualTransactionService(
+      { workspaceId: wsId, userId },
+      {
+        merchantRaw: "Antonino",
+        amount: 4.5,
+        currency: "EUR",
+        occurredAt: "2026-07-23",
+        changeWorkspaceCurrency: true,
+      },
+    );
+    expect(result.transaction.currency).toBe("EUR");
+    expect((await prisma.workspace.findUniqueOrThrow({ where: { id: wsId } })).currency).toBe("EUR");
+    const accounts = await prisma.bankAccount.findMany({ where: { workspaceId: wsId } });
+    expect(accounts.every((account) => account.currency === "EUR")).toBe(true);
+  });
+
   it("does NOT reuse a ghost ex-Plaid account (plaidItemId=null + plaidAccountId set + archived)", async () => {
     const { wsId, userId } = await setupEditor("mtghost@t.co");
     await prisma.bankAccount.create({
@@ -337,6 +366,24 @@ describe("POST /workspaces/:id/transactions/manual", () => {
     const body = res.json() as { transaction: { source: string; merchantNormalized: string } };
     expect(body.transaction.source).toBe("manual");
     expect(body.transaction.merchantNormalized).toBe("tim hortons");
+  });
+
+  it("400 rejects an explicit foreign currency without confirmation", async () => {
+    const { cookie, wsId } = await setupEditor("mtroute-eur@t.co");
+    const res = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/transactions/manual`,
+      headers: { cookie, "x-workspace-id": wsId, "content-type": "application/json" },
+      payload: {
+        merchantRaw: "Antonino",
+        amount: 4.5,
+        currency: "eur",
+        occurredAt: "2026-07-23",
+      },
+    });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "currency_mismatch" });
   });
 
   it("400 workspace_mismatch when X-Workspace-Id differs from path", async () => {

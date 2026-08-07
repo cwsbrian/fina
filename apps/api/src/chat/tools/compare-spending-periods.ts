@@ -154,7 +154,7 @@ async function bucketizeByAllocation(
 export const compareSpendingPeriods: ToolDef<Args, Result> = {
   name: "compareSpendingPeriods",
   description:
-    "Compare CAD spending between two arbitrary date ranges by category or merchant and return the largest changes. " +
+    "Compare spending in the workspace currency between two arbitrary date ranges by category or merchant and return the largest changes. " +
     "Use this WHENEVER the user asks about change between periods — even with shorthand phrasing. " +
     "Trigger phrases (EN): 'vs last month', 'vs last week', 'compared to', 'how does X compare to Y', " +
     "'has it gone up?', 'biggest changes', 'what got more expensive', 'difference vs', 'change from'. " +

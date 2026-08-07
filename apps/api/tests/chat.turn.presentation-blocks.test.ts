@@ -76,5 +76,16 @@ describe("manual transaction prompt", () => {
     expect(shouldForceManualTransaction("Coffee $5 monthly")).toBe(false);
     expect(shouldForceManualTransaction("Set my coffee budget to $50")).toBe(false);
     expect(shouldForceManualTransaction("Did I spend $5 on coffee?")).toBe(false);
+    expect(shouldForceManualTransaction("Antonino 4,50€ el 23 julio")).toBe(true);
+  });
+
+  it("supports every latest-message language and confirms workspace currency changes", () => {
+    expect(SYSTEM_PROMPT).toContain("Support every language the user writes in");
+    expect(SYSTEM_PROMPT).toContain("never fall back to English");
+    expect(SYSTEM_PROMPT).toContain("tool-result JSON are not user language");
+    expect(SYSTEM_PROMPT).toContain("€ → EUR");
+    expect(SYSTEM_PROMPT).toContain("changeWorkspaceCurrencyAndAddManualTransaction");
+    expect(SYSTEM_PROMPT).toContain("without exchange-rate conversion");
+    expect(SYSTEM_PROMPT).not.toContain("Otherwise reply in English");
   });
 });

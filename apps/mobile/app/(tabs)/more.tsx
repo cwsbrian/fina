@@ -58,6 +58,7 @@ type ActiveWorkspace = {
   id: string;
   name: string;
   role: "owner" | "editor" | "viewer";
+  currency: string;
 };
 
 const MORE_PLAN_DEBUG_MARKER = "more-plan-debug-2026-06-18-storekit-entitlements";
@@ -128,6 +129,7 @@ export default function More() {
           id: string;
           name: string;
           role: "owner" | "editor" | "viewer";
+          currency: string;
         }>;
       }>("/workspaces");
       const match = list.workspaces.find((w) => w.id === wsId);
@@ -423,6 +425,24 @@ export default function More() {
             <Ionicons name="add" size={16} color={colors.body} />
             <Text style={styles.wsActionText}>New workspace</Text>
           </Pressable>
+        </View>
+        <View style={{ marginTop: space.sm }}>
+          <Group>
+            <SettingsRow
+              icon="cash-outline"
+              title="Currency"
+              subtitle={
+                activeWs?.role === "owner"
+                  ? "Used across budgets, transactions, and summaries"
+                  : "Only workspace owners can change this"
+              }
+              detail={activeWs?.currency ?? "—"}
+              {...(activeWs?.role === "owner"
+                ? { onPress: () => router.push("/workspace/currency" as never) }
+                : {})}
+              last
+            />
+          </Group>
         </View>
 
         {/* Planning */}

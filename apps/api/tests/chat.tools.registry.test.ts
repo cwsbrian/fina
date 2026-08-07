@@ -12,16 +12,16 @@ const EXPECTED_NEW_TOOLS: ReadonlyArray<readonly [string, string]> = [
   ["findUncategorizedTransactions", "Find transactions that are uncategorized or have not been manually reviewed."],
   [
     "getCategoryBreakdown",
-    "Summarize CAD spending by readable category name for a date range, including parent category and visual metadata. Pass YYYY-MM-DD since/until from the 'Today' anchor in your context.",
+    "Summarize spending in the workspace currency by readable category name for a date range, including parent category and visual metadata. Pass YYYY-MM-DD since/until from the 'Today' anchor in your context.",
   ],
   [
     "compareSpendingPeriods",
-    "Compare CAD spending between two arbitrary date ranges by category or merchant and return the largest changes. Use this WHENEVER the user asks about change between periods — even with shorthand phrasing. Trigger phrases (EN): 'vs last month', 'vs last week', 'compared to', 'how does X compare to Y', 'has it gone up?', 'biggest changes', 'what got more expensive', 'difference vs', 'change from'. Trigger phrases (KR): '지난달 대비', '지난주랑 비교', '지난달과 비교', '비교해줘', '얼마나 늘었어', '얼마나 줄었어', '큰 변화', '변동', '이번달이 더 썼어?'. Do NOT call getSpendingSummary twice when one of these phrases appears — call this tool instead. Provide YYYY-MM-DD dates for both ranges; comparison range must be older than current range; ranges may be different lengths but matched lengths produce more interpretable deltas (e.g. compare a full month to a full month, not a month vs a quarter).",
+    "Compare spending in the workspace currency between two arbitrary date ranges by category or merchant and return the largest changes. Use this WHENEVER the user asks about change between periods — even with shorthand phrasing. Trigger phrases (EN): 'vs last month', 'vs last week', 'compared to', 'how does X compare to Y', 'has it gone up?', 'biggest changes', 'what got more expensive', 'difference vs', 'change from'. Trigger phrases (KR): '지난달 대비', '지난주랑 비교', '지난달과 비교', '비교해줘', '얼마나 늘었어', '얼마나 줄었어', '큰 변화', '변동', '이번달이 더 썼어?'. Do NOT call getSpendingSummary twice when one of these phrases appears — call this tool instead. Provide YYYY-MM-DD dates for both ranges; comparison range must be older than current range; ranges may be different lengths but matched lengths produce more interpretable deltas (e.g. compare a full month to a full month, not a month vs a quarter).",
   ],
   ["detectRecurringMerchants", "Detect likely recurring merchant payments from recent transaction history using cadence and amount stability heuristics."],
   [
     "getCashflowSummary",
-    "Summarize CAD income, expenses, and net cashflow for a date range, grouped by day or account. Pass YYYY-MM-DD since/until from the 'Today' anchor in your context. Use this whenever the user asks about both directions (income vs expense) or net flow.",
+    "Summarize income, expenses, and net cashflow in the workspace currency for a date range, grouped by day or account. Pass YYYY-MM-DD since/until from the 'Today' anchor in your context. Use this whenever the user asks about both directions (income vs expense) or net flow.",
   ],
 ];
 
@@ -241,15 +241,16 @@ describe("REGISTRY (plan 1c-recurring-persist)", () => {
     }
   });
 
-  it("registry has 39 tools total", () => {
+  it("registry has 40 tools total", () => {
     // Cumulative source-of-truth count. Bump this when a new tool is added
     // to apps/api/src/chat/tools/index.ts REGISTRY. The number is checked
     // ONCE here, not in every plan-specific describe (prior duplicates
     // removed in 1K-cleanup). 31 base tools + 6 goal tools (listGoals,
     // getGoalDetails, presentGoalForm, addGoal, updateGoal, archiveGoal)
     // + 2 scheduled-plan tools (addScheduledSpendBatch executor +
-    // presentScheduledSpendPlan presenter) = 39.
-    expect(REGISTRY).toHaveLength(39);
+    // presentScheduledSpendPlan presenter) + 1 confirmed workspace-currency
+    // transaction tool = 40.
+    expect(REGISTRY).toHaveLength(40);
   });
 
   it("addRecurring, listRecurring, removeRecurring are all registered", () => {
@@ -264,7 +265,7 @@ describe("REGISTRY (plan 1c-confirmation)", () => {
   const EXPECTED = [
     [
       "presentConfirmCard",
-      "Display a Yes/No confirmation card for a deferred mutation. accept_action.tool must be one of: createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring, addScheduledSpend, dismissScheduledSpend, removeScheduledSpend, updateGoal, archiveGoal. Server validates args against the target tool's schema before issuing the intent. Use this for destructive ops (removeRecurring, archiveGoal) and ambiguous or large changes. The action runs only when the user taps accept.",
+      "Display a Yes/No confirmation card for a deferred mutation. accept_action.tool must be one of: createCategory, addTransactionNote, setBudget, mapMerchantToCategory, addRecurring, removeRecurring, addScheduledSpend, dismissScheduledSpend, removeScheduledSpend, updateGoal, archiveGoal, changeWorkspaceCurrencyAndAddManualTransaction. Server validates args against the target tool's schema before issuing the intent. Use this for destructive ops (removeRecurring, archiveGoal), currency relabeling, and ambiguous or large changes. The action runs only when the user taps accept.",
     ],
   ] as const;
 

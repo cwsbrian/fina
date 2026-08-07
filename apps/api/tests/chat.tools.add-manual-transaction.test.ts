@@ -88,6 +88,18 @@ describe("addManualTransaction chat tool", () => {
     expect(result.needsCategory).toBe(false);
   });
 
+  it("rejects a different explicit currency until the user confirms a workspace change", async () => {
+    await expect(
+      addManualTransaction.run(ctx, {
+        merchant: "Antonino",
+        amount: 4.5,
+        currency: "EUR",
+        occurred_at: "2026-07-23",
+      }),
+    ).rejects.toMatchObject({ code: "currency_mismatch" });
+    expect(await prisma.transaction.count({ where: { workspaceId: wsId } })).toBe(0);
+  });
+
   it("asks for a category when automatic categorization has no vocabulary", async () => {
     const result = await addManualTransaction.run(ctx, {
       merchant: "Unknown purchase",

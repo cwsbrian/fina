@@ -235,7 +235,7 @@ describe("checkLargeChargeAndPush", () => {
     expect(vi.mocked(sendMod.sendLargeChargePush).mock.calls.length).toBe(0);
   });
 
-  it("with history, both conditions met → 1 push + verify all 5 args forwarded", async () => {
+  it("with history, both conditions met → 1 push + verify all 6 args forwarded", async () => {
     const { checkLargeChargeAndPush } = await import("../src/push/anomaly.js");
     const { wsId, members } = await setupWorkspaceWithMembers(["owner"]);
     const accountId = await seedAccount(wsId);
@@ -263,6 +263,7 @@ describe("checkLargeChargeAndPush", () => {
       "Starbucks",            // 3rd: merchant (passed-through)
       "200.00",               // 4th: amount.toFixed(2)
       "Food",                 // 5th: categoryName
+      "CAD",                  // 6th: workspace currency
     ]);
   });
 

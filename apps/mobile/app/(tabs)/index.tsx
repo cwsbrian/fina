@@ -36,16 +36,15 @@ import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { ActionItemCard } from "../../src/home/ActionItemCard";
 import { shouldShowBudgetHero } from "../../src/home/budget-hero";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
-import { formatMoney } from "../../src/format/money";
+import { currencySymbol, formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
 
 const HEADER_HEIGHT = 84;
 const BANK_GRACE_TOOLBAR_HEIGHT = 60;
-const CURRENCY = "CAD";
-
 type SpendByCategory = { categoryId: string; categoryName?: string; spent: number };
 type BudgetCurrent = {
+  currency: string;
   plan: {
     totalAmount?: number;
     categoryAllocations?: Array<{ categoryId: string; amount: number }>;
@@ -90,20 +89,18 @@ function formatMonthDay(date: Date): string {
 /** Split a decimal-string amount into the formatted dollar portion (no
  *  decimals, with currency symbol + thousands separators) and the ".NN"
  *  cents suffix, so the hero can render them at different sizes. */
-function splitMoney(amount: string, currency = CURRENCY): { dollars: string; cents: string } {
+function splitMoney(amount: string, currency: string): { dollars: string; cents: string } {
   const n = Number(amount);
   if (!Number.isFinite(n)) return { dollars: amount, cents: "" };
   const abs = Math.abs(n);
   const intDollars = Math.floor(abs);
   const cents = Math.round((abs - intDollars) * 100);
   const intl = new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency,
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   });
   return {
-    dollars: intl.format(intDollars),
+    dollars: `${currencySymbol(currency)}${intl.format(intDollars)}`,
     cents: `.${cents.toString().padStart(2, "0")}`,
   };
 }
@@ -178,6 +175,7 @@ export default function Home() {
           .then((r) => {
             if (runId !== loadRunId.current) return;
             setBudgetCurrent({
+              currency: r.currency,
               plan: r.plan,
               totalSpent: r.totalSpent,
               spendByCategory: Array.isArray(r.spendByCategory) ? r.spendByCategory : [],
@@ -185,7 +183,12 @@ export default function Home() {
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
-            setBudgetCurrent({ plan: null, totalSpent: "0.00", spendByCategory: [] });
+            setBudgetCurrent({
+              currency: "CAD",
+              plan: null,
+              totalSpent: "0.00",
+              spendByCategory: [],
+            });
           }),
         apiFetch<{ threads: ChatThreadWithPreview[] }>("/chat/threads")
           .then((r) => {
@@ -336,10 +339,11 @@ export default function Home() {
   const remainingNum = cap !== null ? cap - spentNum : null;
   const pct = cap && cap > 0 ? Math.min(999, (spentNum / cap) * 100) : 0;
   const over = pct > 100;
-  const spentSplit = splitMoney(spentNum.toFixed(2));
-  const capDisplay = cap !== null ? formatMoney(cap.toFixed(2), CURRENCY).display : null;
+  const currency = budgetCurrent?.currency ?? "CAD";
+  const spentSplit = splitMoney(spentNum.toFixed(2), currency);
+  const capDisplay = cap !== null ? formatMoney(cap.toFixed(2), currency).display : null;
   const remainingDisplay =
-    remainingNum !== null ? formatMoney(Math.abs(remainingNum).toFixed(2), CURRENCY).display : null;
+    remainingNum !== null ? formatMoney(Math.abs(remainingNum).toFixed(2), currency).display : null;
 
   // ── Top categories (top 4 by spend) ────────────────────────
   const planAllocByCat = new Map<string, number>();
@@ -669,10 +673,10 @@ export default function Home() {
                     </Text>
                   </View>
                   <Text style={styles.goalOverallValue}>
-                    {formatMoney(goalsSavedTotal.toFixed(2), CURRENCY).display}
+                    {formatMoney(goalsSavedTotal.toFixed(2), currency).display}
                   </Text>
                   <Text style={styles.goalOverallMeta}>
-                    saved toward {formatMoney(goalsTargetTotal.toFixed(2), CURRENCY).display}
+                    saved toward {formatMoney(goalsTargetTotal.toFixed(2), currency).display}
                   </Text>
                   <View style={styles.goalBarTrack}>
                     <View style={[styles.goalBarFill, { width: `${goalsOverallPct}%` }]} />
@@ -726,7 +730,7 @@ export default function Home() {
                               {name}
                             </Text>
                             <Text style={[styles.catAmount, catOver && { color: colors.down }]}>
-                              {formatMoney(spent.toFixed(2), CURRENCY).display}
+                              {formatMoney(spent.toFixed(2), currency).display}
                             </Text>
                           </View>
                           {catCap !== null && catCap > 0 && (
@@ -745,7 +749,7 @@ export default function Home() {
                               <View style={styles.catMetaLine}>
                                 <Text style={styles.catMetaText}>
                                   {Math.round(catPct)}% of{" "}
-                                  {formatMoney(catCap.toFixed(2), CURRENCY).display}
+                                  {formatMoney(catCap.toFixed(2), currency).display}
                                 </Text>
                                 {catOver && <Text style={styles.catMetaOver}>Over</Text>}
                               </View>

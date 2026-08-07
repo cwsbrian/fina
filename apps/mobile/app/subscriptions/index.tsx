@@ -18,6 +18,7 @@ import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import { categoryMeta } from "../../src/categories/meta";
 
 type RecurringRow = {
@@ -75,6 +76,7 @@ function formatSince(iso: string): string {
 }
 
 export default function SubscriptionsScreen() {
+  const currency = useWorkspaceCurrency();
   const [rows, setRows] = useState<RecurringRow[] | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [err, setErr] = useState<string | null>(null);
@@ -216,7 +218,7 @@ export default function SubscriptionsScreen() {
         <View style={styles.hero}>
           <Text style={styles.heroLabel}>Monthly average</Text>
           <Text style={styles.heroAmount}>
-            {formatMoney(monthlyTotal.toFixed(2)).display}
+            {formatMoney(monthlyTotal.toFixed(2), currency).display}
             <Text style={styles.heroPer}>/mo</Text>
           </Text>
           <View style={styles.heroMeta}>
@@ -225,7 +227,7 @@ export default function SubscriptionsScreen() {
             </Text>
             <View style={styles.heroDot} />
             <Text style={styles.heroMetaText}>
-              {formatMoney(yearlyTotal.toFixed(2)).display} / year
+              {formatMoney(yearlyTotal.toFixed(2), currency).display} / year
             </Text>
           </View>
           {hasNonMonthly && (
@@ -242,6 +244,7 @@ export default function SubscriptionsScreen() {
           <SubscriptionRow
             key={r.id}
             row={r}
+            currency={currency}
             category={r.categoryId ? categories[r.categoryId] ?? null : null}
             onPress={() => router.push(`/subscriptions/${r.id}` as never)}
             onLongPress={() => onDelete(r)}
@@ -255,11 +258,13 @@ export default function SubscriptionsScreen() {
 function SubscriptionRow({
   row,
   category,
+  currency,
   onPress,
   onLongPress,
 }: {
   row: RecurringRow;
   category: CategoryDTO | null;
+  currency: string;
   onPress: () => void;
   onLongPress: () => void;
 }) {
@@ -285,7 +290,7 @@ function SubscriptionRow({
             {row.name}
           </Text>
           <Text style={styles.subAmount}>
-            {formatMoney(row.amount).display}
+            {formatMoney(row.amount, currency).display}
             <Text style={styles.subPer}>{cadencePerLabel(row.cadence)}</Text>
           </Text>
         </View>
@@ -297,7 +302,7 @@ function SubscriptionRow({
             <>
               <View style={styles.subDot} />
               <Text style={styles.subMetaTextMuted}>
-                ≈ {formatMoney(row.monthlyEquivalent).display}/mo
+                ≈ {formatMoney(row.monthlyEquivalent, currency).display}/mo
               </Text>
             </>
           )}

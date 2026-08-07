@@ -48,7 +48,7 @@ type Result = {
 export const getCategoryBreakdown: ToolDef<Args, Result> = {
   name: "getCategoryBreakdown",
   description:
-    "Summarize CAD spending by readable category name for a date range, including parent category and visual metadata. " +
+    "Summarize spending in the workspace currency by readable category name for a date range, including parent category and visual metadata. " +
     "Pass YYYY-MM-DD since/until from the 'Today' anchor in your context.",
   args: Args,
   async run(ctx, args) {

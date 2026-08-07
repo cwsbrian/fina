@@ -17,6 +17,7 @@ import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import {
   formatDue,
   goalAccent,
@@ -28,6 +29,7 @@ import { categoryMeta } from "../../src/categories/meta";
 import type { CategoryDTO } from "@fina/shared";
 
 export default function GoalDetail() {
+  const currency = useWorkspaceCurrency();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [goal, setGoal] = useState<GoalDTO | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -114,7 +116,6 @@ export default function GoalDetail() {
 
   const target = Number(goal.targetAmount);
   const saved = Number(goal.savedAmount);
-  const remaining = Math.max(0, target - saved);
   const pct = target > 0 ? Math.min(100, Math.round((saved / target) * 100)) : 0;
   const accent = goalAccent(goal);
   const icon = goalIcon(goal);
@@ -151,10 +152,10 @@ export default function GoalDetail() {
           <View style={styles.heroProgress}>
             <Text style={styles.heroSaved}>
               <Text style={styles.heroSavedNum}>
-                {formatMoney(goal.savedAmount).display}
+                {formatMoney(goal.savedAmount, currency).display}
               </Text>
               <Text style={styles.heroSavedOf}>
-                {" "}/ {formatMoney(goal.targetAmount).display}
+                {" "}/ {formatMoney(goal.targetAmount, currency).display}
               </Text>
             </Text>
             <View style={styles.bar}>
@@ -202,6 +203,7 @@ export default function GoalDetail() {
         <PathSection
           goal={goal}
           accent={accent}
+          currency={currency}
           onRegenerated={(g) => setGoal(g)}
         />
 
@@ -210,7 +212,7 @@ export default function GoalDetail() {
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Saved so far</Text>
             <Text style={styles.rowValue}>
-              {formatMoney(goal.savedAmount).display}
+              {formatMoney(goal.savedAmount, currency).display}
             </Text>
           </View>
           <Text style={styles.rowCaption}>
@@ -223,7 +225,7 @@ export default function GoalDetail() {
         <View style={styles.group}>
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Target</Text>
-            <Text style={styles.rowValue}>{formatMoney(goal.targetAmount).display}</Text>
+            <Text style={styles.rowValue}>{formatMoney(goal.targetAmount, currency).display}</Text>
           </View>
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Due date</Text>
@@ -244,10 +246,12 @@ export default function GoalDetail() {
 function PathSection({
   goal,
   accent,
+  currency,
   onRegenerated,
 }: {
   goal: GoalDTO;
   accent: string;
+  currency: string;
   onRegenerated: (g: GoalDTO) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -351,7 +355,9 @@ function PathSection({
     <>
       <View style={styles.pathHead}>
         <Text style={styles.pathHeadLabel}>
-          {allocations.length > 0 ? `Path · $${totalMo.toFixed(0)}/mo` : "Path"}
+          {allocations.length > 0
+            ? `Path · ${formatMoney(totalMo.toFixed(2), currency).display}/mo`
+            : "Path"}
         </Text>
         <Pressable
           onPress={() => regenerate(false)}
@@ -409,7 +415,9 @@ function PathSection({
                     <Text style={styles.pathRowMeta}>{item.rationale}</Text>
                   )}
                 </View>
-                <Text style={styles.pathRowAmt}>+${Number(item.monthlyAmount).toFixed(0)}</Text>
+                <Text style={styles.pathRowAmt}>
+                  +{formatMoney(Number(item.monthlyAmount).toFixed(2), currency).display}
+                </Text>
               </View>
             );
           })}

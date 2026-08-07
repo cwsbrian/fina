@@ -63,6 +63,12 @@ const PatchTxBody = z
 const ManualTxBody = z.object({
   merchantRaw: z.string(),
   amount: z.number(),
+  currency: z
+    .string()
+    .trim()
+    .transform((value) => value.toUpperCase())
+    .pipe(z.string().regex(/^[A-Z]{3}$/))
+    .optional(),
   occurredAt: z.string().optional(),
   categoryId: z.string().optional(),
   note: z.string().optional(),
@@ -543,6 +549,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         }
         const d = parsed.data;
         const input: CreateManualTxInput = { merchantRaw: d.merchantRaw, amount: d.amount };
+        if (d.currency   !== undefined) input.currency   = d.currency;
         if (d.occurredAt !== undefined) input.occurredAt = d.occurredAt;
         if (d.categoryId !== undefined) input.categoryId = d.categoryId;
         if (d.note       !== undefined) input.note       = d.note;
@@ -569,6 +576,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           workspaceId: ctx.membership.workspaceId,
           merchant: txMerchant ?? "New charge",
           amount: txAmount,
+          currency: result.transaction.currency,
           categoryName: null,
           excludeUserId: ctx.session.userId,
         });
@@ -578,7 +586,9 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           return reply.code(err.statusCode).send({ error: err.code });
         }
         if (err instanceof CreateManualTxError) {
-          const status = err.code.startsWith("invalid_") ? 400 : 404;
+          const status = err.code.startsWith("invalid_") || err.code === "currency_mismatch"
+            ? 400
+            : 404;
           return reply.code(status).send({ error: err.code });
         }
         throw err;

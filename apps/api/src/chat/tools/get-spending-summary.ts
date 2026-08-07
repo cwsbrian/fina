@@ -7,6 +7,7 @@ import {
   effectiveExpenseAllocations,
   effectiveExpenseTransactions,
 } from "../../transactions/cashflow.js";
+import { prisma } from "../../db.js";
 
 const Args = z.object({
   since: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe(SINCE_ARG_DESC),
@@ -37,7 +38,7 @@ const MAX_RECAP_ROWS = 8;
 export const getSpendingSummary: ToolDef<Args, Result> = {
   name: "getSpendingSummary",
   description:
-    "Total CAD spending in a date range, bucketed by category, merchant, or day. " +
+    "Total spending in the workspace currency for a date range, bucketed by category, merchant, or day. " +
     "Use whenever the user asks how much they spent over a period — single range only; for cross-period comparisons use compareSpendingPeriods. " +
     "Pass YYYY-MM-DD dates from the 'Today' anchor in your context.",
   args: Args,
@@ -48,8 +49,14 @@ export const getSpendingSummary: ToolDef<Args, Result> = {
     // re-call resolveUserTz here only because customRange doesn't surface it
     // — surfacing would change the public signature on a hot helper, more
     // churn than the saving justifies.
-    const { gte, lt } = await customRange(ctx.userId, args.since, args.until);
-    const tz = await resolveUserTz(ctx.userId);
+    const [{ gte, lt }, tz, workspace] = await Promise.all([
+      customRange(ctx.userId, args.since, args.until),
+      resolveUserTz(ctx.userId),
+      prisma.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { currency: true },
+      }),
+    ]);
 
     let groups: Group[];
     /** Display labels for the recap rows. category groupings need an extra
@@ -99,7 +106,14 @@ export const getSpendingSummary: ToolDef<Args, Result> = {
       rowLabels = new Map(groups.map((g) => [g.key, g.key]));
     }
 
-    const block = toRecapBlock(groups, rowLabels, args.since, args.until, groupBy);
+    const block = toRecapBlock(
+      groups,
+      rowLabels,
+      args.since,
+      args.until,
+      groupBy,
+      workspace.currency,
+    );
     return { since: args.since, until: args.until, groupBy, groups, block };
   },
 };
@@ -110,6 +124,7 @@ function toRecapBlock(
   since: string,
   until: string,
   groupBy: NonNullable<Args["group_by"]>,
+  currency: string,
 ): PresentationBlock {
   const totalCents = groups.reduce(
     (sum, g) => sum + Math.round(parseFloat(g.total) * 100),
@@ -126,7 +141,7 @@ function toRecapBlock(
     headline: {
       label: "Total",
       amount: total,
-      currency: "CAD",
+      currency,
     },
     rows: top.map((g) => ({
       label: labels.get(g.key) ?? g.key,

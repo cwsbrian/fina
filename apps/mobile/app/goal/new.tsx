@@ -19,6 +19,8 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
+import { currencySymbol } from "../../src/format/money";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import {
   DEFAULT_GOAL_ICON,
   GOAL_COLOR_CHOICES,
@@ -41,6 +43,7 @@ function ymd(d: Date): string {
 }
 
 export default function NewGoal() {
+  const currency = useWorkspaceCurrency();
   const [title, setTitle] = useState("");
   const [target, setTarget] = useState("");
   // Default due: 3 months from today.
@@ -159,7 +162,7 @@ export default function NewGoal() {
 
           <Text style={styles.label}>Target amount</Text>
           <View style={styles.amountRow}>
-            <Text style={styles.amountCurrency}>$</Text>
+            <Text style={styles.amountCurrency}>{currencySymbol(currency)}</Text>
             <TextInput
               style={styles.amountInput}
               value={target}

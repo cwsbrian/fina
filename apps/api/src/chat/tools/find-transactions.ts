@@ -34,13 +34,13 @@ const Args = z.object({
     .number()
     .nonnegative()
     .describe(
-      "Minimum absolute transaction amount (CAD). Inclusive. Matches expenses or refunds whose abs(amount) is >= this value.",
+      "Minimum absolute transaction amount in the workspace currency. Inclusive. Matches expenses or refunds whose abs(amount) is >= this value.",
     )
     .optional(),
   amount_max: z
     .number()
     .nonnegative()
-    .describe("Maximum absolute transaction amount (CAD). Inclusive. Must be >= amount_min if both provided.")
+    .describe("Maximum absolute transaction amount in the workspace currency. Inclusive. Must be >= amount_min if both provided.")
     .optional(),
   category_name: z
     .string()

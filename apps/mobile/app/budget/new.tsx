@@ -27,6 +27,7 @@ import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { categoryMeta } from "../../src/categories/meta";
+import { currencySymbol, formatMoney } from "../../src/format/money";
 
 type Allocation = { categoryId: string; amount: string };
 
@@ -45,6 +46,7 @@ type Plan = {
 type Scope = "month" | "default";
 
 type CurrentResp = {
+  currency: string;
   yearMonth: string;
   plan: Plan | null;
 };
@@ -61,6 +63,7 @@ export default function NewBudget() {
   const [defaultPlan, setDefaultPlan] = useState<Plan | null>(null);
   const [monthPlan, setMonthPlan] = useState<Plan | null>(null);
   const [currentYearMonth, setCurrentYearMonth] = useState<string | null>(null);
+  const [currency, setCurrency] = useState("CAD");
   const [recentAvg, setRecentAvg] = useState<number | null>(null);
   const [bankCount, setBankCount] = useState<number | null>(null);
   const [scope, setScope] = useState<Scope>("month");
@@ -136,6 +139,7 @@ export default function NewBudget() {
         setDefaultPlan(defResp.plan);
         setMonthPlan(curResp.plan);
         setCurrentYearMonth(curResp.yearMonth);
+        setCurrency(curResp.currency);
         setBankCount(plaidResp.plaidItems.length);
         if (typeof defResp.recentMonthlyAvgSpend === "number") {
           setRecentAvg(defResp.recentMonthlyAvgSpend);
@@ -345,7 +349,7 @@ export default function NewBudget() {
       if (recentAvg != null && recentAvg > 0 && totalNum < recentAvg * 0.6) {
         Alert.alert(
           "Budget below recent spending",
-          `You've averaged about $${recentAvg.toLocaleString()}/mo over the last 90 days. A $${totalNum.toLocaleString()} target will likely run over fast unless you cut spending significantly. Save anyway?`,
+          `You've averaged about ${formatMoney(recentAvg.toFixed(2), currency).display}/mo over the last 90 days. A ${formatMoney(totalNum.toFixed(2), currency).display} target will likely run over fast unless you cut spending significantly. Save anyway?`,
           [
             { text: "Cancel", style: "cancel" },
             { text: "Save anyway", onPress: proceed },
@@ -531,7 +535,7 @@ export default function NewBudget() {
 
           <Text style={styles.label}>Monthly total</Text>
           <View style={styles.amountRow}>
-            <Text style={styles.amountCurrency}>$</Text>
+            <Text style={styles.amountCurrency}>{currencySymbol(currency)}</Text>
             <TextInput
               style={styles.amountInput}
               value={total}
@@ -566,7 +570,7 @@ export default function NewBudget() {
                 {!canSetCategories
                   ? "Enter a monthly total first"
                   : allocCount > 0
-                    ? `${allocCount} set · $${allocSum.toFixed(2)} / $${totalNum.toFixed(2)}`
+                    ? `${allocCount} set · ${formatMoney(allocSum.toFixed(2), currency).display} / ${formatMoney(totalNum.toFixed(2), currency).display}`
                     : "Recommended for better analysis"}
               </Text>
             </View>
@@ -619,7 +623,7 @@ export default function NewBudget() {
             <View style={styles.sheetTitleWrap}>
               <Text style={styles.title}>Category budgets</Text>
               <Text style={styles.sheetSub}>
-                ${allocSum.toFixed(2)} / ${totalNum.toFixed(2)}
+                {formatMoney(allocSum.toFixed(2), currency).display} / {formatMoney(totalNum.toFixed(2), currency).display}
               </Text>
             </View>
             <Pressable
@@ -677,7 +681,7 @@ export default function NewBudget() {
                   {c.name}
                 </Text>
                 <View style={styles.catInputWrap}>
-                  <Text style={styles.catInputCurrency}>$</Text>
+                  <Text style={styles.catInputCurrency}>{currencySymbol(currency)}</Text>
                   <BottomSheetTextInput
                     style={styles.catInput}
                     value={a?.amount ?? ""}

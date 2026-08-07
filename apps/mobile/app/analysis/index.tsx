@@ -18,6 +18,7 @@ import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { formatMoney } from "../../src/format/money";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import { categoryMeta } from "../../src/categories/meta";
 import { MonthPickerSheet } from "../../src/datetime/MonthPickerSheet";
 import {
@@ -118,6 +119,7 @@ function withUncategorized(month: MonthAnalysis | null): CategorySpend[] {
 }
 
 export default function AnalysisScreen() {
+  const currency = useWorkspaceCurrency();
   const params = useLocalSearchParams<PeriodQuery>();
   const initialPeriod = useMemo(() => {
     const year = toInt(params.year);
@@ -224,11 +226,13 @@ export default function AnalysisScreen() {
               income={data.current.income}
               expenses={data.current.spend}
               net={data.current.net}
+              currency={currency}
             />
             <SectionLabel>Where it went</SectionLabel>
             <SpendBreakdown
               spend={data.current.spend}
               byCategory={withUncategorized(data.current)}
+              currency={currency}
             />
             <SectionLabel>
               vs {data.previous?.label.split(" ")[0] ?? "last month"}
@@ -238,6 +242,7 @@ export default function AnalysisScreen() {
               previous={withUncategorized(data.previous)}
               year={data.current.year}
               month={data.current.month}
+              currency={currency}
             />
           </>
         )}
@@ -284,24 +289,26 @@ function CashflowSummary({
   income,
   expenses,
   net,
+  currency,
 }: {
   income: number;
   expenses: number;
   net: number;
+  currency: string;
 }) {
   return (
     <View style={[styles.card, styles.cashflowCard]}>
       <View style={styles.cashflowItem}>
         <Text style={styles.cashflowLabel}>Income</Text>
         <Text style={[styles.cashflowValue, styles.cashflowIncome]}>
-          +{formatMoney(income.toFixed(2)).display}
+          +{formatMoney(income.toFixed(2), currency).display}
         </Text>
       </View>
       <View style={styles.cashflowDivider} />
       <View style={styles.cashflowItem}>
         <Text style={styles.cashflowLabel}>Expenses</Text>
         <Text style={styles.cashflowValue}>
-          −{formatMoney(expenses.toFixed(2)).display}
+          −{formatMoney(expenses.toFixed(2), currency).display}
         </Text>
       </View>
       <View style={styles.cashflowDivider} />
@@ -314,7 +321,7 @@ function CashflowSummary({
             net < 0 && styles.cashflowNegative,
           ]}
         >
-          {net >= 0 ? "+" : "−"}{formatMoney(Math.abs(net).toFixed(2)).display}
+          {net >= 0 ? "+" : "−"}{formatMoney(Math.abs(net).toFixed(2), currency).display}
         </Text>
       </View>
     </View>
@@ -360,9 +367,11 @@ function MonthStepper({
 function SpendBreakdown({
   spend,
   byCategory,
+  currency,
 }: {
   spend: number;
   byCategory: CategorySpend[];
+  currency: string;
 }) {
   // Donut + legend. Empty state when no spend at all.
   if (spend <= 0) {
@@ -452,7 +461,7 @@ function SpendBreakdown({
           fill={colors.ink}
           textAnchor="middle"
         >
-          {formatMoney(spend.toFixed(0)).display}
+          {formatMoney(spend.toFixed(0), currency).display}
         </SvgText>
       </Svg>
       <View style={styles.legend}>
@@ -463,7 +472,7 @@ function SpendBreakdown({
               {s.name}
             </Text>
             <Text style={styles.legendAmount}>
-              {formatMoney(s.amount.toFixed(0)).display}
+              {formatMoney(s.amount.toFixed(0), currency).display}
             </Text>
           </View>
         ))}
@@ -477,11 +486,13 @@ function CompareList({
   previous,
   year,
   month,
+  currency,
 }: {
   current: CategorySpend[];
   previous: CategorySpend[];
   year: number;
   month: number;
+  currency: string;
 }) {
   const prevByCat = useMemo(
     () => new Map(previous.map((p) => [p.categoryId, p.amount])),
@@ -513,6 +524,7 @@ function CompareList({
             isLast={i === Math.min(current.length, 8) - 1}
             year={year}
             month={month}
+            currency={currency}
           />
         );
       })}
@@ -528,6 +540,7 @@ function CompareRow({
   isLast,
   year,
   month,
+  currency,
 }: {
   category: CategorySpend;
   delta: number;
@@ -536,6 +549,7 @@ function CompareRow({
   isLast: boolean;
   year: number;
   month: number;
+  currency: string;
 }) {
   const isUncategorized = category.categoryId === UNCATEGORIZED_ID;
   const meta = isUncategorized
@@ -593,7 +607,7 @@ function CompareRow({
           {category.categoryName}
         </Text>
         <Text style={styles.compareAmount}>
-          {formatMoney(category.amount.toFixed(2)).display}
+          {formatMoney(category.amount.toFixed(2), currency).display}
         </Text>
       </View>
       <View style={styles.compareDelta}>

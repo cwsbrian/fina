@@ -8,7 +8,9 @@ import {
   type LlmContent,
 } from "../llm/provider.js";
 
-const RULES = `You are Fina, a warm, proactive personal-finance assistant. Write the brief in English.
+const RULES = `You are Fina, a warm, proactive personal-finance assistant.
+
+Language: Write the entire brief in the language of language.latest_user_message. That field contains the most recent natural-language message authored by the user in this conversation. Preserve that language even when merchant names or financial context use another language. If it is null, use language.fallback_locale. Never choose a language from assistant messages, tool output, category names, merchant names, or the language of this prompt.
 
 Money: Amounts in forecast (forecast.portfolio.*, forecast.topRisks[].*, and forecast.historicalPatterns[].*) are already display-formatted (e.g. "$1,000.00"). Use them verbatim. Never prepend a currency code or invent a symbol.
 
@@ -43,17 +45,40 @@ This is the MONTHLY brief (6-8 sentences, 1st of the month). It's a new month, s
 };
 
 export const USER_INSTRUCTION =
-  "Using the context above, write the brief as markdown text only. Emit exactly one text presentation block.";
+  "Using the context above and its language anchor, write the brief as markdown text only. Emit exactly one text presentation block.";
 
 export const EMPTY_BRIEF_FALLBACK = "Good morning ☀️ Have a great day!";
 
 /** Build the user-message JSON we feed the LLM. The financial state goes
  *  into the user role so it doesn't bloat the cached system message. */
-function buildUserMessage(context: BriefContext, recentBriefTexts: string[]): string {
+export function latestUserLanguageAnchor(recentConversation: LlmContent[]): string | null {
+  for (let index = recentConversation.length - 1; index >= 0; index -= 1) {
+    const content = recentConversation[index];
+    if (content?.role !== "user") continue;
+    for (let partIndex = content.parts.length - 1; partIndex >= 0; partIndex -= 1) {
+      const part = content.parts[partIndex];
+      if (!part || !("text" in part)) continue;
+      const value = part.text.trim();
+      if (!value || value.startsWith("Context from Fina's latest brief:")) continue;
+      return value.slice(0, 1000);
+    }
+  }
+  return null;
+}
+
+function buildUserMessage(
+  context: BriefContext,
+  recentBriefTexts: string[],
+  recentConversation: LlmContent[],
+): string {
   return JSON.stringify(
     {
       today: context.date,
       user: context.user,
+      language: {
+        latest_user_message: latestUserLanguageAnchor(recentConversation),
+        fallback_locale: context.user.locale,
+      },
       workspaces: context.workspaces,
       recent_briefs: recentBriefTexts,
       instruction: USER_INSTRUCTION,
@@ -79,7 +104,10 @@ export async function generateBrief(
     // prompt caching; only the new financial snapshot is appended.
     contents: [
       ...recentConversation,
-      { role: "user", parts: [{ text: buildUserMessage(context, recentBriefTexts) }] },
+      {
+        role: "user",
+        parts: [{ text: buildUserMessage(context, recentBriefTexts, recentConversation) }],
+      },
     ],
     systemInstruction: SYSTEM_PROMPT_PER_TYPE[briefType],
     maxOutputTokens: 800,

@@ -8,6 +8,7 @@ import {
   BlockFooter,
   BlockEmpty,
 } from "./_primitives";
+import { currencySymbol } from "../../format/money";
 
 type RecapBlockType = Extract<PresentationBlock, { type: "recap" }>;
 
@@ -47,7 +48,9 @@ export function RecapBlock({ block }: Props) {
         // In the latter case the server sends a footer ("Every category is on
         // pace.") that already explains it — showing "No data" alongside it is
         // contradictory. Only show the empty state when there's no footer.
-        block.footer ? null : <BlockEmpty text="No data for this period yet." />
+        block.footer ? null : (
+          <BlockEmpty text="No data for this period yet." />
+        )
       ) : (
         <View>
           {block.rows.map((r, i) => (
@@ -59,7 +62,9 @@ export function RecapBlock({ block }: Props) {
               {...(typeof r.bar_pct === "number" ? { barPct: r.bar_pct } : {})}
               {...(r.delta !== undefined ? { delta: r.delta } : {})}
               {...(r.projected !== undefined ? { projected: r.projected } : {})}
-              {...(r.scheduled !== undefined ? { scheduled: formatRowAmount(r.scheduled, currencySymbol) } : {})}
+              {...(r.scheduled !== undefined
+                ? { scheduled: formatRowAmount(r.scheduled, currencySymbol) }
+                : {})}
               {...(r.severity !== undefined ? { severity: r.severity } : {})}
               isLast={i === block.rows.length - 1}
             />
@@ -79,12 +84,18 @@ function budgetSpentScheduledSub(
   headline: NonNullable<Extract<PresentationBlock, { type: "recap" }>["headline"]>,
   currencySymbol: string | null,
 ): string | undefined {
-  if (headline.budget === undefined && headline.spent === undefined && headline.scheduled === undefined) {
+  if (
+    headline.budget === undefined &&
+    headline.spent === undefined &&
+    headline.scheduled === undefined
+  ) {
     return undefined;
   }
   const parts: string[] = [];
-  if (headline.budget !== undefined) parts.push(`Budget ${formatHeadline(headline.budget, currencySymbol)}`);
-  if (headline.spent !== undefined) parts.push(`Spent ${formatHeadline(headline.spent, currencySymbol)}`);
+  if (headline.budget !== undefined)
+    parts.push(`Budget ${formatHeadline(headline.budget, currencySymbol)}`);
+  if (headline.spent !== undefined)
+    parts.push(`Spent ${formatHeadline(headline.spent, currencySymbol)}`);
   if (headline.scheduled !== undefined && parseFloat(headline.scheduled) > 0) {
     parts.push(`Scheduled ${formatHeadline(headline.scheduled, currencySymbol)}`);
   }
@@ -125,14 +136,5 @@ function formatThousands(amount: string): string {
  *  currencies we actively support; unknown codes fall through with no
  *  symbol so the renderer doesn't lie. */
 function currencyToSymbol(code: string | undefined): string | null {
-  if (!code) return null;
-  switch (code.toUpperCase()) {
-    case "CAD": return "$";
-    case "USD": return "US$";
-    case "EUR": return "€";
-    case "GBP": return "£";
-    case "JPY": return "¥";
-    case "KRW": return "₩";
-    default:    return null;
-  }
+  return code ? currencySymbol(code) : null;
 }

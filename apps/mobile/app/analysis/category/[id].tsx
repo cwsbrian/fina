@@ -17,6 +17,7 @@ import { getActiveWorkspaceId } from "../../../src/workspace/active";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
 import { HeaderIconButton } from "../../../src/design/HeaderIconButton";
 import { formatMoney, dateBucket, isExpenseAmount } from "../../../src/format/money";
+import { useWorkspaceCurrency } from "../../../src/workspace/useWorkspaceCurrency";
 import { categoryMeta } from "../../../src/categories/meta";
 
 const UNCATEGORIZED_ID = "__uncategorized__";
@@ -50,6 +51,7 @@ function monthLabel(year: number, month: number): string {
 }
 
 export default function CategoryAnalysisDetail() {
+  const currency = useWorkspaceCurrency();
   const params = useLocalSearchParams<{
     id: string;
     name?: string;
@@ -184,7 +186,7 @@ export default function CategoryAnalysisDetail() {
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={styles.heroLabel}>{monthLabel(year, month)}</Text>
               <Text style={styles.heroAmount}>
-                {formatMoney(total.toFixed(2)).display}
+                {formatMoney(total.toFixed(2), currency).display}
               </Text>
               <Text style={styles.heroMeta}>
                 {txs?.length ?? 0} transaction

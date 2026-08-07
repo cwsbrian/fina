@@ -43,7 +43,7 @@ const MAX_RECAP_ROWS = 8;
 export const getCashflowSummary: ToolDef<Args, Result> = {
   name: "getCashflowSummary",
   description:
-    "Summarize CAD income, expenses, and net cashflow for a date range, grouped by day or account. " +
+    "Summarize income, expenses, and net cashflow in the workspace currency for a date range, grouped by day or account. " +
     "Pass YYYY-MM-DD since/until from the 'Today' anchor in your context. " +
     "Use this whenever the user asks about both directions (income vs expense) or net flow.",
   args: Args,

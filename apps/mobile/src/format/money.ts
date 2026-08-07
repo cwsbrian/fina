@@ -5,9 +5,37 @@
  *  "-$2,840" and tags it with a color instead. */
 
 export type MoneyFormat = {
-  display: string;        // "$24.50"
-  isIncome: boolean;      // true when the raw amount is negative
+  display: string; // "$24.50"
+  isIncome: boolean; // true when the raw amount is negative
 };
+
+const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = {
+  CAD: "$",
+  USD: "$",
+  EUR: "€",
+  GBP: "£",
+  JPY: "¥",
+  KRW: "₩",
+};
+
+export function currencySymbol(currency: string): string {
+  const normalized = currency.toUpperCase();
+  const knownSymbol = CURRENCY_SYMBOLS[normalized];
+  if (knownSymbol) return knownSymbol;
+
+  try {
+    const parts = new Intl.NumberFormat("en-CA", {
+      style: "currency",
+      currency: normalized,
+      currencyDisplay: "narrowSymbol",
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).formatToParts(0);
+    return parts.find((part) => part.type === "currency")?.value ?? normalized;
+  } catch {
+    return normalized;
+  }
+}
 
 export function formatMoney(amount: string, currency = "CAD"): MoneyFormat {
   const n = Number(amount);
@@ -15,14 +43,12 @@ export function formatMoney(amount: string, currency = "CAD"): MoneyFormat {
   const abs = Math.abs(n);
   const isIncome = n < 0;
   const intl = new Intl.NumberFormat("en-CA", {
-    style: "currency",
-    currency,
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-  // Intl will already include the currency symbol; we strip the negative
-  // sign because the color/+ prefix conveys direction instead.
-  return { display: intl.format(abs), isIncome };
+  // Compose the symbol ourselves so runtimes cannot expand USD to "US$"
+  // or fall back to an ISO code such as "JPY".
+  return { display: `${currencySymbol(currency)}${intl.format(abs)}`, isIncome };
 }
 
 export function isExpenseAmount(amount: string): boolean {

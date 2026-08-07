@@ -7,6 +7,7 @@ export const AUDIT_WRITE_TOOLS = new Set([
   "createCategory",
   "addTransactionNote",
   "addManualTransaction",
+  "changeWorkspaceCurrencyAndAddManualTransaction",
   "setBudget",
   "mapMerchantToCategory",
   "addRecurring",
@@ -26,6 +27,7 @@ const TARGET_TYPE_MAP: Record<string, string> = {
   createCategory: "category",
   addTransactionNote: "transaction",
   addManualTransaction: "transaction",
+  changeWorkspaceCurrencyAndAddManualTransaction: "transaction",
   setBudget: "budget",
   mapMerchantToCategory: "merchant_mapping",
   addRecurring: "recurring_expense",
@@ -52,7 +54,10 @@ export function extractTargetId(action: string, result: unknown): string | null 
     const tx = r.tx as Record<string, unknown> | undefined;
     return typeof tx?.id === "string" ? tx.id : null;
   }
-  if (action === "addManualTransaction") {
+  if (
+    action === "addManualTransaction" ||
+    action === "changeWorkspaceCurrencyAndAddManualTransaction"
+  ) {
     const tx = r.transaction as Record<string, unknown> | undefined;
     return typeof tx?.id === "string" ? tx.id : null;
   }

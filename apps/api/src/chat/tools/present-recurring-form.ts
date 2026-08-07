@@ -100,6 +100,10 @@ export const presentRecurringForm: ToolDef<
         skipStrictValidate: true,
       },
     );
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: { currency: true },
+    });
 
     return {
       block: {
@@ -107,7 +111,7 @@ export const presentRecurringForm: ToolDef<
         question: args.question,
         intent_id: out.intent.id,
         defaults,
-        currency: "CAD",
+        currency: workspace.currency,
         mode: existing ? "update" : "add",
       },
     };

@@ -230,6 +230,7 @@ export async function sendLargeChargePush(
   merchant: string,
   amount: string,
   categoryName: string | null,
+  currency = "CAD",
 ): Promise<PushSendResult> {
   if (!(await isChannelEnabled(userId, "largeCharges"))) {
     logInfo({ userId, channel: "largeCharges" }, "push skipped — channel disabled");
@@ -237,7 +238,7 @@ export async function sendLargeChargePush(
   }
   const where = categoryName ? ` for ${categoryName}` : "";
   return sendToUserDevices(env, userId, {
-    title: `Unusual charge: $${amount}`,
+    title: `Unusual charge: ${formatPushMoney(amount, currency)}`,
     body: `${merchant}${where} is well above your usual.`,
     dataType: "large-charge",
   });
@@ -251,6 +252,7 @@ export async function sendTransactionAddedPush(
   merchant: string,
   amount: string,
   categoryName: string | null,
+  currency = "CAD",
 ): Promise<PushSendResult> {
   if (!(await isChannelEnabled(userId, "transactionAdded"))) {
     logInfo({ userId, channel: "transactionAdded" }, "push skipped — channel disabled");
@@ -258,10 +260,22 @@ export async function sendTransactionAddedPush(
   }
   const where = categoryName ? ` · ${categoryName}` : "";
   return sendToUserDevices(env, userId, {
-    title: `${merchant} · $${amount}`,
+    title: `${merchant} · ${formatPushMoney(amount, currency)}`,
     body: `New transaction${where}`,
     dataType: "transaction-added",
   });
+}
+
+function formatPushMoney(amount: string, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-CA", {
+      style: "currency",
+      currency,
+      currencyDisplay: "symbol",
+    }).format(Number(amount));
+  } catch {
+    return `${amount} ${currency}`;
+  }
 }
 
 /** Sparse marketing — new features, tips. Caller chooses copy. */

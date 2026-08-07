@@ -55,7 +55,7 @@ describe("generateBrief (mocked LLM)", () => {
     const blocks = await generateBrief(
       testEnv(),
       {
-        user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" },
+        user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00", locale: "en-CA" },
         briefType: "daily",
         date: "2026-05-22",
         workspaces: [
@@ -108,17 +108,20 @@ describe("generateBrief (mocked LLM)", () => {
     await generateBrief(
       testEnv(),
       {
-        user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00" },
+        user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00", locale: "en-CA" },
         briefType: "daily",
         date: "2026-05-22",
         workspaces: [],
       },
       ["BRIEF_FROM_YESTERDAY_MARKER"],
       "daily",
+      [{ role: "user", parts: [{ text: "Háblame en español, por favor." }] }],
     );
 
     const sentJson = JSON.stringify(lastChatLlmRequest());
     expect(sentJson).toContain("BRIEF_FROM_YESTERDAY_MARKER");
+    expect(sentJson).toContain("Háblame en español, por favor.");
+    expect(sentJson).toContain("latest_user_message");
   });
 
   it("falls back to encouragement when LLM returns empty", async () => {
@@ -129,7 +132,7 @@ describe("generateBrief (mocked LLM)", () => {
     const blocks = await generateBrief(
       testEnv(),
       {
-        user: { id: "u1", name: null, tz: "America/Toronto", morningTime: "08:00" },
+        user: { id: "u1", name: null, tz: "America/Toronto", morningTime: "08:00", locale: "en-CA" },
         briefType: "daily",
         date: "2026-05-22",
         workspaces: [],

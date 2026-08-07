@@ -14,6 +14,7 @@ export async function notifyTransactionAdded(
     workspaceId: string;
     merchant: string;
     amount: number;
+    currency?: string;
     categoryName: string | null;
     excludeUserId?: string;
   },
@@ -28,13 +29,18 @@ export async function notifyTransactionAdded(
       // Per-recipient try/catch: a transient error on one member must NOT
       // drop the tail of the fan-out (per Plan 1U).
       try {
-        await sendTransactionAddedPush(
+        const base = [
           env,
           m.userId,
           args.merchant,
           args.amount.toFixed(2),
           args.categoryName,
-        );
+        ] as const;
+        if (args.currency) {
+          await sendTransactionAddedPush(...base, args.currency);
+        } else {
+          await sendTransactionAddedPush(...base);
+        }
       } catch (err) {
         logError(
           { workspaceId: args.workspaceId, recipientUserId: m.userId, err },

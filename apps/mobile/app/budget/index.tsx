@@ -37,6 +37,7 @@ type CategorySpend = {
 };
 
 type CurrentResp = {
+  currency: string;
   yearMonth: string;
   plan: Plan | null;
   spendByCategory: CategorySpend[];
@@ -50,10 +51,10 @@ type Data = {
   defaultPlan: Plan | null;
 };
 
-function formatDelta(amount: number): string {
+function formatDelta(amount: number, currency: string): string {
   const sign = amount > 0 ? "+" : "−";
   const abs = Math.abs(amount);
-  return `${sign}${formatMoney(abs.toFixed(2)).display}`;
+  return `${sign}${formatMoney(abs.toFixed(2), currency).display}`;
 }
 
 type GoalChip = {
@@ -308,10 +309,10 @@ export default function BudgetScreen() {
         <View style={styles.hero}>
           <Text style={styles.heroLabel}>{monthLabel(data.current.yearMonth)}</Text>
           <Text style={[styles.heroAmount, over && { color: colors.down }]}>
-            {formatMoney(spent.toFixed(2)).display}
+            {formatMoney(spent.toFixed(2), data.current.currency).display}
           </Text>
           <Text style={styles.heroOf}>
-            of {formatMoney(data.current.plan.totalAmount).display}
+            of {formatMoney(data.current.plan.totalAmount, data.current.currency).display}
           </Text>
           {totalDiff !== 0 && defaultTotal !== null && (
             <View style={styles.deltaPill}>
@@ -321,7 +322,7 @@ export default function BudgetScreen() {
                 color={colors.muted}
               />
               <Text style={styles.deltaPillText}>
-                {formatDelta(totalDiff)} vs default ({formatMoney(defaultTotal.toFixed(2)).display})
+                {formatDelta(totalDiff, data.current.currency)} vs default ({formatMoney(defaultTotal.toFixed(2), data.current.currency).display})
               </Text>
             </View>
           )}
@@ -377,18 +378,18 @@ export default function BudgetScreen() {
               ]}
             >
               {remaining < 0
-                ? `${formatMoney(Math.abs(remaining).toFixed(2)).display} over`
-                : `${formatMoney(remaining.toFixed(2)).display} left`}
+                ? `${formatMoney(Math.abs(remaining).toFixed(2), data.current.currency).display} over`
+                : `${formatMoney(remaining.toFixed(2), data.current.currency).display} left`}
             </Text>
           </View>
           {scheduled > 0 && (
             <Text style={styles.heroScheduled}>
-              + {formatMoney(scheduled.toFixed(2)).display} scheduled this month
+              + {formatMoney(scheduled.toFixed(2), data.current.currency).display} scheduled this month
             </Text>
           )}
           {goalsTotal > 0 && (
             <Text style={styles.heroGoals}>
-              + {formatMoney(goalsTotal.toFixed(2)).display} reserved for goals
+              + {formatMoney(goalsTotal.toFixed(2), data.current.currency).display} reserved for goals
             </Text>
           )}
         </View>
@@ -409,6 +410,7 @@ export default function BudgetScreen() {
                 goals={goalsByCategory[r.categoryId] ?? []}
                 year={periodYear}
                 month={periodMonth}
+                currency={data.current.currency}
               />
             ))}
           </View>
@@ -423,6 +425,7 @@ function CategoryRow({
   goals,
   year,
   month,
+  currency,
 }: {
   row: {
     categoryId: string;
@@ -436,6 +439,7 @@ function CategoryRow({
   goals: GoalChip[];
   year: number;
   month: number;
+  currency: string;
 }) {
   const meta = categoryMeta(row.cat);
   const hasBudget = row.budget > 0;
@@ -493,15 +497,15 @@ function CategoryRow({
           </Text>
           {diff !== 0 && (
             <Text style={styles.catDelta}>
-              {formatDelta(diff)} vs default
+              {formatDelta(diff, currency)} vs default
             </Text>
           )}
         </View>
         <Text style={styles.catAmount}>
-          {formatMoney(row.spent.toFixed(2)).display}
+          {formatMoney(row.spent.toFixed(2), currency).display}
           {hasBudget && (
             <Text style={styles.catAmountOf}>
-              {" "}/ {formatMoney(row.budget.toFixed(2)).display}
+              {" "}/ {formatMoney(row.budget.toFixed(2), currency).display}
             </Text>
           )}
         </Text>
@@ -557,19 +561,19 @@ function CategoryRow({
               ]}
             >
               {remaining < 0
-                ? `${formatMoney(Math.abs(remaining).toFixed(2)).display} over`
-                : `${formatMoney(remaining.toFixed(2)).display} left`}
+                ? `${formatMoney(Math.abs(remaining).toFixed(2), currency).display} over`
+                : `${formatMoney(remaining.toFixed(2), currency).display} left`}
             </Text>
             {row.scheduled > 0 && (
               <Text style={styles.catScheduled}>
-                + {formatMoney(row.scheduled.toFixed(2)).display} scheduled
+                + {formatMoney(row.scheduled.toFixed(2), currency).display} scheduled
               </Text>
             )}
           </View>
         </>
       ) : row.scheduled > 0 ? (
         <Text style={styles.catRemaining}>
-          + {formatMoney(row.scheduled.toFixed(2)).display} scheduled · no cap set
+          + {formatMoney(row.scheduled.toFixed(2), currency).display} scheduled · no cap set
         </Text>
       ) : (
         <Text style={styles.catRemaining}>No cap set</Text>

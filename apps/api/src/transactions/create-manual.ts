@@ -16,6 +16,9 @@ import { syncTransactionImpact } from "./refunds.js";
 export type CreateManualTxInput = {
   merchantRaw: string;
   amount: number;
+  currency?: string;
+  /** Internal-only: atomically relabel the workspace before creating this row. */
+  changeWorkspaceCurrency?: boolean;
   occurredAt?: string;
   categoryId?: string;
   note?: string;
@@ -57,8 +60,10 @@ type ErrorCode =
   | "invalid_date"
   | "invalid_note"
   | "invalid_merchant"
+  | "invalid_currency"
   | "category_not_found"
-  | "account_not_found";
+  | "account_not_found"
+  | "currency_mismatch";
 
 export class CreateManualTxError extends Error {
   readonly code: ErrorCode;
@@ -91,6 +96,14 @@ function validateAmount(amount: number): void {
     throw new CreateManualTxError("invalid_amount");
   }
 }
+function validateCurrency(currency: string | undefined): string | undefined {
+  if (currency === undefined) return undefined;
+  const normalized = currency.trim().toUpperCase();
+  if (!/^[A-Z]{3}$/.test(normalized)) {
+    throw new CreateManualTxError("invalid_currency");
+  }
+  return normalized;
+}
 function validateNote(note: string | undefined): string | null {
   return rethrow(() => validateNoteShared(note));
 }
@@ -104,6 +117,7 @@ export async function createManualTransactionService(
 ): Promise<CreateManualTxResult> {
   const merchantRaw = validateMerchantRaw(input.merchantRaw);
   validateAmount(input.amount);
+  const requestedCurrency = validateCurrency(input.currency);
   const note = validateNote(input.note);
 
   let occurredAt: Date;
@@ -127,10 +141,24 @@ export async function createManualTransactionService(
       if (!cat) throw new CreateManualTxError("category_not_found");
     }
 
-    const workspace = await tx.workspace.findUniqueOrThrow({
+    let workspace = await tx.workspace.findUniqueOrThrow({
       where: { id: ctx.workspaceId },
       select: { currency: true },
     });
+    if (requestedCurrency && requestedCurrency !== workspace.currency) {
+      if (input.changeWorkspaceCurrency !== true) {
+        throw new CreateManualTxError("currency_mismatch");
+      }
+      workspace = await tx.workspace.update({
+        where: { id: ctx.workspaceId },
+        data: { currency: requestedCurrency },
+        select: { currency: true },
+      });
+      await tx.bankAccount.updateMany({
+        where: { workspaceId: ctx.workspaceId },
+        data: { currency: requestedCurrency },
+      });
+    }
 
     const MANUAL_WHERE = {
       plaidItemId: null,

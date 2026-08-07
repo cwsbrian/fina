@@ -37,16 +37,19 @@ export async function checkLargeChargeAndPush(
     const tx = await prisma.transaction.findUnique({
       where: { id: args.transactionId },
       select: {
+        workspace: { select: { currency: true } },
         allocations: {
           select: { categoryId: true, category: { select: { name: true } } },
           take: 1,
         },
       },
     });
-    const allocation = tx?.allocations[0];
+    if (!tx) return;
+    const allocation = tx.allocations[0];
     if (!allocation?.categoryId) return; // uncategorized — skip
     const categoryId = allocation.categoryId;
     const categoryName = allocation.category?.name ?? null;
+    const currency = tx.workspace.currency;
 
     // Last 90 days of expense allocations on this category, excluding
     // the new row.
@@ -92,6 +95,7 @@ export async function checkLargeChargeAndPush(
           args.merchant ?? "An unusual charge",
           args.amount.toFixed(2),
           categoryName,
+          currency,
         );
       } catch (err) {
         logError(

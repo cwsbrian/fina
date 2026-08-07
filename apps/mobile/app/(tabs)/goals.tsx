@@ -18,6 +18,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { formatMoney } from "../../src/format/money";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import { PaidFeatureLock } from "../../src/billing/PaidFeatureLock";
 import {
   goalAccent,
@@ -30,6 +31,7 @@ import {
 const HEADER_HEIGHT = 84;
 
 export default function Goals() {
+  const currency = useWorkspaceCurrency();
   const [me, setMe] = useState<Me | null>(null);
   const [goals, setGoals] = useState<GoalDTO[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -122,6 +124,7 @@ export default function Goals() {
         renderItem={({ item }) => (
           <GoalCard
             goal={item}
+            currency={currency}
             onPress={() => router.push(`/goal/${item.id}` as never)}
           />
         )}
@@ -175,7 +178,7 @@ export default function Goals() {
             <Text style={styles.subtitle}>
               {active.length === 0
                 ? "Nothing set aside yet"
-                : `${active.length} active · ${formatMoney(monthlyAside.toFixed(2)).display}/mo set aside`}
+                : `${active.length} active · ${formatMoney(monthlyAside.toFixed(2), currency).display}/mo set aside`}
             </Text>
           </View>
           <View style={styles.headActions}>
@@ -193,7 +196,15 @@ export default function Goals() {
   );
 }
 
-function GoalCard({ goal, onPress }: { goal: GoalDTO; onPress: () => void }) {
+function GoalCard({
+  goal,
+  currency,
+  onPress,
+}: {
+  goal: GoalDTO;
+  currency: string;
+  onPress: () => void;
+}) {
   const target = Number(goal.targetAmount);
   const saved = Number(goal.savedAmount);
   const pct = target > 0 ? Math.min(100, Math.round((saved / target) * 100)) : 0;
@@ -227,7 +238,7 @@ function GoalCard({ goal, onPress }: { goal: GoalDTO; onPress: () => void }) {
             {goal.title}
           </Text>
           <Text style={styles.cardMeta}>
-            ${target.toLocaleString()} · {formatDue(due, new Date())}
+            {formatMoney(target.toFixed(2), currency).display} · {formatDue(due, new Date())}
           </Text>
         </View>
         <View
@@ -248,7 +259,7 @@ function GoalCard({ goal, onPress }: { goal: GoalDTO; onPress: () => void }) {
         <View style={[styles.barFill, { width: `${pct}%`, backgroundColor: accent }]} />
       </View>
       <View style={styles.cardFoot}>
-        <Text style={styles.foot}>${saved.toLocaleString()} saved</Text>
+        <Text style={styles.foot}>{formatMoney(saved.toFixed(2), currency).display} saved</Text>
         <Text style={styles.foot}>{pct}%</Text>
       </View>
     </Pressable>

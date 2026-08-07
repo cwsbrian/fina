@@ -33,11 +33,16 @@ type CreateResp = {
 export default function NewWorkspace() {
   const [name, setName] = useState("");
   const [currency, setCurrency] = useState("CAD");
+  const [customCurrency, setCustomCurrency] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const trimmed = name.trim();
-  const canSubmit = !submitting && trimmed.length > 0 && trimmed.length <= 80;
+  const canSubmit =
+    !submitting &&
+    trimmed.length > 0 &&
+    trimmed.length <= 80 &&
+    (customCurrency.length === 0 || customCurrency.length === 3);
 
   const submit = useCallback(async () => {
     if (!canSubmit) return;
@@ -119,7 +124,10 @@ export default function NewWorkspace() {
                 <Pressable
                   key={c.code}
                   style={[styles.chip, active && styles.chipActive]}
-                  onPress={() => setCurrency(c.code)}
+                  onPress={() => {
+                    setCustomCurrency("");
+                    setCurrency(c.code);
+                  }}
                   disabled={submitting}
                 >
                   <Text
@@ -134,6 +142,21 @@ export default function NewWorkspace() {
               );
             })}
           </View>
+          <TextInput
+            style={[styles.input, { marginTop: space.sm }]}
+            value={customCurrency}
+            onChangeText={(text) => {
+              const normalized = text.replace(/[^a-z]/gi, "").toUpperCase().slice(0, 3);
+              setCustomCurrency(normalized);
+              if (normalized.length === 3) setCurrency(normalized);
+            }}
+            placeholder="Other ISO code, e.g. CHF"
+            placeholderTextColor={colors.mutedSoft}
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={3}
+            editable={!submitting}
+          />
 
           <View style={styles.helper}>
             <Ionicons

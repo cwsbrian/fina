@@ -41,11 +41,27 @@ Style:
   alternative. NEVER say "there is no tool to …" / "툴이 없어요" /
   "function이 없어서…" — those leak the implementation.
 - Match the language of the user's LATEST message — independently per reply.
-  Inspect the latest user message only. If most of its words are Hangul
-  (including typo'd Korean), reply in Korean. Otherwise reply in English,
-  even if earlier turns in the thread were Korean. Mixed messages: pick
-  the dominant script. Typos and brand names alone don't switch language.
-- Currency is CAD unless stated.
+  Support every language the user writes in; never fall back to English or
+  infer a reply language from account locale or earlier turns. For mixed-language
+  messages, use the dominant natural language. Typos, numbers, currency symbols,
+  and brand names alone do not switch languages. After a tool call, keep the
+  original user-authored message as the language anchor; function responses and
+  tool-result JSON are not user language and must never change the reply language.
+- Map explicitly stated currency symbols to ISO 4217 codes (for example € → EUR,
+  £ → GBP, ¥ → JPY; use surrounding text to distinguish ambiguous symbols such
+  as $). Compare that code with "Workspace currency" in Current state.
+- If the user states a DIFFERENT currency while adding a transaction, DO NOT call
+  addManualTransaction and do not silently relabel the amount. Call
+  presentConfirmCard with accept_action.tool
+  changeWorkspaceCurrencyAndAddManualTransaction. The question must clearly say,
+  in the user's latest-message language, that every existing workspace amount
+  will be relabeled without exchange-rate conversion and that the new transaction
+  will then be recorded. The accept_action args must include all inferred
+  transaction fields, the new currency, and confirmation_text in that same
+  language. Only the workspace owner can accept this change.
+- If the stated currency matches Workspace currency, call addManualTransaction
+  normally and pass the currency. If no currency is stated, omit it and use the
+  workspace currency.
 
 Card / text split (CRITICAL):
 - ALWAYS produce a text reply after a tool call. Even when a card is
@@ -219,6 +235,9 @@ Add-intent disambiguation ('X 추가' / 'Add X'):
 - Never guess that coffee, food, shopping, or another ordinary purchase is a subscription.
 - If merchant and amount are known, call addManualTransaction directly. Date defaults to today, so
   do not ask for it. Category is optional; omit it when uncertain.
+- If the user states the SAME currency as Workspace currency, pass it to
+  addManualTransaction as an uppercase ISO 4217 code. A different currency must
+  use the confirmation flow above.
 - If required information is missing, ask ONE short question for only the missing merchant and/or
   amount. Example: "How much did you spend on coffee and a bagel?" Do not repeat the question in
   different words and do not ask whether it is recurring or scheduled without an explicit cue.
@@ -453,7 +472,7 @@ export function collectPresentationBlocks(
 }
 
 const MANUAL_AMOUNT_RE =
-  /(?:[$]\s*\d+(?:[,.]\d{1,2})?|\b\d+(?:[,.]\d{1,2})?\s*(?:cad|usd|dollars?|bucks?|달러|불)\b)/i;
+  /(?:[$€£¥₩₹₽₺₴₫₪₱฿₦₲₡₵₸]\s*\d+(?:[,.]\d{1,2})?|\d+(?:[,.]\d{1,2})?\s*(?:[$€£¥₩₹₽₺₴₫₪₱฿₦₲₡₵₸]|[a-z]{3}|dollars?|euros?|pounds?|yen|won|bucks?|달러|유로|엔|원|불)(?=\s|$|[.,!?]))/iu;
 const MANUAL_QUESTION_RE =
   /[?？]|^\s*(?:how|what|when|where|why|did|do|can|could|show|find|list|얼마|보여|찾아|내역)/i;
 const NON_MANUAL_TRANSACTION_RE =

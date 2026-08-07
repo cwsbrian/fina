@@ -22,6 +22,8 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
 import { categoryMeta } from "../../src/categories/meta";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
+import { currencySymbol } from "../../src/format/money";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 
 const TEN_YEARS_MS = 10 * 365 * 86_400_000;
 
@@ -74,6 +76,7 @@ function toYMD(d: Date): string {
 }
 
 export default function EditSubscription() {
+  const currency = useWorkspaceCurrency();
   const params = useLocalSearchParams<{ id: string }>();
   const id = params.id;
 
@@ -277,7 +280,9 @@ export default function EditSubscription() {
         >
           <View style={styles.amountRow}>
             <Text style={styles.amountAdornment}>−</Text>
-            <Text style={[styles.amountAdornment, { marginRight: 2 }]}>$</Text>
+            <Text style={[styles.amountAdornment, { marginRight: 2 }]}>
+              {currencySymbol(currency)}
+            </Text>
             <View style={styles.amountInputWrap}>
               <TextInput
                 style={styles.amountInput}

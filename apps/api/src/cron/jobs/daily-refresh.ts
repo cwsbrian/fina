@@ -18,7 +18,12 @@ export async function runDailyRefresh(env: Env): Promise<void> {
       status: "active",
       connectedBy: { not: null },
     },
-    select: { id: true, workspaceId: true, connectedBy: true },
+    select: {
+      id: true,
+      workspaceId: true,
+      connectedBy: true,
+      workspace: { select: { currency: true } },
+    },
   });
 
   const t0 = Date.now();
@@ -74,6 +79,7 @@ export async function runDailyRefresh(env: Env): Promise<void> {
             workspaceId: item.workspaceId,
             merchant,
             amount,
+            currency: item.workspace.currency,
             categoryName,
           });
         }

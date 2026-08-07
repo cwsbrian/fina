@@ -3,6 +3,7 @@ import {
   SYSTEM_PROMPT_PER_TYPE,
   USER_INSTRUCTION,
   EMPTY_BRIEF_FALLBACK,
+  latestUserLanguageAnchor,
 } from "../src/chat/brief.js";
 
 // Conjoining jamo (U+1100–11FF) + compatibility jamo (U+3130–318F) +
@@ -10,7 +11,7 @@ import {
 // 6 codepoints short.
 const HANGUL = /[ᄀ-ᇿ㄰-㆏가-힣]/;
 
-describe("brief LLM strings are English (no Hangul)", () => {
+describe("brief LLM language contract", () => {
   it("system prompts contain no Hangul", () => {
     for (const v of Object.values(SYSTEM_PROMPT_PER_TYPE)) {
       expect(HANGUL.test(v)).toBe(false);
@@ -19,6 +20,23 @@ describe("brief LLM strings are English (no Hangul)", () => {
   it("user instruction + fallback contain no Hangul", () => {
     expect(HANGUL.test(USER_INSTRUCTION)).toBe(false);
     expect(HANGUL.test(EMPTY_BRIEF_FALLBACK)).toBe(false);
+  });
+
+  it("requires the latest user message language with locale fallback", () => {
+    for (const value of Object.values(SYSTEM_PROMPT_PER_TYPE)) {
+      expect(value).toContain("language.latest_user_message");
+      expect(value).toContain("language.fallback_locale");
+    }
+  });
+
+  it("finds the latest user-authored text and ignores synthetic brief context", () => {
+    expect(
+      latestUserLanguageAnchor([
+        { role: "user", parts: [{ text: "Responde en español" }] },
+        { role: "model", parts: [{ text: "알겠습니다" }] },
+        { role: "user", parts: [{ text: "Context from Fina's latest brief: ignored" }] },
+      ]),
+    ).toBe("Responde en español");
   });
 
   // Contract anchors: every per-type prompt carries the RULES block, so each

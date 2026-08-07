@@ -2,6 +2,7 @@ import { createContext, ReactNode, useContext } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, space, type as type$ } from "../../design/tokens";
+import { currencySymbol as formatCurrencySymbol } from "../../format/money";
 
 /** Render a category's icon. The `icon` field stores an Ionicons glyph
  *  name (e.g. "cart-outline"); render it as a vector icon. Fall back to
@@ -31,7 +32,12 @@ export function CategoryIcon({
     );
   }
   return (
-    <Text style={{ fontSize: size }} numberOfLines={1} accessibilityElementsHidden importantForAccessibility="no">
+    <Text
+      style={{ fontSize: size }}
+      numberOfLines={1}
+      accessibilityElementsHidden
+      importantForAccessibility="no"
+    >
       {icon}
     </Text>
   );
@@ -49,9 +55,7 @@ export function BlockPresentationProvider({
   children: ReactNode;
 }) {
   return (
-    <BlockPresentationContext.Provider value={value}>
-      {children}
-    </BlockPresentationContext.Provider>
+    <BlockPresentationContext.Provider value={value}>{children}</BlockPresentationContext.Provider>
   );
 }
 
@@ -121,13 +125,7 @@ export function HeadlineAmount({
 }
 
 /** Small badge — "↑ 12%" or "↓ $4.50" — colored by direction. */
-export function DeltaPill({
-  value,
-  direction,
-}: {
-  value: string;
-  direction: "up" | "down";
-}) {
+export function DeltaPill({ value, direction }: { value: string; direction: "up" | "down" }) {
   const color = direction === "up" ? colors.down : colors.up;
   // Spending UP is a "down" outcome (color red); for the recap card we treat
   // direction literally — caller decides semantics. Income/savings tools
@@ -186,9 +184,7 @@ export function KVPRow({
         </View>
         <View style={styles.rowRight}>
           <Text style={styles.rowAmount}>{amount}</Text>
-          {delta ? (
-            <DeltaPill value={delta.value} direction={delta.direction} />
-          ) : null}
+          {delta ? <DeltaPill value={delta.value} direction={delta.direction} /> : null}
         </View>
       </View>
       {typeof barPct === "number" ? <RowBar pct={barPct} /> : null}
@@ -241,15 +237,7 @@ export function withAlpha(hex: string, alpha: number): string {
 /** Currency code → display symbol. Always returns a string; unknown,
  *  missing, or null codes fall back to "$". */
 export function currencySymbol(code: string | undefined | null): string {
-  switch ((code ?? "").toUpperCase()) {
-    case "CAD": return "$";
-    case "USD": return "US$";
-    case "EUR": return "€";
-    case "GBP": return "£";
-    case "JPY": return "¥";
-    case "KRW": return "₩";
-    default:    return "$";
-  }
+  return code ? formatCurrencySymbol(code) : "$";
 }
 
 const styles = StyleSheet.create({

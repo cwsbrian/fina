@@ -432,6 +432,21 @@ describe("sendTransactionAddedPush payload shape", () => {
     );
   });
 
+  it("formats an explicitly supplied foreign currency", async () => {
+    const { Expo } = await import("expo-server-sdk");
+    const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-ta-eur" }]);
+    const spy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockImplementation(sendSpy);
+    const u = await makeUserWithDevices([
+      { token: "ExponentPushToken[ta-payload-eur]", platform: "ios" },
+    ]);
+
+    const { sendTransactionAddedPush } = await import("../src/push/send.js");
+    await sendTransactionAddedPush(testEnv(), u.id, "Antonino", "4.50", "Café", "EUR");
+
+    const chunk = spy.mock.calls[0]![0] as Array<Record<string, unknown>>;
+    expect(chunk[0]).toEqual(expect.objectContaining({ title: "Antonino · €4.50" }));
+  });
+
   it("priority='high', sound='default' (regression guard against payload defaults change)", async () => {
     const { Expo } = await import("expo-server-sdk");
     const sendSpy = vi.fn().mockResolvedValueOnce([{ status: "ok", id: "t-ta-3" }]);

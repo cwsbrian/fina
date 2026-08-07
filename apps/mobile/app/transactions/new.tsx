@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -21,6 +21,7 @@ import { colors, space, type as type$ } from "../../src/design/tokens";
 import { CategoryPickerSheet } from "../../src/categories/CategoryPickerSheet";
 import { categoryMeta } from "../../src/categories/meta";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
+import { currencySymbol } from "../../src/format/money";
 
 export default function NewTransaction() {
   const [direction, setDirection] = useState<"expense" | "income">("expense");
@@ -32,6 +33,27 @@ export default function NewTransaction() {
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [currency, setCurrency] = useState("CAD");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const wsId = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+        if (!wsId) return;
+        const data = await apiFetch<{ workspaces: Array<{ id: string; currency: string }> }>(
+          "/workspaces",
+        );
+        const active = data.workspaces.find((workspace) => workspace.id === wsId);
+        if (!cancelled && active) setCurrency(active.currency);
+      } catch {
+        // Keep the safe default until workspace metadata becomes available.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const submit = useCallback(async () => {
     const num = Number(amount);
@@ -137,7 +159,9 @@ export default function NewTransaction() {
             >
               {direction === "income" ? "+" : "−"}
             </Text>
-            <Text style={[styles.amountAdornment, { marginRight: 2 }]}>$</Text>
+            <Text style={[styles.amountAdornment, { marginRight: 2 }]}>
+              {currencySymbol(currency)}
+            </Text>
             <View style={styles.amountInputWrap}>
               <TextInput
                 style={styles.amountInput}

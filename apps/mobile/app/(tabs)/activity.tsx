@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import type { CategoryDTO, TransactionDTO, Cadence } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
+import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import { formatMoney, dateBucket } from "../../src/format/money";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { categoryMeta } from "../../src/categories/meta";
@@ -226,6 +227,7 @@ function currentMonthRange(): { from: string; to: string } {
 }
 
 export default function Activity() {
+  const currency = useWorkspaceCurrency();
   const [txs, setTxs] = useState<TransactionDTO[] | null>(null);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
@@ -458,10 +460,6 @@ export default function Activity() {
 
   const sections = groupByDate(txs, directionFilter);
   const isSearching = query.trim().length > 0;
-
-  // Pick a currency for section totals — Plaid items live in one
-  // workspace and share its currency, so safe to read from first tx.
-  const currency = txs[0]?.currency ?? "CAD";
 
   return (
     <View style={styles.safe}>

@@ -10,7 +10,11 @@ export async function buildFinancialContext(
   workspaceId: string,
   userId: string,
 ): Promise<string> {
-  const [txCount, latestTx, categoryCount, { today, tz }] = await Promise.all([
+  const [workspace, txCount, latestTx, categoryCount, { today, tz }] = await Promise.all([
+    prisma.workspace.findUniqueOrThrow({
+      where: { id: workspaceId },
+      select: { currency: true },
+    }),
     prisma.transaction.count({ where: { workspaceId, removedAt: null } }),
     prisma.transaction.findFirst({
       where: { workspaceId, removedAt: null },
@@ -26,6 +30,7 @@ export async function buildFinancialContext(
   return [
     `## Current state`,
     `- Today: ${today} (timezone ${tz})`,
+    `- Workspace currency: ${workspace.currency}`,
     `- Total transactions: ${txCount}`,
     latestLine,
     `- Categories defined: ${categoryCount}`,

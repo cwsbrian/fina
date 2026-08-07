@@ -21,6 +21,7 @@ type Result = {
   transactions: Array<{
     id: string;
     amount: string;
+    currency: string;
     merchantRaw: string;
     merchantNormalized: string | null;
     occurredAt: string;
@@ -94,6 +95,10 @@ export const listTransactions: ToolDef<Args, Result> = {
     });
 
     const periodLabel = periodToLabel(args.period);
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: { currency: true },
+    });
     const block: PresentationBlock | undefined =
       rows.length === 0
         ? undefined
@@ -102,7 +107,7 @@ export const listTransactions: ToolDef<Args, Result> = {
             title: "Recent transactions",
             ...(periodLabel ? { period_label: periodLabel } : {}),
             total_count: rows.length,
-            currency: "CAD",
+            currency: workspace.currency,
             rows: blockRows,
             ...(rows.length > blockRows.length
               ? { footer: `Showing ${blockRows.length} of ${rows.length}` }
@@ -113,6 +118,7 @@ export const listTransactions: ToolDef<Args, Result> = {
       transactions: rows.map((r) => ({
         id: r.id,
         amount: r.amount.toString(),
+        currency: workspace.currency,
         merchantRaw: r.merchantRaw,
         merchantNormalized: r.merchantNormalized,
         occurredAt: r.occurredAt.toISOString(),

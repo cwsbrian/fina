@@ -13,6 +13,7 @@ import type { PresentationBlock } from "@fina/shared";
 import { colors, space, type as type$ } from "../../design/tokens";
 import { useDatePickerSheet } from "../../datetime/DatePickerSheetHost";
 import { BlockCard } from "./_primitives";
+import { currencySymbol } from "../../format/money";
 
 type Block = Extract<PresentationBlock, { type: "recurring_form_card" }>;
 type Cadence = NonNullable<Block["defaults"]["cadence"]>;
@@ -67,6 +68,7 @@ export function RecurringFormBlock({
   onActionStateChange,
   onFocusChange,
 }: Props) {
+  const symbol = currencySymbol(block.currency ?? "CAD");
   const datePicker = useDatePickerSheet();
   const [name, setName] = useState<string>(block.defaults.name);
   const [amount, setAmount] = useState<string>(block.defaults.amount ?? "");
@@ -158,7 +160,7 @@ export function RecurringFormBlock({
             </Text>
           </View>
           <Text style={styles.doneAmount}>
-            ${formatAmount(amount)} / {cadenceShortLabel(cadence)}
+            {symbol}{formatAmount(amount)} / {cadenceShortLabel(cadence)}
           </Text>
         </View>
       </BlockCard>
@@ -196,7 +198,7 @@ export function RecurringFormBlock({
       <View style={styles.field}>
         <Text style={styles.label}>Amount</Text>
         <View style={styles.amountRow}>
-          <Text style={styles.amountPrefix}>$</Text>
+          <Text style={styles.amountPrefix}>{symbol}</Text>
           <TextInput
             style={[styles.input, styles.amountInput]}
             value={amount}

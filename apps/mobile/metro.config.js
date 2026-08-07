@@ -16,7 +16,7 @@ const googleSigninApiEntrypoint = path.join(
 
 // pnpm monorepo: watch the workspace root so changes outside apps/mobile
 // are picked up, and let Metro fall through to the hoisted node_modules.
-config.watchFolders = [workspaceRoot];
+config.watchFolders = [...new Set([...(config.watchFolders ?? []), workspaceRoot])];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, "node_modules"),
   path.resolve(workspaceRoot, "node_modules"),

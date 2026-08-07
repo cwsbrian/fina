@@ -34,6 +34,10 @@ function confirmationFor(
       if (!tx) return null;
       return `Added ${tx.merchantRaw} for ${tx.currency} ${tx.amount}.`;
     }
+    case "changeWorkspaceCurrencyAndAddManualTransaction": {
+      const confirmation = (result as { confirmation?: unknown }).confirmation;
+      return typeof confirmation === "string" ? confirmation : null;
+    }
     case "addRecurring": {
       const typed = result as {
         recurring?: { name: string; amount: string; cadence: string; nextOccurrenceDate: string };
@@ -150,6 +154,7 @@ async function getRegistry(): Promise<ToolDef[]> {
 
 export const CONFIRMABLE_TOOLS = [
   "addManualTransaction",
+  "changeWorkspaceCurrencyAndAddManualTransaction",
   "createCategory",
   "addTransactionNote",
   "setBudget",

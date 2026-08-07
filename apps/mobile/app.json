@@ -3,7 +3,7 @@
     "name": "Fina",
     "slug": "fina",
     "scheme": "fina",
-    "version": "1.14",
+    "version": "1.15",
     "orientation": "portrait",
     "icon": "./assets/fina-app-icon.png",
     "userInterfaceStyle": "light",
@@ -13,9 +13,7 @@
       "resizeMode": "contain",
       "backgroundColor": "#071F1D"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": false,
       "bundleIdentifier": "com.withfina.app",
