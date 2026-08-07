@@ -24,9 +24,10 @@
     "smoke:db:start": "docker start fina-postgres-dev",
     "smoke:db:stop": "docker stop fina-postgres-dev",
     "smoke:test": "DATABASE_URL=postgresql://fina:fina@localhost:5433/fina_test nx run-many -t test",
-    "release:android": "cd apps/mobile && pnpm exec eas build --platform android --profile production --auto-submit --non-interactive",
-    "release:android:aab": "cd apps/mobile && pnpm exec eas build --platform android --profile production --non-interactive",
-    "submit:android": "cd apps/mobile && pnpm exec eas submit --platform android --profile production --latest --non-interactive",
+    "release:android": "pnpm release:android:aab && pnpm submit:android",
+    "release:android:aab": "cd apps/mobile && JAVA_HOME=${JAVA_HOME:-$(brew --prefix openjdk@17)/libexec/openjdk.jdk/Contents/Home} ANDROID_HOME=${ANDROID_HOME:-$HOME/Library/Android/sdk} ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-$HOME/Library/Android/sdk} pnpm exec eas build --platform android --profile production --local --output ../../dist/fina-android-latest.aab --non-interactive",
+    "release:android:cloud": "cd apps/mobile && pnpm exec eas build --platform android --profile production --auto-submit --non-interactive",
+    "submit:android": "cd apps/mobile && pnpm exec eas submit --platform android --profile production --path ../../dist/fina-android-latest.aab --non-interactive",
     "e2e": "DATABASE_URL=postgresql://fina:fina@localhost:5433/fina API_URL=http://localhost:4000 WEB_URL=http://localhost:3100 playwright test",
     "e2e:ui": "DATABASE_URL=postgresql://fina:fina@localhost:5433/fina API_URL=http://localhost:4000 WEB_URL=http://localhost:3100 playwright test --ui",
     "e2e:headed": "DATABASE_URL=postgresql://fina:fina@localhost:5433/fina API_URL=http://localhost:4000 WEB_URL=http://localhost:3100 playwright test --headed"
