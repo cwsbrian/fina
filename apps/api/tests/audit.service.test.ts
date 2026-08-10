@@ -214,7 +214,7 @@ describe("audit hook — processChatTurn direct write (actorType: agent)", () =>
   let workspaceId: string;
   let userId: string;
   let threadId: string;
-  const env = { DEEPSEEK_API_KEY: "x" } as never;
+  const env = { OPENAI_API_KEY: "x", CHAT_MODEL: "gpt-5-nano" } as never;
 
   beforeEach(async () => {
     resetGeminiMock();

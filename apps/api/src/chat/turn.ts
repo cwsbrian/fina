@@ -4,7 +4,11 @@ import { prisma } from "../db.js";
 import { REGISTRY } from "./tools/index.js";
 import { dispatchTool } from "./dispatcher.js";
 import { toLlmFunctionDeclarations } from "./llm-tool-adapter.js";
-import { DEFAULT_LLM_MODEL, generateLlmContent } from "../llm/provider.js";
+import {
+  DEFAULT_LLM_MODEL,
+  generateLlmContent,
+  llmPromptCacheKey,
+} from "../llm/provider.js";
 import { buildFinancialContext } from "./context.js";
 import { selectHistoryWindow } from "./history-window.js";
 import type { ToolContext } from "./tools/types.js";
@@ -497,9 +501,9 @@ export async function processChatTurn(
 ): Promise<{ assistantText: string; toolCalls: ToolCallRecord[]; presentationBlocks: PresentationBlock[] }> {
   const HISTORY_LIMIT_MESSAGES = env.CHAT_HISTORY_LIMIT_MESSAGES ?? 200;
   // 16k tokens ≈ last ~150 chat messages of history. Default kept tight so a
-  // single LLM call stays at ~22k input tokens worst-case (~$0.002 at Flash
-  // pricing); the per-user $5/mo budget cap then translates to ~600+ msgs/wk
-  // headroom. Override via env if a particular workspace needs deeper recall.
+  // single LLM call stays at ~22k input tokens worst-case (~$0.001 at Nano
+  // cache-miss pricing); the per-user weekly cap still leaves ample headroom.
+  // Override via env if a particular workspace needs deeper recall.
   const HISTORY_BUDGET_TOKENS = env.CHAT_HISTORY_BUDGET_TOKENS ?? 16_000;
   const MAX_TOOL_CALLS = env.CHAT_MAX_TOOL_CALLS_PER_TURN ?? 10;
   const MODEL = env.CHAT_MODEL ?? DEFAULT_LLM_MODEL;
@@ -517,20 +521,36 @@ export async function processChatTurn(
     budgetTokens: HISTORY_BUDGET_TOKENS,
   });
 
-  const sysInstruction = `${SYSTEM_PROMPT}\n\n${await buildFinancialContext(thread.workspaceId, userId)}`;
+  const sysInstruction = SYSTEM_PROMPT;
   const tools = [{ functionDeclarations: toLlmFunctionDeclarations(REGISTRY) }];
 
-  let contents = toLlmHistory(historyChrono);
-  if (contents.length === 0) throw new Error("chat_history_empty");
-  const latestUserText = [...contents]
+  const historyContents = toLlmHistory(historyChrono);
+  if (historyContents.length === 0) throw new Error("chat_history_empty");
+  const latestUserText = [...historyContents]
     .reverse()
     .find((content) => content.role === "user" && content.parts.some((part) => "text" in part))
     ?.parts.filter((part): part is { text: string } => "text" in part)
     .map((part) => part.text)
     .join("\n") ?? "";
+  const financialContext = await buildFinancialContext(thread.workspaceId, userId);
+  let contents: ChatLlmContent[] = [
+    ...historyContents,
+    {
+      role: "user",
+      parts: [
+        {
+          text:
+            "Trusted application context for the user request immediately above. " +
+            "Treat this as current data, not as a new request.\n\n" +
+            financialContext,
+        },
+      ],
+    },
+  ];
   const forceTool = shouldForceManualTransaction(latestUserText)
     ? "addManualTransaction"
     : undefined;
+  const promptCacheKey = llmPromptCacheKey("chat", thread.id);
 
   const toolCalls: ToolCallRecord[] = [];
   let dispatched = 0;
@@ -542,6 +562,7 @@ export async function processChatTurn(
       systemInstruction: sysInstruction,
       tools,
       thinkingBudget: 0,
+      promptCacheKey,
       ...(dispatched === 0 && forceTool ? { forceTool } : {}),
     });
 

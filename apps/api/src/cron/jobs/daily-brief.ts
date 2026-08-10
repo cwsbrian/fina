@@ -5,6 +5,7 @@ import type { Env } from "../../env.js";
 import { partsInTz, resolveTz } from "../../chat/tools/periods.js";
 import { buildBriefContext, type BriefContext, type BriefType } from "../../chat/brief-context.js";
 import { generateBrief, briefBlocksToText } from "../../chat/brief.js";
+import { llmPromptCacheKey } from "../../llm/provider.js";
 import type { PresentationBlock } from "../../chat/blocks.js";
 import { sendBriefPush } from "../../push/send.js";
 import { markdownToPlainPreview } from "../../push/markdown-preview.js";
@@ -15,6 +16,9 @@ import { selectHistoryWindow } from "../../chat/history-window.js";
 import { toLlmHistory } from "../../chat/turn.js";
 
 const CRON_NAME = "daily-brief";
+export const MORNING_BRIEF_ACTIVITY_WINDOW_DAYS = 30;
+const MORNING_BRIEF_ACTIVITY_WINDOW_MS =
+  MORNING_BRIEF_ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 /** Generate one brief per paid user's workspace and append it to that
@@ -99,6 +103,32 @@ async function emitWorkspaceBrief(
   });
   if (exists) return;
 
+  const now = new Date();
+  const recentTransaction = await prisma.transaction.findFirst({
+    where: {
+      workspaceId,
+      removedAt: null,
+      billingGraceHiddenAt: null,
+      occurredAt: {
+        gte: new Date(now.getTime() - MORNING_BRIEF_ACTIVITY_WINDOW_MS),
+        lte: now,
+      },
+    },
+    select: { id: true },
+  });
+  if (!recentTransaction) {
+    logInfo(
+      {
+        cron: CRON_NAME,
+        userId: u.id,
+        workspaceId,
+        activityWindowDays: MORNING_BRIEF_ACTIVITY_WINDOW_DAYS,
+      },
+      "brief skipped inactive workspace",
+    );
+    return;
+  }
+
   const briefType = determineBriefType(u.localDate);
   const context = await buildBriefContext(u.id, briefType, workspaceId);
   if (context.workspaces.length === 0) return;
@@ -163,6 +193,7 @@ async function emitWorkspaceBrief(
     recentTexts,
     briefType,
     toLlmHistory(history),
+    llmPromptCacheKey(`brief:${briefType}`, thread.id),
   );
 
   const user = await prisma.user.findUnique({

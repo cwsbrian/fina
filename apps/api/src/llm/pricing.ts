@@ -1,5 +1,5 @@
 // Per-model LLM pricing. Update whenever providers publish new rates.
-// Values are USD per 1M tokens. Source: api-docs.deepseek.com/quick_start/pricing.
+// Values are USD per 1M tokens. Sources: official OpenAI and DeepSeek pricing docs.
 //
 // Used only for accounting (LlmCallLog.costUsd); cap evaluation reads the
 // summed cost, never recomputes from tokens. So an outdated price here
@@ -15,6 +15,16 @@ type Price = {
 };
 
 const PRICING: Record<string, Price> = {
+  "gpt-5-nano": {
+    cacheHitInputPerMillion: 0.005,
+    cacheMissInputPerMillion: 0.05,
+    outputPerMillion: 0.4,
+  },
+  "gpt-5-nano-2025-08-07": {
+    cacheHitInputPerMillion: 0.005,
+    cacheMissInputPerMillion: 0.05,
+    outputPerMillion: 0.4,
+  },
   "deepseek-v4-flash": {
     cacheHitInputPerMillion: 0.0028,
     cacheMissInputPerMillion: 0.14,

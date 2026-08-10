@@ -94,14 +94,15 @@ export async function generateBrief(
   recentBriefTexts: string[],
   briefType: BriefType,
   recentConversation: LlmContent[] = [],
+  promptCacheKey?: string,
 ): Promise<PresentationBlock[]> {
   const model = env.CHAT_MODEL ?? DEFAULT_LIGHT_LLM_MODEL;
 
   const response = await generateLlmContent(env, {
     model,
     // Preserve the exact chronological prefix from the workspace's canonical
-    // conversation. DeepSeek can reuse that stable prefix through automatic
-    // prompt caching; only the new financial snapshot is appended.
+    // conversation. The provider can reuse that stable prefix through
+    // automatic prompt caching; only the new financial snapshot is appended.
     contents: [
       ...recentConversation,
       {
@@ -112,6 +113,7 @@ export async function generateBrief(
     systemInstruction: SYSTEM_PROMPT_PER_TYPE[briefType],
     maxOutputTokens: 800,
     temperature: 0.7,
+    ...(promptCacheKey ? { promptCacheKey } : {}),
   });
 
   // Brief is system-initiated — runs even if the user has hit their weekly

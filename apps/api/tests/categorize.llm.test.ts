@@ -23,7 +23,7 @@ describe("callLlmCategorize", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
 
     await callLlmCategorize(
-      { DEEPSEEK_API_KEY: "deepseek-test" } as never,
+      { DEEPSEEK_API_KEY: "deepseek-test", CHAT_MODEL: "deepseek-v4-flash" } as never,
       { expense: ["Other"], income: ["Other"] },
       [],
       null,
@@ -58,7 +58,7 @@ describe("callLlmCategorize", () => {
 
     await expect(
       callLlmCategorize(
-        { DEEPSEEK_API_KEY: "deepseek-test" } as never,
+        { DEEPSEEK_API_KEY: "deepseek-test", CHAT_MODEL: "deepseek-v4-flash" } as never,
         { expense: ["Groceries"], income: ["Other"] },
         [{ id: "tx_1", merchantRaw: "Loblaws", amount: 10, occurredAtISO: "2026-06-01" }],
         null,

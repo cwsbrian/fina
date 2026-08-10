@@ -31,6 +31,23 @@ async function makeUser(tz = "America/Toronto", morningTime = "08:00") {
   });
 }
 
+async function addWorkspaceTransaction(workspaceId: string, occurredAt = new Date()): Promise<void> {
+  const account = await prisma.bankAccount.create({
+    data: { workspaceId, name: "Checking", type: "depository" },
+  });
+  await prisma.transaction.create({
+    data: {
+      workspaceId,
+      accountId: account.id,
+      amount: "10.00",
+      merchantRaw: "Merchant",
+      occurredAt,
+      source: "manual",
+      rawData: {},
+    },
+  });
+}
+
 describe("runDailyBrief", () => {
   it("skips when no users match the current minute", async () => {
     await makeUser("America/Toronto", "00:01");
@@ -50,6 +67,7 @@ describe("runDailyBrief", () => {
     const u = await makeUser(tz, initialHHmm);
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id);
 
     // Recompute now and update if the minute rolled over during setup.
     const p2 = partsInTz(new Date(), tz);
@@ -78,6 +96,7 @@ describe("runDailyBrief", () => {
     const u = await makeUser(tz, await currentLocalHHmm(tz));
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id);
     await syncMorningTimeToNow(u.id, tz);
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
@@ -122,6 +141,7 @@ describe("runDailyBrief", () => {
     await prisma.membership.create({
       data: { userId: u.id, workspaceId: ws.id, role: "owner" },
     });
+    await addWorkspaceTransaction(ws.id);
     const thread = await prisma.chatThread.create({
       data: { userId: u.id, workspaceId: ws.id },
     });
@@ -174,6 +194,7 @@ describe("runDailyBrief", () => {
     });
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000));
     await syncMorningTimeToNow(u.id, tz);
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
@@ -202,6 +223,7 @@ describe("runDailyBrief", () => {
     });
     const ws = await prisma.workspace.create({ data: { name: "Personal" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id, new Date(Date.now() - 2 * 24 * 60 * 60 * 1000));
     const category = await prisma.category.create({
       data: { workspaceId: ws.id, name: "Housing" },
     });

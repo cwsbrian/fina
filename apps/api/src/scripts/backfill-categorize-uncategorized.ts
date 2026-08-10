@@ -11,19 +11,25 @@
 import { prisma } from "../db.js";
 import { categorizeNewTransactions } from "../categorize/service.js";
 import type { Env } from "../env.js";
+import { DEFAULT_LIGHT_LLM_MODEL } from "../llm/provider.js";
 
 async function main(): Promise<void> {
-  // Dev backfill: categorize service only uses DEEPSEEK_API_KEY,
-  // CHAT_MODEL, and CATEGORIZE_BATCH_MAX. Skip the full env validation (Stripe/Plaid/etc
-  // not needed here).
-  const deepseek = process.env.DEEPSEEK_API_KEY;
-  if (!deepseek) {
+  // Dev backfill: categorize service only uses the selected provider key,
+  // CHAT_MODEL, and CATEGORIZE_BATCH_MAX. Skip full env validation.
+  const model = process.env.CHAT_MODEL ?? DEFAULT_LIGHT_LLM_MODEL;
+  const isOpenAI = model.startsWith("gpt-");
+  if (isOpenAI && !process.env.OPENAI_API_KEY) {
+    console.error("OPENAI_API_KEY is required (export it or source the root .env).");
+    process.exit(1);
+  }
+  if (!isOpenAI && model.startsWith("deepseek-") && !process.env.DEEPSEEK_API_KEY) {
     console.error("DEEPSEEK_API_KEY is required (export it or source the root .env).");
     process.exit(1);
   }
   const env = {
-    DEEPSEEK_API_KEY: deepseek,
-    CHAT_MODEL: process.env.CHAT_MODEL ?? "deepseek-v4-flash",
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY,
+    CHAT_MODEL: model,
     CATEGORIZE_BATCH_MAX: 50,
   } as unknown as Env;
 

@@ -55,6 +55,7 @@ const Schema = z.object({
   // the crypto helper so tests can use a fixed value without re-running zod.
   ENCRYPTION_KEY: z.string(),
   // LLM providers
+  OPENAI_API_KEY: z.string().optional(),
   DEEPSEEK_API_KEY: z.string().optional(),
   // OPTIONAL — keeps test literals clean. Use `env.CATEGORIZE_BATCH_MAX ?? 50`
   // in service code. z.default() would make the inferred Env type non-optional.
@@ -147,7 +148,31 @@ const ParsedSchema = Schema.refine(
       "ADMIN_TOKEN_PUBLIC_KEYS, ADMIN_TOKEN_ISSUER, and ADMIN_EMAIL are required in production",
     path: ["ADMIN_TOKEN_PUBLIC_KEYS"],
   },
-);
+).superRefine((e, ctx) => {
+  if (e.NODE_ENV !== "production") return;
+  const model = e.CHAT_MODEL ?? "gpt-5-nano";
+  if (model.startsWith("gpt-") && !e.OPENAI_API_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "OPENAI_API_KEY is required for the configured OpenAI model",
+      path: ["OPENAI_API_KEY"],
+    });
+  }
+  if (model.startsWith("deepseek-") && !e.DEEPSEEK_API_KEY) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "DEEPSEEK_API_KEY is required for the configured DeepSeek model",
+      path: ["DEEPSEEK_API_KEY"],
+    });
+  }
+  if (!model.startsWith("gpt-") && !model.startsWith("deepseek-")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Unsupported CHAT_MODEL: ${model}`,
+      path: ["CHAT_MODEL"],
+    });
+  }
+});
 
 export type Env = z.infer<typeof ParsedSchema>;
 

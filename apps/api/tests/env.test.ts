@@ -11,6 +11,7 @@ function baseEnv(): NodeJS.ProcessEnv {
     PLAID_CLIENT_ID: "x",
     PLAID_SECRET: "x",
     ENCRYPTION_KEY: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    OPENAI_API_KEY: "openai-test-key",
     DEEPSEEK_API_KEY: "x",
     TRUST_PROXY: "false", // 1J Task 2 strict opt-in requires explicit value
     // 1K: billing-stripe merged 4 required Stripe env vars. Use clear
@@ -69,6 +70,31 @@ describe("loadEnv RESEND_API_KEY refine", () => {
 });
 
 describe("loadEnv new keys", () => {
+  it("requires the selected LLM provider key in production", () => {
+    const { OPENAI_API_KEY: _drop, ...withoutOpenAI } = baseEnv();
+    void _drop;
+    expect(() =>
+      loadEnv({
+        ...withoutOpenAI,
+        ...adminEnv,
+        NODE_ENV: "production",
+        RESEND_API_KEY: "re_" + "a".repeat(24),
+      }),
+    ).toThrow(/OPENAI_API_KEY/);
+
+    const { DEEPSEEK_API_KEY: _dropDeepSeek, ...withoutDeepSeek } = baseEnv();
+    void _dropDeepSeek;
+    expect(() =>
+      loadEnv({
+        ...withoutDeepSeek,
+        ...adminEnv,
+        NODE_ENV: "production",
+        RESEND_API_KEY: "re_" + "a".repeat(24),
+        CHAT_MODEL: "deepseek-v4-flash",
+      }),
+    ).toThrow(/DEEPSEEK_API_KEY/);
+  });
+
   it("requires all admin delegation variables in production", () => {
     expect(() =>
       loadEnv({

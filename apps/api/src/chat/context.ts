@@ -1,8 +1,8 @@
 import { prisma } from "../db.js";
 import { todayKeyInTz } from "./tools/periods.js";
 
-/** Financial + temporal context injected into the system prompt every
- *  chat turn. The temporal line is non-negotiable now that recap tools
+/** Financial + temporal context appended after the conversation history on
+ *  every chat turn. The temporal line is non-negotiable now that recap tools
  *  accept since/until ISO date keys — the LLM needs an unambiguous
  *  "today" anchor in the user's timezone to translate "this month",
  *  "올해", "지난 90일" etc. into specific dates. */

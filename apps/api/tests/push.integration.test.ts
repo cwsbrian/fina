@@ -35,6 +35,20 @@ describe("E2E: sign-up → register device → cron fires → push dispatched", 
     const { cookie, userId } = await signUpAndGetCookie(app, { email: "e2e-push@t.co" });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId, workspaceId: ws.id, role: "owner" } });
+    const account = await prisma.bankAccount.create({
+      data: { workspaceId: ws.id, name: "Checking", type: "depository" },
+    });
+    await prisma.transaction.create({
+      data: {
+        workspaceId: ws.id,
+        accountId: account.id,
+        amount: "10.00",
+        merchantRaw: "Starbucks",
+        occurredAt: new Date(),
+        source: "manual",
+        rawData: {},
+      },
+    });
 
     // 2) Register device via POST /devices.
     const registerRes = await app.inject({

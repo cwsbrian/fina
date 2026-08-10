@@ -13,7 +13,7 @@ describe("processChatTurn", () => {
   let wsId: string;
   let threadId: string;
   let userId: string;
-  const env = { DEEPSEEK_API_KEY: "x", CHAT_MODEL: "deepseek-v4-flash" } as never;
+  const env = { OPENAI_API_KEY: "x", CHAT_MODEL: "gpt-5-nano" } as never;
 
   beforeEach(async () => {
     resetGeminiMock();
@@ -46,6 +46,23 @@ describe("processChatTurn", () => {
     expect(system).toContain("Treat \"Fina\" as your own assistant name");
     expect(system).not.toContain("your Fina account");
     expect(system).not.toContain("your Fina money");
+  });
+
+  it("keeps financial state after history and sends an opaque per-thread cache key", async () => {
+    chatGeminiMock.responses.push({ text: "Hello!" });
+    await processChatTurn(env, { id: threadId, workspaceId: wsId }, userId, "owner");
+
+    const req = lastChatLlmRequest() as {
+      prompt_cache_key?: string;
+      messages?: Array<{ role?: string; content?: string | null }>;
+    };
+    const system = req.messages?.find((m) => m.role === "system")?.content ?? "";
+    const userMessages = req.messages?.filter((m) => m.role === "user") ?? [];
+    expect(system).not.toContain("## Current state");
+    expect(userMessages[0]?.content).toBe("hi");
+    expect(userMessages.at(-1)?.content).toContain("## Current state");
+    expect(req.prompt_cache_key).toMatch(/^fina:chat:[a-f0-9]{32}$/);
+    expect(req.prompt_cache_key).not.toContain(threadId);
   });
 
   it("single function call → dispatched → final text", async () => {

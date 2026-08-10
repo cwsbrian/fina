@@ -62,6 +62,23 @@ async function makeUserMatchingNow(tz = "Asia/Seoul") {
   });
 }
 
+async function addWorkspaceTransaction(workspaceId: string, occurredAt = new Date()): Promise<void> {
+  const account = await prisma.bankAccount.create({
+    data: { workspaceId, name: "Checking", type: "depository" },
+  });
+  await prisma.transaction.create({
+    data: {
+      workspaceId,
+      accountId: account.id,
+      amount: "10.00",
+      merchantRaw: "Recent merchant",
+      occurredAt,
+      source: "manual",
+      rawData: {},
+    },
+  });
+}
+
 describe("daily-brief integration", () => {
   it("zero-membership user — no workspace means no brief", async () => {
     const u = await makeUserMatchingNow();
@@ -75,10 +92,38 @@ describe("daily-brief integration", () => {
     expect(briefs).toHaveLength(0);
   });
 
+  it("workspace with no transactions — no brief", async () => {
+    const u = await makeUserMatchingNow();
+    const ws = await prisma.workspace.create({ data: { name: "Empty" } });
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await syncMorningTimeToNow(u.id, "Asia/Seoul");
+
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+    await runDailyBrief(testEnv());
+
+    expect(await prisma.brief.count({ where: { userId: u.id } })).toBe(0);
+    expect(await prisma.chatMessage.count({ where: { thread: { userId: u.id } } })).toBe(0);
+  });
+
+  it("workspace whose latest transaction is older than 30 days — no brief", async () => {
+    const u = await makeUserMatchingNow();
+    const ws = await prisma.workspace.create({ data: { name: "Inactive" } });
+    await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id, new Date(Date.now() - 31 * 24 * 60 * 60 * 1000));
+    await syncMorningTimeToNow(u.id, "Asia/Seoul");
+
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+    await runDailyBrief(testEnv());
+
+    expect(await prisma.brief.count({ where: { userId: u.id } })).toBe(0);
+    expect(await prisma.chatMessage.count({ where: { thread: { userId: u.id } } })).toBe(0);
+  });
+
   it("post-run state is consistent — exactly 1 brief + 1 chatMessage per successful tick", async () => {
     const u = await makeUserMatchingNow();
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id);
     await syncMorningTimeToNow(u.id, "Asia/Seoul");  // anti-flake
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
@@ -97,6 +142,7 @@ describe("daily-brief integration", () => {
     const u = await makeUserMatchingNow();
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id);
     await syncMorningTimeToNow(u.id, "Asia/Seoul");  // anti-flake
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
@@ -219,7 +265,8 @@ async function getCategorizeCard(userId: string): Promise<CategorizeCardBlock | 
 
 describe("daily-brief categorize_confirm_card block", () => {
   it("no needsConfirmation allocs → block is not emitted", async () => {
-    const { userId } = await setupCardUser();
+    const { userId, wsId } = await setupCardUser();
+    await addWorkspaceTransaction(wsId);
     await syncMorningTimeToNow(userId, "Asia/Seoul");
 
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");

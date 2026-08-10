@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
+
 import type { Env } from "../env.js";
 
-export const DEFAULT_LLM_MODEL = "deepseek-v4-flash";
-export const DEFAULT_LIGHT_LLM_MODEL = "deepseek-v4-flash";
+export const DEFAULT_LLM_MODEL = "gpt-5-nano";
+export const DEFAULT_LIGHT_LLM_MODEL = "gpt-5-nano";
 
 export type LlmPart =
   | { text: string }
@@ -32,6 +34,7 @@ export type LlmGenerateArgs = {
   temperature?: number;
   thinkingBudget?: number;
   forceTool?: string;
+  promptCacheKey?: string;
 };
 
 export type LlmGenerateResponse = {
@@ -63,14 +66,64 @@ export async function generateLlmContent(
   env: Env,
   args: LlmGenerateArgs,
 ): Promise<LlmGenerateResponse> {
-  if (!isDeepSeekModel(args.model)) {
-    throw new Error(`Unsupported LLM model: ${args.model}. Fina is configured for DeepSeek models only.`);
-  }
-  return generateDeepSeek(env, args);
+  if (isOpenAIModel(args.model)) return generateOpenAI(env, args);
+  if (isDeepSeekModel(args.model)) return generateDeepSeek(env, args);
+  throw new Error(`Unsupported LLM model: ${args.model}`);
+}
+
+function isOpenAIModel(model: string): boolean {
+  return model.startsWith("gpt-");
 }
 
 function isDeepSeekModel(model: string): boolean {
   return model.startsWith("deepseek-");
+}
+
+/** Stable, privacy-preserving key for routing related prompts to the same cache. */
+export function llmPromptCacheKey(scope: string, id: string): string {
+  const digest = createHash("sha256").update(id).digest("hex").slice(0, 32);
+  return `fina:${scope}:${digest}`;
+}
+
+async function generateOpenAI(
+  env: Env,
+  args: LlmGenerateArgs,
+): Promise<LlmGenerateResponse> {
+  if (!env.OPENAI_API_KEY) {
+    throw new Error("OPENAI_API_KEY is required for OpenAI models");
+  }
+
+  const body: Record<string, unknown> = {
+    model: args.model,
+    messages: toOpenAIMessages(args),
+    stream: false,
+    reasoning_effort: "minimal",
+  };
+  const tools = toOpenAITools(args.tools);
+  if (tools.length > 0) body.tools = tools;
+  if (args.forceTool) {
+    body.tool_choice = { type: "function", function: { name: args.forceTool } };
+  }
+  if (args.responseMimeType === "application/json") {
+    body.response_format = { type: "json_object" };
+  }
+  if (args.maxOutputTokens) body.max_completion_tokens = args.maxOutputTokens;
+  if (args.promptCacheKey) body.prompt_cache_key = args.promptCacheKey;
+
+  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`OpenAI API error ${response.status}: ${text.slice(0, 300)}`);
+  }
+  const json = (await response.json()) as OpenAIChatCompletionResponse;
+  return fromOpenAIResponse(json);
 }
 
 async function generateDeepSeek(
@@ -144,6 +197,44 @@ async function generateDeepSeek(
       ...(typeof usage?.prompt_cache_miss_tokens === "number"
         ? { promptCacheMissTokenCount: usage.prompt_cache_miss_tokens }
         : {}),
+      candidatesTokenCount: usage?.completion_tokens ?? 0,
+    },
+  };
+}
+
+type OpenAIChatCompletionResponse = {
+  choices?: Array<{
+    message?: {
+      content?: string | null;
+      tool_calls?: Array<{
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    prompt_tokens_details?: { cached_tokens?: number };
+    completion_tokens?: number;
+  };
+};
+
+function fromOpenAIResponse(json: OpenAIChatCompletionResponse): LlmGenerateResponse {
+  const message = json.choices?.[0]?.message;
+  const usage = json.usage;
+  const promptTokens = usage?.prompt_tokens ?? 0;
+  const cacheHitTokens = usage?.prompt_tokens_details?.cached_tokens ?? 0;
+  const functionCalls = message?.tool_calls?.map((tc) => ({
+    ...(tc.function?.name ? { name: tc.function.name } : {}),
+    args: parseToolArgs(tc.function?.arguments),
+  }));
+  return {
+    ...(typeof message?.content === "string" ? { text: message.content } : {}),
+    ...(functionCalls ? { functionCalls } : {}),
+    usageMetadata: {
+      promptTokenCount: promptTokens,
+      promptCacheHitTokenCount: cacheHitTokens,
+      promptCacheMissTokenCount: Math.max(0, promptTokens - cacheHitTokens),
       candidatesTokenCount: usage?.completion_tokens ?? 0,
     },
   };

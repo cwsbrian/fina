@@ -32,6 +32,23 @@ afterAll(async () => {
   await disconnect();
 });
 
+async function addWorkspaceTransaction(workspaceId: string): Promise<void> {
+  const account = await prisma.bankAccount.create({
+    data: { workspaceId, name: "Checking", type: "depository" },
+  });
+  await prisma.transaction.create({
+    data: {
+      workspaceId,
+      accountId: account.id,
+      amount: "10.00",
+      merchantRaw: "Merchant",
+      occurredAt: new Date(),
+      source: "manual",
+      rawData: {},
+    },
+  });
+}
+
 describe("daily-brief push integration", () => {
   it("after brief tx commits, sendBriefPush fires for the user's device", async () => {
     const tz = "Asia/Seoul";
@@ -47,6 +64,7 @@ describe("daily-brief push integration", () => {
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id);
     await prisma.userDevice.create({
       data: { userId: u.id, expoPushToken: "ExponentPushToken[push1]", platform: "ios" },
     });
@@ -88,6 +106,7 @@ describe("daily-brief push integration", () => {
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id);
     await prisma.userDevice.create({
       data: { userId: u.id, expoPushToken: "ExponentPushToken[push2]", platform: "android" },
     });
@@ -119,6 +138,7 @@ describe("daily-brief push integration", () => {
     });
     const ws = await prisma.workspace.create({ data: { name: "P" } });
     await prisma.membership.create({ data: { userId: u.id, workspaceId: ws.id, role: "owner" } });
+    await addWorkspaceTransaction(ws.id);
     await syncMorningTimeToNow(u.id, tz);
 
     const { Expo } = await import("expo-server-sdk");

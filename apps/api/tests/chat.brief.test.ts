@@ -116,12 +116,14 @@ describe("generateBrief (mocked LLM)", () => {
       ["BRIEF_FROM_YESTERDAY_MARKER"],
       "daily",
       [{ role: "user", parts: [{ text: "Háblame en español, por favor." }] }],
+      "fina:brief:test",
     );
 
     const sentJson = JSON.stringify(lastChatLlmRequest());
     expect(sentJson).toContain("BRIEF_FROM_YESTERDAY_MARKER");
     expect(sentJson).toContain("Háblame en español, por favor.");
     expect(sentJson).toContain("latest_user_message");
+    expect(lastChatLlmRequest()).toMatchObject({ prompt_cache_key: "fina:brief:test" });
   });
 
   it("falls back to encouragement when LLM returns empty", async () => {
