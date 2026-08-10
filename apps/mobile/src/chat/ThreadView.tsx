@@ -1,11 +1,4 @@
-import {
-  Fragment,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -65,14 +58,14 @@ type Props = {
    *  the title in the screen header and surface rename/delete actions
    *  on it. `null` means the view is on the fresh / pending state with
    *  nothing to act on. */
-  onThreadChange?: (
-    thread: { id: string; title: string | null } | null,
-  ) => void;
+  onThreadChange?: (thread: { id: string; title: string | null } | null) => void;
 };
 
 type GetThreadResp = {
   thread: ChatThreadDTO;
   messages: ChatMessageDTO[];
+  /** Cursor for the next, older page. Null means the full history is loaded. */
+  nextCursor?: string | null;
   /** accept_intent ids whose ActionIntent is already consumed or expired —
    *  their action cards must stay closed across re-entry (the dismissal is
    *  otherwise only in-memory). */
@@ -101,11 +94,10 @@ const CHAT_SUPPORT_ANSWER_LIMIT = 1800;
 const DETAIL_BLOB_MIN_WIDTH = 196;
 const SUPPORT_ACTION_ICON_SIZE = 16;
 const SUPPORT_ACTION_MIN_WIDTH = SUPPORT_ACTION_ICON_SIZE * 2 + space.sm;
+const MESSAGE_PAGE_SIZE = 30;
 
 function chatSupportAnswerText(message: ChatMessageDTO): string {
-  const blocks = Array.isArray(message.blocks)
-    ? (message.blocks as Block[])
-    : [];
+  const blocks = Array.isArray(message.blocks) ? (message.blocks as Block[]) : [];
   const text = blocks
     .filter((b): b is Extract<Block, { type: "text" }> => b.type === "text")
     .map((b) => b.markdown)
@@ -120,9 +112,7 @@ function chatSupportAnswerText(message: ChatMessageDTO): string {
 }
 
 function assistantCopyText(message: ChatMessageDTO): string {
-  const blocks = Array.isArray(message.blocks)
-    ? (message.blocks as Block[])
-    : [];
+  const blocks = Array.isArray(message.blocks) ? (message.blocks as Block[]) : [];
   return blocks
     .filter((b): b is Extract<Block, { type: "text" }> => b.type === "text")
     .map((b) => b.markdown.trim())
@@ -165,6 +155,8 @@ export function ThreadView({
   const [localId, setLocalId] = useState<string | null>(threadId);
   const [thread, setThread] = useState<ChatThreadDTO | null>(null);
   const [messages, setMessages] = useState<ChatMessageDTO[]>([]);
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   // Bumped on every send to force-remount the composer TextInput. Clearing the
@@ -173,7 +165,10 @@ export function ThreadView({
   // field. Remounting throws away the native input + its IME composition state.
   const [composerKey, setComposerKey] = useState(0);
   const [sending, setSending] = useState(false);
-  const listRef = useRef<FlatList>(null);
+  const listRef = useRef<FlatList<ChatMessageDTO>>(null);
+  const localIdRef = useRef<string | null>(threadId);
+  const loadingOlderRef = useRef(false);
+  const userRequestedOlderRef = useRef(false);
   const inputRef = useRef<TextInput>(null);
   const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
   // Skips the load useEffect's GET /chat/threads/:id when we just created
@@ -193,33 +188,32 @@ export function ThreadView({
   // Per-session only — a reload re-fetches the server's view of the
   // thread (which includes the assistant's confirmation message and
   // the now-consumed intent, so re-hiding isn't critical).
-  const [dismissedIntents, setDismissedIntents] = useState<Set<string>>(
-    () => new Set(),
-  );
+  const [dismissedIntents, setDismissedIntents] = useState<Set<string>>(() => new Set());
   const [supportMessage, setSupportMessage] = useState<ChatMessageDTO | null>(null);
   const [supportNote, setSupportNote] = useState("");
   const [supportSubmitting, setSupportSubmitting] = useState(false);
   const [supportErr, setSupportErr] = useState<string | null>(null);
-  const [activeDetailBlock, setActiveDetailBlock] =
-    useState<ActiveDetailBlock | null>(null);
-  const [detailFormState, setDetailFormState] =
-    useState<DetailFormState | null>(null);
+  const [activeDetailBlock, setActiveDetailBlock] = useState<ActiveDetailBlock | null>(null);
+  const [detailFormState, setDetailFormState] = useState<DetailFormState | null>(null);
   const detailFormActionsRef = useRef<DetailFormActions | null>(null);
   const detailSnapPoints = useMemo(() => ["68%", "92%"], []);
   const detailSheetRef = useRef<BottomSheetModal>(null);
   const categoryPickedRef = useRef<((cat: CategoryDTO | null) => void) | null>(null);
   const [categoryPickerTxId, setCategoryPickerTxId] = useState<string | null>(null);
   const supportCanSubmit =
-    supportMessage?.role === "assistant" &&
-    supportNote.trim().length > 0 &&
-    !supportSubmitting;
+    supportMessage?.role === "assistant" && supportNote.trim().length > 0 && !supportSubmitting;
 
   // Sync when the active workspace changes and the parent supplies its
   // canonical thread. Reset local state so the conversation loads cleanly.
   useEffect(() => {
     setLocalId(threadId);
+    localIdRef.current = threadId;
     setThread(null);
     setMessages([]);
+    setOlderCursor(null);
+    setLoadingOlder(false);
+    loadingOlderRef.current = false;
+    userRequestedOlderRef.current = false;
     setErr(null);
   }, [threadId]);
 
@@ -229,15 +223,16 @@ export function ThreadView({
     let cancelled = false;
     (async () => {
       try {
-        const list =
-          await apiFetch<{ workspaces: WorkspaceOption[] }>("/workspaces");
+        const list = await apiFetch<{ workspaces: WorkspaceOption[] }>("/workspaces");
         if (cancelled) return;
         setWorkspaces(list.workspaces);
       } catch {
         // Non-fatal: the thread still carries the authoritative workspace id.
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Notify parent about the workspace name to surface in the header.
@@ -245,18 +240,12 @@ export function ThreadView({
   useEffect(() => {
     if (!onWorkspaceContextChange) return;
     const activeId = thread?.workspaceId ?? null;
-    const name = activeId
-      ? workspaces.find((w) => w.id === activeId)?.name ?? null
-      : null;
+    const name = activeId ? (workspaces.find((w) => w.id === activeId)?.name ?? null) : null;
     onWorkspaceContextChange({
       workspaceName: name,
       multipleWorkspaces: workspaces.length > 1,
     });
-  }, [
-    onWorkspaceContextChange,
-    workspaces,
-    thread?.workspaceId,
-  ]);
+  }, [onWorkspaceContextChange, workspaces, thread?.workspaceId]);
 
   // Surface thread identity (id + title) to the parent so it can render
   // the title in its header and offer rename/delete actions on the
@@ -276,9 +265,14 @@ export function ThreadView({
 
   const scrollToBottom = useCallback(() => {
     requestAnimationFrame(() => {
-      listRef.current?.scrollToEnd({ animated: true });
+      listRef.current?.scrollToOffset({ offset: 0, animated: true });
     });
   }, []);
+
+  // State stays chronological for the rest of the chat logic. FlatList gets
+  // newest-first data and renders inverted, so offset 0 is the latest message
+  // immediately — no top-to-bottom entrance animation or full-history render.
+  const invertedMessages = useMemo(() => [...messages].reverse(), [messages]);
 
   const renderDetailBackdrop = useCallback(
     (props: BottomSheetBackdropProps) => (
@@ -302,12 +296,13 @@ export function ThreadView({
     });
   }, []);
 
-  const appendConfirmationMessage = useCallback((msg: ChatMessageDTO) => {
-    setMessages((prev) =>
-      prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
-    );
-    scrollToBottom();
-  }, [scrollToBottom]);
+  const appendConfirmationMessage = useCallback(
+    (msg: ChatMessageDTO) => {
+      setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+      scrollToBottom();
+    },
+    [scrollToBottom],
+  );
 
   useEffect(() => {
     // Pending thread: nothing to load. Composer is shown over an empty
@@ -324,14 +319,16 @@ export function ThreadView({
     let cancelled = false;
     (async () => {
       try {
-        const data = await apiFetch<GetThreadResp>(`/chat/threads/${localId}`);
+        const data = await apiFetch<GetThreadResp>(
+          `/chat/threads/${localId}?limit=${MESSAGE_PAGE_SIZE}`,
+        );
         if (cancelled) return;
         setThread(data.thread);
         setMessages(data.messages);
+        setOlderCursor(data.nextCursor ?? null);
         // Seed the dismissal set from server truth so already-resolved cards
         // (consumed/expired intents) don't re-open on re-entry.
         setDismissedIntents(new Set(data.resolvedIntentIds ?? []));
-        scrollToBottom();
         // Mark as read on view — the user is looking at the messages
         // right now, so any unreadCount must drop to 0 immediately and
         // the next Home / chats poll must not show a stale badge.
@@ -343,7 +340,50 @@ export function ThreadView({
     return () => {
       cancelled = true;
     };
-  }, [localId, scrollToBottom]);
+  }, [localId]);
+
+  const loadOlderMessages = useCallback(async () => {
+    const id = localId;
+    const cursor = olderCursor;
+    if (!id || !cursor || loadingOlderRef.current) return;
+
+    loadingOlderRef.current = true;
+    setLoadingOlder(true);
+    try {
+      const data = await apiFetch<GetThreadResp>(
+        `/chat/threads/${id}?limit=${MESSAGE_PAGE_SIZE}&cursor=${encodeURIComponent(cursor)}`,
+      );
+      if (localIdRef.current !== id) return;
+
+      setMessages((current) => {
+        const knownIds = new Set(current.map((message) => message.id));
+        const older = data.messages.filter((message) => !knownIds.has(message.id));
+        return [...older, ...current];
+      });
+      setOlderCursor(data.nextCursor ?? null);
+      setDismissedIntents((current) => {
+        const next = new Set(current);
+        for (const intentId of data.resolvedIntentIds ?? []) next.add(intentId);
+        return next;
+      });
+    } catch {
+      // Keep the cursor so another upward scroll can retry without replacing
+      // the already-visible conversation with a full-screen error.
+    } finally {
+      if (localIdRef.current === id) {
+        loadingOlderRef.current = false;
+        setLoadingOlder(false);
+      }
+    }
+  }, [localId, olderCursor]);
+
+  const handleOlderEndReached = useCallback(() => {
+    // Inverted FlatList may call onEndReached during its first layout. Only a
+    // real upward drag is allowed to fetch another page.
+    if (!userRequestedOlderRef.current) return;
+    userRequestedOlderRef.current = false;
+    void loadOlderMessages();
+  }, [loadOlderMessages]);
 
   // After a send completes the composer was force-remounted (key bump) to clear
   // the CJK IME residual, which also drops focus. Refocus once it's editable
@@ -385,26 +425,24 @@ export function ThreadView({
       if (!id) {
         const wsId = await bootstrapActiveWorkspace();
         if (!wsId) throw new Error("no_workspace");
-        const created = await apiFetch<{ thread: ChatThreadDTO }>(
-          "/chat/threads",
-          { method: "POST", body: JSON.stringify({}) },
-        );
+        const created = await apiFetch<{ thread: ChatThreadDTO }>("/chat/threads", {
+          method: "POST",
+          body: JSON.stringify({}),
+        });
         id = created.thread.id;
         // Mark BEFORE setLocalId so the load-useEffect skips the GET
         // on the re-render triggered by setLocalId.
         justCreatedId.current = id;
         setLocalId(id);
+        localIdRef.current = id;
         setThread(created.thread);
         onThreadCreated?.(id);
       }
 
-      const resp = await apiFetch<PostMessageResp>(
-        `/chat/threads/${id}/messages`,
-        {
-          method: "POST",
-          body: JSON.stringify({ text: body }),
-        },
-      );
+      const resp = await apiFetch<PostMessageResp>(`/chat/threads/${id}/messages`, {
+        method: "POST",
+        body: JSON.stringify({ text: body }),
+      });
       // Server returns the canonical user+assistant pair. Swap our
       // optimistic temp row for the server's record (so the id lines
       // up for any future updates), then append the assistant reply.
@@ -433,10 +471,7 @@ export function ThreadView({
         );
         return;
       }
-      Alert.alert(
-        "Couldn't send",
-        code ?? "Try again in a moment.",
-      );
+      Alert.alert("Couldn't send", code ?? "Try again in a moment.");
     } finally {
       setSending(false);
     }
@@ -513,40 +548,37 @@ export function ThreadView({
     router.push("/(tabs)/activity" as never);
   }, []);
 
-  const handleChangeCategoryFromDetail = useCallback((
-    txId: string,
-    onPicked: (cat: CategoryDTO | null) => void,
-  ) => {
-    categoryPickedRef.current = onPicked;
-    setCategoryPickerTxId(txId);
-  }, []);
+  const handleChangeCategoryFromDetail = useCallback(
+    (txId: string, onPicked: (cat: CategoryDTO | null) => void) => {
+      categoryPickedRef.current = onPicked;
+      setCategoryPickerTxId(txId);
+    },
+    [],
+  );
 
   const handleCategoryPickerClose = useCallback(() => {
     setCategoryPickerTxId(null);
     categoryPickedRef.current = null;
   }, []);
 
-  const acceptDetailIntent = useCallback(async (intentId: string) => {
-    dismissIntent(intentId);
-    try {
-      const confirmation = await submitFormIntent(
-        thread?.workspaceId ?? null,
-        localId,
-        intentId,
-        {},
-      );
-      if (confirmation) appendConfirmationMessage(confirmation);
-      closeDetail();
-    } catch (e) {
-      notifyConsumeError(e);
-    }
-  }, [
-    appendConfirmationMessage,
-    closeDetail,
-    dismissIntent,
-    localId,
-    thread?.workspaceId,
-  ]);
+  const acceptDetailIntent = useCallback(
+    async (intentId: string) => {
+      dismissIntent(intentId);
+      try {
+        const confirmation = await submitFormIntent(
+          thread?.workspaceId ?? null,
+          localId,
+          intentId,
+          {},
+        );
+        if (confirmation) appendConfirmationMessage(confirmation);
+        closeDetail();
+      } catch (e) {
+        notifyConsumeError(e);
+      }
+    },
+    [appendConfirmationMessage, closeDetail, dismissIntent, localId, thread?.workspaceId],
+  );
 
   const rejectDetailIntent = useCallback(() => {
     const block = activeDetailBlock?.block;
@@ -556,23 +588,23 @@ export function ThreadView({
     closeDetail();
   }, [activeDetailBlock?.block, closeDetail, dismissIntent]);
 
-  const submitDetailForm = useCallback(async (
-    intentId: string,
-    overrides: Record<string, unknown>,
-  ) => {
-    try {
-      const confirmation = await submitFormIntent(
-        thread?.workspaceId ?? null,
-        localId,
-        intentId,
-        overrides,
-      );
-      if (confirmation) appendConfirmationMessage(confirmation);
-    } catch (e) {
-      notifyConsumeError(e);
-      throw e;
-    }
-  }, [appendConfirmationMessage, localId, thread?.workspaceId]);
+  const submitDetailForm = useCallback(
+    async (intentId: string, overrides: Record<string, unknown>) => {
+      try {
+        const confirmation = await submitFormIntent(
+          thread?.workspaceId ?? null,
+          localId,
+          intentId,
+          overrides,
+        );
+        if (confirmation) appendConfirmationMessage(confirmation);
+      } catch (e) {
+        notifyConsumeError(e);
+        throw e;
+      }
+    },
+    [appendConfirmationMessage, localId, thread?.workspaceId],
+  );
 
   const handleDetailFormActions = useCallback((actions: DetailFormActions | null) => {
     detailFormActionsRef.current = actions;
@@ -604,9 +636,7 @@ export function ThreadView({
   }, [acceptDetailIntent, activeDetailBlock?.block]);
 
   const activeDetail = activeDetailBlock?.block ?? null;
-  const detailActionKind = activeDetail
-    ? detailActionKindForBlock(activeDetail)
-    : "none";
+  const detailActionKind = activeDetail ? detailActionKindForBlock(activeDetail) : "none";
   const detailTitle = activeDetail ? detailTitleForBlock(activeDetail) : "Detail";
   const detailShowSave =
     detailActionKind === "intent" ||
@@ -617,8 +647,7 @@ export function ThreadView({
     detailActionKind === "form"
       ? detailFormState?.canSubmit !== true
       : detailActionKind !== "intent";
-  const detailSaving =
-    detailActionKind === "form" && detailFormState?.submitting === true;
+  const detailSaving = detailActionKind === "form" && detailFormState?.submitting === true;
 
   if (err) {
     return (
@@ -647,11 +676,22 @@ export function ThreadView({
     >
       <FlatList
         ref={listRef}
-        data={messages}
+        data={invertedMessages}
+        inverted={invertedMessages.length > 0}
         keyExtractor={(m) => m.id}
-        contentContainerStyle={[styles.listContent, { paddingTop: space.lg + listTopInset }]}
-        onContentSizeChange={scrollToBottom}
+        contentContainerStyle={[
+          styles.listContent,
+          invertedMessages.length > 0
+            ? { paddingBottom: space.lg + listTopInset }
+            : { paddingTop: space.lg + listTopInset },
+        ]}
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
         onScroll={onScroll}
+        onScrollBeginDrag={() => {
+          userRequestedOlderRef.current = true;
+        }}
+        onEndReached={handleOlderEndReached}
+        onEndReachedThreshold={0.2}
         scrollEventThrottle={scrollEventThrottle}
         ListEmptyComponent={
           <View style={styles.startCard}>
@@ -662,10 +702,7 @@ export function ThreadView({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel="Use example transaction"
-              style={({ pressed }) => [
-                styles.startSuggestion,
-                pressed && { opacity: 0.7 },
-              ]}
+              style={({ pressed }) => [styles.startSuggestion, pressed && { opacity: 0.7 }]}
               onPress={() => {
                 setDraft("Coffee $5 this morning");
                 requestAnimationFrame(() => inputRef.current?.focus());
@@ -689,7 +726,14 @@ export function ThreadView({
             onDismissIntent={dismissIntent}
           />
         )}
-        ListFooterComponent={sending ? <TypingIndicator /> : null}
+        ListHeaderComponent={sending ? <TypingIndicator /> : null}
+        ListFooterComponent={
+          loadingOlder ? (
+            <View style={styles.olderLoader}>
+              <ActivityIndicator size="small" color={colors.primary} />
+            </View>
+          ) : null
+        }
       />
 
       {/* Composer is hidden while a form card is in-edit — the user
@@ -697,35 +741,35 @@ export function ThreadView({
           still lifts the form into view; without the composer the form's
           own inputs sit naturally above the keyboard. */}
       {!formFocused && (
-      <View style={styles.composer}>
-        <TextInput
-          key={composerKey}
-          ref={inputRef}
-          style={styles.input}
-          placeholder="Tell Fina what you spent…"
-          placeholderTextColor={colors.muted}
-          value={draft}
-          onChangeText={setDraft}
-          multiline
-          editable={!sending}
-          returnKeyType="default"
-        />
-        <Pressable
-          style={({ pressed }) => [
-            styles.sendBtn,
-            (draft.trim().length === 0 || sending) && styles.sendBtnDisabled,
-            pressed && draft.trim().length > 0 && { opacity: 0.85 },
-          ]}
-          onPress={onSend}
-          disabled={draft.trim().length === 0 || sending}
-        >
-          {sending ? (
-            <ActivityIndicator size="small" color={colors.onPrimary} />
-          ) : (
-            <Ionicons name="arrow-up" size={20} color={colors.onPrimary} />
-          )}
-        </Pressable>
-      </View>
+        <View style={styles.composer}>
+          <TextInput
+            key={composerKey}
+            ref={inputRef}
+            style={styles.input}
+            placeholder="Tell Fina what you spent…"
+            placeholderTextColor={colors.muted}
+            value={draft}
+            onChangeText={setDraft}
+            multiline
+            editable={!sending}
+            returnKeyType="default"
+          />
+          <Pressable
+            style={({ pressed }) => [
+              styles.sendBtn,
+              (draft.trim().length === 0 || sending) && styles.sendBtnDisabled,
+              pressed && draft.trim().length > 0 && { opacity: 0.85 },
+            ]}
+            onPress={onSend}
+            disabled={draft.trim().length === 0 || sending}
+          >
+            {sending ? (
+              <ActivityIndicator size="small" color={colors.onPrimary} />
+            ) : (
+              <Ionicons name="arrow-up" size={20} color={colors.onPrimary} />
+            )}
+          </Pressable>
+        </View>
       )}
       <BottomSheetModal
         ref={detailSheetRef}
@@ -745,10 +789,7 @@ export function ThreadView({
               accessibilityRole="button"
               accessibilityLabel="Cancel detail"
               hitSlop={8}
-              style={({ pressed }) => [
-                styles.detailHeaderAction,
-                pressed && { opacity: 0.65 },
-              ]}
+              style={({ pressed }) => [styles.detailHeaderAction, pressed && { opacity: 0.65 }]}
             >
               <Text style={styles.detailHeaderActionText}>Cancel</Text>
             </Pressable>
@@ -784,7 +825,8 @@ export function ThreadView({
           contentContainerStyle={styles.detailSheetContent}
         >
           {activeDetailBlock && (
-            <PresentationBlock block={activeDetailBlock.block}
+            <PresentationBlock
+              block={activeDetailBlock.block}
               role={activeDetailBlock.message.role}
               presentation="sheet"
               formActions="header"
@@ -840,9 +882,7 @@ export function ThreadView({
                 maxLength={2400}
                 autoFocus
               />
-              {supportErr && (
-                <Text style={styles.supportErr}>Couldn't send: {supportErr}</Text>
-              )}
+              {supportErr && <Text style={styles.supportErr}>Couldn't send: {supportErr}</Text>}
               <View style={styles.supportActions}>
                 <Pressable
                   onPress={closeSupport}
@@ -879,12 +919,15 @@ export function ThreadView({
   );
 }
 
-
 /** Three-dot bouncing indicator inside an assistant-style bubble. Shown
  *  while a chat turn is in flight so the user knows Fina is "thinking",
  *  rather than guessing whether the tap registered. */
 function TypingIndicator() {
-  const dots = useRef([new Animated.Value(0), new Animated.Value(0), new Animated.Value(0)]).current;
+  const dots = useRef([
+    new Animated.Value(0),
+    new Animated.Value(0),
+    new Animated.Value(0),
+  ]).current;
   useEffect(() => {
     const animations = dots.map((d, i) => {
       return Animated.loop(
@@ -928,14 +971,8 @@ function TypingIndicator() {
   );
 }
 
-type FormDetailBlock = Extract<
-  Block,
-  { type: "recurring_form_card" | "goal_form_card" }
->;
-type IntentDetailBlock = Extract<
-  Block,
-  { type: "confirm_card" | "plan_proposal_card" }
->;
+type FormDetailBlock = Extract<Block, { type: "recurring_form_card" | "goal_form_card" }>;
+type IntentDetailBlock = Extract<Block, { type: "confirm_card" | "plan_proposal_card" }>;
 
 function isFormDetailBlock(block: Block): block is FormDetailBlock {
   return block.type === "recurring_form_card" || block.type === "goal_form_card";
@@ -1053,10 +1090,7 @@ function markRead(threadId: string): void {
  *  the card action is best-effort and the user can retry from chat. */
 function notifyConsumeError(e: unknown): void {
   if (isApiError(e) && e.code === "insufficient_role") {
-    Alert.alert(
-      "View-only access",
-      "You don't have permission to make changes in this workspace.",
-    );
+    Alert.alert("View-only access", "You don't have permission to make changes in this workspace.");
   }
 }
 
@@ -1104,9 +1138,7 @@ function MessageBubble({
   onChangeCategory?: (txId: string, onPicked: (cat: CategoryDTO | null) => void) => void;
   onDismissIntent?: (intentId: string) => void;
 }) {
-  const rawBlocks = Array.isArray(message.blocks)
-    ? (message.blocks as Block[])
-    : [];
+  const rawBlocks = Array.isArray(message.blocks) ? (message.blocks as Block[]) : [];
   // Drop confirm_card blocks whose intent the user already resolved
   // this session — once tapped, the card collapses out of the thread.
   // Other block types are unaffected.
@@ -1134,29 +1166,21 @@ function MessageBubble({
   const hasAssistantSupportAction = message.role === "assistant" && !!onSupportPress;
   const hasAssistantAction = hasAssistantShareAction || hasAssistantSupportAction;
   const actionRowWidthStyle =
-    !isUser && (hasCardBlocks || hasAssistantAction)
-      ? { width: actionRowWidth }
-      : null;
+    !isUser && (hasCardBlocks || hasAssistantAction) ? { width: actionRowWidth } : null;
 
   useEffect(() => {
-    setActionRowWidth(
-      hasCardBlocks ? DETAIL_BLOB_MIN_WIDTH : SUPPORT_ACTION_MIN_WIDTH,
-    );
+    setActionRowWidth(hasCardBlocks ? DETAIL_BLOB_MIN_WIDTH : SUPPORT_ACTION_MIN_WIDTH);
   }, [hasCardBlocks, message.id]);
 
-  const captureActionBubbleWidth = useCallback((event: LayoutChangeEvent) => {
-    if (isUser) return;
-    const minWidth = hasCardBlocks
-      ? DETAIL_BLOB_MIN_WIDTH
-      : SUPPORT_ACTION_MIN_WIDTH;
-    const nextWidth = Math.max(
-      minWidth,
-      Math.ceil(event.nativeEvent.layout.width),
-    );
-    setActionRowWidth((current) =>
-      Math.abs(current - nextWidth) < 1 ? current : nextWidth,
-    );
-  }, [hasCardBlocks, isUser]);
+  const captureActionBubbleWidth = useCallback(
+    (event: LayoutChangeEvent) => {
+      if (isUser) return;
+      const minWidth = hasCardBlocks ? DETAIL_BLOB_MIN_WIDTH : SUPPORT_ACTION_MIN_WIDTH;
+      const nextWidth = Math.max(minWidth, Math.ceil(event.nativeEvent.layout.width));
+      setActionRowWidth((current) => (Math.abs(current - nextWidth) < 1 ? current : nextWidth));
+    },
+    [hasCardBlocks, isUser],
+  );
   const handleDetailPress = (block: Block, msg: ChatMessageDTO) => {
     onDetailPress?.(block, msg);
   };
@@ -1188,11 +1212,7 @@ function MessageBubble({
           pressed && { opacity: 0.65 },
         ]}
       >
-        <Ionicons
-          name="copy-outline"
-          size={SUPPORT_ACTION_ICON_SIZE}
-          color={colors.muted}
-        />
+        <Ionicons name="copy-outline" size={SUPPORT_ACTION_ICON_SIZE} color={colors.muted} />
       </Pressable>
     );
   };
@@ -1212,11 +1232,7 @@ function MessageBubble({
           pressed && { opacity: 0.65 },
         ]}
       >
-        <Ionicons
-          name="help-circle-outline"
-          size={SUPPORT_ACTION_ICON_SIZE}
-          color={colors.muted}
-        />
+        <Ionicons name="help-circle-outline" size={SUPPORT_ACTION_ICON_SIZE} color={colors.muted} />
       </Pressable>
     );
   };
@@ -1232,17 +1248,10 @@ function MessageBubble({
         if (isInlineCardBlock(b)) {
           const showDetailButton = hasDetailButtonForBlock(b);
           const showActionsInDetailRow =
-            message.role === "assistant" &&
-            i === lastCardBlockIndex &&
-            hasAssistantAction;
+            message.role === "assistant" && i === lastCardBlockIndex && hasAssistantAction;
           return (
             <Fragment key={key}>
-              <View
-                style={[
-                  styles.cardRow,
-                  isUser ? styles.rowUser : styles.rowAssistant,
-                ]}
-              >
+              <View style={[styles.cardRow, isUser ? styles.rowUser : styles.rowAssistant]}>
                 <PresentationBlock
                   block={b}
                   role={message.role}
@@ -1272,16 +1281,9 @@ function MessageBubble({
                       onPress={() => handleDetailPress(b, message)}
                       accessibilityRole="button"
                       accessibilityLabel="View message detail"
-                      style={({ pressed }) => [
-                        styles.detailButton,
-                        pressed && { opacity: 0.72 },
-                      ]}
+                      style={({ pressed }) => [styles.detailButton, pressed && { opacity: 0.72 }]}
                     >
-                      <Ionicons
-                        name="reader-outline"
-                        size={16}
-                        color={colors.primary}
-                      />
+                      <Ionicons name="reader-outline" size={16} color={colors.primary} />
                       <Text style={styles.detailButtonText}>{detailLabelForBlock(b)}</Text>
                     </Pressable>
                   ) : null}
@@ -1297,29 +1299,22 @@ function MessageBubble({
           );
         }
         const showSupportOnlyRow =
-          hasAssistantAction &&
-          lastCardBlockIndex === -1 &&
-          i === lastTextBlockIndex;
+          hasAssistantAction && lastCardBlockIndex === -1 && i === lastTextBlockIndex;
         const shouldCaptureActionBubbleWidth =
-          !isUser &&
-          i === lastTextBlockIndex &&
-          (hasCardBlocks || hasAssistantAction);
+          !isUser && i === lastTextBlockIndex && (hasCardBlocks || hasAssistantAction);
         return (
           <Fragment key={key}>
-            <View
-              style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}
-            >
+            <View style={[styles.row, isUser ? styles.rowUser : styles.rowAssistant]}>
               <View
-                onLayout={
-                  shouldCaptureActionBubbleWidth
-                    ? captureActionBubbleWidth
-                    : undefined
-                }
+                onLayout={shouldCaptureActionBubbleWidth ? captureActionBubbleWidth : undefined}
                 style={[
                   styles.bubble,
                   isUser ? styles.bubbleUser : styles.bubbleAssistant,
                   !isUser && hasCardBlocks && styles.assistantBubbleWithDetailActions,
-                  !isUser && hasAssistantAction && !hasCardBlocks && styles.assistantBubbleWithSupportActions,
+                  !isUser &&
+                    hasAssistantAction &&
+                    !hasCardBlocks &&
+                    styles.assistantBubbleWithSupportActions,
                 ]}
               >
                 <PresentationBlock block={b} role={message.role} />
@@ -1327,11 +1322,7 @@ function MessageBubble({
             </View>
             {showSupportOnlyRow ? (
               <View
-                style={[
-                  styles.detailActionRow,
-                  styles.supportOnlyActionRow,
-                  actionRowWidthStyle,
-                ]}
+                style={[styles.detailActionRow, styles.supportOnlyActionRow, actionRowWidthStyle]}
               >
                 {renderShareButton("compact")}
                 {renderSupportButton("compact")}
@@ -1349,6 +1340,7 @@ const styles = StyleSheet.create({
   errTitle: { ...type$.titleMd, color: colors.down, marginBottom: 4 },
   errBody: { ...type$.bodyMd, color: colors.body, textAlign: "center" },
   listContent: { padding: space.lg, gap: space.sm },
+  olderLoader: { paddingVertical: space.md, alignItems: "center" },
   row: { flexDirection: "row", marginVertical: 4 },
   rowUser: { justifyContent: "flex-end" },
   rowAssistant: { justifyContent: "flex-start" },

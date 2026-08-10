@@ -23,7 +23,14 @@ export const ListChatThreadsQuery = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional(),
 });
 
+export const GetChatThreadQuery = z.object({
+  /** Opaque cursor returned by the previous message page. */
+  cursor: z.string().min(1).max(512).optional(),
+  limit: z.coerce.number().int().min(1).max(50).optional(),
+});
+
 export type CreateChatThreadInput = z.infer<typeof CreateChatThreadBody>;
 export type PatchChatThreadInput = z.infer<typeof PatchChatThreadBody>;
 export type ChatMessageInput = z.infer<typeof ChatMessageBody>;
 export type ListChatThreadsInput = z.infer<typeof ListChatThreadsQuery>;
+export type GetChatThreadInput = z.infer<typeof GetChatThreadQuery>;

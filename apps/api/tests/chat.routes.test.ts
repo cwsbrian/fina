@@ -26,9 +26,17 @@ vi.mock("../src/chat/auto-title-llm.js", () => ({
 const env = testEnv();
 
 let app: FastifyInstance;
-beforeAll(async () => { app = await buildApp(env); await app.ready(); });
-afterAll(async () => { await app.close(); await disconnect(); });
-beforeEach(async () => { await truncateAll(); });
+beforeAll(async () => {
+  app = await buildApp(env);
+  await app.ready();
+});
+afterAll(async () => {
+  await app.close();
+  await disconnect();
+});
+beforeEach(async () => {
+  await truncateAll();
+});
 
 async function setup(email: string): Promise<{ userId: string; cookie: string; wsId: string }> {
   const u = await signUpAndGetCookie(app, { email });
@@ -91,12 +99,16 @@ describe("POST /chat/threads", () => {
       "x-workspace-id": wsId,
     };
     const res = await app.inject({
-      method: "POST", url: "/chat/threads",
+      method: "POST",
+      url: "/chat/threads",
       headers,
       payload: "{}",
     });
     const again = await app.inject({
-      method: "POST", url: "/chat/threads", headers, payload: "{}",
+      method: "POST",
+      url: "/chat/threads",
+      headers,
+      payload: "{}",
     });
     expect(res.statusCode).toBe(200);
     expect(res.json().thread.title).toBeNull();
@@ -105,7 +117,8 @@ describe("POST /chat/threads", () => {
 
   it("401 — no session", async () => {
     const res = await app.inject({
-      method: "POST", url: "/chat/threads",
+      method: "POST",
+      url: "/chat/threads",
       headers: { "content-type": "application/json" },
       payload: "{}",
     });
@@ -116,7 +129,8 @@ describe("POST /chat/threads", () => {
     const { userId, cookie, wsId } = await setup("ct-pro@t.co");
     await convertToPro(userId);
     const res = await app.inject({
-      method: "POST", url: "/chat/threads",
+      method: "POST",
+      url: "/chat/threads",
       headers: { cookie, "content-type": "application/json", "x-workspace-id": wsId },
       payload: "{}",
     });
@@ -127,7 +141,8 @@ describe("POST /chat/threads", () => {
     const { userId, cookie } = await setup("ct3@t.co");
     await downgradeToFree(userId);
     const res = await app.inject({
-      method: "POST", url: "/chat/threads",
+      method: "POST",
+      url: "/chat/threads",
       headers: { cookie, "content-type": "application/json" },
       payload: "{}",
     });
@@ -137,7 +152,8 @@ describe("POST /chat/threads", () => {
   it("400 — invalid_body when title is too long", async () => {
     const { cookie } = await setup("ct4@t.co");
     const res = await app.inject({
-      method: "POST", url: "/chat/threads",
+      method: "POST",
+      url: "/chat/threads",
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ title: "x".repeat(201) }),
     });
@@ -147,7 +163,8 @@ describe("POST /chat/threads", () => {
   it("rejects an unknown active workspace", async () => {
     const { cookie } = await setup("ct5@t.co");
     const res = await app.inject({
-      method: "POST", url: "/chat/threads",
+      method: "POST",
+      url: "/chat/threads",
       headers: { cookie, "content-type": "application/json", "x-workspace-id": "bogus-ws-id" },
       payload: "{}",
     });
@@ -170,8 +187,14 @@ describe("GET /chat/threads", () => {
   it("200 — does not return other users' threads", async () => {
     const { cookie: cookieA } = await setup("gt2a@t.co");
     const { userId: userB } = await setup("gt2b@t.co");
-    await prisma.chatThread.create({ data: { userId: userB, workspaceId: null, title: "B-thread" } });
-    const res = await app.inject({ method: "GET", url: "/chat/threads", headers: { cookie: cookieA } });
+    await prisma.chatThread.create({
+      data: { userId: userB, workspaceId: null, title: "B-thread" },
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: "/chat/threads",
+      headers: { cookie: cookieA },
+    });
     expect(res.json().threads).toEqual([]);
   });
 
@@ -202,8 +225,11 @@ describe("GET /chat/threads", () => {
     const res = await app.inject({ method: "GET", url: "/chat/threads", headers: { cookie } });
     const row = res.json().threads[0];
     expect(row).toMatchObject({
-      userId, workspaceId: null, title: "t",
-      lastMessageAt: null, archivedAt: null,
+      userId,
+      workspaceId: null,
+      title: "t",
+      lastMessageAt: null,
+      archivedAt: null,
     });
     expect(typeof row.createdAt).toBe("string");
   });
@@ -213,7 +239,11 @@ describe("GET /chat/threads/:tid", () => {
   it("200 — returns the thread + messages", async () => {
     const { userId, cookie } = await setup("gti1@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
-    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    const res = await app.inject({
+      method: "GET",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie },
+    });
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.thread.id).toBe(t.id);
@@ -224,7 +254,11 @@ describe("GET /chat/threads/:tid", () => {
     const { cookie: cookieA } = await setup("gti2a@t.co");
     const { userId: userB } = await setup("gti2b@t.co");
     const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
-    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie: cookieA } });
+    const res = await app.inject({
+      method: "GET",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie: cookieA },
+    });
     expect(res.statusCode).toBe(403);
   });
 
@@ -239,7 +273,11 @@ describe("GET /chat/threads/:tid", () => {
     const t = await prisma.chatThread.create({
       data: { userId, workspaceId: null, archivedAt: new Date() },
     });
-    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    const res = await app.inject({
+      method: "GET",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie },
+    });
     expect(res.statusCode).toBe(200);
     expect(res.json().thread.archivedAt).toBeTruthy();
   });
@@ -248,8 +286,63 @@ describe("GET /chat/threads/:tid", () => {
     const { userId, cookie } = await setup("gti5@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     await downgradeToFree(userId);
-    const res = await app.inject({ method: "GET", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    const res = await app.inject({
+      method: "GET",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie },
+    });
     expect(res.statusCode).toBe(200);
+  });
+
+  it("returns the latest message page and pages backward without overlap", async () => {
+    const { userId, cookie } = await setup("gti6@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    await prisma.chatMessage.createMany({
+      data: Array.from({ length: 35 }, (_, index) => ({
+        threadId: t.id,
+        role: "user" as const,
+        blocks: [{ type: "text", markdown: `message-${index}` }],
+        createdAt: new Date(Date.UTC(2026, 0, 1, 0, index)),
+      })),
+    });
+
+    const latest = await app.inject({
+      method: "GET",
+      url: `/chat/threads/${t.id}?limit=10`,
+      headers: { cookie },
+    });
+    expect(latest.statusCode).toBe(200);
+    const latestBody = latest.json();
+    expect(latestBody.messages).toHaveLength(10);
+    expect(latestBody.messages[0].blocks[0].markdown).toBe("message-25");
+    expect(latestBody.messages[9].blocks[0].markdown).toBe("message-34");
+    expect(typeof latestBody.nextCursor).toBe("string");
+
+    const older = await app.inject({
+      method: "GET",
+      url: `/chat/threads/${t.id}?limit=10&cursor=${encodeURIComponent(latestBody.nextCursor)}`,
+      headers: { cookie },
+    });
+    expect(older.statusCode).toBe(200);
+    const olderBody = older.json();
+    expect(olderBody.messages).toHaveLength(10);
+    expect(olderBody.messages[0].blocks[0].markdown).toBe("message-15");
+    expect(olderBody.messages[9].blocks[0].markdown).toBe("message-24");
+    expect(olderBody.messages.map((message: { id: string }) => message.id)).not.toContain(
+      latestBody.messages[0].id,
+    );
+  });
+
+  it("400 — rejects an invalid message cursor", async () => {
+    const { userId, cookie } = await setup("gti7@t.co");
+    const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
+    const res = await app.inject({
+      method: "GET",
+      url: `/chat/threads/${t.id}?cursor=not-a-cursor`,
+      headers: { cookie },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: "invalid_query" });
   });
 });
 
@@ -258,7 +351,8 @@ describe("PATCH /chat/threads/:tid", () => {
     const { userId, cookie } = await setup("pti1@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     const res = await app.inject({
-      method: "PATCH", url: `/chat/threads/${t.id}`,
+      method: "PATCH",
+      url: `/chat/threads/${t.id}`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ title: "renamed" }),
     });
@@ -270,7 +364,8 @@ describe("PATCH /chat/threads/:tid", () => {
     const { userId, cookie, wsId } = await setup("pti2@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
-      method: "PATCH", url: `/chat/threads/${t.id}`,
+      method: "PATCH",
+      url: `/chat/threads/${t.id}`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ title: "x" }),
     });
@@ -282,7 +377,8 @@ describe("PATCH /chat/threads/:tid", () => {
     const { userId: userB } = await setup("pti3b@t.co");
     const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
     const res = await app.inject({
-      method: "PATCH", url: `/chat/threads/${t.id}`,
+      method: "PATCH",
+      url: `/chat/threads/${t.id}`,
       headers: { cookie: cookieA, "content-type": "application/json" },
       payload: JSON.stringify({ title: "stolen" }),
     });
@@ -294,7 +390,8 @@ describe("PATCH /chat/threads/:tid", () => {
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     await downgradeToFree(userId);
     const res = await app.inject({
-      method: "PATCH", url: `/chat/threads/${t.id}`,
+      method: "PATCH",
+      url: `/chat/threads/${t.id}`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ title: "x" }),
     });
@@ -306,7 +403,11 @@ describe("DELETE /chat/threads/:tid", () => {
   it("204 — archives an unbound thread", async () => {
     const { userId, cookie } = await setup("dti1@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
-    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie },
+    });
     expect(res.statusCode).toBe(204);
     const reload = await prisma.chatThread.findUniqueOrThrow({ where: { id: t.id } });
     expect(reload.archivedAt).toBeTruthy();
@@ -315,7 +416,11 @@ describe("DELETE /chat/threads/:tid", () => {
   it("204 — archives a bound thread", async () => {
     const { userId, cookie, wsId } = await setup("dti2@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
-    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie },
+    });
     expect(res.statusCode).toBe(204);
   });
 
@@ -323,7 +428,11 @@ describe("DELETE /chat/threads/:tid", () => {
     const { cookie: cookieA } = await setup("dti3a@t.co");
     const { userId: userB } = await setup("dti3b@t.co");
     const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: null } });
-    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie: cookieA } });
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie: cookieA },
+    });
     expect(res.statusCode).toBe(403);
   });
 
@@ -331,7 +440,11 @@ describe("DELETE /chat/threads/:tid", () => {
     const { userId, cookie } = await setup("dti4@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     await downgradeToFree(userId);
-    const res = await app.inject({ method: "DELETE", url: `/chat/threads/${t.id}`, headers: { cookie } });
+    const res = await app.inject({
+      method: "DELETE",
+      url: `/chat/threads/${t.id}`,
+      headers: { cookie },
+    });
     expect(res.statusCode).toBe(402);
   });
 });
@@ -341,7 +454,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const { userId, cookie, wsId } = await setup("mt1@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: null } });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "hello", workspaceId: wsId }),
     });
@@ -353,7 +467,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const { userId, cookie, wsId } = await setup("mt2@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x" }),
     });
@@ -365,7 +480,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const otherWs = await prisma.workspace.create({ data: { name: "other" } });
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: otherWs.id }),
     });
@@ -380,7 +496,8 @@ describe("POST /chat/threads/:tid/messages", () => {
       data: { userId, workspaceId: strangerWs.id },
     });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: strangerWs.id }),
     });
@@ -393,7 +510,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const { userId: userB, wsId: wsB } = await setup("mt5b@t.co");
     const t = await prisma.chatThread.create({ data: { userId: userB, workspaceId: wsB } });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie: cookieA, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: wsB }),
     });
@@ -405,7 +523,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     await downgradeToFree(userId);
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: wsId }),
     });
@@ -418,7 +537,8 @@ describe("POST /chat/threads/:tid/messages", () => {
       data: { userId, workspaceId: wsId, archivedAt: new Date() },
     });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: wsId }),
     });
@@ -429,7 +549,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const { userId, cookie, wsId } = await setup("mt8@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x" }),
     });
@@ -441,7 +562,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const otherWs = await prisma.workspace.create({ data: { name: "other" } });
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json", "x-workspace-id": otherWs.id },
       payload: JSON.stringify({ text: "x" }),
     });
@@ -469,7 +591,8 @@ describe("POST /chat/threads/:tid/messages", () => {
       },
     });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: wsId }),
     });
@@ -495,7 +618,8 @@ describe("POST /chat/threads/:tid/messages", () => {
       },
     });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: wsId }),
     });
@@ -521,7 +645,8 @@ describe("POST /chat/threads/:tid/messages", () => {
     const { userId, cookie, wsId } = await setup("mt12b@t.co");
     const t = await prisma.chatThread.create({ data: { userId, workspaceId: wsId } });
     const res = await app.inject({
-      method: "POST", url: `/chat/threads/${t.id}/messages`,
+      method: "POST",
+      url: `/chat/threads/${t.id}/messages`,
       headers: { cookie, "content-type": "application/json" },
       payload: JSON.stringify({ text: "x", workspaceId: wsId }),
     });
