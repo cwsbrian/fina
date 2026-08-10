@@ -4,7 +4,7 @@ require "tmpdir"
 
 ROOT_DIR = File.expand_path("..", __dir__)
 IOS_APP_IDENTIFIER = "com.withfina.app"
-APPLE_STORE_LOCALE = "en-US"
+APPLE_STORE_LOCALE = "en-CA"
 APPLE_KEY_ID = "ZH5Y96UGRV"
 APPLE_KEY_PATH = File.expand_path("~/.config/fina/apple/AuthKey_#{APPLE_KEY_ID}.p8")
 GOOGLE_KEY_PATH = File.expand_path("~/.config/fina/google-play-service-account.json")
