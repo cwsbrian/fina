@@ -19,6 +19,8 @@ const CRON_NAME = "daily-brief";
 export const MORNING_BRIEF_ACTIVITY_WINDOW_DAYS = 30;
 const MORNING_BRIEF_ACTIVITY_WINDOW_MS =
   MORNING_BRIEF_ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+const FORECAST_CHANGE_MIN_AMOUNT = 200;
+const FORECAST_CHANGE_MIN_RATIO = 0.25;
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
 /** Generate one brief per paid user's workspace and append it to that
@@ -133,22 +135,20 @@ async function emitWorkspaceBrief(
   const context = await buildBriefContext(u.id, briefType, workspaceId);
   if (context.workspaces.length === 0) return;
 
-  let dailyForecastState: ForecastAlertState | null = null;
+  const deliveredForecastState = snapshotForecastState(context);
   let mentionForecast = true;
   if (briefType === "daily") {
-    dailyForecastState = snapshotForecastState(context);
     const previous = await prisma.brief.findFirst({
       where: {
         userId: u.id,
         workspaceId,
-        type: "daily",
         forecastState: { not: Prisma.DbNull },
       },
       orderBy: [{ date: "desc" }, { createdAt: "desc" }],
       select: { forecastState: true },
     });
     mentionForecast = shouldMentionDailyForecast(
-      dailyForecastState,
+      deliveredForecastState,
       parseForecastState(previous?.forecastState),
     );
     if (!mentionForecast) {
@@ -288,12 +288,12 @@ async function emitWorkspaceBrief(
     const result = await sendBriefPush(env, u.id, preview, {
       threadId: thread.id,
     });
-    if (dailyForecastState && mentionForecast && result.sent > 0) {
+    if (mentionForecast && result.sent > 0) {
       await prisma.brief.update({
         where: { id: emitted.briefId },
         data: {
           forecastState:
-            dailyForecastState as unknown as Prisma.InputJsonValue,
+            deliveredForecastState as unknown as Prisma.InputJsonValue,
         },
       });
     }
@@ -434,6 +434,9 @@ function moneyNumber(display: string): number {
 }
 
 function meaningfullyDifferent(current: number, previous: number): boolean {
-  const threshold = Math.max(50, Math.abs(previous) * 0.1);
+  const threshold = Math.max(
+    FORECAST_CHANGE_MIN_AMOUNT,
+    Math.abs(previous) * FORECAST_CHANGE_MIN_RATIO,
+  );
   return Math.abs(current - previous) >= threshold;
 }

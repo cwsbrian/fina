@@ -26,6 +26,9 @@ describe("brief LLM language contract", () => {
     for (const value of Object.values(SYSTEM_PROMPT_PER_TYPE)) {
       expect(value).toContain("language.latest_user_message");
       expect(value).toContain("language.fallback_locale");
+      expect(value).toContain("read-only memory");
+      expect(value).toContain("only active request");
+      expect(value).toContain("Never continue, answer, or repeat an earlier assistant question");
     }
   });
 
@@ -55,6 +58,7 @@ describe("brief LLM language contract", () => {
       expect(v).toContain("briefLabel");
       expect(v).toContain('Never call a workspace "your workspace"');
       expect(v).toContain("ask me for a plan to stay on track");
+      expect(v).toContain("negative examples for repetition");
     }
   });
 
