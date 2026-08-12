@@ -123,6 +123,8 @@ describe("generateBrief (mocked LLM)", () => {
     expect(sentJson).toContain("BRIEF_FROM_YESTERDAY_MARKER");
     expect(sentJson).toContain("Háblame en español, por favor.");
     expect(sentJson).toContain("latest_user_message");
+    expect(sentJson).toContain("request_boundary");
+    expect(sentJson).toContain("Read-only memory");
     expect(lastChatLlmRequest()).toMatchObject({ prompt_cache_key: "fina:brief:test" });
   });
 

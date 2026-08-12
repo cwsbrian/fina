@@ -819,8 +819,9 @@ model Brief {
   /// changes between briefs. Lexical sort = chronological.
   date          String
   messageId     String    @unique
-  /// Structured Daily forecast state that was actually delivered by push.
-  /// Null for Weekly/Monthly, suppressed repeats, and failed/skipped pushes.
+  /// Structured forecast state that was actually delivered by push.
+  /// Null for suppressed Daily repeats and failed/skipped pushes. Weekly and
+  /// Monthly snapshots serve as the baseline for the next Daily dedupe check.
   forecastState Json?
   createdAt     DateTime  @default(now())
 

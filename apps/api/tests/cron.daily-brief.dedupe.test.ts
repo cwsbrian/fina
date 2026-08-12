@@ -148,7 +148,7 @@ describe("Daily brief forecast dedupe flow", () => {
 
   it("re-includes and stores the forecast after a meaningful amount change", async () => {
     const { user, workspace, category, account } = await setupRisk();
-    await addSpend(workspace.id, account.id, category.id, "200.00", "2026-07-14T11:00:00Z");
+    await addSpend(workspace.id, account.id, category.id, "500.00", "2026-07-14T11:00:00Z");
     const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
 
     await runDailyBrief(testEnv());
@@ -165,6 +165,39 @@ describe("Daily brief forecast dedupe flow", () => {
     expect(mocks.sendBriefPush).toHaveBeenCalledTimes(1);
   });
 
+  it("suppresses forecast churn below the higher amount threshold", async () => {
+    const { user, workspace, category, account } = await setupRisk();
+    await addSpend(workspace.id, account.id, category.id, "150.00", "2026-07-14T11:00:00Z");
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+
+    await runDailyBrief(testEnv());
+
+    const context = mocks.generateBrief.mock.calls[0]?.[1] as Awaited<
+      ReturnType<typeof buildBriefContext>
+    >;
+    expect(context.workspaces[0]?.forecast.mention).toBe(false);
+    const latest = await prisma.brief.findFirstOrThrow({
+      where: { userId: user.id },
+      orderBy: { date: "desc" },
+    });
+    expect(latest.forecastState).toBeNull();
+  });
+
+  it("uses a delivered Weekly forecast as the next Daily dedupe baseline", async () => {
+    const { user } = await setupRisk();
+    const previous = await prisma.brief.findFirstOrThrow({ where: { userId: user.id } });
+    await prisma.brief.update({
+      where: { id: previous.id },
+      data: { type: "weekly" },
+    });
+    const { runDailyBrief } = await import("../src/cron/jobs/daily-brief.js");
+
+    await runDailyBrief(testEnv());
+
+    expect(await prisma.brief.count({ where: { userId: user.id } })).toBe(1);
+    expect(mocks.generateBrief).not.toHaveBeenCalled();
+  });
+
   it("does not apply Daily dedupe to a Weekly brief", async () => {
     vi.setSystemTime(new Date("2026-07-13T12:00:00Z")); // Monday in Seoul.
     await setupRisk("2026-07-12");
@@ -177,5 +210,9 @@ describe("Daily brief forecast dedupe flow", () => {
     >;
     expect(context.briefType).toBe("weekly");
     expect(context.workspaces[0]?.forecast.mention).toBe(true);
+    const latest = await prisma.brief.findFirstOrThrow({
+      where: { userId: context.user.id, date: "2026-07-13" },
+    });
+    expect(latest.forecastState).not.toBeNull();
   });
 });
