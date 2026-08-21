@@ -32,7 +32,10 @@ export function plaidClient(env: Env): PlaidApi {
 }
 
 export const PLAID_PRODUCTS: Products[] = ["transactions" as Products];
-export const PLAID_COUNTRY_CODES: CountryCode[] = ["CA" as CountryCode];
+export const PLAID_COUNTRY_CODES: CountryCode[] = [
+  "CA" as CountryCode,
+  "US" as CountryCode,
+];
 
 /**
  * Plaid SDK errors (axios-shaped) include the request body in `error.config.data`,

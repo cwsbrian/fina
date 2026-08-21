@@ -338,7 +338,7 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
     await app.close();
   });
 
-  it("requests four months of transaction history", async () => {
+  it("requests four months of transaction history from Canadian and US institutions", async () => {
     const app = await buildApp(env);
     const u = await signUpAndGetCookie(app, { email: "lt-days@x.com", name: "LD" });
     const wsId = await getOwnerWorkspaceId(u.userId);
@@ -353,6 +353,7 @@ describe("POST /workspaces/:id/plaid/link-token", () => {
     expect(res.statusCode).toBe(200);
     expect(plaidMock.linkTokenCreateCalls[0][0]).toMatchObject({
       transactions: { days_requested: 120 },
+      country_codes: ["CA", "US"],
     });
     await app.close();
   });
