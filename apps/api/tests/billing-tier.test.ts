@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import { randomUUID } from "crypto";
 import { prisma } from "../src/db.js";
-import { computeEffectiveTier, effectiveTier } from "../src/auth/tier.js";
+import { effectiveTier } from "../src/auth/tier.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 
 describe("EffectiveTier with subscriptions", () => {

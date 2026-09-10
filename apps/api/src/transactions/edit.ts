@@ -288,6 +288,7 @@ export async function editTransactionService(
     }
 
     if (Object.keys(data).length > 0) {
+      if (!flags.allocationsProvided && !flags.categoryIdProvided) data.version = { increment: 1 };
       await tx.transaction.update({
         where: { id: txId },
         data,

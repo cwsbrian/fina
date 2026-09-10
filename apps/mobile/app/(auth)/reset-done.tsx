@@ -4,7 +4,7 @@ import { router } from "expo-router";
 import { useSession } from "../../src/auth/client";
 import { AuthCTA } from "../../src/design/AuthButtons";
 import { Icon } from "../../src/design/Icon";
-import { colors, type } from "../../src/design/tokens";
+import { colors } from "../../src/design/tokens";
 
 const SUCCESS_GREEN = "#1f8c44";
 const SUCCESS_BG = "rgba(31,140,68,0.14)";

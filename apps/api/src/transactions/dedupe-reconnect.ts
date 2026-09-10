@@ -301,7 +301,7 @@ export async function findReconnectDuplicateCandidatesByEmail(
 }
 
 function allocationRank(
-  allocations: Array<{ source: CategorizationSource | null }>,
+  allocations: Array<{ source: CategorizationSource | null; businessAmount?: Prisma.Decimal | null; receiptLineItemId?: string | null }>,
 ): number {
   const sourceRank: Record<CategorizationSource, number> = {
     manual: 4,
@@ -313,7 +313,9 @@ function allocationRank(
     (best, allocation) => Math.max(best, allocation.source ? sourceRank[allocation.source] : 0),
     0,
   );
-  return allocations.length > 1 ? rank + 10 : rank;
+  const evidenceRank = allocations.some((allocation) => allocation.receiptLineItemId) ? 100
+    : allocations.some((allocation) => allocation.businessAmount !== null && allocation.businessAmount !== undefined) ? 50 : 0;
+  return evidenceRank + (allocations.length > 1 ? rank + 10 : rank);
 }
 
 async function hardDeleteCurrentCandidate(
@@ -344,8 +346,13 @@ async function hardDeleteCurrentCandidate(
       return false;
     }
 
-    if (allocationRank(current.allocations) > allocationRank(historical.allocations)) {
+    const preferCurrentAllocations = allocationRank(current.allocations) > allocationRank(historical.allocations);
+    if (preferCurrentAllocations) {
       await tx.transactionAllocation.deleteMany({ where: { transactionId: historical.id } });
+      await tx.transactionAllocation.updateMany({
+        where: { id: { in: current.allocations.map((allocation) => allocation.id) } },
+        data: { receiptLineItemId: null },
+      });
       await tx.transactionAllocation.createMany({
         data: current.allocations.map((allocation) => ({
           transactionId: historical.id,
@@ -354,6 +361,8 @@ async function hardDeleteCurrentCandidate(
           source: allocation.source,
           needsConfirmation: allocation.needsConfirmation,
           dismissedUntil: allocation.dismissedUntil,
+          businessAmount: allocation.businessAmount,
+          receiptLineItemId: allocation.receiptLineItemId,
         })),
       });
     }
@@ -365,6 +374,10 @@ async function hardDeleteCurrentCandidate(
     await tx.transaction.updateMany({
       where: { refundOfTransactionId: current.id, id: { not: historical.id } },
       data: { refundOfTransactionId: historical.id },
+    });
+    await tx.receiptDocument.updateMany({
+      where: { transactionId: current.id },
+      data: { transactionId: historical.id },
     });
     const refundOfTransactionId =
       historical.refundOfTransactionId &&
@@ -386,6 +399,7 @@ async function hardDeleteCurrentCandidate(
     await tx.transaction.update({
       where: { id: historical.id },
       data: {
+        version: { increment: 1 },
         accountId: current.accountId,
         plaidItemId: current.plaidItemId,
         plaidTransactionId: current.plaidTransactionId,
@@ -399,6 +413,12 @@ async function hardDeleteCurrentCandidate(
         rawData: current.rawData as Prisma.InputJsonValue,
         removedAt: null,
         note: historical.note ?? current.note,
+        businessPurpose: historical.businessPurpose ?? current.businessPurpose,
+        receiptMissingReason: historical.receiptMissingReason ?? current.receiptMissingReason,
+        receiptMissingNote: historical.receiptMissingNote ?? current.receiptMissingNote,
+        classificationSourceReceiptId: preferCurrentAllocations
+          ? current.classificationSourceReceiptId ?? historical.classificationSourceReceiptId
+          : historical.classificationSourceReceiptId ?? current.classificationSourceReceiptId,
         ...(keepCurrentBudgetImpact
           ? {
               budgetImpact: current.budgetImpact,

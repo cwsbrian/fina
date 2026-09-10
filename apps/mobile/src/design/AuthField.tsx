@@ -7,7 +7,7 @@ import {
   TextInputProps,
   View,
 } from "react-native";
-import { colors, radius, type } from "./tokens";
+import { colors, type } from "./tokens";
 import { Icon } from "./Icon";
 
 type Props = TextInputProps & {

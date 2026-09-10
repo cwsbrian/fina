@@ -57,6 +57,18 @@ const Schema = z.object({
   // LLM providers
   OPENAI_API_KEY: z.string().optional(),
   DEEPSEEK_API_KEY: z.string().optional(),
+  // Private receipt storage in Cloudflare R2. US uses the R2 US jurisdiction;
+  // CA uses an Eastern North America location-hinted bucket.
+  R2_ACCOUNT_ID: z.string().optional(),
+  R2_ACCESS_KEY_ID: z.string().optional(),
+  R2_SECRET_ACCESS_KEY: z.string().optional(),
+  R2_RECEIPTS_CA_BUCKET: z.string().optional(),
+  R2_RECEIPTS_US_BUCKET: z.string().optional(),
+  RECEIPTS_CA_QUEUE_URL: z.string().url().optional(),
+  RECEIPTS_US_QUEUE_URL: z.string().url().optional(),
+  // OpenAI receipt extraction. Change this value to promote the same worker
+  // from the cheap baseline to Luna after running the receipt eval set.
+  RECEIPT_OCR_MODEL: z.enum(["gpt-5-nano", "gpt-5.6-luna"]).optional(),
   // OPTIONAL — keeps test literals clean. Use `env.CATEGORIZE_BATCH_MAX ?? 50`
   // in service code. z.default() would make the inferred Env type non-optional.
   CATEGORIZE_BATCH_MAX: z.coerce.number().int().positive().optional(),

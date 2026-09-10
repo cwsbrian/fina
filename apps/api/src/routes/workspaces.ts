@@ -3,6 +3,7 @@ import {
   CreateWorkspaceBody,
   PatchMemberRoleBody,
   PatchWorkspaceCurrencyBody,
+  PatchWorkspaceKindBody,
   type Role,
 } from "@fina/shared";
 import { prisma } from "../db.js";
@@ -15,6 +16,7 @@ import {
   MembersServiceError,
 } from "../workspaces/members.js";
 import { createWorkspaceForUser } from "../workspaces/bootstrap.js";
+import { logAuditEvent } from "../audit/service.js";
 
 function mapMembersError(e: unknown): { statusCode: number; code: string } {
   if (e instanceof MembersServiceError) {
@@ -55,6 +57,8 @@ export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
           name: m.workspace.name,
           role: m.role as Role,
           currency: m.workspace.currency,
+          kind: m.workspace.kind,
+          taxCountry: m.workspace.taxCountry,
         })),
       };
     } catch (e) {
@@ -72,11 +76,64 @@ export async function workspacesRoutes(app: FastifyInstance): Promise<void> {
         userId: session.userId,
         name: parsed.data.name,
         ...(parsed.data.currency ? { currency: parsed.data.currency } : {}),
+        kind: parsed.data.kind,
+        ...(parsed.data.taxCountry ? { taxCountry: parsed.data.taxCountry } : {}),
       });
       return reply.code(201).send(result);
     } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>("/workspaces/:id/kind", async (req, reply) => {
+    const parsed = PatchWorkspaceKindBody.safeParse(req.body);
+    if (!parsed.success) return reply.code(400).send({ error: "invalid_body" });
+    try {
+      const ctx = await requireWorkspaceContext(req, app, { requiredRole: "owner" });
+      if (req.params.id !== ctx.membership.workspaceId) {
+        return reply.code(400).send({ error: "workspace_mismatch" });
+      }
+      const wsId = ctx.membership.workspaceId;
+      const updated = await prisma.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${wsId}))`;
+        const current = await tx.workspace.findUniqueOrThrow({ where: { id: wsId } });
+        if (current.kind === "personal" && parsed.data.kind === "business") {
+          const allocations = await tx.transactionAllocation.findMany({
+            where: { transaction: { workspaceId: wsId }, businessAmount: null },
+            select: { id: true, amount: true, transaction: { select: { budgetImpact: true } } },
+          });
+          for (const allocation of allocations) {
+            const businessAmount = allocation.transaction.budgetImpact === "income"
+              ? allocation.amount.abs()
+              : allocation.transaction.budgetImpact === "excluded" ? 0 : null;
+            if (businessAmount !== null) {
+              await tx.transactionAllocation.update({ where: { id: allocation.id }, data: { businessAmount } });
+            }
+          }
+        }
+        return await tx.workspace.update({
+          where: { id: wsId },
+          data: {
+            kind: parsed.data.kind,
+            taxCountry: parsed.data.kind === "business" ? parsed.data.taxCountry! : null,
+          },
+          select: { id: true, name: true, currency: true, kind: true, taxCountry: true },
+        });
+      });
+      await logAuditEvent({
+        workspaceId: wsId,
+        actorType: "user",
+        actorUserId: ctx.session.userId,
+        action: "change_workspace_kind",
+        targetType: "workspace",
+        targetId: wsId,
+        payload: { kind: parsed.data.kind, taxCountry: parsed.data.taxCountry ?? null },
+      });
+      return reply.send({ workspace: updated });
+    } catch (err) {
+      if (err instanceof HttpError) return reply.code(err.statusCode).send({ error: err.code });
+      throw err;
     }
   });
 

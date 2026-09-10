@@ -26,6 +26,7 @@ export * from "./dto/health.js";
 export * from "./dto/subscription.js";
 export * from "./dto/goals.js";
 export * from "./dto/admin.js";
+export * from "./dto/business.js";
 
 // Validators (pure helpers used by both API services and frontend forms)
 export * from "./validation/money.js";
@@ -49,6 +50,8 @@ export * from "./schemas/me.js";
 export * from "./schemas/recurring.js";
 export * from "./schemas/schedules.js";
 export * from "./schemas/workspaces.js";
+export * from "./schemas/business.js";
+export * from "./schemas/receipts.js";
 
 // HTTP client factory
 export * from "./http/api-client.js";

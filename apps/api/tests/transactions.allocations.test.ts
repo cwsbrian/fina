@@ -8,7 +8,6 @@ import { truncateAll, disconnect } from "./helpers/db.js";
 import { withWorkspaceLock } from "../src/locks/workspace.js";
 import {
   applyAllocations,
-  AllocationError,
 } from "../src/transactions/allocations.js";
 import { testEnv } from "./helpers/test-env.js";
 

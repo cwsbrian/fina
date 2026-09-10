@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
@@ -73,6 +72,25 @@ describe("Plaid sync — unified allocations edge cases", () => {
     expect(after.allocations).toHaveLength(1);
     expect(after.allocations[0]!.amount.toString()).toBe("150");
     expect(after.needsReclassification).toBe(false);
+  });
+
+  it("preserves full/zero business classifications but sends a changed partial amount back to review", async () => {
+    const { wsId, acctId } = await setup("ps-business-amount@t.co");
+    const fullId = await seedPlaidTx(wsId, acctId, { amount: "100", allocations: [{ categoryId: null, amount: "100", source: null }] });
+    const partialId = await seedPlaidTx(wsId, acctId, { amount: "100", allocations: [{ categoryId: null, amount: "100", source: null }] });
+    await prisma.transactionAllocation.updateMany({ where: { transactionId: fullId }, data: { businessAmount: "100" } });
+    await prisma.transactionAllocation.updateMany({ where: { transactionId: partialId }, data: { businessAmount: "35" } });
+    for (const id of [fullId, partialId]) {
+      const target = await prisma.transaction.findUniqueOrThrow({ where: { id } });
+      await prisma.$transaction((db) => upsertModified(db, {
+        transaction_id: target.plaidTransactionId!, account_id: "x", amount: 120, date: "2026-05-19",
+        pending: false, merchant_name: "Costco", name: "Costco",
+      } as any, wsId));
+    }
+    const full = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: fullId } });
+    const partial = await prisma.transactionAllocation.findFirstOrThrow({ where: { transactionId: partialId } });
+    expect(full.businessAmount?.toString()).toBe("120");
+    expect(partial.businessAmount).toBeNull();
   });
 
   it("upsertModified: N=1, only postedAt changes → no allocation update", async () => {

@@ -31,6 +31,22 @@ export const DEFAULT_INCOME_CATEGORIES: ReadonlyArray<DefaultCategory> = [
   { name: "Other",      icon: "ellipsis-horizontal", color: "#7a8a86" },
 ];
 
+export const DEFAULT_BUSINESS_EXPENSE_CATEGORIES: ReadonlyArray<DefaultCategory> = [
+  { name: "Advertising", icon: "megaphone-outline", color: "#8b5cf6" },
+  { name: "Contractors", icon: "people-outline", color: "#2563eb" },
+  { name: "Meals", icon: "restaurant-outline", color: "#c25a25" },
+  { name: "Office", icon: "desktop-outline", color: "#64748b" },
+  { name: "Professional services", icon: "briefcase-outline", color: "#0f766e" },
+  { name: "Software", icon: "code-slash-outline", color: "#4f46e5" },
+  { name: "Travel", icon: "airplane-outline", color: "#0284c7" },
+  { name: "Other business", icon: "ellipsis-horizontal", color: "#7a8a86" },
+];
+
+export const DEFAULT_BUSINESS_INCOME_CATEGORIES: ReadonlyArray<DefaultCategory> = [
+  { name: "Client income", icon: "cash-outline", color: "#0f7c3a" },
+  { name: "Other business income", icon: "add-circle-outline", color: "#0e8466" },
+];
+
 /** Legacy combined list — kept for places that still need a bare name list
  *  irrespective of type (e.g., older history-lookup paths). Concatenation
  *  preserves the previous "Income" name implicitly via the new "Salary"
@@ -60,6 +76,23 @@ export async function seedDefaultCategories(
         icon: c.icon,
         color: c.color,
         type: "income" as const,
+      })),
+    ],
+    skipDuplicates: true,
+  });
+}
+
+export async function seedBusinessCategories(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+): Promise<void> {
+  await tx.category.createMany({
+    data: [
+      ...DEFAULT_BUSINESS_EXPENSE_CATEGORIES.map((c) => ({
+        workspaceId, ...c, type: "expense" as const,
+      })),
+      ...DEFAULT_BUSINESS_INCOME_CATEGORIES.map((c) => ({
+        workspaceId, ...c, type: "income" as const,
       })),
     ],
     skipDuplicates: true,

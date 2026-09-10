@@ -4,7 +4,7 @@ import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { removeTransactionService, RemoveTxError } from "../src/transactions/remove.js";
+import { removeTransactionService } from "../src/transactions/remove.js";
 import { createManualTransactionService } from "../src/transactions/create-manual.js";
 import { testEnv } from "./helpers/test-env.js";
 

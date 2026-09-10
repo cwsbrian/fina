@@ -1,6 +1,8 @@
 const IAP_SECRET_KEYS = new Set([
   "APPLE_ASC_PRIVATE_KEY",
   "GOOGLE_SERVICE_ACCOUNT_JSON",
+  "OPENAI_API_KEY",
+  "R2_SECRET_ACCESS_KEY",
 ]);
 
 /** Returns a shallow copy of `env` with IAP secret values replaced by

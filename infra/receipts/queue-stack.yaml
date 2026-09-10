@@ -1,0 +1,43 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Receipt OCR queue and dead-letter alarm (deploy in ca-central-1 and us-east-1)
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [staging, production]
+
+Resources:
+  ReceiptQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: alias/aws/sqs
+      VisibilityTimeout: 900
+      MessageRetentionPeriod: 1209600
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt ReceiptDeadLetterQueue.Arn
+        maxReceiveCount: 5
+
+  ReceiptDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 1209600
+
+  ReceiptDeadLetterAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Receipt OCR messages reached the dead-letter queue
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt ReceiptDeadLetterQueue.QueueName }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+Outputs:
+  QueueUrl: { Value: !Ref ReceiptQueue }
+  QueueArn: { Value: !GetAtt ReceiptQueue.Arn }
+  DeadLetterQueueArn: { Value: !GetAtt ReceiptDeadLetterQueue.Arn }

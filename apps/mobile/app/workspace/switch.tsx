@@ -23,6 +23,7 @@ type Workspace = {
   name: string;
   role: Role;
   currency: string;
+  kind: "personal" | "business";
 };
 
 type Member = { userId: string };
@@ -139,7 +140,7 @@ export default function SwitchWorkspace() {
                   {w.name}
                 </Text>
                 <Text style={styles.meta}>
-                  {roleLabel(w.role)} · {memberLine}
+                  {w.kind === "business" ? "Business" : "Personal"} · {roleLabel(w.role)} · {memberLine}
                 </Text>
               </View>
               {isActive ? (

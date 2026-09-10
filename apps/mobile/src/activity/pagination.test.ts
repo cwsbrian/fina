@@ -6,6 +6,7 @@ import { buildActivityTransactionsPath, mergeActivityTransactionPages } from "./
 function tx(id: string, amount: string): TransactionDTO {
   return {
     id,
+    version: 1,
     accountId: `acct-${id}`,
     plaidTransactionId: null,
     amount,
@@ -22,6 +23,10 @@ function tx(id: string, amount: string): TransactionDTO {
     budgetImpact: Number(amount) < 0 ? "income" : "expense",
     budgetImpactSource: "auto",
     refundOfTransactionId: null,
+    classificationSourceReceiptId: null,
+    businessPurpose: null,
+    receiptMissingReason: null,
+    receiptMissingNote: null,
     refundedAmount: "0.00",
     allocations: [],
   };

@@ -42,17 +42,17 @@ describe("Daily forecast structured dedupe", () => {
     expect(shouldMentionDailyForecast(current, structuredClone(current))).toBe(false);
   });
 
-  it("suppresses small amount drift but re-mentions after cumulative change reaches 10%", () => {
+  it("suppresses small amount drift but re-mentions after cumulative change reaches 25%", () => {
     const previous = state({ overspend: 1_500, category: "Shopping" });
     expect(
       shouldMentionDailyForecast(
-        state({ overspend: 1_640, category: "Shopping" }),
+        state({ overspend: 1_874, category: "Shopping" }),
         previous,
       ),
     ).toBe(false);
     expect(
       shouldMentionDailyForecast(
-        state({ overspend: 1_650, category: "Shopping" }),
+        state({ overspend: 1_875, category: "Shopping" }),
         previous,
       ),
     ).toBe(true);

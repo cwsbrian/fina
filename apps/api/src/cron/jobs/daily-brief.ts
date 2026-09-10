@@ -66,7 +66,7 @@ export async function runDailyBrief(env: Env): Promise<void> {
         continue;
       }
       const memberships = await prisma.membership.findMany({
-        where: { userId: u.id },
+        where: { userId: u.id, workspace: { kind: "personal" } },
         select: { workspaceId: true },
       });
       for (const membership of memberships) {

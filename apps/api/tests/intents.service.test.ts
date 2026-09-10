@@ -3,7 +3,6 @@ import { prisma } from "../src/db.js";
 import {
   createIntentService,
   consumeIntentService,
-  CONFIRMABLE_TOOLS,
 } from "../src/intents/service.js";
 
 describe("createIntentService", () => {

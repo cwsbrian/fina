@@ -256,8 +256,8 @@ describe("matchScheduledSpends", () => {
 
   it("cross-run dedupe — second run does not match tx already claimed by prior run", async () => {
     const { wsId, categoryId } = await setup("mt-crossrun@t.co");
-    const txId = await seedTx(wsId, { categoryId, amount: "50", occurredAt: new Date("2026-05-25T12:00:00Z") });
-    const a = await addScheduledSpendService({
+    await seedTx(wsId, { categoryId, amount: "50", occurredAt: new Date("2026-05-25T12:00:00Z") });
+    await addScheduledSpendService({
       workspaceId: wsId, categoryId, amount: 100, scheduledDate: "2026-05-25",
     });
     await matchScheduledSpends(wsId, new Date("2026-05-25T18:00:00Z"));  // matches A

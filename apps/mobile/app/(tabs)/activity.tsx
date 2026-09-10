@@ -16,7 +16,7 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import type { CategoryDTO, TransactionDTO, Cadence } from "@fina/shared";
-import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
+import { apiFetch, bootstrapActiveWorkspace, bootstrapActiveWorkspaceSummary } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
 import { formatMoney, dateBucket } from "../../src/format/money";
@@ -238,6 +238,7 @@ export default function Activity() {
   const [excludedCount, setExcludedCount] = useState(0);
   const [newExcludedCount, setNewExcludedCount] = useState(0);
   const [wsId, setWsId] = useState<string | null>(null);
+  const [isBusiness, setIsBusiness] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -268,7 +269,8 @@ export default function Activity() {
 
   const load = useCallback(async () => {
     try {
-      const id = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      const workspace = await bootstrapActiveWorkspaceSummary();
+      const id = workspace?.id ?? (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!id) {
         setErr("no_workspace");
         return;
@@ -288,6 +290,7 @@ export default function Activity() {
         setRange(savedFilter.range);
       }
       setWsId(id);
+      setIsBusiness(workspace?.kind === "business");
       setNextCursor(null);
       setLoadingMore(false);
       const trimmed = queryRef.current.trim();
@@ -517,7 +520,7 @@ export default function Activity() {
             </View>
           </View>
         )}
-        renderItem={({ item }) => <TxRow tx={item} categories={categories} />}
+        renderItem={({ item }) => <TxRow tx={item} categories={categories} isBusiness={isBusiness} />}
         ListFooterComponent={
           loadingMore ? (
             <View style={styles.footerLoading}>
@@ -814,9 +817,11 @@ function ActivityHeader({
 function TxRow({
   tx,
   categories,
+  isBusiness,
 }: {
   tx: TransactionDTO;
   categories: Record<string, CategoryDTO>;
+  isBusiness: boolean;
 }) {
   const money = formatMoney(tx.amount, tx.currency);
   const isSplit = tx.allocations.length > 1;
@@ -831,6 +836,11 @@ function TxRow({
   // to the transaction detail where the confirm banner lives.
   const showDot = !isSplit && !!firstAlloc?.needsConfirmation && !!firstAllocCat;
   const isOther = !!firstAllocCat && firstAllocCat.name.trim().toLowerCase() === "other";
+  const reviewedBusiness = tx.allocations.every((allocation) => allocation.businessAmount !== null);
+  const businessAmount = reviewedBusiness
+    ? tx.allocations.reduce((sum, allocation) => sum + Number(allocation.businessAmount ?? 0), 0)
+    : null;
+  const partial = businessAmount !== null && businessAmount > 0 && businessAmount < Math.abs(Number(tx.amount));
   return (
     <Pressable
       style={({ pressed }) => [styles.row, pressed && { opacity: 0.6 }]}
@@ -852,7 +862,9 @@ function TxRow({
         </View>
         <View style={styles.rowMetaLine}>
           <Text style={[styles.rowMeta, uncategorized && styles.rowMetaUncat]} numberOfLines={1}>
-            {categoryLabel}
+            {isBusiness
+              ? `${categoryLabel} · ${businessAmount === null ? "Expense review" : businessAmount === 0 ? "Not business" : `${partial ? "Partial · " : ""}${formatMoney(businessAmount.toFixed(2), tx.currency).display} business`}`
+              : categoryLabel}
           </Text>
           {showDot && <NeedsReviewDot isOther={isOther} />}
         </View>

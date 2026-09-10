@@ -509,6 +509,31 @@ export async function processChatTurn(
   const MODEL = env.CHAT_MODEL ?? DEFAULT_LLM_MODEL;
 
   const toolCtx: ToolContext = { env, workspaceId: thread.workspaceId, userId, role };
+  const workspace = await prisma.workspace.findUniqueOrThrow({
+    where: { id: thread.workspaceId },
+    select: { kind: true },
+  });
+  const businessBlockedTools = new Set([
+    "getSpendingSummary",
+    "getCategoryBreakdown",
+    "compareSpendingPeriods",
+    "getCashflowSummary",
+    "setBudget",
+    "getBudget",
+    "compareSpendingVsBudget",
+    "addGoal",
+    "updateGoal",
+    "listGoals",
+    "getGoalDetails",
+    "presentGoalForm",
+    "archiveGoal",
+    "presentConfirmCard",
+    "presentRecurringForm",
+    "presentScheduledSpendPlan",
+  ]);
+  const activeRegistry = workspace.kind === "business"
+    ? REGISTRY.filter((tool) => !businessBlockedTools.has(tool.name))
+    : REGISTRY;
 
   const recent = await prisma.chatMessage.findMany({
     where: { threadId: thread.id },
@@ -521,8 +546,10 @@ export async function processChatTurn(
     budgetTokens: HISTORY_BUDGET_TOKENS,
   });
 
-  const sysInstruction = SYSTEM_PROMPT;
-  const tools = [{ functionDeclarations: toLlmFunctionDeclarations(REGISTRY) }];
+  const sysInstruction = workspace.kind === "business"
+    ? `${SYSTEM_PROMPT}\n\nBUSINESS WORKSPACE: Do not offer Goals, Budgets, personal Analysis, or confirmation forms. Do not answer aggregate expense/net questions using personal spending tools; direct the user to the Expenses tab and use transaction lookup tools only.`
+    : SYSTEM_PROMPT;
+  const tools = [{ functionDeclarations: toLlmFunctionDeclarations(activeRegistry) }];
 
   const historyContents = toLlmHistory(historyChrono);
   if (historyContents.length === 0) throw new Error("chat_history_empty");
@@ -622,7 +649,7 @@ export async function processChatTurn(
       if (!fc.name) { logWarn({ threadId: thread.id }, "chat: function call missing name"); continue; }
       const fcName = fc.name;
       const fcArgs = (fc.args ?? {}) as Record<string, unknown>;
-      const dispatch = await dispatchTool(toolCtx, fcName, fcArgs, REGISTRY);
+      const dispatch = await dispatchTool(toolCtx, fcName, fcArgs, activeRegistry);
       if (AUDIT_WRITE_TOOLS.has(fcName) && dispatch.ok) {
         await logAuditEvent({
           workspaceId: thread.workspaceId,

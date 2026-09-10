@@ -239,6 +239,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
               source: true,
               needsConfirmation: true,
               dismissedUntil: true,
+              businessAmount: true,
+              receiptLineItemId: true,
             },
             orderBy: { createdAt: "asc" },
           },
@@ -261,6 +263,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       return {
         transactions: page.map((t) => ({
           id: t.id,
+          version: t.version,
           accountId: t.accountId,
           plaidTransactionId: t.plaidTransactionId,
           amount: t.amount.toString(),
@@ -280,6 +283,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             t.merchantNormalized ?? normalizeMerchant(t.merchantRaw),
           ),
           refundOfTransactionId: t.refundOfTransactionId,
+          classificationSourceReceiptId: t.classificationSourceReceiptId,
+          businessPurpose: t.businessPurpose,
+          receiptMissingReason: t.receiptMissingReason,
+          receiptMissingNote: t.receiptMissingNote,
           refundedAmount: t.refunds
             .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
             .toFixed(2),
@@ -290,6 +297,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             source: a.source,
             needsConfirmation: a.needsConfirmation,
             dismissedUntil: a.dismissedUntil ? a.dismissedUntil.toISOString() : null,
+            businessAmount: a.businessAmount?.toFixed(2) ?? null,
+            receiptLineItemId: a.receiptLineItemId,
           })),
         })),
         nextCursor,
@@ -329,6 +338,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
                   source: true,
                   needsConfirmation: true,
                   dismissedUntil: true,
+                  businessAmount: true,
+                  receiptLineItemId: true,
                 },
                 orderBy: { createdAt: "asc" },
               },
@@ -348,6 +359,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(200).send({
           transaction: {
             id: t.id,
+            version: t.version,
             accountId: t.accountId,
             plaidTransactionId: t.plaidTransactionId,
             amount: t.amount.toString(),
@@ -365,6 +377,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             budgetImpactSource: t.budgetImpactSource,
             merchantExclusionActive: merchantExclusions.has(merchantNormalized),
             refundOfTransactionId: t.refundOfTransactionId,
+            classificationSourceReceiptId: t.classificationSourceReceiptId,
+            businessPurpose: t.businessPurpose,
+            receiptMissingReason: t.receiptMissingReason,
+            receiptMissingNote: t.receiptMissingNote,
             refundedAmount: t.refunds
               .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
               .toFixed(2),
@@ -375,6 +391,8 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
               source: a.source,
               needsConfirmation: a.needsConfirmation,
               dismissedUntil: a.dismissedUntil ? a.dismissedUntil.toISOString() : null,
+              businessAmount: a.businessAmount?.toFixed(2) ?? null,
+              receiptLineItemId: a.receiptLineItemId,
             })),
           },
         });

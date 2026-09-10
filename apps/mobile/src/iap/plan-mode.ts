@@ -2,7 +2,7 @@ import type { SubscriptionSource } from "@fina/shared";
 
 export type PlanEntryAction = "plan-screen" | "web-billing";
 
-export function usesNativeSubscriptionSurface(platform: string): boolean {
+export function usesNativeSubscriptionSurface(_platform: string): boolean {
   return false;
 }
 

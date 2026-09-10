@@ -14,7 +14,7 @@ const CRON_NAME = "goal-milestones";
  *  every owner/editor of the workspace. */
 export async function runGoalMilestones(env: Env): Promise<void> {
   const goals = await prisma.goal.findMany({
-    where: { archivedAt: null },
+    where: { archivedAt: null, workspace: { kind: "personal" } },
     select: {
       id: true,
       title: true,

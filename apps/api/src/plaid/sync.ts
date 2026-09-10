@@ -311,6 +311,16 @@ function utcDayRange(value: Date): { gte: Date; lt: Date } {
   return { gte, lt: new Date(gte.getTime() + 86_400_000) };
 }
 
+function businessAmountForChangedAmount(
+  allocation: { amount: Prisma.Decimal; businessAmount: Prisma.Decimal | null },
+  newAmount: Prisma.Decimal,
+): { businessAmount: Prisma.Decimal | null; clearReceiptLine: boolean } {
+  if (allocation.businessAmount === null) return { businessAmount: null, clearReceiptLine: false };
+  if (allocation.businessAmount.equals(0)) return { businessAmount: new Prisma.Decimal(0), clearReceiptLine: false };
+  if (allocation.businessAmount.equals(allocation.amount.abs())) return { businessAmount: newAmount.abs(), clearReceiptLine: false };
+  return { businessAmount: null, clearReceiptLine: true };
+}
+
 export async function upsertAdded(
   tx: Prisma.TransactionClient,
   t: PlaidTxLike,
@@ -324,7 +334,7 @@ export async function upsertAdded(
         workspaceId,
         plaidTransactionId: t.pending_transaction_id, // OLD pending row's transaction_id
       },
-      include: { allocations: { select: { id: true } } },
+      include: { allocations: { select: { id: true, amount: true, businessAmount: true } } },
     });
     if (promotion) {
       const newAmount = new Prisma.Decimal(t.amount);
@@ -339,9 +349,14 @@ export async function upsertAdded(
       // Paranoid check: pending tx must have N=1 allocation (cannot_split_pending
       // blocks user splits). If N != 1, log + skip the allocation update.
       if (promotion.allocations.length === 1) {
+        const business = businessAmountForChangedAmount(promotion.allocations[0]!, newAmount);
         await tx.transactionAllocation.update({
           where: { id: promotion.allocations[0]!.id },
-          data: { amount: newAmount },
+          data: {
+            amount: newAmount,
+            businessAmount: business.businessAmount,
+            ...(business.clearReceiptLine ? { receiptLineItemId: null } : {}),
+          },
         });
       } else {
         logWarn(
@@ -352,6 +367,7 @@ export async function upsertAdded(
       await tx.transaction.update({
         where: { id: promotion.id },
         data: {
+          version: { increment: 1 },
           plaidTransactionId: t.transaction_id,
           plaidPendingTransactionId: t.pending_transaction_id,
           pending: false,
@@ -381,7 +397,7 @@ export async function upsertAdded(
   const accountId = await accountIdForPlaidAccount(tx, plaidItemId, t.account_id);
   const existing = await tx.transaction.findFirst({
     where: { workspaceId, plaidTransactionId: t.transaction_id },
-    include: { allocations: { select: { id: true, amount: true } } },
+    include: { allocations: { select: { id: true, amount: true, businessAmount: true, receiptLineItemId: true } } },
   });
   if (existing) {
     const newAmount = new Prisma.Decimal(t.amount);
@@ -402,20 +418,26 @@ export async function upsertAdded(
     // blocks user splits on pending so replay should always be N=1, but guard anyway).
     if (amountChanged) {
       if (N === 1) {
+        const business = businessAmountForChangedAmount(existing.allocations[0]!, newAmount);
         await tx.transactionAllocation.update({
           where: { id: existing.allocations[0]!.id },
-          data: { amount: newAmount },
+          data: {
+            amount: newAmount,
+            businessAmount: business.businessAmount,
+            ...(business.clearReceiptLine ? { receiptLineItemId: null } : {}),
+          },
         });
       } else if (N >= 2) {
         await tx.transactionAllocation.deleteMany({ where: { transactionId: existing.id } });
         await tx.transactionAllocation.create({
-          data: { transactionId: existing.id, categoryId: null, amount: newAmount, source: null },
+          data: { transactionId: existing.id, categoryId: null, amount: newAmount, source: null, businessAmount: null },
         });
       }
     }
     await tx.transaction.update({
       where: { id: existing.id },
       data: {
+        version: { increment: 1 },
         amount: newAmount,
         merchantRaw: plaidMerchantRaw(t),
         occurredAt: plaidOccurredAt(t),
@@ -503,6 +525,7 @@ export async function upsertAdded(
         await tx.transaction.update({
           where: { id: match.id },
           data: {
+            version: { increment: 1 },
             accountId,
             plaidItemId,
             plaidTransactionId: t.transaction_id,
@@ -550,14 +573,18 @@ export async function upsertAdded(
       billingGraceHiddenAt,
       removedAt: billingGraceHiddenAt,
     },
-    select: { id: true, amount: true },
+    select: { id: true, amount: true, budgetImpact: true },
   });
+  const workspaceKind = await tx.workspace.findUniqueOrThrow({ where: { id: workspaceId }, select: { kind: true } });
   await tx.transactionAllocation.create({
     data: {
       transactionId: created.id,
       categoryId: null,
       amount: created.amount,
       source: null,
+      businessAmount: workspaceKind.kind === "business"
+        ? created.budgetImpact === "income" ? created.amount.abs() : created.budgetImpact === "excluded" ? 0 : null
+        : null,
     },
   });
   return { kind: "inserted", localId: created.id };
@@ -572,7 +599,7 @@ export async function upsertModified(
   // rows still get field updates for state consistency.
   const existing = await tx.transaction.findFirst({
     where: { workspaceId, plaidTransactionId: t.transaction_id },
-    include: { allocations: { select: { id: true, amount: true } } },
+    include: { allocations: { select: { id: true, amount: true, businessAmount: true, receiptLineItemId: true } } },
   });
   if (!existing) return; // matches today's no-op for missing row
 
@@ -610,23 +637,29 @@ export async function upsertModified(
         categoryId: null,
         amount: newAmount,
         source: null,
+        businessAmount: null,
       },
     });
     await tx.transaction.update({
       where: { id: existing.id },
-      data: { ...txDataBase, needsReclassification: true },
+      data: { ...txDataBase, needsReclassification: true, version: { increment: 1 } },
     });
   } else {
     // N=1 (any change) OR N≥2 with only metadata changes: preserve allocations.
     if (amountChanged && N === 1) {
+      const business = businessAmountForChangedAmount(existing.allocations[0]!, newAmount);
       await tx.transactionAllocation.update({
         where: { id: existing.allocations[0]!.id },
-        data: { amount: newAmount },
+        data: {
+          amount: newAmount,
+          businessAmount: business.businessAmount,
+          ...(business.clearReceiptLine ? { receiptLineItemId: null } : {}),
+        },
       });
     }
     await tx.transaction.update({
       where: { id: existing.id },
-      data: txDataBase,
+      data: { ...txDataBase, version: { increment: 1 } },
     });
   }
 }
@@ -655,6 +688,6 @@ export async function markRemoved(
   await clearScheduleMatch(tx, target.id);
   await tx.transaction.update({
     where: { id: target.id },
-    data: { removedAt: new Date() },
+    data: { removedAt: new Date(), version: { increment: 1 } },
   });
 }

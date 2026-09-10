@@ -1,0 +1,101 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Fargate receipt OCR consumer using Cloudflare R2 and OpenAI
+
+Parameters:
+  WorkerImageUri: { Type: String }
+  DatabaseUrlSecretArn: { Type: String }
+  R2AccessKeyIdSecretArn: { Type: String }
+  R2SecretAccessKeySecretArn: { Type: String }
+  OpenAiApiKeySecretArn: { Type: String }
+  R2AccountId: { Type: String }
+  ReceiptStorageLocation:
+    Type: String
+    AllowedValues: [enam, us]
+  ReceiptOcrModel:
+    Type: String
+    Default: gpt-5-nano
+    AllowedValues: [gpt-5-nano, gpt-5.6-luna]
+  ReceiptQueueUrl: { Type: String }
+  ReceiptQueueArn: { Type: String }
+  PrivateSubnetIds: { Type: "List<AWS::EC2::Subnet::Id>" }
+  SecurityGroupIds: { Type: "List<AWS::EC2::SecurityGroup::Id>" }
+
+Resources:
+  WorkerCluster:
+    Type: AWS::ECS::Cluster
+  WorkerLogs:
+    Type: AWS::Logs::LogGroup
+    Properties: { RetentionInDays: 30 }
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }]
+      ManagedPolicyArns: [arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy]
+      Policies:
+        - PolicyName: ReadWorkerSecrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource:
+                  - !Ref DatabaseUrlSecretArn
+                  - !Ref R2AccessKeyIdSecretArn
+                  - !Ref R2SecretAccessKeySecretArn
+                  - !Ref OpenAiApiKeySecretArn
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: [{ Effect: Allow, Principal: { Service: ecs-tasks.amazonaws.com }, Action: sts:AssumeRole }]
+      Policies:
+        - PolicyName: ReceiptQueue
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - { Effect: Allow, Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility, sqs:GetQueueAttributes], Resource: !Ref ReceiptQueueArn }
+  WorkerTask:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      RequiresCompatibilities: [FARGATE]
+      NetworkMode: awsvpc
+      Cpu: "512"
+      Memory: "1024"
+      ExecutionRoleArn: !GetAtt ExecutionRole.Arn
+      TaskRoleArn: !GetAtt WorkerRole.Arn
+      ContainerDefinitions:
+        - Name: receipt-worker
+          Image: !Ref WorkerImageUri
+          Essential: true
+          Command: [pnpm, --filter, "@fina/api", "receipt:worker"]
+          Environment:
+            - { Name: NODE_ENV, Value: production }
+            - { Name: RECEIPT_QUEUE_URL, Value: !Ref ReceiptQueueUrl }
+            - { Name: RECEIPT_STORAGE_LOCATION, Value: !Ref ReceiptStorageLocation }
+            - { Name: R2_ACCOUNT_ID, Value: !Ref R2AccountId }
+            - { Name: RECEIPT_OCR_MODEL, Value: !Ref ReceiptOcrModel }
+          Secrets:
+            - { Name: DATABASE_URL, ValueFrom: !Ref DatabaseUrlSecretArn }
+            - { Name: R2_ACCESS_KEY_ID, ValueFrom: !Ref R2AccessKeyIdSecretArn }
+            - { Name: R2_SECRET_ACCESS_KEY, ValueFrom: !Ref R2SecretAccessKeySecretArn }
+            - { Name: OPENAI_API_KEY, ValueFrom: !Ref OpenAiApiKeySecretArn }
+          LogConfiguration:
+            LogDriver: awslogs
+            Options: { awslogs-group: !Ref WorkerLogs, awslogs-region: !Ref "AWS::Region", awslogs-stream-prefix: receipt-worker }
+  WorkerService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref WorkerCluster
+      TaskDefinition: !Ref WorkerTask
+      DesiredCount: 1
+      LaunchType: FARGATE
+      DeploymentConfiguration: { MinimumHealthyPercent: 0, MaximumPercent: 100 }
+      NetworkConfiguration:
+        AwsvpcConfiguration: { AssignPublicIp: DISABLED, Subnets: !Ref PrivateSubnetIds, SecurityGroups: !Ref SecurityGroupIds }
+
+Outputs:
+  ClusterArn: { Value: !GetAtt WorkerCluster.Arn }
+  ServiceName: { Value: !GetAtt WorkerService.Name }

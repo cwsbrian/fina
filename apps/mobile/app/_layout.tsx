@@ -1,4 +1,4 @@
-import { Stack, router } from "expo-router";
+import { Stack, router, useSegments } from "expo-router";
 import { useEffect } from "react";
 import { AppState } from "react-native";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -18,9 +18,22 @@ import { useSession } from "../src/auth/client";
 import { syncDeviceTz } from "../src/api/tz-sync";
 import { notificationRouteForData } from "../src/api/push-routing";
 import { syncAppleSignupEnvironment } from "../src/distribution/sync";
+import { useActiveWorkspace } from "../src/workspace/useActiveWorkspace";
 
 export default function RootLayout() {
   const { data: session } = useSession();
+  const segments = useSegments();
+  const { workspace, reload: reloadWorkspace } = useActiveWorkspace();
+
+  useEffect(() => {
+    if (session?.user?.id) reloadWorkspace();
+  }, [session?.user?.id, reloadWorkspace]);
+
+  useEffect(() => {
+    const personalOnly = segments.some((segment) => ["goals", "goal", "budget", "analysis"].includes(segment));
+    const businessOnly = segments.some((segment) => ["expenses", "receipts"].includes(segment));
+    if ((workspace?.kind === "business" && personalOnly) || (workspace?.kind === "personal" && businessOnly)) router.replace("/(tabs)" as never);
+  }, [segments, workspace?.kind]);
 
   useEffect(() => {
     // Initial sync on mount.

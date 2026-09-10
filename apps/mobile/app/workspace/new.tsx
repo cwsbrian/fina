@@ -27,13 +27,15 @@ const CURRENCIES = [
 ];
 
 type CreateResp = {
-  workspace: { id: string; name: string; currency: string };
+  workspace: { id: string; name: string; currency: string; kind: "personal" | "business"; taxCountry: "CA" | "US" | null };
 };
 
 export default function NewWorkspace() {
   const [name, setName] = useState("");
   const [currency, setCurrency] = useState("CAD");
   const [customCurrency, setCustomCurrency] = useState("");
+  const [kind, setKind] = useState<"personal" | "business">("personal");
+  const [taxCountry, setTaxCountry] = useState<"CA" | "US">("CA");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -51,7 +53,7 @@ export default function NewWorkspace() {
     try {
       const r = await apiFetch<CreateResp>("/workspaces", {
         method: "POST",
-        body: JSON.stringify({ name: trimmed, currency }),
+        body: JSON.stringify({ name: trimmed, currency, kind, ...(kind === "business" ? { taxCountry } : {}) }),
       });
       // Make the new workspace active so the tabs reload against it.
       await setActiveWorkspaceId(r.workspace.id);
@@ -60,7 +62,7 @@ export default function NewWorkspace() {
       setErr((e as { code?: string }).code ?? "create_failed");
       setSubmitting(false);
     }
-  }, [canSubmit, trimmed, currency]);
+  }, [canSubmit, trimmed, currency, kind, taxCountry]);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -95,9 +97,8 @@ export default function NewWorkspace() {
           contentContainerStyle={styles.body}
         >
           <Text style={styles.sub}>
-            A new workspace is its own world with separate categories,
-            accounts, budgets, and members. Useful for a side business or
-            another household.
+            Choose a personal workspace for household finances or business
+            for contractor income, expenses, and receipt evidence.
           </Text>
 
           <Text style={styles.label}>Name</Text>
@@ -115,6 +116,12 @@ export default function NewWorkspace() {
             maxLength={80}
             autoFocus
           />
+
+          <Text style={[styles.label, { marginTop: space.lg }]}>Workspace use</Text>
+          <View style={styles.chips}>
+            {([['personal', 'Personal'], ['business', 'Business']] as const).map(([value, label]) => <Pressable key={value} style={[styles.chip, kind === value && styles.chipActive]} onPress={() => setKind(value)} disabled={submitting}><Text style={[styles.chipText, kind === value && styles.chipTextActive]}>{label}</Text></Pressable>)}
+          </View>
+          {kind === "business" && <><Text style={[styles.label, { marginTop: space.lg }]}>Tax country</Text><View style={styles.chips}>{([['CA','Canada'],['US','United States']] as const).map(([value,label]) => <Pressable key={value} style={[styles.chip, taxCountry === value && styles.chipActive]} onPress={() => { setTaxCountry(value); setCurrency(value === 'CA' ? 'CAD' : 'USD'); }} disabled={submitting}><Text style={[styles.chipText, taxCountry === value && styles.chipTextActive]}>{label}</Text></Pressable>)}</View></>}
 
           <Text style={[styles.label, { marginTop: space.lg }]}>Currency</Text>
           <View style={styles.chips}>
@@ -166,9 +173,8 @@ export default function NewWorkspace() {
               style={{ marginTop: 2 }}
             />
             <Text style={styles.helperText}>
-              You'll start as the owner. Default categories and a manual
-              account are seeded automatically. You can invite members after
-              creating.
+              You'll start as the owner. Business workspaces use dedicated
+              categories and keep receipt files private in the selected tax region.
             </Text>
           </View>
 

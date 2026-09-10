@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { isPaidFeatureTier } from "@fina/shared";
-import { HttpError, requireWorkspaceContext } from "../auth/context.js";
+import { HttpError, registerPersonalWorkspaceGate, requireWorkspaceContext } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import {
   type BudgetPlanRecord,
@@ -60,6 +60,7 @@ function parseYearMonth(s: string): { year: number; month: number } | null {
 }
 
 export async function budgetPlansRoutes(app: FastifyInstance): Promise<void> {
+  registerPersonalWorkspaceGate(app, { allowGet: true });
   app.get("/workspaces/:id/budget-plans/default", async (req, reply) => {
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });

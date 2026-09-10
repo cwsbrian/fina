@@ -7,6 +7,7 @@ import { useSession } from "../../src/auth/client";
 import { shouldRedirectToSignIn } from "../../src/auth/session-guard";
 import { isBackendUnavailableError } from "../../src/api/backend-status";
 import { MaintenanceScreen } from "../../src/api/MaintenanceScreen";
+import { useActiveWorkspace } from "../../src/workspace/useActiveWorkspace";
 
 // Five-tab structure per Fina Mobile Designs. Add (manual / OCR) is a
 // modal/sheet launched from Home/Activity FABs, not a tab.
@@ -15,10 +16,11 @@ export default function TabsLayout() {
     error?: unknown;
   };
   const insets = useSafeAreaInsets();
+  const { workspace, loading: workspaceLoading } = useActiveWorkspace();
   if (isBackendUnavailableError(sessionState.error)) {
     return <MaintenanceScreen />;
   }
-  if (sessionState.isPending) {
+  if (sessionState.isPending || workspaceLoading) {
     return (
       <View
         style={{
@@ -73,7 +75,7 @@ export default function TabsLayout() {
         name="index"
         options={{
           title: "Home",
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color }) => (
             <Ionicons name="home-outline" color={color} size={21} />
           ),
         }}
@@ -82,7 +84,7 @@ export default function TabsLayout() {
         name="activity"
         options={{
           title: "Activity",
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color }) => (
             <Ionicons name="list-outline" color={color} size={21} />
           ),
         }}
@@ -91,7 +93,7 @@ export default function TabsLayout() {
         name="chat"
         options={{
           title: "Chat",
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color }) => (
             <Ionicons name="chatbubble-outline" color={color} size={21} />
           ),
         }}
@@ -100,8 +102,19 @@ export default function TabsLayout() {
         name="goals"
         options={{
           title: "Goals",
-          tabBarIcon: ({ color, size }) => (
+          ...(workspace?.kind === "business" ? { href: null } : {}),
+          tabBarIcon: ({ color }) => (
             <Ionicons name="flag-outline" color={color} size={21} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="expenses"
+        options={{
+          title: "Expenses",
+          ...(workspace?.kind === "business" ? {} : { href: null }),
+          tabBarIcon: ({ color }) => (
+            <Ionicons name="receipt-outline" color={color} size={21} />
           ),
         }}
       />
@@ -109,7 +122,7 @@ export default function TabsLayout() {
         name="more"
         options={{
           title: "More",
-          tabBarIcon: ({ color, size }) => (
+          tabBarIcon: ({ color }) => (
             <Ionicons name="ellipsis-horizontal" color={color} size={21} />
           ),
         }}

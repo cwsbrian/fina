@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://withfina.com"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["content-type", "content-length"],
+    "ExposeHeaders": ["etag"],
+    "MaxAgeSeconds": 300
+  }
+]

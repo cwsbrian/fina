@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { Prisma } from "@prisma/client";
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../src/db.js";
 import { buildApp } from "../src/server.js";
@@ -10,7 +9,6 @@ import {
   listScheduledSpendsService,
   dismissScheduledSpendService,
   removeScheduledSpendService,
-  ScheduledSpendError,
 } from "../src/schedules/service.js";
 import { testEnv } from "./helpers/test-env.js";
 

@@ -5,6 +5,9 @@ export type WorkspaceSummary = {
   id: string;
   name: string;
   role: Role;
+  currency: string;
+  kind: "personal" | "business";
+  taxCountry: "CA" | "US" | null;
 };
 
 /** A row in `GET /workspaces/:id/members`. */

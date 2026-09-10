@@ -62,6 +62,17 @@ export async function requireWorkspaceContext(
       workspaceId: wsId,
       requiredRole: opts.requiredRole,
     });
+    const route = req.routeOptions.url ?? req.url;
+    const isBusinessPersonalFeature =
+      route.includes("/analysis") ||
+      route.includes("/intents/") ||
+      (req.method !== "GET" && (route.includes("/goals") || route.includes("/budget-plans")));
+    if (isBusinessPersonalFeature) {
+      const workspace = await prisma.workspace.findUnique({ where: { id: wsId }, select: { kind: true } });
+      if (workspace?.kind === "business") {
+        throw new HttpError(403, "personal_workspace_required");
+      }
+    }
     return { session, membership };
   } catch (e) {
     if (e instanceof MembershipError) {
@@ -74,4 +85,40 @@ export async function requireWorkspaceContext(
     }
     throw e;
   }
+}
+
+export async function requireWorkspaceKind(
+  workspaceId: string,
+  kind: "personal" | "business",
+): Promise<void> {
+  const workspace = await prisma.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { kind: true },
+  });
+  if (!workspace) throw new HttpError(404, "workspace_not_found");
+  if (workspace.kind !== kind) {
+    throw new HttpError(403, kind === "business" ? "business_workspace_required" : "personal_workspace_required");
+  }
+}
+
+/** Scoped Fastify gate for route families that are personal-only. It runs
+ * before handler-local Zod parsing so business workspaces always receive the
+ * same feature-boundary response, regardless of request body shape. */
+export function registerPersonalWorkspaceGate(
+  app: FastifyInstance,
+  opts: { allowGet: boolean },
+): void {
+  app.addHook("preHandler", async (req, reply) => {
+    if (opts.allowGet && req.method === "GET") return;
+    const workspaceId = req.headers["x-workspace-id"];
+    if (typeof workspaceId !== "string" || !workspaceId) return;
+    const session = await requireSession(req, app);
+    const membership = await prisma.membership.findUnique({
+      where: { userId_workspaceId: { userId: session.userId, workspaceId } },
+      select: { workspace: { select: { kind: true } } },
+    });
+    if (membership?.workspace.kind === "business") {
+      return reply.code(403).send({ error: "personal_workspace_required" });
+    }
+  });
 }

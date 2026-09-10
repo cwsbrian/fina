@@ -3,7 +3,7 @@
     "name": "Fina",
     "slug": "fina",
     "scheme": "fina",
-    "version": "1.16",
+    "version": "1.17",
     "orientation": "portrait",
     "icon": "./assets/fina-app-icon.png",
     "userInterfaceStyle": "light",
@@ -47,6 +47,14 @@
       "@react-native-community/datetimepicker",
       "expo-web-browser",
       "expo-apple-authentication",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Fina uses selected receipt photos to document your business expenses.",
+          "cameraPermission": "Fina uses the camera to photograph receipts for your business expenses.",
+          "microphonePermission": false
+        }
+      ],
       [
         "react-native-iap",
         {

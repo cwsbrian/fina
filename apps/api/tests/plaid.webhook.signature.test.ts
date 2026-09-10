@@ -13,10 +13,7 @@ import {
   resetJwkCache,
   type WebhookKeyPair,
 } from "./helpers/plaid-webhook-mock.js";
-import {
-  verifyPlaidWebhook,
-  PlaidWebhookVerifyError,
-} from "../src/plaid/webhook-jwks.js";
+import { verifyPlaidWebhook } from "../src/plaid/webhook-jwks.js";
 import { testEnv } from "./helpers/test-env.js";
 
 const env = testEnv();

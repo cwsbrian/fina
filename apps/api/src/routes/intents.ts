@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { isPaidFeatureTier } from "@fina/shared";
-import { requireWorkspaceContext, HttpError } from "../auth/context.js";
+import { requireWorkspaceContext, HttpError, registerPersonalWorkspaceGate } from "../auth/context.js";
 import { effectiveTier } from "../auth/tier.js";
 import { consumeIntentService } from "../intents/service.js";
 
 export async function intentsRoutes(app: FastifyInstance): Promise<void> {
+  registerPersonalWorkspaceGate(app, { allowGet: false });
   app.post("/workspaces/:id/intents/:intentId/consume", async (req, reply) => {
     const params = req.params as { id: string; intentId: string };
     // Form blocks send their edited values in the body. Untyped record

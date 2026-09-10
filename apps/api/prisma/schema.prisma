@@ -157,6 +157,8 @@ model Workspace {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   currency          String             @default("CAD")
+  kind              WorkspaceKind      @default(personal)
+  taxCountry        TaxCountry?
   memberships       Membership[]
   invites           Invite[]
   plaidItems        PlaidItem[]
@@ -173,8 +175,19 @@ model Workspace {
   goals             Goal[]
   budgetPlans       BudgetPlan[]
   briefs            Brief[]
+  receiptDocuments  ReceiptDocument[]
 
   @@map("workspaces")
+}
+
+enum WorkspaceKind {
+  personal
+  business
+}
+
+enum TaxCountry {
+  CA
+  US
 }
 
 model Membership {
@@ -367,48 +380,56 @@ enum AccountStatus {
 }
 
 model Transaction {
-  id                        String             @id @default(cuid())
-  workspaceId               String
-  accountId                 String
-  plaidItemId               String?
-  plaidTransactionId        String?
-  plaidPendingTransactionId String?
-  amount                    Decimal            @db.Decimal(14, 2)
-  merchantRaw               String
-  merchantNormalized        String?
-  occurredAt                DateTime
-  postedAt                  DateTime?
-  pending                   Boolean            @default(false)
-  source                    TransactionSource  @default(plaid)
-  rawData                   Json
+  id                            String             @id @default(cuid())
+  workspaceId                   String
+  accountId                     String
+  plaidItemId                   String?
+  plaidTransactionId            String?
+  plaidPendingTransactionId     String?
+  amount                        Decimal            @db.Decimal(14, 2)
+  merchantRaw                   String
+  merchantNormalized            String?
+  occurredAt                    DateTime
+  postedAt                      DateTime?
+  pending                       Boolean            @default(false)
+  source                        TransactionSource  @default(plaid)
+  rawData                       Json
   // Transactions first imported while their Plaid Item is in billing grace.
   // They remain hidden from product reads and are restored on upgrade.
-  billingGraceHiddenAt      DateTime?
-  note                      String?
-  removedAt                 DateTime?
-  createdAt                 DateTime           @default(now())
-  updatedAt                 DateTime           @updatedAt
-  needsReclassification     Boolean            @default(false)
-  budgetImpact              BudgetImpact       @default(expense)
-  budgetImpactSource        BudgetImpactSource @default(auto)
-  refundOfTransactionId     String?
+  billingGraceHiddenAt          DateTime?
+  note                          String?
+  removedAt                     DateTime?
+  createdAt                     DateTime           @default(now())
+  updatedAt                     DateTime           @updatedAt
+  needsReclassification         Boolean            @default(false)
+  budgetImpact                  BudgetImpact       @default(expense)
+  budgetImpactSource            BudgetImpactSource @default(auto)
+  refundOfTransactionId         String?
+  version                       Int                @default(1)
+  classificationSourceReceiptId String?
+  businessPurpose               String?
+  receiptMissingReason          String?
+  receiptMissingNote            String?
 
-  workspace        Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace                   Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   // FK column kept as `accountId` (not `bankAccountId`) so URL/query filters
   // and prior plan-2 code that exposes accountId in API responses don't churn.
   // The Prisma model is BankAccount but the field name is unchanged.
-  account          BankAccount             @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  plaidItem        PlaidItem?              @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
-  allocations      TransactionAllocation[]
-  matchedSchedules ScheduledSpend[]        @relation("ScheduledSpendMatch")
-  refundOf         Transaction?            @relation("TransactionRefunds", fields: [refundOfTransactionId], references: [id], onDelete: SetNull)
-  refunds          Transaction[]           @relation("TransactionRefunds")
+  account                     BankAccount             @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  plaidItem                   PlaidItem?              @relation(fields: [plaidItemId], references: [id], onDelete: SetNull)
+  allocations                 TransactionAllocation[]
+  matchedSchedules            ScheduledSpend[]        @relation("ScheduledSpendMatch")
+  refundOf                    Transaction?            @relation("TransactionRefunds", fields: [refundOfTransactionId], references: [id], onDelete: SetNull)
+  refunds                     Transaction[]           @relation("TransactionRefunds")
+  receipts                    ReceiptDocument[]       @relation("TransactionReceipts")
+  classificationSourceReceipt ReceiptDocument?        @relation("ClassificationSource", fields: [classificationSourceReceiptId], references: [id], onDelete: SetNull)
 
   @@index([workspaceId, occurredAt(sort: Desc)])
   @@index([workspaceId, budgetImpact, occurredAt(sort: Desc)])
   @@index([workspaceId, accountId, occurredAt(sort: Desc)])
   @@index([plaidItemId, billingGraceHiddenAt])
   @@index([refundOfTransactionId])
+  @@index([classificationSourceReceiptId])
   @@map("transactions")
 }
 
@@ -420,16 +441,104 @@ model TransactionAllocation {
   source            CategorizationSource?
   needsConfirmation Boolean               @default(false)
   dismissedUntil    DateTime?
+  businessAmount    Decimal?              @db.Decimal(14, 2)
+  receiptLineItemId String?               @unique
   createdAt         DateTime              @default(now())
   updatedAt         DateTime              @updatedAt
 
-  transaction Transaction @relation(fields: [transactionId], references: [id], onDelete: Cascade)
-  category    Category?   @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  transaction     Transaction      @relation(fields: [transactionId], references: [id], onDelete: Cascade)
+  category        Category?        @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  receiptLineItem ReceiptLineItem? @relation(fields: [receiptLineItemId], references: [id], onDelete: SetNull)
 
   @@index([transactionId])
   @@index([categoryId])
   @@index([categoryId, transactionId])
   @@map("transaction_allocations")
+}
+
+enum ReceiptRole {
+  payment_proof
+  itemized
+  combined
+}
+
+enum ReceiptStatus {
+  uploading
+  queued
+  processing
+  ocr_review
+  reviewed
+  failed
+  superseded
+  deleted
+}
+
+model ReceiptDocument {
+  id             String        @id @default(cuid())
+  workspaceId    String
+  transactionId  String?
+  role           ReceiptRole
+  status         ReceiptStatus @default(uploading)
+  originalName   String
+  mimeType       String
+  byteSize       Int
+  pageCount      Int?
+  /// Cloudflare R2 location/jurisdiction key: enam or us.
+  storageRegion  String
+  storageBucket  String
+  storageKey     String        @unique
+  sha256         String?
+  verifiedAt     DateTime?
+  uploadedById   String
+  merchantName   String?
+  receiptDate    DateTime?
+  totalAmount    Decimal?      @db.Decimal(14, 2)
+  currency       String?
+  ocrRawData     Json?
+  ocrError       String?
+  supersededById String?
+  deletedAt      DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  workspace               Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  transaction             Transaction?      @relation("TransactionReceipts", fields: [transactionId], references: [id], onDelete: SetNull)
+  classificationSourceFor Transaction[]     @relation("ClassificationSource")
+  lineItems               ReceiptLineItem[]
+  supersededBy            ReceiptDocument?  @relation("ReceiptReplacement", fields: [supersededById], references: [id], onDelete: SetNull)
+  supersedes              ReceiptDocument[] @relation("ReceiptReplacement")
+
+  @@index([workspaceId, createdAt(sort: Desc)])
+  @@index([transactionId])
+  @@index([sha256])
+  @@map("receipt_documents")
+}
+
+model ReceiptLineItem {
+  id                String   @id @default(cuid())
+  receiptId         String
+  description       String
+  quantity          Decimal? @db.Decimal(12, 3)
+  unitPrice         Decimal? @db.Decimal(14, 2)
+  lineTotal         Decimal  @db.Decimal(14, 2)
+  confidence        Decimal? @db.Decimal(5, 4)
+  page              Int      @default(1)
+  boundingBox       Json?
+  editedDescription String?
+  editedQuantity    Decimal? @db.Decimal(12, 3)
+  editedUnitPrice   Decimal? @db.Decimal(14, 2)
+  editedLineTotal   Decimal? @db.Decimal(14, 2)
+  categoryId        String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  receipt    ReceiptDocument        @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  category   Category?              @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  allocation TransactionAllocation?
+
+  @@index([receiptId, page])
+  @@index([categoryId])
+  @@map("receipt_line_items")
 }
 
 model ScheduledSpend {
@@ -500,6 +609,7 @@ model Category {
   merchantMappings  MerchantMapping[]
   recurringExpenses RecurringExpense[]
   goalAllocations   GoalAllocation[]
+  receiptLineItems  ReceiptLineItem[]
 
   @@index([workspaceId, type])
   @@map("categories")

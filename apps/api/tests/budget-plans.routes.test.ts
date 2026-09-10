@@ -102,8 +102,9 @@ describe("POST /workspaces/:id/budget-plans/suggest-split", () => {
     const u = await signUpAndGetCookie(app, { email: `bp-short-${Date.now()}@t.co` });
     const wsId = await getOwnerWorkspaceId(u.userId);
     await convertToPro(u.userId);
-    await addCategorizedSpend(wsId, new Date("2026-05-01T12:00:00Z"));
-    await addCategorizedSpend(wsId, new Date("2026-06-01T12:00:00Z"));
+    const now = new Date();
+    await addCategorizedSpend(wsId, new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1, 12)));
+    await addCategorizedSpend(wsId, new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1, 12)));
 
     const res = await app.inject({
       method: "POST",

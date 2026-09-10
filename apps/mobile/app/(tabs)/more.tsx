@@ -59,6 +59,7 @@ type ActiveWorkspace = {
   name: string;
   role: "owner" | "editor" | "viewer";
   currency: string;
+  kind: "personal" | "business";
 };
 
 const MORE_PLAN_DEBUG_MARKER = "more-plan-debug-2026-06-18-storekit-entitlements";
@@ -130,6 +131,7 @@ export default function More() {
           name: string;
           role: "owner" | "editor" | "viewer";
           currency: string;
+          kind: "personal" | "business";
         }>;
       }>("/workspaces");
       const match = list.workspaces.find((w) => w.id === wsId);
@@ -400,11 +402,11 @@ export default function More() {
             </Text>
             <Text style={styles.wsMeta}>
               {activeWs
-                ? activeWs.role === "owner"
+                ? `${activeWs.kind === "business" ? "Business" : "Personal"} · ${activeWs.role === "owner"
                   ? "Owner"
                   : activeWs.role === "editor"
                     ? "Editor"
-                    : "Viewer"
+                    : "Viewer"}`
                 : "Owner"}
             </Text>
           </View>
@@ -472,24 +474,24 @@ export default function More() {
             subtitle="Monthly recurring services"
             onPress={() => router.push("/subscriptions" as never)}
           />
-          <SettingsRow
+          {activeWs?.kind !== "business" && <SettingsRow
             icon="trending-down-outline"
             title="Budget"
             subtitle="Monthly cap + category split"
             onPress={() => router.push("/budget" as never)}
             last
-          />
+          />}
         </Group>
 
         {/* Insights */}
         <GroupLabel>Insights</GroupLabel>
         <Group>
-          <SettingsRow
+          {activeWs?.kind !== "business" && <SettingsRow
             icon="bar-chart-outline"
             title="Analysis"
             subtitle="Patterns, trends, category breakdown"
             onPress={() => router.push("/analysis" as never)}
-          />
+          />}
           <SettingsRow
             icon="list-outline"
             title="Review queue"

@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { Prisma } from "@prisma/client";
 import { CreateGoalBody, isPaidFeatureTier, PatchGoalBody } from "@fina/shared";
 import { prisma } from "../db.js";
-import { HttpError, requireWorkspaceContext } from "../auth/context.js";
+import { HttpError, registerPersonalWorkspaceGate, requireWorkspaceContext } from "../auth/context.js";
 import { generateAndStoreGoalStrategy } from "../goals/generate-strategy.js";
 import { computeGoalSavings } from "../goals/savings.js";
 import { effectiveTier } from "../auth/tier.js";
@@ -73,6 +73,7 @@ const goalInclude = {
 };
 
 export async function goalsRoutes(app: FastifyInstance): Promise<void> {
+  registerPersonalWorkspaceGate(app, { allowGet: true });
   app.get("/workspaces/:id/goals", async (req, reply) => {
     const params = req.params as { id: string };
     const q = req.query as { includeArchived?: string };

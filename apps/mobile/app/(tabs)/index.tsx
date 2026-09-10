@@ -39,6 +39,8 @@ import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { currencySymbol, formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
 import { fetchMeWithNativeSubscriptionSync } from "../../src/iap/sync";
+import { useActiveWorkspace } from "../../src/workspace/useActiveWorkspace";
+import { BusinessHome } from "../../src/business/BusinessHome";
 
 const HEADER_HEIGHT = 84;
 const BANK_GRACE_TOOLBAR_HEIGHT = 60;
@@ -134,6 +136,13 @@ function formatTime(iso: string): string {
 }
 
 export default function Home() {
+  const { workspace, loading } = useActiveWorkspace();
+  if (loading) return <View style={{ flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: colors.canvas }}><ActivityIndicator color={colors.primary} /></View>;
+  if (workspace?.kind === "business") return <BusinessHome />;
+  return <PersonalHome />;
+}
+
+function PersonalHome() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
   const [err, setErr] = useState<string | null>(null);

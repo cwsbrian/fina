@@ -21,6 +21,8 @@ import { plaidRoutes } from "./routes/plaid.js";
 import { plaidItemsRoutes } from "./routes/plaid-items.js";
 import { accountsRoutes } from "./routes/accounts.js";
 import { transactionsRoutes } from "./routes/transactions.js";
+import { businessRoutes } from "./routes/business.js";
+import { receiptsRoutes } from "./routes/receipts.js";
 import { recurringRoutes } from "./routes/recurring.js";
 import { schedulesRoutes } from "./routes/schedules.js";
 import { categoriesRoutes } from "./routes/categories.js";
@@ -114,8 +116,12 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
               paths: [
                 "env.APPLE_ASC_PRIVATE_KEY",
                 "env.GOOGLE_SERVICE_ACCOUNT_JSON",
+                "env.OPENAI_API_KEY",
+                "env.R2_SECRET_ACCESS_KEY",
                 "*.APPLE_ASC_PRIVATE_KEY",
                 "*.GOOGLE_SERVICE_ACCOUNT_JSON",
+                "*.OPENAI_API_KEY",
+                "*.R2_SECRET_ACCESS_KEY",
                 "*.private_key",
                 "*.purchaseToken",
                 "*.linkedPurchaseToken",
@@ -225,6 +231,8 @@ export async function buildApp(env: Env, opts: BuildAppOpts = {}): Promise<Fasti
   await app.register(plaidItemsRoutes);
   await app.register(accountsRoutes);
   await app.register(transactionsRoutes);
+  await app.register(businessRoutes);
+  await app.register(receiptsRoutes);
   await app.register(categoriesRoutes);
   await app.register(goalsRoutes);
   await app.register(budgetPlansRoutes);

@@ -13,11 +13,15 @@ export type AllocationDTO = {
   /** ISO 8601 timestamp. When in the future, this allocation is snoozed
    *  (hidden from Activity pill and Daily Brief confirm card). */
   dismissedUntil: string | null;
+  /** Non-negative portion used for business. null means not reviewed. */
+  businessAmount: string | null;
+  receiptLineItemId: string | null;
 };
 
 /** A row in `GET /workspaces/:id/transactions`. */
 export type TransactionDTO = {
   id: string;
+  version: number;
   accountId: string;
   plaidTransactionId: string | null;
   /** Decimal serialized as a string. */
@@ -41,6 +45,10 @@ export type TransactionDTO = {
   merchantExclusionActive?: boolean;
   /** Original expense linked to this refund, when confidently matched. */
   refundOfTransactionId: string | null;
+  classificationSourceReceiptId: string | null;
+  businessPurpose: string | null;
+  receiptMissingReason: string | null;
+  receiptMissingNote: string | null;
   /** Posted refunds matched to this expense. Raw transaction amount is unchanged. */
   refundedAmount: string;
   allocations: AllocationDTO[];

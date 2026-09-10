@@ -9,7 +9,7 @@ export default function Privacy() {
   return (
     <>
       <h1>Privacy Policy</h1>
-      <p className={styles.meta}>Last updated: May 26, 2026</p>
+      <p className={styles.meta}>Last updated: September 10, 2026</p>
 
       <p>
         Fina (&quot;we&quot;, &quot;us&quot;) is a personal finance application
@@ -50,6 +50,12 @@ export default function Privacy() {
           <strong>Categories, budgets, goals</strong> — any data you create
           inside the product.
         </li>
+        <li>
+          <strong>Receipt documents</strong> — receipt photos or files you
+          choose to upload, plus extracted merchant, date, amount, and line-item
+          information used for business-expense review. We access only the
+          photo or file you select or capture for this purpose.
+        </li>
       </ul>
 
       <h3>Information we collect automatically</h3>
@@ -75,6 +81,7 @@ export default function Privacy() {
       <ul>
         <li>Provide the Fina service — show your transactions, categorize
           them, generate insights, send notifications you&apos;ve enabled.</li>
+        <li>Store and process receipts you upload for business-expense review.</li>
         <li>Authenticate you and keep your account secure.</li>
         <li>Process subscription payments and manage billing status.</li>
         <li>Respond to support requests and improve the product.</li>
@@ -119,7 +126,7 @@ export default function Privacy() {
           <tr>
             <td>Cloudflare Inc.</td>
             <td>DNS, WAF, CDN, encrypted backups (R2)</td>
-            <td>Request metadata, encrypted database backups</td>
+            <td>Request metadata, encrypted database backups, receipt originals</td>
           </tr>
           <tr>
             <td>Hetzner Online GmbH</td>
@@ -145,6 +152,11 @@ export default function Privacy() {
             <td>Google LLC (Gemini)</td>
             <td>AI categorization and chat responses</td>
             <td>Merchant text and chat message content</td>
+          </tr>
+          <tr>
+            <td>OpenAI, L.L.C.</td>
+            <td>Receipt text and line-item extraction</td>
+            <td>Receipt images or files you choose to upload</td>
           </tr>
           <tr>
             <td>650 Industries Inc. (Expo)</td>
@@ -196,6 +208,10 @@ export default function Privacy() {
         <li>
           <strong>Account data</strong> — retained while your account is
           active.
+        </li>
+        <li>
+          <strong>Receipt documents</strong> — retained while the related
+          workspace is active, or until you delete the receipt.
         </li>
         <li>
           <strong>Plaid webhook events</strong> — retained for 30 days then

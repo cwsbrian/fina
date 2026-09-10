@@ -198,6 +198,8 @@ export async function createIntentService(
   ctx: { workspaceId: string; userId: string },
   input: CreateIntentInput,
 ): Promise<CreateIntentOutput> {
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ctx.workspaceId }, select: { kind: true } });
+  if (workspace.kind === "business") throw new Error("personal_workspace_required");
   if (!isConfirmable(input.tool)) throw new Error("invalid_tool");
   const registry = await getRegistry();
   const tool = registry.find((t) => t.name === input.tool);
@@ -241,6 +243,8 @@ export async function consumeIntentService(
   if (row.workspaceId !== ctx.workspaceId || row.userId !== ctx.userId) {
     throw new Error("intent_owner_mismatch");
   }
+  const workspace = await prisma.workspace.findUniqueOrThrow({ where: { id: ctx.workspaceId }, select: { kind: true } });
+  if (workspace.kind === "business") throw new Error("personal_workspace_required");
   if (row.consumedAt !== null || row.expiresAt.getTime() <= Date.now()) {
     throw new Error("intent_gone");
   }

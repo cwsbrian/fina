@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { HttpError, requireWorkspaceContext } from "../auth/context.js";
+import { HttpError, registerPersonalWorkspaceGate, requireWorkspaceContext } from "../auth/context.js";
 import { getAnalysis, getLatestAnalysis } from "../analysis/service.js";
 
 function parseYM(q: { year?: string; month?: string }): { year: number; month: number } | null {
@@ -13,6 +13,7 @@ function parseYM(q: { year?: string; month?: string }): { year: number; month: n
 }
 
 export async function analysisRoutes(app: FastifyInstance): Promise<void> {
+  registerPersonalWorkspaceGate(app, { allowGet: false });
   app.get<{ Params: { id: string }; Querystring: { year?: string; month?: string } }>(
     "/workspaces/:id/analysis",
     async (req, reply) => {

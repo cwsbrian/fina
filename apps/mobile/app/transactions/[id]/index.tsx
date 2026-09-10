@@ -15,8 +15,9 @@ import type {
   TransactionDTO,
   CategoryDTO,
   BankAccountDTO,
+  ReceiptDocumentDTO,
 } from "@fina/shared";
-import { apiFetch, bootstrapActiveWorkspace } from "../../../src/api/client";
+import { apiFetch, bootstrapActiveWorkspace, bootstrapActiveWorkspaceSummary } from "../../../src/api/client";
 import { getActiveWorkspaceId } from "../../../src/workspace/active";
 import { formatMoney } from "../../../src/format/money";
 import { colors, space, type as type$ } from "../../../src/design/tokens";
@@ -25,6 +26,7 @@ import { categoryMeta } from "../../../src/categories/meta";
 import { CategoryPickerSheet } from "../../../src/categories/CategoryPickerSheet";
 import { DatePickerSheet } from "../../../src/datetime/DatePickerSheet";
 import { AccountPickerSheet } from "../../../src/accounts/AccountPickerSheet";
+import { pickAndUploadReceipt, type ReceiptRole, type ReceiptSource } from "../../../src/receipts/upload";
 
 type SingleTxResp = { transaction: TransactionDTO };
 type AccountsResp = { accounts: BankAccountDTO[] };
@@ -40,21 +42,34 @@ export default function TransactionDetail() {
   const [datePickerOpen, setDatePickerOpen] = useState(false);
   const [accountPickerOpen, setAccountPickerOpen] = useState(false);
   const [savingBudgetImpact, setSavingBudgetImpact] = useState(false);
+  const [isBusiness, setIsBusiness] = useState(false);
+  const [receipts, setReceipts] = useState<ReceiptDocumentDTO[]>([]);
+  const [uploadingReceipt, setUploadingReceipt] = useState(false);
+  const [savingBusinessUse, setSavingBusinessUse] = useState(false);
+  const [canEditBusiness, setCanEditBusiness] = useState(false);
+  const [canEditWorkspace, setCanEditWorkspace] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
     try {
-      const wsId =
-        (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
-      if (!wsId) throw new Error("no_workspace");
-      const [t, a, c] = await Promise.all([
+      const workspace = await bootstrapActiveWorkspaceSummary();
+      const wsId = workspace?.id ?? (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
+      if (!wsId || !workspace) throw new Error("no_workspace");
+      setIsBusiness(workspace.kind === "business");
+      setCanEditBusiness(workspace.role !== "viewer");
+      setCanEditWorkspace(workspace.role !== "viewer");
+      const [t, a, c, receiptData] = await Promise.all([
         apiFetch<SingleTxResp>(`/workspaces/${wsId}/transactions/${id}`),
         apiFetch<AccountsResp>(`/workspaces/${wsId}/accounts`),
         apiFetch<CategoriesResp>(`/workspaces/${wsId}/categories`),
+        workspace.kind === "business"
+          ? apiFetch<{ receipts: ReceiptDocumentDTO[] }>(`/workspaces/${wsId}/transactions/${id}/receipts`)
+          : Promise.resolve({ receipts: [] }),
       ]);
       setTx(t.transaction);
       setAccount(a.accounts.find((x) => x.id === t.transaction.accountId) ?? null);
       setCategories(Object.fromEntries(c.categories.map((x) => [x.id, x])));
+      setReceipts(receiptData.receipts);
       setErr(null);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "load_error");
@@ -164,8 +179,8 @@ export default function TransactionDetail() {
       const updated = await apiFetch<{ transaction: { merchantExclusionActive: boolean } }>(
         `/workspaces/${wsId}/transactions/${tx.id}`,
         {
-          method: "PATCH",
-          body: JSON.stringify({ budgetImpact: next, budgetImpactScope: scope }),
+        method: "PATCH",
+        body: JSON.stringify({ budgetImpact: next, budgetImpactScope: scope }),
         },
       );
       setTx({
@@ -199,6 +214,106 @@ export default function TransactionDetail() {
         },
       ],
     );
+  }
+
+  async function setBusinessUse(mode: "full" | "none", partialTotal?: number) {
+    if (!tx || savingBusinessUse) return;
+    setSavingBusinessUse(true);
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}/business-use`, {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedVersion: tx.version,
+          allocations: tx.allocations.map((allocation) => {
+            const allocationAbs = Math.abs(Number(allocation.amount));
+            const txAbs = Math.abs(Number(tx.amount));
+            return ({
+            allocationId: allocation.id,
+            categoryId: allocation.categoryId,
+            amount: Number(allocation.amount),
+            businessAmount: partialTotal === undefined ? (mode === "full" ? allocationAbs : 0) : Math.min(allocationAbs, partialTotal * allocationAbs / txAbs),
+            receiptLineItemId: allocation.receiptLineItemId,
+          }); }),
+        }),
+      });
+      await load();
+    } catch (e) {
+      Alert.alert("Couldn't update business use", (e as { code?: string }).code ?? "The transaction may have changed.");
+      await load();
+    } finally { setSavingBusinessUse(false); }
+  }
+
+  function setPartialBusinessUse() {
+    if (!tx) return;
+    Alert.prompt("Partial business amount", `Enter an amount up to ${formatMoney(Math.abs(Number(tx.amount)).toFixed(2), tx.currency).display}.`, (value) => {
+      const amount = Number(value);
+      if (!Number.isFinite(amount) || amount < 0 || amount > Math.abs(Number(tx.amount))) {
+        Alert.alert("Invalid amount", "Enter a business amount within the transaction total.");
+        return;
+      }
+      setBusinessUse("none", amount);
+    }, "plain-text", "", "decimal-pad");
+  }
+
+  async function uploadReceipt(role: ReceiptRole, source: ReceiptSource) {
+    if (!tx) return;
+    setUploadingReceipt(true);
+    try {
+      const receiptId = await pickAndUploadReceipt({ role, source, transactionId: tx.id });
+      if (receiptId) router.push(`/receipts/${receiptId}` as never);
+    } catch (e) {
+      Alert.alert("Couldn't upload receipt", (e as { code?: string; message?: string }).code ?? (e as Error).message);
+    } finally { setUploadingReceipt(false); }
+  }
+
+  function chooseReceiptSource(role: ReceiptRole) {
+    Alert.alert("Add receipt", "Choose a source.", [
+      { text: "Camera", onPress: () => uploadReceipt(role, "camera") },
+      { text: "Photo Library", onPress: () => uploadReceipt(role, "library") },
+      { text: "Files", onPress: () => uploadReceipt(role, "files") },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  function addReceipt() {
+    Alert.alert("What does this document show?", "Choose both when one receipt includes item detail and the paid total.", [
+      { text: "Itemized + payment", onPress: () => chooseReceiptSource("combined") },
+      { text: "Itemized receipt", onPress: () => chooseReceiptSource("itemized") },
+      { text: "Payment proof", onPress: () => chooseReceiptSource("payment_proof") },
+      { text: "Cancel", style: "cancel" },
+    ]);
+  }
+
+  async function documentMissingEvidence(reason: string) {
+    if (!tx) return;
+    try {
+      const wsId = await getActiveWorkspaceId();
+      if (!wsId) throw new Error("no_workspace");
+      await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}/business-use`, {
+        method: "PUT",
+        body: JSON.stringify({
+          expectedVersion: tx.version,
+          allocations: tx.allocations.map((allocation) => ({
+            categoryId: allocation.categoryId,
+            amount: Number(allocation.amount),
+            businessAmount: allocation.businessAmount === null ? null : Number(allocation.businessAmount),
+            receiptLineItemId: allocation.receiptLineItemId,
+          })),
+          receiptMissingReason: reason,
+        }),
+      });
+      await load();
+    } catch (e) { Alert.alert("Couldn't save", (e as { code?: string }).code ?? "Try again."); }
+  }
+
+  function chooseMissingReason() {
+    Alert.alert("Document missing evidence", "The expense stays marked Documented missing; this does not make it Evidence complete.", [
+      { text: "Merchant didn't provide", onPress: () => documentMissingEvidence("merchant_did_not_provide") },
+      { text: "Lost or unavailable", onPress: () => documentMissingEvidence("lost_or_unavailable") },
+      { text: "Cancel", style: "cancel" },
+    ]);
   }
 
   return (
@@ -255,11 +370,11 @@ export default function TransactionDetail() {
           >
             <Text style={styles.confirmBannerTitle}>
               {isOther
-                ? "Auto-categorized as Other. Is that right?"
-                : `Is ${firstCat?.name} the right category?`}
+                ? "Category review · Is Other right?"
+                : `Category review · Is ${firstCat?.name} right?`}
             </Text>
             <Text style={styles.confirmBannerSub}>{merchant}</Text>
-            <View style={styles.confirmBannerActions}>
+            {canEditWorkspace && <View style={styles.confirmBannerActions}>
               <Pressable
                 style={({ pressed }) => [
                   styles.confirmBtn,
@@ -280,7 +395,7 @@ export default function TransactionDetail() {
               >
                 <Text style={styles.confirmBtnGhostText}>Change category</Text>
               </Pressable>
-            </View>
+            </View>}
           </View>
         )}
 
@@ -289,7 +404,7 @@ export default function TransactionDetail() {
         <View style={styles.group}>
           <DetailRow
             label="Amount"
-            editable={tx.source === "manual"}
+            editable={canEditWorkspace && tx.source === "manual"}
             onPress={() =>
               router.push(`/transactions/${tx.id}/edit-amount` as never)
             }
@@ -300,14 +415,14 @@ export default function TransactionDetail() {
           </DetailRow>
           <DetailRow
             label="Date"
-            editable={tx.source === "manual"}
+            editable={canEditWorkspace && tx.source === "manual"}
             onPress={() => setDatePickerOpen(true)}
           >
             <Text style={styles.rowValue}>{formatDateTime(tx.occurredAt)}</Text>
           </DetailRow>
           <DetailRow
             label="Account"
-            editable={tx.source === "manual"}
+            editable={canEditWorkspace && tx.source === "manual"}
             onPress={() => setAccountPickerOpen(true)}
           >
             <Text style={styles.rowValue}>{accountLabel(account)}</Text>
@@ -336,11 +451,28 @@ export default function TransactionDetail() {
           )}
         </View>
 
-        <Text style={styles.groupLabel}>Budget</Text>
+        {isBusiness && <>
+          <Text style={styles.groupLabel}>Business use</Text>
+          <View style={styles.group}>
+            <View style={styles.businessSummary}>
+              <View><Text style={styles.catName}>{tx.allocations.some((a) => a.businessAmount === null) ? "Expense review" : `${formatMoney(tx.allocations.reduce((sum, a) => sum + Number(a.businessAmount ?? 0), 0).toFixed(2), tx.currency).display} business`}</Text><Text style={styles.catMeta}>Full, none, partial, or itemized</Text></View>
+              {tx.allocations.every((a) => a.businessAmount !== null) && tx.allocations.some((a) => Number(a.businessAmount) > 0 && Number(a.businessAmount) < Math.abs(Number(a.amount))) && <View style={styles.splitPill}><Text style={styles.splitPillText}>PARTIAL</Text></View>}
+            </View>
+            {canEditBusiness && <View style={styles.businessButtons}><Pressable disabled={savingBusinessUse} style={styles.businessButton} onPress={() => setBusinessUse("full")}><Text style={styles.businessButtonText}>Full business</Text></Pressable><Pressable disabled={savingBusinessUse} style={styles.businessButton} onPress={setPartialBusinessUse}><Text style={styles.businessButtonText}>Partial</Text></Pressable><Pressable disabled={savingBusinessUse} style={styles.businessButton} onPress={() => setBusinessUse("none")}><Text style={styles.businessButtonText}>Not business</Text></Pressable></View>}
+          </View>
+          <Text style={styles.groupLabel}>Receipts & evidence</Text>
+          <View style={styles.group}>
+            {receipts.map((receipt) => <Pressable key={receipt.id} style={styles.receiptRow} onPress={() => router.push(`/receipts/${receipt.id}` as never)}><Ionicons name="document-text-outline" size={19} color={colors.primary} /><View style={{ flex: 1 }}><Text style={styles.catName}>{receipt.originalName}</Text><Text style={styles.catMeta}>{receipt.role.replaceAll("_", " ")} · {receipt.status.replaceAll("_", " ")}</Text></View><Ionicons name="chevron-forward" size={16} color={colors.mutedSoft} /></Pressable>)}
+            {canEditBusiness && <><Pressable style={styles.receiptRow} disabled={uploadingReceipt} onPress={addReceipt}>{uploadingReceipt ? <ActivityIndicator color={colors.primary} /> : <Ionicons name="add-circle-outline" size={20} color={colors.primary} />}<Text style={[styles.catName, { color: colors.primary }]}>{uploadingReceipt ? "Uploading…" : "Add receipt"}</Text></Pressable>
+            <Pressable style={styles.receiptRow} onPress={chooseMissingReason}><Ionicons name="alert-circle-outline" size={20} color={colors.muted} /><View style={{ flex: 1 }}><Text style={styles.catName}>Document missing evidence</Text><Text style={styles.catMeta}>{tx.receiptMissingReason ? "Reason saved · not Evidence complete" : "Record why a receipt is unavailable"}</Text></View></Pressable></>}
+          </View>
+        </>}
+
+        {!isBusiness && <><Text style={styles.groupLabel}>Budget</Text>
         <View style={styles.group}>
           <DetailRow
             label="Budget"
-            editable={!savingBudgetImpact}
+            editable={canEditWorkspace && !savingBudgetImpact}
             onPress={toggleBudgetImpact}
           >
             <Text style={styles.rowValue}>
@@ -350,6 +482,7 @@ export default function TransactionDetail() {
             </Text>
           </DetailRow>
         </View>
+        </>}
 
         {/* Category */}
         {!isSplit ? (
@@ -357,6 +490,7 @@ export default function TransactionDetail() {
             <Text style={styles.groupLabel}>Category</Text>
             <View style={styles.group}>
               <Pressable
+                disabled={!canEditWorkspace}
                 style={({ pressed }) => [
                   styles.catRow,
                   pressed && { opacity: 0.6 },
@@ -374,9 +508,9 @@ export default function TransactionDetail() {
                     All {money.display} in one category
                   </Text>
                 </View>
-                <Text style={styles.changeLink}>Change</Text>
+                {canEditWorkspace && <Text style={styles.changeLink}>Change</Text>}
               </Pressable>
-              <Pressable
+              {canEditWorkspace && <Pressable
                 style={({ pressed }) => [
                   styles.splitCta,
                   pressed && { opacity: 0.6 },
@@ -404,7 +538,7 @@ export default function TransactionDetail() {
                   size={16}
                   color={colors.mutedSoft}
                 />
-              </Pressable>
+              </Pressable>}
             </View>
           </>
         ) : (
@@ -436,7 +570,7 @@ export default function TransactionDetail() {
                   </View>
                 );
               })}
-              <Pressable
+              {canEditWorkspace && <Pressable
                 style={({ pressed }) => [
                   styles.splitCta,
                   pressed && { opacity: 0.6 },
@@ -462,7 +596,7 @@ export default function TransactionDetail() {
                   size={16}
                   color={colors.mutedSoft}
                 />
-              </Pressable>
+              </Pressable>}
             </View>
           </>
         )}
@@ -471,6 +605,7 @@ export default function TransactionDetail() {
         <Text style={styles.groupLabel}>Note</Text>
         <View style={styles.group}>
           <Pressable
+            disabled={!canEditWorkspace}
             style={({ pressed }) => [
               styles.noteRow,
               pressed && { opacity: 0.6 },
@@ -489,7 +624,7 @@ export default function TransactionDetail() {
         </View>
 
         {/* Delete */}
-        <View style={{ paddingHorizontal: space.base, paddingTop: space.lg, paddingBottom: space.xl }}>
+        {canEditWorkspace && <View style={{ paddingHorizontal: space.base, paddingTop: space.lg, paddingBottom: space.xl }}>
           <Pressable
             style={({ pressed }) => [
               styles.deleteBtn,
@@ -499,7 +634,7 @@ export default function TransactionDetail() {
           >
             <Text style={styles.deleteText}>Delete transaction</Text>
           </Pressable>
-        </View>
+        </View>}
       </ScrollView>
 
       <DatePickerSheet
@@ -829,6 +964,12 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.hairlineSoft,
   },
   allocAmount: { ...type$.bodyMd, color: colors.ink, fontWeight: "600", fontVariant: ["tabular-nums"] },
+
+  businessSummary: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: space.base },
+  businessButtons: { flexDirection: "row", gap: 8, paddingHorizontal: space.base, paddingBottom: space.base },
+  businessButton: { flex: 1, alignItems: "center", paddingVertical: 10, borderRadius: 10, backgroundColor: colors.canvas, borderWidth: 1, borderColor: colors.hairline },
+  businessButtonText: { ...type$.bodySm, color: colors.ink, fontWeight: "600" },
+  receiptRow: { flexDirection: "row", alignItems: "center", gap: 10, padding: space.base, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.hairline },
 
   // Note
   noteRow: { padding: space.base + 2 },

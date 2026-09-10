@@ -28,6 +28,7 @@ export type CreateManualTxInput = {
 export type CreateManualTxResult = {
   transaction: {
     id: string;
+    version: number;
     accountId: string;
     plaidTransactionId: null;
     amount: string;
@@ -35,6 +36,7 @@ export type CreateManualTxResult = {
     merchantRaw: string;
     merchantNormalized: string;
     occurredAt: string;
+    postedAt: null;
     pending: false;
     source: "manual";
     note: string | null;
@@ -44,6 +46,10 @@ export type CreateManualTxResult = {
     budgetImpactSource: "auto" | "user";
     merchantExclusionActive: boolean;
     refundOfTransactionId: string | null;
+    classificationSourceReceiptId: string | null;
+    businessPurpose: string | null;
+    receiptMissingReason: string | null;
+    receiptMissingNote: string | null;
     refundedAmount: string;
     createdAt: string;
     updatedAt: string;
@@ -52,6 +58,10 @@ export type CreateManualTxResult = {
       categoryId: string | null;
       amount: string;
       source: "manual" | "mapping" | "ai" | "history" | null;
+      needsConfirmation: boolean;
+      dismissedUntil: string | null;
+      businessAmount: string | null;
+      receiptLineItemId: string | null;
     }>;
   };
 };
@@ -238,18 +248,24 @@ export async function createManualTransactionService(
         budgetImpact: true,
         budgetImpactSource: true,
         refundOfTransactionId: true,
+        version: true,
+        classificationSourceReceiptId: true,
+        businessPurpose: true,
+        receiptMissingReason: true,
+        receiptMissingNote: true,
       },
     });
 
     const allocs = await tx.transactionAllocation.findMany({
       where: { transactionId: row.id },
-      select: { id: true, categoryId: true, amount: true, source: true },
+      select: { id: true, categoryId: true, amount: true, source: true, needsConfirmation: true, dismissedUntil: true, businessAmount: true, receiptLineItemId: true },
       orderBy: { createdAt: "asc" },
     });
 
     return {
       transaction: {
         id: row.id,
+        version: impact.version,
         accountId: row.accountId,
         plaidTransactionId: null,           // invariant: manual tx
         amount: row.amount.toString(),
@@ -257,6 +273,7 @@ export async function createManualTransactionService(
         merchantRaw: row.merchantRaw,
         merchantNormalized: row.merchantNormalized ?? merchantNormalized,
         occurredAt: row.occurredAt.toISOString(),
+        postedAt: null,
         pending: false,                     // invariant: manual tx
         source: "manual",
         note: row.note,
@@ -267,6 +284,10 @@ export async function createManualTransactionService(
         merchantExclusionActive:
           impact.budgetImpact === "excluded" && impact.budgetImpactSource === "user",
         refundOfTransactionId: impact.refundOfTransactionId,
+        classificationSourceReceiptId: impact.classificationSourceReceiptId,
+        businessPurpose: impact.businessPurpose,
+        receiptMissingReason: impact.receiptMissingReason,
+        receiptMissingNote: impact.receiptMissingNote,
         refundedAmount: "0.00",
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
@@ -275,6 +296,10 @@ export async function createManualTransactionService(
           categoryId: a.categoryId,
           amount: a.amount.toString(),
           source: a.source,
+          needsConfirmation: a.needsConfirmation,
+          dismissedUntil: a.dismissedUntil?.toISOString() ?? null,
+          businessAmount: a.businessAmount?.toFixed(2) ?? null,
+          receiptLineItemId: a.receiptLineItemId,
         })),
       },
     };

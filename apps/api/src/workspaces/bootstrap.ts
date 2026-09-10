@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../db.js";
-import { seedDefaultCategories } from "../categorize/seed.js";
+import { seedBusinessCategories, seedDefaultCategories } from "../categorize/seed.js";
 import { seedDefaultAccounts } from "../accounts/seed.js";
 
 const TRIAL_DAYS = 30;
@@ -23,6 +23,8 @@ export type CreateWorkspaceInput = {
   userId: string;
   name: string;
   currency?: string;
+  kind?: "personal" | "business";
+  taxCountry?: "CA" | "US";
 };
 
 /** Create an additional workspace for an already-bootstrapped user.
@@ -31,7 +33,7 @@ export type CreateWorkspaceInput = {
  *  primitive for the "+ New workspace" flow in the app. */
 export async function createWorkspaceForUser(
   input: CreateWorkspaceInput,
-): Promise<{ workspace: { id: string; name: string; currency: string } }> {
+): Promise<{ workspace: { id: string; name: string; currency: string; kind: "personal" | "business"; taxCountry: "CA" | "US" | null } }> {
   return await prisma.$transaction(
     async (tx) => {
       const user = await tx.user.findUniqueOrThrow({ where: { id: input.userId } });
@@ -41,18 +43,23 @@ export async function createWorkspaceForUser(
         data: {
           name,
           ...(input.currency ? { currency: input.currency } : {}),
+          kind: input.kind ?? "personal",
+          taxCountry: input.kind === "business" ? input.taxCountry ?? null : null,
         },
       });
       await tx.membership.create({
         data: { userId: user.id, workspaceId: workspace.id, role: "owner" },
       });
-      await seedDefaultCategories(tx, workspace.id);
+      if (workspace.kind === "business") await seedBusinessCategories(tx, workspace.id);
+      else await seedDefaultCategories(tx, workspace.id);
       await seedDefaultAccounts(tx, workspace.id, workspace.currency);
       return {
         workspace: {
           id: workspace.id,
           name: workspace.name,
           currency: workspace.currency,
+          kind: workspace.kind,
+          taxCountry: workspace.taxCountry,
         },
       };
     },

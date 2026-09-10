@@ -1,12 +1,18 @@
 import { Prisma, CategorizationSource } from "@prisma/client";
 import { MAX_AMOUNT, AMOUNT_RE } from "@fina/shared";
 
-export type AllocationInput = { categoryId: string | null; amount: number };
+export type AllocationInput = {
+  categoryId: string | null;
+  amount: number;
+  businessAmount?: number | null;
+  receiptLineItemId?: string | null;
+};
 
 export type AllocationErrorCode =
   | "empty_allocations"
   | "sum_mismatch"
   | "invalid_allocation_amount"
+  | "invalid_business_amount"
   | "category_not_found";
 
 export class AllocationError extends Error {
@@ -69,6 +75,16 @@ export async function applyAllocations(
     if (allocIsNegative !== txIsNegative) {
       throw new AllocationError("invalid_allocation_amount");
     }
+    if (a.businessAmount !== undefined && a.businessAmount !== null) {
+      if (
+        !Number.isFinite(a.businessAmount) ||
+        a.businessAmount < 0 ||
+        a.businessAmount > Math.abs(a.amount) ||
+        !AMOUNT_RE.test(String(a.businessAmount))
+      ) {
+        throw new AllocationError("invalid_business_amount");
+      }
+    }
   }
 
   // Strict Decimal sum equality.
@@ -94,12 +110,42 @@ export async function applyAllocations(
     }
   }
 
+  const transaction = await tx.transaction.findFirstOrThrow({
+    where: { id: txId, workspaceId },
+    select: {
+      budgetImpact: true,
+      workspace: { select: { kind: true } },
+      allocations: { select: { amount: true, businessAmount: true, receiptLineItemId: true } },
+    },
+  });
+  const preserved = [...transaction.allocations];
+
   // Replace allocations atomically. deleteMany + createMany inside the
   // caller-provided `tx` (which is already inside a Prisma $transaction
   // started by withWorkspaceLock).
   await tx.transactionAllocation.deleteMany({ where: { transactionId: txId } });
   await tx.transactionAllocation.createMany({
     data: allocations.map((a) => ({
+      ...(() => {
+        if (a.businessAmount !== undefined || a.receiptLineItemId !== undefined) {
+          return {
+            businessAmount: a.businessAmount === null || a.businessAmount === undefined
+              ? null : new Prisma.Decimal(a.businessAmount),
+            receiptLineItemId: a.receiptLineItemId ?? null,
+          };
+        }
+        const matchIndex = preserved.findIndex((old) => old.amount.equals(a.amount));
+        const match = matchIndex >= 0 ? preserved.splice(matchIndex, 1)[0] : undefined;
+        if (match) {
+          return { businessAmount: match.businessAmount, receiptLineItemId: match.receiptLineItemId };
+        }
+        if (transaction.workspace.kind !== "business") return { businessAmount: null };
+        if (transaction.budgetImpact === "income") {
+          return { businessAmount: new Prisma.Decimal(Math.abs(a.amount)) };
+        }
+        if (transaction.budgetImpact === "excluded") return { businessAmount: new Prisma.Decimal(0) };
+        return { businessAmount: null };
+      })(),
       transactionId: txId,
       categoryId: a.categoryId,
       amount: new Prisma.Decimal(a.amount),
@@ -110,6 +156,6 @@ export async function applyAllocations(
   // Clear the needsReclassification flag — user has now categorized.
   await tx.transaction.update({
     where: { id: txId },
-    data: { needsReclassification: false },
+    data: { needsReclassification: false, version: { increment: 1 } },
   });
 }

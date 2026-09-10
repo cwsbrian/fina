@@ -1,10 +1,9 @@
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import * as WebBrowser from "expo-web-browser";
 import {
   passwordStrength,
-  MIN_PASSWORD_LENGTH,
   meetsPasswordPolicy,
 } from "@fina/shared";
 import { signUp } from "../../src/auth/client";
