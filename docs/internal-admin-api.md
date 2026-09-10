@@ -108,9 +108,28 @@ GET /internal/admin/users/:userId
 
 ```http
 GET /internal/admin/plaid-items
+Authorization: Bearer <delegated-jwt>
+Accept: application/json
 ```
 
-query와 pagination은 없다. Fina DB에 저장된 각 Item의 암호화된 access token으로 Plaid `/item/get`을 실시간 호출한 결과이므로, 화면 진입 또는 사용자의 명시적인 새로고침 때 호출한다. access token은 응답에 포함되지 않는다.
+request body, query, workspace header는 필요 없다. 기존 `/internal/admin/*`와 같은 delegated JWT가 필요하며 Better Auth cookie만으로는 호출할 수 없다. 응답에는 `Cache-Control: no-store`가 적용된다.
+
+Fina DB에 저장된 각 Item의 암호화된 access token으로 Plaid `/item/get`을 실시간 호출한 결과이므로, 화면 진입 또는 사용자의 명시적인 새로고침 때 호출한다. access token과 암호화 필드는 응답·감사 로그에 포함되지 않는다. 이 endpoint는 조회 전용이며 Item을 삭제하거나 변경하지 않는다.
+
+인증·route 오류:
+
+| HTTP  | 응답                             | 조건                                                        |
+| ----- | -------------------------------- | ----------------------------------------------------------- |
+| `401` | `{ "error": "unauthenticated" }` | bearer token 누락·형식 오류·만료·서명/필수 claim 오류       |
+| `403` | `{ "error": "admin_required" }`  | token의 `email` 또는 `scope`가 허용된 admin과 일치하지 않음 |
+
+개별 Plaid 조회 실패는 route 전체 오류가 아니다. 해당 row만 `plaidStatus: "error"`와 안전하게 정제된 `plaidErrorCode`를 반환하고 나머지 Item 결과는 계속 반환한다. Plaid가 `ITEM_NOT_FOUND`를 명시하면 기존 응답 의미를 유지해 `plaidStatus: "missing"`으로 반환한다.
+
+#### 응답 시간과 Hub timeout
+
+현재 구현에는 고정된 최대 응답시간이 없다. DB 조회 후 Item을 순차적으로 확인하며 Plaid SDK의 HTTP timeout도 설정되어 있지 않으므로, Item 수를 `N`이라 할 때 대략 `DB 조회 시간 + N개 /item/get 시간의 합`이다.
+
+따라서 Hub의 5초 upstream timeout은 안전하지 않다. 우선 30초로 늘리고 실제 `internal_admin_audit.latencyMs`의 p95를 확인한다. 확정된 응답시간 SLA가 필요하면 Fina API에 Item별 timeout과 제한된 병렬 조회를 별도 추가해야 한다. 30초는 운영 시작값이지 서버의 보장 상한은 아니다.
 
 ```ts
 type AdminPlaidItemsResponse = {
