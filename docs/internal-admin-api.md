@@ -65,6 +65,7 @@ claim 예시:
 
 | 용도                         | Method | Path                                                            |
 | ---------------------------- | ------ | --------------------------------------------------------------- |
+| Plaid Item 과금 상태         | `GET`  | `/internal/admin/plaid-items`                                   |
 | 사용자 목록                  | `GET`  | `/internal/admin/users`                                         |
 | 사용자 상세·활동 요약        | `GET`  | `/internal/admin/users/:userId`                                 |
 | 사용자 접근 가능 transaction | `GET`  | `/internal/admin/users/:userId/transactions`                    |
@@ -73,11 +74,12 @@ claim 예시:
 
 권장 화면 흐름:
 
-1. 사용자 목록을 가져온다.
-2. 사용자를 선택하면 사용자 상세, transaction 첫 페이지, chat thread 목록을 병렬로 요청한다.
-3. chat thread를 선택했을 때 해당 thread의 message 첫 페이지를 요청한다.
-4. transaction의 `nextCursor`는 다음 페이지를 목록 뒤에 붙인다.
-5. message의 `nextCursor`는 이전 message 페이지이므로 기존 목록 앞에 붙인다.
+1. Plaid monitoring 화면에서는 `/internal/admin/plaid-items`를 요청한다.
+2. 사용자 목록을 가져온다.
+3. 사용자를 선택하면 사용자 상세, transaction 첫 페이지, chat thread 목록을 병렬로 요청한다.
+4. chat thread를 선택했을 때 해당 thread의 message 첫 페이지를 요청한다.
+5. transaction의 `nextCursor`는 다음 페이지를 목록 뒤에 붙인다.
+6. message의 `nextCursor`는 이전 message 페이지이므로 기존 목록 앞에 붙인다.
 
 ### 기존 사용자 endpoint
 
@@ -101,6 +103,66 @@ GET /internal/admin/users/:userId
 응답에는 사용자 기본 정보와 device/session, Plaid 계좌 상태, activity count, 월별 AI usage가 포함된다. Transaction 원문과 chat message는 상세 응답에 포함되지 않으므로 아래 전용 endpoint로 별도 조회한다.
 
 기존 client 타입은 각각 `AdminUsersResponse`, `AdminUserDetailDTO`이며 `@fina/shared`에서 export된다.
+
+### Plaid Item monitoring
+
+```http
+GET /internal/admin/plaid-items
+```
+
+query와 pagination은 없다. Fina DB에 저장된 각 Item의 암호화된 access token으로 Plaid `/item/get`을 실시간 호출한 결과이므로, 화면 진입 또는 사용자의 명시적인 새로고침 때 호출한다. access token은 응답에 포함되지 않는다.
+
+```ts
+type AdminPlaidItemsResponse = {
+  environment: "sandbox" | "production";
+  checkedAt: string;
+  summary: {
+    trackedItemCount: number;
+    reachableItemCount: number;
+    transactionsBilledItemCount: number;
+    missingItemCount: number;
+    checkFailedItemCount: number;
+  };
+  items: Array<{
+    id: string;
+    itemId: string;
+    institutionName: string;
+    localStatus: string;
+    plaidStatus: "reachable" | "missing" | "error";
+    plaidErrorCode: string | null;
+    billedProducts: string[];
+    lastPlaidUpdateAt: string | null;
+    lastLocalSyncAt: string | null;
+    billingGraceEndsAt: string | null;
+    createdAt: string;
+    accountCount: number;
+    workspace: { id: string; name: string };
+    user: { id: string; email: string } | null;
+  }>;
+};
+```
+
+요약 필드 의미:
+
+| 필드                          | 의미                                                        |
+| ----------------------------- | ----------------------------------------------------------- |
+| `trackedItemCount`            | Fina DB에 남아 있어 확인을 시도한 Item 수                   |
+| `reachableItemCount`          | Plaid `/item/get`에 성공한 Item 수                          |
+| `transactionsBilledItemCount` | 성공한 Item 중 `billed_products`에 `transactions`가 있는 수 |
+| `missingItemCount`            | Plaid가 `ITEM_NOT_FOUND`를 반환한 수                        |
+| `checkFailedItemCount`        | 그 외 인증·네트워크·Plaid 오류로 확인하지 못한 수           |
+
+`transactionsBilledItemCount`는 `checkFailedItemCount`가 0일 때만 현재 추적 Item 전체에 대한 확정치다. 실패가 있으면 확인 가능한 최소치로 표시한다. Sandbox에서도 `billed_products` 값은 보이지만 실제 청구 판단에는 `environment === "production"`인 결과만 사용한다.
+
+행 표시 시 함께 드러낼 상태:
+
+- `localStatus === "disconnected"`인데 `plaidStatus === "reachable"`이면 로컬 삭제와 Plaid 연결 상태가 어긋난 후보이다.
+- `plaidStatus === "reachable"`이어도 `plaidErrorCode`가 있으면 Item-level 오류가 있는 상태이다.
+- `localStatus === "active"`인데 `plaidStatus === "missing"`이면 로컬 정리 대상 후보이다.
+- `billingGraceEndsAt`은 삭제·해제 후 과금 유예 상태를 판단할 때 표시한다.
+- `user === null`은 연결 사용자가 삭제되었거나 연결 정보가 없는 legacy Item일 수 있다.
+
+Plaid에는 계정 전체 Item을 나열하는 범용 API가 없다. 따라서 이 endpoint는 Fina DB에 access token이 남은 Item만 확인한다. Plaid Usage 숫자와 차이가 있으면 Plaid Dashboard의 Item Debugger 또는 Support에서 별도로 확인해야 한다.
 
 ## 4. 공통 규칙
 
@@ -340,6 +402,10 @@ async function finaAdminGet<T>(path: string, delegatedToken: string): Promise<T>
   return response.json() as Promise<T>;
 }
 
+async function getPlaidItems(token: string) {
+  return finaAdminGet<AdminPlaidItemsResponse>("/internal/admin/plaid-items", token);
+}
+
 async function getTransactions(userId: string, token: string, cursor?: string) {
   const query = new URLSearchParams({ limit: "50" });
   if (cursor) query.set("cursor", cursor);
@@ -375,6 +441,7 @@ async function getChatMessages(userId: string, threadId: string, token: string, 
 import type {
   AdminChatMessagesResponse,
   AdminChatThreadsResponse,
+  AdminPlaidItemsResponse,
   AdminTransactionsResponse,
 } from "@fina/shared";
 ```
@@ -403,6 +470,10 @@ import type {
 
 - [ ] 호출이 브라우저가 아닌 외부 관리자 backend에서 수행된다.
 - [ ] 기존 사용자 목록과 같은 delegated JWT 발급 로직을 사용한다.
+- [ ] Plaid 화면에서 `summary`, `environment`, 각 Item 상태를 함께 표시한다.
+- [ ] `checkFailedItemCount > 0`이면 billed 수가 최소치임을 표시한다.
+- [ ] Plaid access token은 client 타입·로그·화면에 추가하지 않는다.
+- [ ] Plaid Item을 자동 삭제하거나 짧은 주기로 polling하지 않는다.
 - [ ] `userId`, `threadId`, cursor는 URL-safe하게 encode한다.
 - [ ] money를 parse해서 다시 계산하지 않고 표시 시 decimal string을 사용한다.
 - [ ] transaction 다음 페이지는 목록 뒤에 붙인다.

@@ -4,6 +4,7 @@ import {
   ACTIVE_SUBSCRIPTION_STATUSES,
   type AdminChatMessagesResponse,
   type AdminChatThreadsResponse,
+  type AdminPlaidItemsResponse,
   type AdminTransactionsResponse,
   type AdminUserDetailDTO,
   type AdminUserDTO,
@@ -14,6 +15,8 @@ import { prisma } from "../db.js";
 import { HttpError, requireAdminSession } from "../auth/context.js";
 import { computeEffectiveTier } from "../auth/tier.js";
 import { filterEnvironmentRows, pickPrimarySub } from "../billing/precedence.js";
+import { plaidClient, sanitizePlaidError } from "../plaid/client.js";
+import { readAccessToken } from "../plaid/items.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -228,6 +231,81 @@ function adminUsersSummary(
 }
 
 export async function adminRoutes(app: FastifyInstance): Promise<void> {
+  const listPlaidItems = async (reply: FastifyReply) => {
+    const rows = await prisma.plaidItem.findMany({
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        itemId: true,
+        workspaceId: true,
+        institutionName: true,
+        status: true,
+        lastSyncAt: true,
+        billingGraceEndsAt: true,
+        createdAt: true,
+        workspace: { select: { id: true, name: true } },
+        user: { select: { id: true, email: true } },
+        _count: { select: { bankAccounts: true } },
+      },
+    });
+    const items: AdminPlaidItemsResponse["items"] = [];
+
+    // ponytail: sequential checks are enough for this admin-only list; add a
+    // concurrency limit if the production Item count makes refreshes slow.
+    for (const row of rows) {
+      const base = {
+        id: row.id,
+        itemId: row.itemId,
+        institutionName: row.institutionName,
+        localStatus: row.status,
+        lastLocalSyncAt: row.lastSyncAt?.toISOString() ?? null,
+        billingGraceEndsAt: row.billingGraceEndsAt?.toISOString() ?? null,
+        createdAt: row.createdAt.toISOString(),
+        accountCount: row._count.bankAccounts,
+        workspace: row.workspace,
+        user: row.user,
+      };
+
+      try {
+        const { accessToken } = await readAccessToken(app.fina.env, row.workspaceId, row.id);
+        const { data } = await plaidClient(app.fina.env).itemGet({ access_token: accessToken });
+        items.push({
+          ...base,
+          plaidStatus: "reachable",
+          plaidErrorCode: data.item.error?.error_code ?? null,
+          billedProducts: data.item.billed_products.map(String),
+          lastPlaidUpdateAt: data.status?.transactions?.last_successful_update ?? null,
+        });
+      } catch (error) {
+        const plaidError = sanitizePlaidError(error);
+        items.push({
+          ...base,
+          plaidStatus: plaidError.error_code === "ITEM_NOT_FOUND" ? "missing" : "error",
+          plaidErrorCode: plaidError.error_code ?? "CHECK_FAILED",
+          billedProducts: [],
+          lastPlaidUpdateAt: null,
+        });
+      }
+    }
+
+    const response: AdminPlaidItemsResponse = {
+      environment: app.fina.env.PLAID_ENV,
+      checkedAt: new Date().toISOString(),
+      summary: {
+        trackedItemCount: items.length,
+        reachableItemCount: items.filter((item) => item.plaidStatus === "reachable").length,
+        transactionsBilledItemCount: items.filter(
+          (item) =>
+            item.plaidStatus === "reachable" && item.billedProducts.includes("transactions"),
+        ).length,
+        missingItemCount: items.filter((item) => item.plaidStatus === "missing").length,
+        checkFailedItemCount: items.filter((item) => item.plaidStatus === "error").length,
+      },
+      items,
+    };
+    return { result: reply.send(response), returned: items.length };
+  };
+
   const listUsers = async (req: FastifyRequest, reply: FastifyReply) => {
     try {
       const query = req.query as { limit?: string; cursor?: string; environment?: string };
@@ -728,6 +806,7 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     startedAt: number,
     action:
       | "admin_users_listed"
+      | "admin_plaid_items_viewed"
       | "admin_user_detail_viewed"
       | "admin_user_transactions_viewed"
       | "admin_user_chat_threads_viewed"
@@ -772,6 +851,32 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     } catch (e) {
       const status = e instanceof HttpError ? e.statusCode : 500;
       logInternalAudit(req, startedAt, "admin_users_listed", "failure", status, adminSubject);
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
+  app.get("/internal/admin/plaid-items", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    const startedAt = Date.now();
+    let adminSubject: string | undefined;
+    try {
+      const actor = await app.fina.verifyAdminToken(req.headers.authorization);
+      adminSubject = actor.sub;
+      const { result, returned } = await listPlaidItems(reply);
+      logInternalAudit(
+        req,
+        startedAt,
+        "admin_plaid_items_viewed",
+        "success",
+        200,
+        adminSubject,
+        returned,
+      );
+      return result;
+    } catch (e) {
+      const status = e instanceof HttpError ? e.statusCode : 500;
+      logInternalAudit(req, startedAt, "admin_plaid_items_viewed", "failure", status, adminSubject);
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
     }

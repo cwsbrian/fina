@@ -10,6 +10,9 @@ import {
   type SignedUpUser,
 } from "./helpers/auth.js";
 import { testEnv } from "./helpers/test-env.js";
+import { plaidApiError } from "./helpers/plaid-mock.js";
+import { plaidClient } from "../src/plaid/client.js";
+import { storeAccessToken } from "../src/plaid/items.js";
 
 const env = testEnv({ APPLE_ENV: "production" });
 const sandboxEnv = testEnv({ APPLE_ENV: "sandbox" });
@@ -279,6 +282,100 @@ describe("GET /admin/users", () => {
       expect.objectContaining({ id: unknownUser.userId, signupEnvironment: "UNKNOWN" }),
     ]);
     await app.close();
+  });
+});
+
+describe("GET /internal/admin/plaid-items", () => {
+  beforeEach(async () => {
+    await truncateAll();
+  });
+
+  afterAll(async () => {
+    await disconnect();
+  });
+
+  it("compares stored Items with Plaid without exposing access tokens", async () => {
+    const app = await buildInternalApp();
+    const user = await signUpAndGetCookie(app, { email: "plaid-owner@example.com" });
+    const workspaceId = await getOwnerWorkspaceId(user.userId);
+    await storeAccessToken(env, prisma, {
+      workspaceId,
+      connectedBy: user.userId,
+      itemId: "item-reachable",
+      institutionId: "ins_1",
+      institutionName: "Reachable Bank",
+      accessToken: "access-reachable",
+    });
+    await storeAccessToken(env, prisma, {
+      workspaceId,
+      connectedBy: user.userId,
+      itemId: "item-missing",
+      institutionId: "ins_2",
+      institutionName: "Missing Bank",
+      accessToken: "access-missing",
+    });
+
+    const itemGet = vi.spyOn(plaidClient(env), "itemGet").mockImplementation(async (request) => {
+      if (request.access_token === "access-missing") {
+        throw plaidApiError({ error_code: "ITEM_NOT_FOUND", http_status: 404 });
+      }
+      return {
+        data: {
+          item: {
+            item_id: "item-reachable",
+            institution_id: "ins_1",
+            institution_name: "Reachable Bank",
+            webhook: null,
+            error: null,
+            available_products: [],
+            billed_products: ["transactions"],
+            products: ["transactions"],
+            consent_expiration_time: null,
+            update_type: "background",
+          },
+          status: { transactions: { last_successful_update: "2026-09-10T12:00:00Z" } },
+          request_id: "request-1",
+        },
+      } as never;
+    });
+
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: "/internal/admin/plaid-items",
+        headers: internalHeaders,
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({
+        environment: "sandbox",
+        summary: {
+          trackedItemCount: 2,
+          reachableItemCount: 1,
+          transactionsBilledItemCount: 1,
+          missingItemCount: 1,
+          checkFailedItemCount: 0,
+        },
+        items: expect.arrayContaining([
+          expect.objectContaining({
+            itemId: "item-reachable",
+            plaidStatus: "reachable",
+            billedProducts: ["transactions"],
+          }),
+          expect.objectContaining({
+            itemId: "item-missing",
+            plaidStatus: "missing",
+            plaidErrorCode: "ITEM_NOT_FOUND",
+          }),
+        ]),
+      });
+      expect(JSON.stringify(response.json())).not.toContain("access-reachable");
+      expect(JSON.stringify(response.json())).not.toContain("access-missing");
+    } finally {
+      itemGet.mockRestore();
+      await app.close();
+    }
   });
 });
 

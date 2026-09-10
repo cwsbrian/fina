@@ -45,6 +45,34 @@ export type AdminUsersResponse = {
   };
 };
 
+export type AdminPlaidItemsResponse = {
+  environment: "sandbox" | "production";
+  checkedAt: string;
+  summary: {
+    trackedItemCount: number;
+    reachableItemCount: number;
+    transactionsBilledItemCount: number;
+    missingItemCount: number;
+    checkFailedItemCount: number;
+  };
+  items: {
+    id: string;
+    itemId: string;
+    institutionName: string;
+    localStatus: string;
+    plaidStatus: "reachable" | "missing" | "error";
+    plaidErrorCode: string | null;
+    billedProducts: string[];
+    lastPlaidUpdateAt: string | null;
+    lastLocalSyncAt: string | null;
+    billingGraceEndsAt: string | null;
+    createdAt: string;
+    accountCount: number;
+    workspace: { id: string; name: string };
+    user: { id: string; email: string } | null;
+  }[];
+};
+
 export type AdminUserDetailDTO = {
   user: AdminUserDTO;
   devices: {
