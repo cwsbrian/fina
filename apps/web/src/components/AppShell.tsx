@@ -17,7 +17,7 @@ import {
 } from "../lib/active-workspace";
 import { syncDeviceTz } from "../lib/tz-sync";
 import { WebIcon } from "./WebIcon";
-import { navItemsForRole } from "./shell-nav";
+import { NAV_ITEMS } from "./shell-nav";
 import styles from "./shell.module.css";
 
 export type ShellState = {
@@ -96,8 +96,6 @@ export function AppShell({ children }: { children: ReactNode }) {
     : initials(undefined, session?.user?.email ?? "?");
   const trialDays = me ? trialDaysLeft(me.trial.endsAt) : null;
   const tierTag = me ? tierLabel(me.tier, me.trial.active) : "Free";
-  const navItems = navItemsForRole(me?.user.role);
-
   return (
     <div className={styles.shell}>
       <nav className={styles.nav}>
@@ -112,7 +110,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
 
           <div className={styles.links}>
-            {navItems.map((it) => (
+            {NAV_ITEMS.map((it) => (
               <button
                 key={it.id}
                 type="button"

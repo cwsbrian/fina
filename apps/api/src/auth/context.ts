@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { Role, UserRole } from "@fina/shared";
+import type { Role } from "@fina/shared";
 import { prisma } from "../db.js";
 import { assertMembership, MembershipError, type AssertedMembership } from "./membership.js";
 
@@ -25,12 +25,6 @@ export type WorkspaceContext = {
   membership: AssertedMembership;
 };
 
-export type AdminSession = {
-  userId: string;
-  email: string;
-  role: UserRole;
-};
-
 export type RequireOpts = { requiredRole: Role };
 
 function buildHeadersFromRequest(req: FastifyRequest): Headers {
@@ -50,20 +44,6 @@ export async function requireSession(
   const s = await app.fina.auth.api.getSession({ headers });
   if (!s?.user) throw new HttpError(401, "unauthenticated");
   return { userId: s.user.id, email: s.user.email };
-}
-
-export async function requireAdminSession(
-  req: FastifyRequest,
-  app: FastifyInstance,
-): Promise<AdminSession> {
-  const session = await requireSession(req, app);
-  const user = await prisma.user.findUnique({
-    where: { id: session.userId },
-    select: { id: true, email: true, role: true },
-  });
-  if (!user) throw new HttpError(404, "no_user");
-  if (user.role !== "admin") throw new HttpError(403, "admin_required");
-  return { userId: user.id, email: user.email, role: user.role };
 }
 
 export async function requireWorkspaceContext(

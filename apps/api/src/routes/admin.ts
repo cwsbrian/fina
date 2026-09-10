@@ -12,7 +12,7 @@ import {
   type SubscriptionDTO,
 } from "@fina/shared";
 import { prisma } from "../db.js";
-import { HttpError, requireAdminSession } from "../auth/context.js";
+import { HttpError } from "../auth/context.js";
 import { computeEffectiveTier } from "../auth/tier.js";
 import { filterEnvironmentRows, pickPrimarySub } from "../billing/precedence.js";
 import { plaidClient, sanitizePlaidError } from "../plaid/client.js";
@@ -991,37 +991,6 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
         status,
         adminSubject,
       );
-      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
-      throw e;
-    }
-  });
-
-  app.get("/admin/users", async (req, reply) => {
-    try {
-      await requireAdminSession(req, app);
-      return (await listUsers(req, reply)).result;
-    } catch (e) {
-      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
-      throw e;
-    }
-  });
-
-  app.get("/admin/plaid-items", async (req, reply) => {
-    reply.header("Cache-Control", "no-store");
-    try {
-      await requireAdminSession(req, app);
-      return (await listPlaidItems(reply)).result;
-    } catch (e) {
-      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
-      throw e;
-    }
-  });
-
-  app.get("/admin/users/:userId", async (req, reply) => {
-    try {
-      await requireAdminSession(req, app);
-      return await userDetail(req, reply);
-    } catch (e) {
       if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
       throw e;
     }

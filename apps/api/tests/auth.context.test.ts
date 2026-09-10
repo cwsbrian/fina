@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/server.js";
-import { requireAdminSession, requireWorkspaceContext } from "../src/auth/context.js";
-import { prisma } from "../src/db.js";
+import { requireWorkspaceContext } from "../src/auth/context.js";
 import { signUpAndGetCookie, getOwnerWorkspaceId } from "./helpers/auth.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
@@ -16,18 +15,6 @@ async function mountProbe(app: FastifyInstance): Promise<void> {
     try {
       const ctx = await requireWorkspaceContext(req, app, { requiredRole: "viewer" });
       return { ok: true, workspaceId: ctx.membership.workspaceId, role: ctx.membership.role };
-    } catch (e) {
-      const err = e as { statusCode?: number; code?: string; message?: string };
-      return reply.code(err.statusCode ?? 500).send({ error: err.code ?? "internal", message: err.message });
-    }
-  });
-}
-
-async function mountAdminProbe(app: FastifyInstance): Promise<void> {
-  app.get("/_probe/admin", async (req, reply) => {
-    try {
-      const session = await requireAdminSession(req, app);
-      return { ok: true, userId: session.userId, email: session.email, role: session.role };
     } catch (e) {
       const err = e as { statusCode?: number; code?: string; message?: string };
       return reply.code(err.statusCode ?? 500).send({ error: err.code ?? "internal", message: err.message });
@@ -94,59 +81,6 @@ describe("requireWorkspaceContext", () => {
     });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, workspaceId: wsId, role: "owner" });
-    await app.close();
-  });
-});
-
-describe("requireAdminSession", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-
-  afterAll(async () => {
-    await disconnect();
-  });
-
-  it("401 when no session", async () => {
-    const app = await buildApp(env);
-    await mountAdminProbe(app);
-    const res = await app.inject({ method: "GET", url: "/_probe/admin" });
-    expect(res.statusCode).toBe(401);
-    expect(res.json().error).toBe("unauthenticated");
-    await app.close();
-  });
-
-  it("403 when signed in but not admin", async () => {
-    const app = await buildApp(env);
-    await mountAdminProbe(app);
-    const user = await signUpAndGetCookie(app, { email: "not-admin@example.com" });
-    const res = await app.inject({
-      method: "GET",
-      url: "/_probe/admin",
-      headers: { cookie: user.cookie },
-    });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("admin_required");
-    await app.close();
-  });
-
-  it("200 when signed in as admin", async () => {
-    const app = await buildApp(env);
-    await mountAdminProbe(app);
-    const user = await signUpAndGetCookie(app, { email: "admin@example.com" });
-    await prisma.user.update({ where: { id: user.userId }, data: { role: "admin" } });
-    const res = await app.inject({
-      method: "GET",
-      url: "/_probe/admin",
-      headers: { cookie: user.cookie },
-    });
-    expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({
-      ok: true,
-      userId: user.userId,
-      email: "admin@example.com",
-      role: "admin",
-    });
     await app.close();
   });
 });

@@ -2,7 +2,7 @@
 
 외부 관리자 애플리케이션에서 Fina 사용자, transaction, chat 내용을 조회하기 위한 서버 간 API 계약이다.
 
-이 문서의 모든 endpoint는 `{FINA_API_BASE_URL}/internal/admin` 아래에 있으며 읽기 전용이다. Fina 웹의 `/admin/*` endpoint나 Better Auth cookie를 사용하지 않는다.
+이 문서의 모든 endpoint는 `{FINA_API_BASE_URL}/internal/admin` 아래에 있으며 읽기 전용이다. Fina 웹의 `/admin` 화면과 `/admin/*` API는 제거되었으며 다시 추가하지 않는다. 운영 기능은 Building Intent Admin Hub에서만 제공하고 Better Auth cookie는 사용하지 않는다.
 
 ## 1. 권장 호출 구조
 

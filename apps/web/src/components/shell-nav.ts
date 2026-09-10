@@ -1,5 +1,3 @@
-import type { UserRole } from "@fina/shared";
-
 export type NavItem = {
   id: string;
   label: string;
@@ -13,13 +11,3 @@ export const NAV_ITEMS: NavItem[] = [
   { id: "plan", label: "Plan", path: "/settings/plan" },
   { id: "account", label: "Account", path: "/settings/account" },
 ];
-
-export const ADMIN_NAV_ITEM: NavItem = {
-  id: "admin",
-  label: "Admin",
-  path: "/admin",
-};
-
-export function navItemsForRole(role: UserRole | null | undefined): NavItem[] {
-  return role === "admin" ? [...NAV_ITEMS, ADMIN_NAV_ITEM] : NAV_ITEMS;
-}

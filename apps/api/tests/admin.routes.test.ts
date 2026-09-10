@@ -91,12 +91,6 @@ function expectSafeUserShape(row: Record<string, unknown>) {
   }
 }
 
-async function createAdmin(app: Awaited<ReturnType<typeof buildApp>>) {
-  const admin = await signUpAndGetCookie(app, { email: "admin-list@example.com" });
-  await prisma.user.update({ where: { id: admin.userId }, data: { role: "admin" } });
-  return admin;
-}
-
 describe("internal admin delegation guard", () => {
   it.each([
     ["/internal/admin/users", "findMany", "admin_users_listed"],
@@ -137,19 +131,29 @@ describe("internal admin delegation guard", () => {
     },
   );
 
-  it.each(["/me", "/admin/users"])("keeps Better Auth session resolution on %s", async (url) => {
+  it("keeps Better Auth session resolution on customer routes", async () => {
     const app = await buildInternalApp();
     const sessionResolver = vi.spyOn(app.fina.auth.api, "getSession").mockResolvedValue(null);
 
     await app.inject({
       method: "GET",
-      url,
+      url: "/me",
       headers: { cookie: "better-auth.session_token=customer" },
     });
 
     expect(sessionResolver).toHaveBeenCalled();
     await app.close();
   });
+
+  it.each(["/admin/users", "/admin/plaid-items", "/admin/users/user-1"])(
+    "does not register the retired cookie-admin route %s",
+    async (url) => {
+      const app = await buildInternalApp();
+      const res = await app.inject({ method: "GET", url });
+      expect(res.statusCode).toBe(404);
+      await app.close();
+    },
+  );
 
   it("includes the verified subject in a failed internal audit event", async () => {
     const app = await buildInternalApp();
@@ -171,116 +175,6 @@ describe("internal admin delegation guard", () => {
       status: 400,
       latencyMs: expect.any(Number),
     });
-    await app.close();
-  });
-});
-
-describe("GET /admin/users", () => {
-  beforeEach(async () => {
-    await truncateAll();
-  });
-
-  afterAll(async () => {
-    await disconnect();
-  });
-
-  it("401 without a session", async () => {
-    const app = await buildApp(env);
-    const res = await app.inject({ method: "GET", url: "/admin/users" });
-    expect(res.statusCode).toBe(401);
-    expect(res.json().error).toBe("unauthenticated");
-    await app.close();
-  });
-
-  it("403 for a workspace owner who is not a global admin", async () => {
-    const app = await buildApp(env);
-    const user = await signUpAndGetCookie(app, { email: "owner-not-admin@example.com" });
-    const wsId = await getOwnerWorkspaceId(user.userId);
-    const res = await app.inject({
-      method: "GET",
-      url: "/admin/users",
-      headers: { cookie: user.cookie, "x-workspace-id": wsId },
-    });
-    expect(res.statusCode).toBe(403);
-    expect(res.json().error).toBe("admin_required");
-    await app.close();
-  });
-
-  it("400 for an invalid cursor", async () => {
-    const app = await buildApp(env);
-    const admin = await createAdmin(app);
-    const res = await app.inject({
-      method: "GET",
-      url: "/admin/users?cursor=not-a-valid-cursor",
-      headers: { cookie: admin.cookie },
-    });
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe("invalid_query");
-    await app.close();
-  });
-
-  it("retains Better Auth admin access to the legacy list and detail routes", async () => {
-    const app = await buildApp(env);
-    const admin = await createAdmin(app);
-
-    const list = await app.inject({
-      method: "GET",
-      url: "/admin/users",
-      headers: { cookie: admin.cookie },
-    });
-    const detail = await app.inject({
-      method: "GET",
-      url: `/admin/users/${admin.userId}`,
-      headers: { cookie: admin.cookie },
-    });
-
-    expect(list.statusCode).toBe(200);
-    expect(list.json().users).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: admin.userId })]),
-    );
-    expect(detail.statusCode).toBe(200);
-    expect(detail.json().user.id).toBe(admin.userId);
-    await app.close();
-  });
-
-  it("shows production by default and keeps test and unknown users separate", async () => {
-    const app = await buildApp(env);
-    const admin = await createAdmin(app);
-    const testUser = await signUpAndGetCookie(app, { email: "test-user@example.com" });
-    const unknownUser = await signUpAndGetCookie(app, { email: "unknown-user@example.com" });
-    await prisma.user.update({
-      where: { id: testUser.userId },
-      data: { signupEnvironment: "TEST" },
-    });
-    await prisma.user.update({
-      where: { id: unknownUser.userId },
-      data: { signupEnvironment: "UNKNOWN" },
-    });
-
-    const production = await app.inject({
-      method: "GET",
-      url: "/admin/users",
-      headers: { cookie: admin.cookie },
-    });
-    expect(production.json().users.map((user: { id: string }) => user.id)).toEqual([admin.userId]);
-
-    const test = await app.inject({
-      method: "GET",
-      url: "/admin/users?environment=test",
-      headers: { cookie: admin.cookie },
-    });
-    expect(test.json().users).toEqual([
-      expect.objectContaining({ id: testUser.userId, signupEnvironment: "TEST" }),
-    ]);
-
-    const unknown = await app.inject({
-      method: "GET",
-      url: "/admin/users?environment=unknown",
-      headers: { cookie: admin.cookie },
-    });
-    expect(unknown.json().users).toEqual([
-      expect.objectContaining({ id: unknownUser.userId, signupEnvironment: "UNKNOWN" }),
-    ]);
     await app.close();
   });
 });
@@ -389,14 +283,14 @@ describe("GET /internal/admin/users", () => {
     await disconnect();
   });
 
-  it("rejects a valid Better Auth admin cookie without delegation", async () => {
+  it("rejects a valid Better Auth cookie without delegation", async () => {
     const app = await buildApp(env);
-    const admin = await createAdmin(app);
+    const user = await signUpAndGetCookie(app, { email: "cookie-only@example.com" });
 
     const res = await app.inject({
       method: "GET",
       url: "/internal/admin/users",
-      headers: { cookie: admin.cookie },
+      headers: { cookie: user.cookie },
     });
 
     expect(res.statusCode).toBe(401);
