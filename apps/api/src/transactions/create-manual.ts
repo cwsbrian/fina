@@ -10,7 +10,7 @@ import {
   parseOccurredAt as parseOccurredAtShared,
 } from "./validators.js";
 import { applyAllocations } from "./allocations.js";
-import { budgetImpactForAmount } from "./budget-impact.js";
+import { applyMerchantExclusion, budgetImpactForAmount } from "./budget-impact.js";
 import { syncTransactionImpact } from "./refunds.js";
 
 export type CreateManualTxInput = {
@@ -42,6 +42,7 @@ export type CreateManualTxResult = {
     needsReclassification: false;
     budgetImpact: "expense" | "income" | "refund" | "excluded";
     budgetImpactSource: "auto" | "user";
+    merchantExclusionActive: boolean;
     refundOfTransactionId: string | null;
     refundedAmount: string;
     createdAt: string;
@@ -132,7 +133,12 @@ export async function createManualTransactionService(
   const merchantNormalized = normalizeMerchant(merchantRaw);
 
   return await withWorkspaceLock(ctx.workspaceId, async (tx) => {
-
+    const budgetImpact = await applyMerchantExclusion(
+      tx,
+      ctx.workspaceId,
+      merchantNormalized,
+      budgetImpactForAmount(input.amount),
+    );
     if (input.categoryId !== undefined) {
       const cat = await tx.category.findFirst({
         where: { id: input.categoryId, workspaceId: ctx.workspaceId, archivedAt: null },
@@ -211,7 +217,7 @@ export async function createManualTransactionService(
         source: "manual",
         rawData: {} as Prisma.InputJsonValue,
         note,
-        budgetImpact: budgetImpactForAmount(input.amount),
+        ...budgetImpact,
       },
     });
 
@@ -258,6 +264,8 @@ export async function createManualTransactionService(
         needsReclassification: false,
         budgetImpact: impact.budgetImpact,
         budgetImpactSource: impact.budgetImpactSource,
+        merchantExclusionActive:
+          impact.budgetImpact === "excluded" && impact.budgetImpactSource === "user",
         refundOfTransactionId: impact.refundOfTransactionId,
         refundedAmount: "0.00",
         createdAt: row.createdAt.toISOString(),

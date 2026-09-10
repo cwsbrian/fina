@@ -151,7 +151,7 @@ export default function TransactionDetail() {
     }
   }
 
-  async function toggleBudgetImpact() {
+  async function saveBudgetImpact(scope: "transaction" | "merchant") {
     if (!tx || savingBudgetImpact) return;
     const includedImpact = money.isIncome
       ? firstCat?.name.trim().toLowerCase() === "refund" ? "refund" : "income"
@@ -161,16 +161,44 @@ export default function TransactionDetail() {
     try {
       const wsId = await getActiveWorkspaceId();
       if (!wsId) throw new Error("no_workspace");
-      await apiFetch(`/workspaces/${wsId}/transactions/${tx.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ budgetImpact: next }),
+      const updated = await apiFetch<{ transaction: { merchantExclusionActive: boolean } }>(
+        `/workspaces/${wsId}/transactions/${tx.id}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ budgetImpact: next, budgetImpactScope: scope }),
+        },
+      );
+      setTx({
+        ...tx,
+        budgetImpact: next,
+        budgetImpactSource: "user",
+        merchantExclusionActive: updated.transaction.merchantExclusionActive,
       });
-      setTx({ ...tx, budgetImpact: next, budgetImpactSource: "user" });
     } catch (e) {
       Alert.alert("Couldn't update", (e as { code?: string }).code ?? "Try again.");
     } finally {
       setSavingBudgetImpact(false);
     }
+  }
+
+  function toggleBudgetImpact() {
+    if (!tx || savingBudgetImpact) return;
+    const excluded = tx.budgetImpact === "excluded";
+    Alert.alert(
+      excluded ? "Include in budget?" : "Exclude from budget?",
+      excluded
+        ? "Choose whether this applies only to this transaction or to future transactions from this merchant."
+        : "Choose whether to exclude this transaction once or always exclude this merchant.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "This transaction only", onPress: () => void saveBudgetImpact("transaction") },
+        {
+          text: excluded ? "This merchant going forward" : "Always exclude merchant",
+          style: excluded ? "default" : "destructive",
+          onPress: () => void saveBudgetImpact("merchant"),
+        },
+      ],
+    );
   }
 
   return (
@@ -316,7 +344,9 @@ export default function TransactionDetail() {
             onPress={toggleBudgetImpact}
           >
             <Text style={styles.rowValue}>
-              {tx.budgetImpact === "excluded" ? "Excluded" : "Included"}
+              {tx.budgetImpact === "excluded"
+                ? tx.merchantExclusionActive ? "Always excluded" : "Excluded once"
+                : "Included"}
             </Text>
           </DetailRow>
         </View>

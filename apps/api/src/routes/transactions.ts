@@ -16,6 +16,7 @@ import { checkLargeChargeAndPush } from "../push/anomaly.js";
 import { notifyTransactionAdded } from "../push/transaction-added.js";
 import { emitCategorizeConfirmed } from "../telemetry/categorize.js";
 import { ensureRefundLinks } from "../transactions/refunds.js";
+import { normalizeMerchant } from "../categorize/normalize.js";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -49,6 +50,7 @@ const PatchTxBody = z
     occurredAt: z.string().optional(),
     note: z.string().nullable().optional(),
     budgetImpact: z.enum(["expense", "income", "refund", "excluded"]).optional(),
+    budgetImpactScope: z.enum(["transaction", "merchant"]).optional(),
     categoryId: z.string().nullable().optional(),
     allocations: z
       .array(z.object({
@@ -58,7 +60,8 @@ const PatchTxBody = z
       .optional(),
     accountId: z.string().optional(),
   })
-  .strict();
+  .strict()
+  .refine((body) => body.budgetImpactScope === undefined || body.budgetImpact !== undefined);
 
 const ManualTxBody = z.object({
   merchantRaw: z.string(),
@@ -106,6 +109,19 @@ function decodeCursor(s: string | undefined): Cursor | null {
 }
 function encodeCursor(c: Cursor): string {
   return Buffer.from(JSON.stringify(c), "utf8").toString("base64url");
+}
+
+async function activeMerchantExclusions(
+  workspaceId: string,
+  merchants: string[],
+): Promise<Set<string>> {
+  const normalized = [...new Set(merchants.filter(Boolean))];
+  if (normalized.length === 0) return new Set();
+  const rows = await prisma.merchantExclusion.findMany({
+    where: { workspaceId, merchantNormalized: { in: normalized } },
+    select: { merchantNormalized: true },
+  });
+  return new Set(rows.map((row) => row.merchantNormalized));
 }
 
 function editTxErrorStatus(code: EditTxError["code"]): number {
@@ -234,6 +250,10 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
       });
       const hasMore = rows.length > q.limit;
       const page = hasMore ? rows.slice(0, q.limit) : rows;
+      const merchantExclusions = await activeMerchantExclusions(
+        ctx.membership.workspaceId,
+        page.map((t) => t.merchantNormalized ?? normalizeMerchant(t.merchantRaw)),
+      );
       const last = page[page.length - 1];
       const nextCursor = hasMore && last
         ? encodeCursor({ occurredAtMs: last.occurredAt.getTime(), id: last.id })
@@ -256,6 +276,9 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           needsReclassification: t.needsReclassification,
           budgetImpact: t.budgetImpact,
           budgetImpactSource: t.budgetImpactSource,
+          merchantExclusionActive: merchantExclusions.has(
+            t.merchantNormalized ?? normalizeMerchant(t.merchantRaw),
+          ),
           refundOfTransactionId: t.refundOfTransactionId,
           refundedAmount: t.refunds
             .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
@@ -317,6 +340,11 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           }),
         ]);
         if (!t) return reply.code(404).send({ error: "not_found" });
+        const merchantNormalized = t.merchantNormalized ?? normalizeMerchant(t.merchantRaw);
+        const merchantExclusions = await activeMerchantExclusions(
+          ctx.membership.workspaceId,
+          [merchantNormalized],
+        );
         return reply.code(200).send({
           transaction: {
             id: t.id,
@@ -335,6 +363,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
             needsReclassification: t.needsReclassification,
             budgetImpact: t.budgetImpact,
             budgetImpactSource: t.budgetImpactSource,
+            merchantExclusionActive: merchantExclusions.has(merchantNormalized),
             refundOfTransactionId: t.refundOfTransactionId,
             refundedAmount: t.refunds
               .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
@@ -624,6 +653,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         if (d.occurredAt   !== undefined) input.occurredAt   = d.occurredAt;
         if (d.note         !== undefined) input.note         = d.note;
         if (d.budgetImpact !== undefined) input.budgetImpact = d.budgetImpact;
+        if (d.budgetImpactScope !== undefined) input.budgetImpactScope = d.budgetImpactScope;
         if (d.accountId    !== undefined) input.accountId    = d.accountId;
         if (flags.categoryIdProvided)     input.categoryId   = d.categoryId ?? null;
         if (flags.allocationsProvided)    input.allocations  = d.allocations ?? [];

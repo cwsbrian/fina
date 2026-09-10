@@ -167,7 +167,10 @@ function ExcludedRow({
           <Text style={styles.rowTitle} numberOfLines={1}>{merchant}</Text>
           {isNew && <View style={styles.newDot} />}
         </View>
-        <Text style={styles.rowMeta}>{formatDate(tx.occurredAt)}</Text>
+        <Text style={styles.rowMeta}>
+          {formatDate(tx.occurredAt)}
+          {tx.merchantExclusionActive ? " · Always excluded" : ""}
+        </Text>
       </View>
       <View style={styles.rowRight}>
         <Text style={[styles.rowAmount, money.isIncome && styles.rowAmountIncome]}>

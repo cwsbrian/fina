@@ -112,6 +112,24 @@ export function budgetImpactForAmount(amount: number): BudgetImpactValue {
   return "excluded";
 }
 
+export async function applyMerchantExclusion(
+  tx: Prisma.TransactionClient,
+  workspaceId: string,
+  merchantNormalized: string,
+  fallback: BudgetImpactValue,
+): Promise<{ budgetImpact: BudgetImpactValue; budgetImpactSource: "auto" | "user" }> {
+  // ponytail: one indexed lookup per imported transaction; batch if sync latency becomes measurable.
+  const exclusion = merchantNormalized
+    ? await tx.merchantExclusion.findUnique({
+        where: { workspaceId_merchantNormalized: { workspaceId, merchantNormalized } },
+        select: { id: true },
+      })
+    : null;
+  return exclusion
+    ? { budgetImpact: "excluded", budgetImpactSource: "user" }
+    : { budgetImpact: fallback, budgetImpactSource: "auto" };
+}
+
 export function budgetExpenseTransactionWhere(
   extra: Prisma.TransactionWhereInput = {},
 ): Prisma.TransactionWhereInput {

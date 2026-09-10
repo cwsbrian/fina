@@ -37,6 +37,8 @@ export type TransactionDTO = {
   needsReclassification: boolean;
   budgetImpact: "expense" | "income" | "refund" | "excluded";
   budgetImpactSource: "auto" | "user";
+  /** True while future transactions from this merchant are also excluded. */
+  merchantExclusionActive?: boolean;
   /** Original expense linked to this refund, when confidently matched. */
   refundOfTransactionId: string | null;
   /** Posted refunds matched to this expense. Raw transaction amount is unchanged. */

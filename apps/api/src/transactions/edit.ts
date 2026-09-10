@@ -25,6 +25,7 @@ export type EditTxInput = {
   // NEW: reassign the tx to a different (manual) account.
   accountId?: string;
   budgetImpact?: "expense" | "income" | "refund" | "excluded";
+  budgetImpactScope?: "transaction" | "merchant";
 };
 
 // Type signal that the caller used the categoryId field (the route layer
@@ -52,6 +53,7 @@ export type EditTxResult = {
     needsReclassification: boolean;
     budgetImpact: "expense" | "income" | "refund" | "excluded";
     budgetImpactSource: "auto" | "user";
+    merchantExclusionActive: boolean;
     refundOfTransactionId: string | null;
     refundedAmount: string;
     createdAt: string;
@@ -122,6 +124,7 @@ const TX_SELECT = {
 function shape(
   row: Prisma.TransactionGetPayload<{ select: typeof TX_SELECT }>,
   currency: string,
+  merchantExclusionActive: boolean,
 ): EditTxResult["transaction"] {
   return {
     id: row.id,
@@ -139,6 +142,7 @@ function shape(
     needsReclassification: row.needsReclassification,
     budgetImpact: row.budgetImpact,
     budgetImpactSource: row.budgetImpactSource,
+    merchantExclusionActive,
     refundOfTransactionId: row.refundOfTransactionId,
     refundedAmount: row.refunds
       .reduce((sum, refund) => sum + Math.abs(refund.amount.toNumber()), 0)
@@ -298,6 +302,28 @@ export async function editTransactionService(
         : row.merchantNormalized ?? normalizeMerchant(row.merchantRaw)
       ).trim();
 
+    if (input.budgetImpactScope !== undefined && input.budgetImpact !== undefined) {
+      if (input.budgetImpactScope === "merchant" && input.budgetImpact === "excluded") {
+        await tx.merchantExclusion.upsert({
+          where: {
+            workspaceId_merchantNormalized: {
+              workspaceId: ctx.workspaceId,
+              merchantNormalized,
+            },
+          },
+          create: { workspaceId: ctx.workspaceId, merchantNormalized },
+          update: {},
+        });
+      } else if (
+        input.budgetImpactScope === "merchant"
+        || input.budgetImpact === "excluded"
+      ) {
+        await tx.merchantExclusion.deleteMany({
+          where: { workspaceId: ctx.workspaceId, merchantNormalized },
+        });
+      }
+    }
+
     if (flags.categoryIdProvided && input.categoryId && merchantNormalized.length > 0) {
       await tx.merchantMapping.upsert({
         where: {
@@ -369,8 +395,18 @@ export async function editTransactionService(
       where: { id: txId },
       select: TX_SELECT,
     });
+    const finalMerchant = finalRow.merchantNormalized ?? normalizeMerchant(finalRow.merchantRaw);
+    const merchantExclusionActive = await tx.merchantExclusion.findUnique({
+      where: {
+        workspaceId_merchantNormalized: {
+          workspaceId: ctx.workspaceId,
+          merchantNormalized: finalMerchant,
+        },
+      },
+      select: { id: true },
+    });
     return {
-      transaction: shape(finalRow, workspace.currency),
+      transaction: shape(finalRow, workspace.currency, merchantExclusionActive !== null),
       affectedTransactionIds,
     };
   });

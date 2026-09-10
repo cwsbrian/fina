@@ -164,6 +164,7 @@ model Workspace {
   transactions      Transaction[]
   categories        Category[]
   merchantMappings  MerchantMapping[]
+  merchantExclusions MerchantExclusion[]
   chatThreads       ChatThread[]
   recurringExpenses RecurringExpense[]
   actionIntents     ActionIntent[]
@@ -650,6 +651,18 @@ model MerchantMapping {
   @@unique([workspaceId, merchantNormalized])
   @@index([workspaceId])
   @@map("merchant_mappings")
+}
+
+model MerchantExclusion {
+  id                 String   @id @default(cuid())
+  workspaceId        String
+  merchantNormalized String
+  createdAt          DateTime @default(now())
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([workspaceId, merchantNormalized])
+  @@map("merchant_exclusions")
 }
 
 enum MappingSource {

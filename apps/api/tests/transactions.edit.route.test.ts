@@ -65,6 +65,69 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(res.json().transaction.id).toBe(txId);
   });
 
+  it("supports one-time and future merchant budget exclusions", async () => {
+    const { cookie, wsId } = await setupEditor("ep-budget-scope@t.co");
+    const headers = { cookie, "x-workspace-id": wsId, "content-type": "application/json" };
+    const firstId = await seedManual(cookie, wsId);
+
+    const once = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${firstId}`,
+      headers,
+      payload: JSON.stringify({ budgetImpact: "excluded", budgetImpactScope: "transaction" }),
+    });
+    expect(once.statusCode).toBe(200);
+    expect(once.json().transaction.merchantExclusionActive).toBe(false);
+    expect(await prisma.merchantExclusion.count({ where: { workspaceId: wsId } })).toBe(0);
+
+    const always = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${firstId}`,
+      headers,
+      payload: JSON.stringify({ budgetImpact: "excluded", budgetImpactScope: "merchant" }),
+    });
+    expect(always.statusCode).toBe(200);
+    expect(always.json().transaction.merchantExclusionActive).toBe(true);
+
+    const future = await app.inject({
+      method: "POST",
+      url: `/workspaces/${wsId}/transactions/manual`,
+      headers,
+      payload: JSON.stringify({ merchantRaw: "Costco #123", amount: 20, occurredAt: "2026-05-20" }),
+    });
+    expect(future.json().transaction).toMatchObject({
+      budgetImpact: "excluded",
+      budgetImpactSource: "user",
+      merchantExclusionActive: true,
+    });
+
+    const detail = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions/${firstId}`,
+      headers,
+    });
+    expect(detail.json().transaction.merchantExclusionActive).toBe(true);
+
+    const includeOnce = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${firstId}`,
+      headers,
+      payload: JSON.stringify({ budgetImpact: "expense", budgetImpactScope: "transaction" }),
+    });
+    expect(includeOnce.json().transaction.merchantExclusionActive).toBe(true);
+
+    const excludeOnce = await app.inject({
+      method: "PATCH",
+      url: `/workspaces/${wsId}/transactions/${firstId}`,
+      headers,
+      payload: JSON.stringify({ budgetImpact: "excluded", budgetImpactScope: "transaction" }),
+    });
+    expect(excludeOnce.json().transaction).toMatchObject({
+      budgetImpact: "excluded",
+      merchantExclusionActive: false,
+    });
+  });
+
   it("400 invalid_body: amount not a number", async () => {
     const { cookie, wsId } = await setupEditor("ep3@t.co");
     const txId = await seedManual(cookie, wsId);

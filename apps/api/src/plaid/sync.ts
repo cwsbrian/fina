@@ -9,7 +9,7 @@ import { withWorkspaceLock } from "../locks/workspace.js";
 import { clearScheduleMatch } from "../schedules/cleanup.js";
 import { logWarn } from "../logger.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
-import { classifyPlaidBudgetImpact } from "../transactions/budget-impact.js";
+import { applyMerchantExclusion, classifyPlaidBudgetImpact } from "../transactions/budget-impact.js";
 
 // `skipped` carries the partial counters from any pages that DID commit
 // before the lock was lost (final-tx race) — the page-level commits are
@@ -328,7 +328,14 @@ export async function upsertAdded(
     });
     if (promotion) {
       const newAmount = new Prisma.Decimal(t.amount);
-      const budgetImpact = classifyPlaidBudgetImpact(t);
+      const budgetImpact = promotion.budgetImpactSource === "auto"
+        ? await applyMerchantExclusion(
+            tx,
+            workspaceId,
+            normalizeMerchant(plaidMerchantRaw(t)),
+            classifyPlaidBudgetImpact(t),
+          )
+        : null;
       // Paranoid check: pending tx must have N=1 allocation (cannot_split_pending
       // blocks user splits). If N != 1, log + skip the allocation update.
       if (promotion.allocations.length === 1) {
@@ -357,7 +364,7 @@ export async function upsertAdded(
           // hidden when it posts. Non-grace promotion still restores an
           // earlier ordinary soft-removal as before.
           removedAt: promotion.billingGraceHiddenAt ? promotion.removedAt : null,
-          ...(promotion.budgetImpactSource === "auto" ? { budgetImpact } : {}),
+          ...(budgetImpact ?? {}),
         },
       });
       return { kind: "updated", localId: promotion.id };
@@ -378,7 +385,14 @@ export async function upsertAdded(
   });
   if (existing) {
     const newAmount = new Prisma.Decimal(t.amount);
-    const budgetImpact = classifyPlaidBudgetImpact(t);
+    const budgetImpact = existing.budgetImpactSource === "auto"
+      ? await applyMerchantExclusion(
+          tx,
+          workspaceId,
+          normalizeMerchant(plaidMerchantRaw(t)),
+          classifyPlaidBudgetImpact(t),
+        )
+      : null;
     const amountChanged = !existing.amount.equals(newAmount);
     const N = existing.allocations.length;
 
@@ -408,7 +422,7 @@ export async function upsertAdded(
         postedAt: plaidPostedAt(t),
         pending: t.pending,
         rawData: t as unknown as Prisma.InputJsonValue,
-        ...(existing.budgetImpactSource === "auto" ? { budgetImpact } : {}),
+        ...(budgetImpact ?? {}),
         ...(amountChanged && N >= 2 ? { needsReclassification: true } : {}),
       },
     });
@@ -478,6 +492,14 @@ export async function upsertAdded(
       // are reconciled as a multiset instead of all being inserted again.
       if (strongMatches.length > 0) {
         const match = strongMatches[0]!;
+        const budgetImpact = match.budgetImpactSource === "auto"
+          ? await applyMerchantExclusion(
+              tx,
+              workspaceId,
+              merchantNormalized,
+              classifyPlaidBudgetImpact(t),
+            )
+          : null;
         await tx.transaction.update({
           where: { id: match.id },
           data: {
@@ -493,9 +515,7 @@ export async function upsertAdded(
             merchantNormalized,
             rawData: t as unknown as Prisma.InputJsonValue,
             removedAt: null,
-            ...(match.budgetImpactSource === "auto"
-              ? { budgetImpact: classifyPlaidBudgetImpact(t) }
-              : {}),
+            ...(budgetImpact ?? {}),
           },
         });
         return { kind: "updated", localId: match.id };
@@ -507,6 +527,12 @@ export async function upsertAdded(
     currentAccount.plaidItem.billingGraceEndsAt > new Date()
       ? new Date()
       : null;
+  const budgetImpact = await applyMerchantExclusion(
+    tx,
+    workspaceId,
+    normalizeMerchant(plaidMerchantRaw(t)),
+    classifyPlaidBudgetImpact(t),
+  );
   const created = await tx.transaction.create({
     data: {
       workspaceId,
@@ -520,7 +546,7 @@ export async function upsertAdded(
       postedAt: plaidPostedAt(t),
       pending: t.pending,
       rawData: t as unknown as Prisma.InputJsonValue,
-      budgetImpact: classifyPlaidBudgetImpact(t),
+      ...budgetImpact,
       billingGraceHiddenAt,
       removedAt: billingGraceHiddenAt,
     },
@@ -552,7 +578,14 @@ export async function upsertModified(
 
   const oldAmount = existing.amount;
   const newAmount = new Prisma.Decimal(t.amount);
-  const budgetImpact = classifyPlaidBudgetImpact(t);
+  const budgetImpact = existing.budgetImpactSource === "auto"
+    ? await applyMerchantExclusion(
+        tx,
+        workspaceId,
+        normalizeMerchant(plaidMerchantRaw(t)),
+        classifyPlaidBudgetImpact(t),
+      )
+    : null;
   const amountChanged = !oldAmount.equals(newAmount);
   const newMerchantRaw = plaidMerchantRaw(t);
   const merchantChanged = existing.merchantRaw !== newMerchantRaw;
@@ -565,7 +598,7 @@ export async function upsertModified(
     postedAt: plaidPostedAt(t),
     pending: t.pending,
     rawData: t as unknown as Prisma.InputJsonValue,
-    ...(existing.budgetImpactSource === "auto" ? { budgetImpact } : {}),
+    ...(budgetImpact ?? {}),
   };
 
   if (N >= 2 && (amountChanged || merchantChanged)) {
