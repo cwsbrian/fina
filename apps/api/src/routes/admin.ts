@@ -1006,6 +1006,17 @@ export async function adminRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  app.get("/admin/plaid-items", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    try {
+      await requireAdminSession(req, app);
+      return (await listPlaidItems(reply)).result;
+    } catch (e) {
+      if (e instanceof HttpError) return reply.code(e.statusCode).send({ error: e.code });
+      throw e;
+    }
+  });
+
   app.get("/admin/users/:userId", async (req, reply) => {
     try {
       await requireAdminSession(req, app);
