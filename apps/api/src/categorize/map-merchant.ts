@@ -18,21 +18,23 @@ export async function mapMerchantToCategoryService(
 
   const category = await prisma.category.findFirst({
     where: { id: input.categoryId, workspaceId: ctx.workspaceId, archivedAt: null },
-    select: { id: true },
+    select: { id: true, type: true },
   });
   if (!category) throw new Error("category_not_found");
 
   await prisma.$transaction(async (db) => {
     await db.merchantMapping.upsert({
       where: {
-        workspaceId_merchantNormalized: {
+        workspaceId_merchantNormalized_type: {
           workspaceId: ctx.workspaceId,
           merchantNormalized,
+          type: category.type,
         },
       },
       create: {
         workspaceId: ctx.workspaceId,
         merchantNormalized,
+        type: category.type,
         categoryId: input.categoryId,
         source: "manual",
         confidence: 1.0,
@@ -75,6 +77,8 @@ export async function mapMerchantToCategoryService(
       workspaceId: ctx.workspaceId,
       merchantNormalized,
       removedAt: null,
+      amount: category.type === "expense" ? { gte: 0 } : { lt: 0 },
+      budgetImpact: { in: ["expense", "income", "refund"] },
       allocations: { some: {}, every: { categoryId: null, source: null } },
     },
     include: { allocations: { select: { id: true } } },
@@ -84,7 +88,10 @@ export async function mapMerchantToCategoryService(
     if (c.allocations.length !== 1) continue;
     const a = c.allocations[0]!;
     const upd = await prisma.transactionAllocation.updateMany({
-      where: { id: a.id, categoryId: null, source: null },
+      where: {
+        id: a.id, categoryId: null, source: null,
+        transaction: { amount: category.type === "expense" ? { gte: 0 } : { lt: 0 } },
+      },
       data: { categoryId: input.categoryId, source: "mapping" },
     });
     if (upd.count > 0) {

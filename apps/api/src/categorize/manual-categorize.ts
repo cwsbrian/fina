@@ -46,19 +46,6 @@ export async function applyManualCategorize(
     select: { currency: true },
   });
 
-  // Category lookup stays OUTSIDE the lock: read-only, pre-existing archive
-  // races are not introduced by this plan, and keeping it outside means the
-  // lock scope is no larger than the read+writes that actually mutate state.
-  const category = await prisma.category.findFirst({
-    where: {
-      workspaceId: input.workspaceId,
-      archivedAt: null,
-      name: { equals: trimmedName, mode: "insensitive" },
-    },
-    select: { id: true, name: true },
-  });
-  if (!category) throw new ManualCategorizeError("category_not_found");
-
   const result = await withWorkspaceLock(input.workspaceId, async (tx) => {
     // Re-read INSIDE the lock so a concurrent PATCH that writes merchantRaw +
     // merchantNormalized is visible here — we must normalize from the post-PATCH
@@ -71,13 +58,15 @@ export async function applyManualCategorize(
 
     const merchantNorm = txRow.merchantNormalized ?? normalizeMerchant(txRow.merchantRaw);
 
-    // Re-check category inside the lock: if it was archived between the
-    // pre-lock lookup and now, reject rather than write a stale archived id.
-    const categoryStillActive = await tx.category.findFirst({
-      where: { id: category.id, workspaceId: input.workspaceId, archivedAt: null },
-      select: { id: true },
+    const type = txRow.amount.gte(0) ? "expense" : "income";
+    const category = await tx.category.findFirst({
+      where: {
+        workspaceId: input.workspaceId, archivedAt: null, type,
+        name: { equals: trimmedName, mode: "insensitive" },
+      },
+      select: { id: true, name: true },
     });
-    if (!categoryStillActive) throw new ManualCategorizeError("category_not_found");
+    if (!category) throw new ManualCategorizeError("category_not_found");
 
     // Primary: write allocations via the helper (single entry).
     // Amount is Decimal(14, 2); Number(d.toString()) round-trips cleanly for
@@ -107,17 +96,19 @@ export async function applyManualCategorize(
       data: { merchantNormalized: merchantNorm },
     });
 
-    // Merchant mapping upsert (unchanged).
+    // Keep separate rules for money in and money out at the same merchant.
     await tx.merchantMapping.upsert({
       where: {
-        workspaceId_merchantNormalized: {
+        workspaceId_merchantNormalized_type: {
           workspaceId: input.workspaceId,
           merchantNormalized: merchantNorm,
+          type,
         },
       },
       create: {
         workspaceId: input.workspaceId,
         merchantNormalized: merchantNorm,
+        type,
         categoryId: category.id,
         confidence: 1.0,
         source: "manual",
@@ -153,6 +144,7 @@ export async function applyManualCategorize(
         merchantNormalized: merchantNorm,
         id: { not: txRow.id },
         removedAt: null,  // align with map-merchant.ts; don't back-fill soft-removed siblings
+        amount: type === "expense" ? { gte: 0 } : { lt: 0 },
         allocations: { some: {} },
       },
       include: { allocations: { select: { id: true, source: true } } },

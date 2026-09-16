@@ -122,16 +122,17 @@ export async function categorizeNewTransactions(
           },
           select: {
             merchantNormalized: true,
+            type: true,
             categoryId: true,
             category: { select: { type: true } },
           },
         });
-  const mappingByNorm = new Map(mappings.map((m) => [m.merchantNormalized, m]));
+  const mappingByNorm = new Map(mappings.map((m) => [`${m.type}:${m.merchantNormalized}`, m]));
 
   const unmapped: Loaded[] = [];
   for (const t of loaded) {
-    const mapping = mappingByNorm.get(t.merchantNormalized);
     const expectedType = t.amount >= 0 ? "expense" : "income";
+    const mapping = mappingByNorm.get(`${expectedType}:${t.merchantNormalized}`);
     if (mapping?.category.type === expectedType) {
       const catId = mapping.categoryId;
       // Find tx with N=1 null-cat allocation matching merchantNormalized, update
@@ -174,10 +175,13 @@ export async function categorizeNewTransactions(
 
   // Step 2: History lookup (batch).
   const historyMerchants = [...new Set(unmapped.map((t) => t.merchantNormalized))];
-  const historyHints = await findHistoryHints(workspaceId, historyMerchants);
+  const [expenseHints, incomeHints] = await Promise.all([
+    findHistoryHints(workspaceId, historyMerchants, "expense"),
+    findHistoryHints(workspaceId, historyMerchants, "income"),
+  ]);
 
   // Pre-fetch categories referenced by hints to evaluate isOther.
-  const hintCategoryIds = [...new Set(Array.from(historyHints.values()).map((h) => h.categoryId))];
+  const hintCategoryIds = [...new Set([...expenseHints.values(), ...incomeHints.values()].map((h) => h.categoryId))];
   const hintCategories = hintCategoryIds.length === 0 ? [] : await prisma.category.findMany({
     where: { id: { in: hintCategoryIds }, archivedAt: null },
     select: { id: true, name: true, type: true, archivedAt: true },
@@ -186,7 +190,7 @@ export async function categorizeNewTransactions(
 
   const stillUnmapped: Loaded[] = [];
   for (const t of unmapped) {
-    const hint = historyHints.get(t.merchantNormalized);
+    const hint = (t.amount >= 0 ? expenseHints : incomeHints).get(t.merchantNormalized);
     const hintCat = hint ? hintCatById.get(hint.categoryId) : undefined;
     const expectedType = t.amount >= 0 ? "expense" : "income";
     if (!hint || !hintCat || hintCat.type !== expectedType) {

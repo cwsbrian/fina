@@ -1,5 +1,5 @@
 import { prisma } from "../db.js";
-import { resolveUserTz, partsInTz } from "./tools/periods.js";
+import { resolveUserTz, partsInTz, localMidnightToUtc } from "./tools/periods.js";
 import { budgetPlanSnapshot } from "../budget-plans/service.js";
 import {
   projectMonthEnd,
@@ -124,6 +124,8 @@ export type WorkspaceContext = {
   /** Exact label the brief must use when naming this workspace. */
   briefLabel: string;
   currency: string;
+  /** Complete previous calendar period; totals are not limited to the sample. */
+  recap?: { from: string; until: string; spent: string; income: string; refunds: string; count: number };
   /** New transactions in the relevant window. Pre-formatted display strings. */
   newTransactions: {
     count: number;
@@ -229,7 +231,7 @@ async function buildWorkspaceContext(
   userId: string,
   now: Date,
 ): Promise<WorkspaceContext> {
-  const txWindowStart = txWindowStartFor(briefType, now, tz);
+  const txRange = briefTransactionRange(briefType, now, tz);
   const scheduleWindowEnd = scheduleWindowEndFor(briefType, now, tz);
 
   // New transactions in the window.
@@ -237,8 +239,10 @@ async function buildWorkspaceContext(
     where: {
       workspaceId,
       removedAt: null,
+      pending: false,
+      billingGraceHiddenAt: null,
       budgetImpact: { in: ["expense", "income", "refund"] },
-      occurredAt: { gte: txWindowStart },
+      occurredAt: txRange,
     },
     select: {
       id: true,
@@ -251,7 +255,17 @@ async function buildWorkspaceContext(
     take: 200,
   });
 
-  const newCount = txs.length;
+  const totals = await prisma.transaction.groupBy({
+    by: ["budgetImpact"],
+    where: {
+      workspaceId, removedAt: null, pending: false, billingGraceHiddenAt: null,
+      budgetImpact: { in: ["expense", "income", "refund"] }, occurredAt: txRange,
+    },
+    _sum: { amount: true }, _count: true,
+  });
+  const totalFor = (type: "expense" | "income" | "refund") =>
+    formatMoney(Math.abs(Number(totals.find((t) => t.budgetImpact === type)?._sum.amount ?? 0)), ws.currency);
+  const newCount = totals.reduce((count, t) => count + t._count, 0);
   const uncategorizedCount = txs.filter((t) => t.allocations.length === 0).length;
   const sample = txs.slice(0, 5).map((t) => ({
     merchant: t.merchantRaw,
@@ -347,6 +361,10 @@ async function buildWorkspaceContext(
     name: ws.name,
     briefLabel: ws.name,
     currency: ws.currency,
+    recap: {
+      from: isoDateInTz(txRange.gte, tz), until: isoDateInTz(txRange.lt, tz),
+      spent: totalFor("expense"), income: totalFor("income"), refunds: totalFor("refund"), count: newCount,
+    },
     newTransactions: { count: newCount, sample },
     uncategorizedCount,
     schedule: scheduleFmt,
@@ -358,31 +376,23 @@ async function buildWorkspaceContext(
 }
 
 /** Window-start for "new transactions" per brief type. */
-function txWindowStartFor(briefType: BriefType, now: Date, tz: string): Date {
-  switch (briefType) {
-    case "daily":
-      return shiftDaysInTz(now, -1, tz);
-    case "weekly":
-      return shiftDaysInTz(now, -7, tz);
-    case "monthly":
-      return shiftDaysInTz(now, -30, tz);
-  }
+export function briefTransactionRange(briefType: BriefType, now: Date, tz: string): { gte: Date; lt: Date } {
+  const p = partsInTz(now, tz);
+  const endDay = briefType === "monthly" ? 1 : briefType === "weekly" ? p.day - (p.weekday + 6) % 7 : p.day;
+  const start = new Date(Date.UTC(p.year, p.month - 1 - (briefType === "monthly" ? 1 : 0),
+    endDay - (briefType === "monthly" ? 0 : briefType === "weekly" ? 7 : 1)));
+  const end = new Date(Date.UTC(p.year, p.month - 1, endDay));
+  const midnight = (d: Date) => localMidnightToUtc(d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate(), tz);
+  return { gte: midnight(start), lt: midnight(end) };
 }
 
 /** Window-end for "upcoming schedule" per brief type. */
 function scheduleWindowEndFor(briefType: BriefType, now: Date, tz: string): Date {
-  switch (briefType) {
-    case "daily":
-      return shiftDaysInTz(now, 7, tz);
-    case "weekly":
-      return shiftDaysInTz(now, 28, tz);
-    case "monthly":
-      return shiftDaysInTz(now, 30, tz);
-  }
-}
-
-function shiftDaysInTz(d: Date, days: number, _tz: string): Date {
-  return new Date(d.getTime() + days * 24 * 60 * 60 * 1000);
+  const p = partsInTz(now, tz);
+  const end = briefType === "monthly"
+    ? new Date(Date.UTC(p.year, p.month, 1))
+    : new Date(Date.UTC(p.year, p.month - 1, p.day + (briefType === "weekly" ? 7 - (p.weekday + 6) % 7 : 1)));
+  return localMidnightToUtc(end.getUTCFullYear(), end.getUTCMonth() + 1, end.getUTCDate(), tz);
 }
 
 function isoDateInTz(d: Date, tz: string): string {

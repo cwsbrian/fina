@@ -44,6 +44,7 @@ model User {
   // morningTime: validated by PatchMeBody zod (API is sole writer).
   // No DB-level CHECK constraint.
   morningTime           String    @default("08:00")
+  /// Legacy preference retained for older clients; server cadence is global.
   morningBriefFrequency String    @default("daily")
   snoozeUntil           DateTime?
   pauseEnabled          Boolean   @default(false)
@@ -178,6 +179,8 @@ model Workspace {
 }
 
 model Membership {
+  /// Local calendar date claimed for the non-LLM morning spending push.
+  lastDailySummaryDate String?
   id          String    @id @default(cuid())
   userId      String
   workspaceId String
@@ -638,6 +641,7 @@ model MerchantMapping {
   // E.g. "STARBUCKS #1234 TORONTO ON" → "starbucks".
   // See apps/api/src/categorize/normalize.ts for the exact rules.
   merchantNormalized String
+  type               CategoryType @default(expense)
   categoryId         String
   // 0.00 – 1.00. Manual confirms = 1.00. Reserved for confidence-weighted
   // UI (Phase 2) — stored but not consumed in Plan 1B.
@@ -648,7 +652,7 @@ model MerchantMapping {
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   category  Category  @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
-  @@unique([workspaceId, merchantNormalized])
+  @@unique([workspaceId, merchantNormalized, type])
   @@index([workspaceId])
   @@map("merchant_mappings")
 }

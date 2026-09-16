@@ -11,19 +11,28 @@ export async function maybeAutoPromote(
   merchantNormalized: string,
   categoryId: string,
 ): Promise<{ promoted: boolean; count: number }> {
+  const category = await prisma.category.findFirst({
+    where: { id: categoryId, workspaceId, archivedAt: null },
+    select: { type: true },
+  });
+  if (!category) return { promoted: false, count: 0 };
+  const type = category.type;
   const count = await prisma.transactionAllocation.count({
     where: {
       categoryId,
       needsConfirmation: false,
       source: { in: ["ai", "history", "manual"] },
-      transaction: { workspaceId, merchantNormalized, removedAt: null },
+      transaction: {
+        workspaceId, merchantNormalized, removedAt: null,
+        amount: type === "expense" ? { gte: 0 } : { lt: 0 },
+      },
     },
   });
 
   if (count < 3) return { promoted: false, count };
 
   const existing = await prisma.merchantMapping.findUnique({
-    where: { workspaceId_merchantNormalized: { workspaceId, merchantNormalized } },
+    where: { workspaceId_merchantNormalized_type: { workspaceId, merchantNormalized, type } },
     select: { categoryId: true, source: true },
   });
   const promoted = existing === null;
@@ -32,10 +41,11 @@ export async function maybeAutoPromote(
   }
 
   await prisma.merchantMapping.upsert({
-    where: { workspaceId_merchantNormalized: { workspaceId, merchantNormalized } },
+    where: { workspaceId_merchantNormalized_type: { workspaceId, merchantNormalized, type } },
     create: {
       workspaceId,
       merchantNormalized,
+      type,
       categoryId,
       confidence: 1.0,
       source: "auto",

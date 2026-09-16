@@ -64,7 +64,7 @@ describe("mapMerchantToCategoryService", () => {
     expect(r.mapping.categoryId).toBe(categoryId);
     expect(r.backfilledCount).toBe(0);
     const mapping = await prisma.merchantMapping.findUnique({
-      where: { workspaceId_merchantNormalized: { workspaceId, merchantNormalized: "starbucks" } },
+      where: { workspaceId_merchantNormalized_type: { workspaceId, merchantNormalized: "starbucks", type: "expense" } },
     });
     expect(mapping?.source).toBe("manual");
     expect(mapping?.confidence.toString()).toBe("1");
@@ -80,7 +80,7 @@ describe("mapMerchantToCategoryService", () => {
     );
     expect(r.mapping.categoryId).toBe(categoryId);
     const mapping = await prisma.merchantMapping.findUnique({
-      where: { workspaceId_merchantNormalized: { workspaceId, merchantNormalized: "starbucks" } },
+      where: { workspaceId_merchantNormalized_type: { workspaceId, merchantNormalized: "starbucks", type: "expense" } },
     });
     expect(mapping?.categoryId).toBe(categoryId);
     expect(mapping?.source).toBe("manual");

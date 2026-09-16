@@ -9,17 +9,15 @@ function readMobile(rel: string) {
 }
 
 describe("morning brief frequency settings", () => {
-  it("shows compact frequency options and patches morningBriefFrequency", () => {
+  it("explains the global cadence and makes settings available to Free users", () => {
     const source = readMobile("app/brief/index.tsx");
 
-    expect(source).toContain("Frequency");
-    expect(source).toContain("Needs attention");
-    expect(source).toContain("Only when Fina spots something important");
-    expect(source).toContain("Every morning");
-    expect(source).toContain("Send a brief even on quiet days");
-    expect(source).toContain("morningBriefFrequency");
-    expect(source).toContain('value: "issues_only"');
-    expect(source).toContain('value: "daily"');
-    expect(source).toContain("patch({ morningBriefFrequency: opt.value })");
+    expect(source).not.toContain("FREQUENCY_OPTIONS");
+    expect(source).not.toContain("morningBriefFrequency");
+    expect(source).not.toContain("PaidFeatureLock");
+    expect(source).toContain("Tap to open Home");
+    expect(source).toContain("weekly report on Mondays");
+    expect(source).toContain("monthly report on the 1st");
+    expect(source).toContain("patch({ pauseEnabled: !v })");
   });
 });

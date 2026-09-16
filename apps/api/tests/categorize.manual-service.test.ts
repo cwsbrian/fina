@@ -50,7 +50,7 @@ describe("applyManualCategorize", () => {
     expect(res.backfilledCount).toBe(2);
 
     const mapping = await prisma.merchantMapping.findUniqueOrThrow({
-      where: { workspaceId_merchantNormalized: { workspaceId: wsId, merchantNormalized: "starbucks" } },
+      where: { workspaceId_merchantNormalized_type: { workspaceId: wsId, merchantNormalized: "starbucks", type: "expense" } },
     });
     expect(mapping.source).toBe("manual");
     expect(mapping.confidence.toString()).toBe("1");

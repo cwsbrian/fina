@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterAll, vi } from "vitest";
+import { describe, expect, it, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
@@ -33,7 +33,11 @@ vi.mock("../src/push/send.js", async (importOriginal) => {
   };
 });
 
-beforeEach(async () => { await truncateAll(); });
+beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-13T12:00:00Z")); // Monday: report path.
+  await truncateAll();
+});
 afterAll(async () => { await disconnect(); });
 
 async function currentLocalHHmm(tz: string): Promise<string> {
@@ -482,3 +486,5 @@ describe("daily-brief categorize_confirm_card block", () => {
     expect(card!.items[0]!.merchant).toBe("Inside");
   });
 });
+
+afterEach(() => vi.useRealTimers());

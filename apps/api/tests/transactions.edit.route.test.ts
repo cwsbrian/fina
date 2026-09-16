@@ -434,7 +434,7 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(otherAlloc.categoryId).toBe(oldCat.id);
 
     const mapping = await prisma.merchantMapping.findUniqueOrThrow({
-      where: { workspaceId_merchantNormalized: { workspaceId: wsId, merchantNormalized: "apple" } },
+      where: { workspaceId_merchantNormalized_type: { workspaceId: wsId, merchantNormalized: "apple", type: "expense" } },
     });
     expect(mapping.categoryId).toBe(newCat.id);
     expect(mapping.source).toBe("manual");

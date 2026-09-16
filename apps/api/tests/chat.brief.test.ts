@@ -45,6 +45,16 @@ describe("briefBlocksToText", () => {
 });
 
 describe("generateBrief (mocked LLM)", () => {
+  it.each(["daily", "weekly"] as const)("rejects daily context before any LLM call, even with type=%s", async (briefType) => {
+    const { generateBrief } = await import("../src/chat/brief.js");
+    const { testEnv } = await import("./helpers/test-env.js");
+    chatGeminiMock.responses.push({ text: "must not be consumed" });
+    await expect(generateBrief(testEnv(), {
+      user: { id: "u1", name: null, tz: "UTC", morningTime: "08:00", locale: "en-CA" },
+      briefType: "daily", date: "2026-09-16", workspaces: [],
+    }, [], briefType)).rejects.toThrow("daily_brief_llm_forbidden");
+    expect(chatGeminiMock.responses).toHaveLength(1);
+  });
   it("emits a single text PresentationBlock from the LLM response", async () => {
     const { generateBrief } = await import("../src/chat/brief.js");
     const { testEnv } = await import("./helpers/test-env.js");
@@ -56,7 +66,7 @@ describe("generateBrief (mocked LLM)", () => {
       testEnv(),
       {
         user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00", locale: "en-CA" },
-        briefType: "daily",
+        briefType: "weekly",
         date: "2026-05-22",
         workspaces: [
           {
@@ -92,7 +102,7 @@ describe("generateBrief (mocked LLM)", () => {
         ],
       },
       [],
-      "daily",
+      "weekly",
     );
 
     expect(blocks).toHaveLength(1);
@@ -109,12 +119,12 @@ describe("generateBrief (mocked LLM)", () => {
       testEnv(),
       {
         user: { id: "u1", name: "Brian", tz: "America/Toronto", morningTime: "08:00", locale: "en-CA" },
-        briefType: "daily",
+        briefType: "weekly",
         date: "2026-05-22",
         workspaces: [],
       },
       ["BRIEF_FROM_YESTERDAY_MARKER"],
-      "daily",
+      "weekly",
       [{ role: "user", parts: [{ text: "Háblame en español, por favor." }] }],
       "fina:brief:test",
     );
@@ -137,12 +147,12 @@ describe("generateBrief (mocked LLM)", () => {
       testEnv(),
       {
         user: { id: "u1", name: null, tz: "America/Toronto", morningTime: "08:00", locale: "en-CA" },
-        briefType: "daily",
+        briefType: "weekly",
         date: "2026-05-22",
         workspaces: [],
       },
       [],
-      "daily",
+      "weekly",
     );
 
     expect(blocks).toHaveLength(1);

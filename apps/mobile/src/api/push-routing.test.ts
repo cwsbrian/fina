@@ -10,6 +10,10 @@ function readMobile(rel: string) {
 }
 
 describe("push notification routing", () => {
+  it("opens Home for daily spending, even if a stale thread id is present", () => {
+    expect(notificationRouteForData({ type: "daily-spending" })).toBe("/(tabs)");
+    expect(notificationRouteForData({ type: "daily-spending", threadId: "old" })).toBe("/(tabs)");
+  });
   it("routes daily brief notification taps to the chat thread", () => {
     expect(notificationRouteForData({ type: "daily-brief", threadId: "thread 123" })).toBe(
       "/(tabs)/chat?thread=thread%20123",

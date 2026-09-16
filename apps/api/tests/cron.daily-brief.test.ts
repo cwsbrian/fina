@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, afterAll } from "vitest";
+import { describe, expect, it, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
@@ -10,6 +10,8 @@ import {
 } from "./helpers/gemini-mock.js";
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-13T12:00:00Z")); // Monday: report path.
   await truncateAll();
   resetGeminiMock();
   chatGeminiMock.responses.push({ text: "test brief text" });
@@ -179,7 +181,7 @@ describe("runDailyBrief", () => {
     expect(brief.message.threadId).toBe(thread.id);
   });
 
-  it("skips quiet days for users who only want briefs when attention is needed", async () => {
+  it("uses the global report cadence even with a legacy issues_only preference", async () => {
     const tz = "Asia/Seoul";
     const u = await prisma.user.create({
       data: {
@@ -204,8 +206,8 @@ describe("runDailyBrief", () => {
     const messages = await prisma.chatMessage.findMany({
       where: { thread: { userId: u.id } },
     });
-    expect(briefs).toHaveLength(0);
-    expect(messages).toHaveLength(0);
+    expect(briefs).toHaveLength(1);
+    expect(messages).toHaveLength(1);
   });
 
   it("emits an attention-only brief when an upcoming scheduled spend exists", async () => {
@@ -304,3 +306,5 @@ describe("runDailyBrief", () => {
     expect(threads[0]!.id).toBe(existingThread.id);
   });
 });
+
+afterEach(() => vi.useRealTimers());

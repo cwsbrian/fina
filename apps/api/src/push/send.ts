@@ -148,7 +148,7 @@ export async function sendBriefPush(
   env: Env,
   userId: string,
   briefText: string,
-  route?: { threadId?: string },
+  route?: { threadId?: string; home?: boolean },
 ): Promise<PushSendResult> {
   if (!(await isChannelEnabled(userId, "morningBrief"))) {
     logInfo({ userId, channel: "morningBrief" }, "push skipped — channel disabled");
@@ -157,7 +157,7 @@ export async function sendBriefPush(
   const payload: PushPayload = {
     title: "Fina ☀️",
     body: briefText,
-    dataType: "daily-brief",
+    dataType: route?.home ? "daily-spending" : "daily-brief",
   };
   if (route?.threadId) payload.data = { threadId: route.threadId };
   return sendToUserDevices(env, userId, payload);
@@ -194,7 +194,7 @@ export async function sendTrialExpiringPush(
   const label = daysLeft === 1 ? "Your trial ends tomorrow" : `Your trial ends in ${daysLeft} days`;
   return sendToUserDevices(env, userId, {
     title: label,
-    body: "Pick a plan to keep Plaid sync, chat, and the morning brief running.",
+    body: "Pick a plan to keep Plaid sync, chat, and weekly and monthly reports running.",
     dataType: "trial-expiring",
   });
 }

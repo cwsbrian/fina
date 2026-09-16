@@ -1,7 +1,7 @@
 import { describe, expect, it, beforeEach, afterAll } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
-import { buildBriefContext } from "../src/chat/brief-context.js";
+import { buildBriefContext, briefTransactionRange } from "../src/chat/brief-context.js";
 
 beforeEach(async () => {
   await truncateAll();
@@ -103,7 +103,7 @@ describe("buildBriefContext", () => {
     });
 
     // Tx from yesterday — should be in window.
-    const yesterday = new Date(Date.now() - 12 * 60 * 60 * 1000);
+    const yesterday = briefTransactionRange("daily", new Date(), u.tz).gte;
     await prisma.transaction.create({
       data: {
         workspaceId: ws.id,

@@ -17,6 +17,7 @@ export type HistoryHint = {
 export async function findHistoryHints(
   workspaceId: string,
   merchantsNormalized: string[],
+  type: "expense" | "income",
 ): Promise<Map<string, HistoryHint>> {
   if (merchantsNormalized.length === 0) return new Map();
 
@@ -44,6 +45,8 @@ export async function findHistoryHints(
         AND t."removedAt" IS NULL
         AND a."categoryId" IS NOT NULL
         AND c."archivedAt" IS NULL
+        AND c."type"::text = ${type}
+        AND (t."amount" >= 0) = (${type} = 'expense')
         AND (SELECT COUNT(*) FROM "transaction_allocations" x WHERE x."transactionId" = t."id") = 1
     )
     SELECT "merchantNormalized", "categoryId", "needsConfirmation", "dismissedUntil"

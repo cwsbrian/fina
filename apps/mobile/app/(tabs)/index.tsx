@@ -34,7 +34,7 @@ import { analysisCategoryRoute } from "../../src/analysis/category-route";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { useCollapsingHeader } from "../../src/design/useCollapsingHeader";
 import { ActionItemCard } from "../../src/home/ActionItemCard";
-import { shouldShowBudgetHero } from "../../src/home/budget-hero";
+import { computeBudgetCap, shouldShowBudgetHero } from "../../src/home/budget-hero";
 import { isBillingLocked } from "../../src/billing/recovery-ui";
 import { currencySymbol, formatMoney } from "../../src/format/money";
 import { categoryMeta } from "../../src/categories/meta";
@@ -46,7 +46,7 @@ type SpendByCategory = { categoryId: string; categoryName?: string; spent: numbe
 type BudgetCurrent = {
   currency: string;
   plan: {
-    totalAmount?: number;
+    totalAmount: string;
     categoryAllocations?: Array<{ categoryId: string; amount: number }>;
   } | null;
   totalSpent: string;
@@ -67,16 +67,6 @@ type GoalSummary = {
   targetAmount: string;
   dueDate: string;
 };
-
-function computeBudgetCap(plan: BudgetCurrent["plan"]): number | null {
-  if (!plan) return null;
-  if (typeof plan.totalAmount === "number") return plan.totalAmount;
-  if (Array.isArray(plan.categoryAllocations)) {
-    const sum = plan.categoryAllocations.reduce((s, c) => s + Number(c.amount ?? 0), 0);
-    return sum > 0 ? sum : null;
-  }
-  return null;
-}
 
 function monthName(date: Date): string {
   return date.toLocaleDateString("en-CA", { month: "long" });

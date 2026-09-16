@@ -1,10 +1,12 @@
-import { describe, expect, it, beforeEach, afterAll } from "vitest";
+import { describe, expect, it, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { prisma } from "../src/db.js";
 import { truncateAll, disconnect } from "./helpers/db.js";
 import { testEnv } from "./helpers/test-env.js";
 import { chatGeminiMock, resetGeminiMock } from "./helpers/gemini-mock.js";
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-13T12:00:00Z")); // Monday: report path.
   await truncateAll();
   resetGeminiMock();
   chatGeminiMock.responses.push({
@@ -76,3 +78,5 @@ describe("daily-brief E2E smoke", () => {
     expect(thread.workspaceId).toBe(ws.id);
   });
 });
+
+afterEach(() => vi.useRealTimers());

@@ -64,7 +64,7 @@ describe("findHistoryHints", () => {
     const newer = new Date("2026-02-01");
     await makeTx(wsId, accountId, "starbucks", older, cat.id);
     await makeTx(wsId, accountId, "starbucks", newer, cat.id, { needsConfirmation: true });
-    const result = await findHistoryHints(wsId, ["starbucks"]);
+    const result = await findHistoryHints(wsId, ["starbucks"], "expense");
     const hint = result.get("starbucks");
     expect(hint?.categoryId).toBe(cat.id);
     expect(hint?.needsConfirmation).toBe(true);
@@ -74,14 +74,14 @@ describe("findHistoryHints", () => {
     const { wsId, accountId } = await makeWs();
     const cat = await makeCat(wsId, "HistDining");
     await makeTx(wsId, accountId, "starbucks", new Date("2026-02-01"), cat.id, { removedAt: new Date() });
-    const result = await findHistoryHints(wsId, ["starbucks"]);
+    const result = await findHistoryHints(wsId, ["starbucks"], "expense");
     expect(result.has("starbucks")).toBe(false);
   });
 
   it("skips uncategorized prior allocations", async () => {
     const { wsId, accountId } = await makeWs();
     await makeTx(wsId, accountId, "starbucks", new Date("2026-02-01"), null);
-    const result = await findHistoryHints(wsId, ["starbucks"]);
+    const result = await findHistoryHints(wsId, ["starbucks"], "expense");
     expect(result.has("starbucks")).toBe(false);
   });
 
@@ -89,7 +89,7 @@ describe("findHistoryHints", () => {
     const { wsId, accountId } = await makeWs();
     const cat = await makeCat(wsId, "HistDining", true);
     await makeTx(wsId, accountId, "starbucks", new Date("2026-02-01"), cat.id);
-    const result = await findHistoryHints(wsId, ["starbucks"]);
+    const result = await findHistoryHints(wsId, ["starbucks"], "expense");
     expect(result.has("starbucks")).toBe(false);
   });
 
@@ -99,14 +99,14 @@ describe("findHistoryHints", () => {
     const transit = await makeCat(wsId, "HistTransit");
     await makeTx(wsId, accountId, "starbucks", new Date("2026-02-01"), dining.id);
     await makeTx(wsId, accountId, "uber", new Date("2026-02-01"), transit.id);
-    const result = await findHistoryHints(wsId, ["starbucks", "uber", "newmerchant"]);
+    const result = await findHistoryHints(wsId, ["starbucks", "uber", "newmerchant"], "expense");
     expect(result.size).toBe(2);
     expect(result.get("starbucks")?.categoryId).toBe(dining.id);
     expect(result.get("uber")?.categoryId).toBe(transit.id);
   });
 
   it("returns empty map for empty input", async () => {
-    const result = await findHistoryHints("any-ws-id", []);
+    const result = await findHistoryHints("any-ws-id", [], "expense");
     expect(result.size).toBe(0);
   });
 });

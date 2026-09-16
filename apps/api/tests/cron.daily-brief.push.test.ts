@@ -21,6 +21,8 @@ vi.mock("expo-server-sdk", () => ({
 }));
 
 beforeEach(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-07-13T12:00:00Z")); // Monday: report path.
   await truncateAll();
   resetGeminiMock();
   chatGeminiMock.responses.push({ text: "morning brief text" });
@@ -152,3 +154,5 @@ describe("daily-brief push integration", () => {
     expect(sendSpy).not.toHaveBeenCalled(); // 0 devices → no Expo call
   });
 });
+
+afterEach(() => vi.useRealTimers());

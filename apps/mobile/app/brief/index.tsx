@@ -19,12 +19,9 @@ import BottomSheet, {
   type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
 import {
-  tierAtLeast,
   type MeDTO as Me,
-  type MorningBriefFrequency,
 } from "@fina/shared";
 import { apiFetch } from "../../src/api/client";
-import { PaidFeatureLock } from "../../src/billing/PaidFeatureLock";
 import { colors, space, type as type$ } from "../../src/design/tokens";
 import { HeaderIconButton } from "../../src/design/HeaderIconButton";
 import { DatePickerSheet } from "../../src/datetime/DatePickerSheet";
@@ -65,23 +62,6 @@ const SNOOZE_OPTIONS: SnoozeOption[] = [
   { key: "3d", label: "3 days", daysAhead: 3 },
   { key: "1w", label: "1 week", daysAhead: 7 },
   { key: "1mo", label: "1 month", daysAhead: 30 },
-];
-
-const FREQUENCY_OPTIONS: Array<{
-  value: MorningBriefFrequency;
-  label: string;
-  sub: string;
-}> = [
-  {
-    value: "issues_only",
-    label: "Needs attention",
-    sub: "Only when Fina spots something important",
-  },
-  {
-    value: "daily",
-    label: "Every morning",
-    sub: "Send a brief even on quiet days",
-  },
 ];
 
 function daysAheadIso(days: number): string {
@@ -158,23 +138,7 @@ export default function MorningBriefSettings() {
     );
   }
 
-  const canUseBrief = me.trial.active || tierAtLeast(me.tier, "pro");
-  if (!canUseBrief) {
-    return (
-      <SafeAreaView style={styles.safe} edges={["top"]}>
-        <Stack.Screen options={{ headerShown: false }} />
-        <Header />
-        <PaidFeatureLock
-          icon="sunny-outline"
-          title="Morning brief is a Pro feature"
-          body="Upgrade to get AI-generated morning guidance based on your workspace activity and conversation."
-        />
-      </SafeAreaView>
-    );
-  }
-
   const morningTime = me.user.morningTime ?? "08:00";
-  const morningBriefFrequency = me.user.morningBriefFrequency ?? "daily";
   const t = splitTime(morningTime);
   const enabled = !me.user.pauseEnabled;
 
@@ -188,9 +152,10 @@ export default function MorningBriefSettings() {
             <Ionicons name="sunny-outline" size={26} color={colors.primary} />
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={styles.heroTitle}>Daily morning brief</Text>
+            <Text style={styles.heroTitle}>Morning updates</Text>
             <Text style={styles.heroSub}>
-              Fina sends one push each morning with yesterday's activity and what's coming.
+              Yesterday's spending, without AI, on every plan. Tap to open Home.
+              Pro and Max include a weekly report on Mondays and a monthly report on the 1st, delivered to your chat instead.
             </Text>
           </View>
         </View>
@@ -200,7 +165,7 @@ export default function MorningBriefSettings() {
           <View style={styles.row}>
             <View style={styles.rowBody}>
               <Text style={styles.rowTitle}>Get the brief</Text>
-              <Text style={styles.rowSub}>Push on days with new activity</Text>
+              <Text style={styles.rowSub}>Morning updates for active workspaces</Text>
             </View>
             <Switch
               value={enabled}
@@ -209,39 +174,6 @@ export default function MorningBriefSettings() {
               trackColor={{ true: colors.primary, false: colors.surfaceStrong }}
             />
           </View>
-        </View>
-
-        <Text style={styles.groupLabel}>Frequency</Text>
-        <View style={styles.group}>
-          {FREQUENCY_OPTIONS.map((opt, idx) => {
-            const selected = morningBriefFrequency === opt.value;
-            return (
-              <Pressable
-                key={opt.value}
-                style={({ pressed }) => [
-                  styles.row,
-                  idx > 0 && styles.rowBorder,
-                  pressed && { backgroundColor: colors.surfaceSoft },
-                ]}
-                onPress={() => patch({ morningBriefFrequency: opt.value })}
-                disabled={saving || !enabled}
-              >
-                <View style={styles.rowBody}>
-                  <Text style={[styles.rowTitle, !enabled && { color: colors.muted }]}>
-                    {opt.label}
-                  </Text>
-                  <Text style={styles.rowSub}>{opt.sub}</Text>
-                </View>
-                {selected && (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={20}
-                    color={enabled ? colors.primary : colors.mutedSoft}
-                  />
-                )}
-              </Pressable>
-            );
-          })}
         </View>
 
         <Text style={styles.groupLabel}>Schedule</Text>

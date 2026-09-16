@@ -65,10 +65,9 @@ describe("brief LLM language contract", () => {
   // Each per-type prompt must carry its own framing tail (not only the shared
   // RULES) — guards against a regression that drops a per-type suffix.
   it("each brief type carries its own framing tail", () => {
-    expect(SYSTEM_PROMPT_PER_TYPE.daily).toContain("DAILY brief");
+    expect(SYSTEM_PROMPT_PER_TYPE).not.toHaveProperty("daily");
     expect(SYSTEM_PROMPT_PER_TYPE.weekly).toContain("WEEKLY brief");
     expect(SYSTEM_PROMPT_PER_TYPE.monthly).toContain("MONTHLY brief");
-    expect(SYSTEM_PROMPT_PER_TYPE.daily).toContain("do not warn or coach");
     expect(SYSTEM_PROMPT_PER_TYPE.weekly).toContain("recognize the improvement");
     expect(SYSTEM_PROMPT_PER_TYPE.monthly).toContain("calm goals");
   });
@@ -76,6 +75,6 @@ describe("brief LLM language contract", () => {
   // The at_risk severity line must carry the literal warning glyph (the brief
   // doubles as a lock-screen push; the glyph is the only visual severity cue).
   it("at_risk guidance uses the literal warning glyph", () => {
-    expect(SYSTEM_PROMPT_PER_TYPE.daily).toContain("⚠️");
+    expect(SYSTEM_PROMPT_PER_TYPE.weekly).toContain("⚠️");
   });
 });

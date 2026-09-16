@@ -213,13 +213,15 @@ export async function editTransactionService(
     }
 
     // 4d. Validate categoryId when using the shortcut path (not allocations path).
+    let mappingCategoryType: "expense" | "income" | undefined;
     if (flags.categoryIdProvided && !flags.allocationsProvided) {
       if (input.categoryId !== undefined && input.categoryId !== null) {
         const cat = await tx.category.findFirst({
           where: { id: input.categoryId, workspaceId: ctx.workspaceId, archivedAt: null },
-          select: { id: true },
+          select: { id: true, type: true },
         });
         if (!cat) throw new EditTxError("category_not_found");
+        mappingCategoryType = cat.type;
       }
     }
 
@@ -324,17 +326,20 @@ export async function editTransactionService(
       }
     }
 
-    if (flags.categoryIdProvided && input.categoryId && merchantNormalized.length > 0) {
+    if (flags.categoryIdProvided && input.categoryId && merchantNormalized.length > 0
+      && mappingCategoryType === (effectiveAmount.gte(0) ? "expense" : "income")) {
       await tx.merchantMapping.upsert({
         where: {
-          workspaceId_merchantNormalized: {
+          workspaceId_merchantNormalized_type: {
             workspaceId: ctx.workspaceId,
             merchantNormalized,
+            type: effectiveAmount.gte(0) ? "expense" : "income",
           },
         },
         create: {
           workspaceId: ctx.workspaceId,
           merchantNormalized,
+          type: effectiveAmount.gte(0) ? "expense" : "income",
           categoryId: input.categoryId,
           source: "manual",
           confidence: 1.0,
@@ -352,6 +357,7 @@ export async function editTransactionService(
           id: { not: txId },
           merchantNormalized,
           removedAt: null,
+          amount: effectiveAmount.gte(0) ? { gte: 0 } : { lt: 0 },
           allocations: {
             some: {
               needsConfirmation: true,
