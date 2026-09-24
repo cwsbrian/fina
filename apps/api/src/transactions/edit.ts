@@ -316,6 +316,34 @@ export async function editTransactionService(
           create: { workspaceId: ctx.workspaceId, merchantNormalized },
           update: {},
         });
+
+        const merchantTransactions = await tx.transaction.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            OR: [
+              { merchantNormalized },
+              { merchantNormalized: null },
+            ],
+          },
+          select: { id: true, merchantRaw: true, merchantNormalized: true },
+        });
+        const merchantTransactionIds = merchantTransactions
+          .filter((candidate) =>
+            (candidate.merchantNormalized ?? normalizeMerchant(candidate.merchantRaw))
+              === merchantNormalized,
+          )
+          .map((candidate) => candidate.id);
+        await tx.transaction.updateMany({
+          where: { id: { in: merchantTransactionIds } },
+          data: {
+            merchantNormalized,
+            budgetImpact: "excluded",
+            budgetImpactSource: "user",
+          },
+        });
+        affectedTransactionIds.push(
+          ...merchantTransactionIds.filter((id) => id !== txId),
+        );
       } else if (
         input.budgetImpactScope === "merchant"
         || input.budgetImpact === "excluded"

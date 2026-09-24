@@ -65,7 +65,7 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(res.json().transaction.id).toBe(txId);
   });
 
-  it("supports one-time and future merchant budget exclusions", async () => {
+  it("supports one-time and all-time merchant budget exclusions", async () => {
     const { cookie, wsId } = await setupEditor("ep-budget-scope@t.co");
     const headers = { cookie, "x-workspace-id": wsId, "content-type": "application/json" };
     const firstId = await seedManual(cookie, wsId);
@@ -80,6 +80,12 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     expect(once.json().transaction.merchantExclusionActive).toBe(false);
     expect(await prisma.merchantExclusion.count({ where: { workspaceId: wsId } })).toBe(0);
 
+    const historicalId = await seedManual(cookie, wsId);
+    await prisma.transaction.update({
+      where: { id: historicalId },
+      data: { merchantRaw: "Costco #123", merchantNormalized: null },
+    });
+
     const always = await app.inject({
       method: "PATCH",
       url: `/workspaces/${wsId}/transactions/${firstId}`,
@@ -88,6 +94,14 @@ describe("PATCH /workspaces/:id/transactions/:txId", () => {
     });
     expect(always.statusCode).toBe(200);
     expect(always.json().transaction.merchantExclusionActive).toBe(true);
+    expect(always.json().affectedTransactionIds.sort()).toEqual(
+      [firstId, historicalId].sort(),
+    );
+    expect(await prisma.transaction.findUnique({ where: { id: historicalId } })).toMatchObject({
+      merchantNormalized: "costco",
+      budgetImpact: "excluded",
+      budgetImpactSource: "user",
+    });
 
     const future = await app.inject({
       method: "POST",
