@@ -2,6 +2,11 @@
 
 AI Financial Advisor (chat-first). See `docs/superpowers/specs/2026-05-07-fina-design.md`.
 
+## License
+
+The source code in this repository is licensed under the [MIT License](LICENSE).
+The root package remains marked `private` to prevent accidental npm publication.
+
 ## Dev Setup
 
 Requires Node 20.18+, pnpm 9.12+, Docker.
