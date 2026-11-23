@@ -1,0 +1,375 @@
+/* Fina UI primitives: the one set every screen composes from.
+   CSS modules pull these in with `composes: fi-… from global`, so a
+   button, a field, a card and a tag look and move the same on Activity,
+   in Settings and on the sign-in page. */
+
+/* ───────── Buttons: one pair ─────────
+   .fi-btn is the secondary. .fi-btn--primary is the single filled
+   action of a view. Danger keeps the secondary shape in red. */
+
+.fi-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s-2);
+  height: var(--control-h);
+  padding: 0 var(--s-4);
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--m-out) var(--ease),
+    border-color var(--m-out) var(--ease),
+    transform var(--m-out) var(--ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .fi-btn:hover:not(:disabled) {
+    background: var(--color-surface-soft);
+    border-color: var(--color-muted);
+    transform: translateY(-1px);
+    transition-duration: var(--m-in);
+  }
+
+  .fi-btn--primary:hover:not(:disabled) {
+    background: var(--color-action-hover);
+    border-color: var(--color-action-hover);
+  }
+
+  .fi-btn--danger:hover:not(:disabled) {
+    background: var(--color-down-tint);
+    border-color: var(--color-down);
+  }
+}
+
+.fi-btn:active:not(:disabled) {
+  transform: translateY(1px) scale(0.985);
+  transition-duration: var(--m-press);
+}
+
+.fi-btn:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
+}
+
+.fi-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.fi-btn--primary {
+  border-color: var(--color-action);
+  background: var(--color-action);
+  color: var(--color-on-primary);
+}
+
+.fi-btn--danger {
+  color: var(--color-down);
+}
+
+.fi-btn--sm {
+  height: var(--control-h-sm);
+  padding: 0 var(--s-3);
+  font-size: 13px;
+}
+
+/* ───────── Fields ───────── */
+
+.fi-label {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--color-body);
+}
+
+.fi-input {
+  width: 100%;
+  min-width: 0;
+  height: var(--control-h);
+  padding: 0 var(--s-3);
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 1.4;
+  transition:
+    border-color 140ms var(--ease),
+    box-shadow 140ms var(--ease);
+}
+
+.fi-input::placeholder {
+  color: var(--color-muted-soft);
+}
+
+.fi-input:hover:not(:disabled):not(:focus) {
+  border-color: var(--color-muted);
+}
+
+.fi-input:focus,
+.fi-input:focus-visible {
+  outline: 0;
+  border-color: var(--color-action);
+  box-shadow: var(--ring);
+}
+
+.fi-input:disabled {
+  background: var(--color-surface-soft);
+  color: var(--color-muted);
+  cursor: not-allowed;
+}
+
+select.fi-input {
+  appearance: none;
+  padding-right: 34px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364706a' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+textarea.fi-input {
+  height: auto;
+  min-height: 96px;
+  padding: 10px var(--s-3);
+  line-height: 1.5;
+  resize: vertical;
+}
+
+input[type="color"].fi-input {
+  width: 56px;
+  padding: 4px;
+  cursor: pointer;
+}
+
+input[type="file"].fi-input {
+  height: auto;
+  padding: 7px var(--s-2);
+  color: var(--color-body);
+}
+
+input[type="file"].fi-input::file-selector-button {
+  margin-right: var(--s-3);
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+@media (pointer: coarse) {
+  .fi-input {
+    font-size: 16px;
+  }
+}
+
+/* ───────── Surfaces ─────────
+   One card: white, a hairline, no shadow. Only a card that is itself a
+   link or a button lifts. */
+
+.fi-card {
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.fi-card--link {
+  cursor: pointer;
+  transition:
+    border-color var(--m-out) var(--ease),
+    transform var(--m-out) var(--ease),
+    box-shadow var(--m-out) var(--ease);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .fi-card--link:hover:not(:disabled) {
+    border-color: var(--color-control-border);
+    transform: translateY(-2px);
+    box-shadow: 0 10px 24px -12px rgba(17, 35, 28, 0.22);
+    transition-duration: 180ms;
+  }
+}
+
+.fi-card--link:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
+}
+
+/* ───────── Tags ───────── */
+
+.fi-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 var(--s-2);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.fi-tag--up {
+  background: var(--color-up-tint);
+  color: var(--color-up);
+}
+
+.fi-tag--info {
+  background: var(--color-info-tint);
+  color: var(--color-info);
+}
+
+.fi-tag--warn {
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+
+.fi-tag--down {
+  background: var(--color-down-tint);
+  color: var(--color-down);
+}
+
+/* ───────── Links: one look ───────── */
+
+.fi-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-action);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: text-decoration-color var(--m-out) var(--ease);
+}
+
+.fi-link:hover {
+  text-decoration-color: currentColor;
+  transition-duration: var(--m-in);
+}
+
+.fi-link:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* ───────── Notices ───────── */
+
+.fi-notice {
+  padding: var(--s-3) var(--s-4);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-body);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.fi-notice--error {
+  border-color: transparent;
+  background: var(--color-down-tint);
+  color: var(--color-down);
+}
+
+.fi-notice--success {
+  border-color: transparent;
+  background: var(--color-up-tint);
+  color: var(--color-up);
+}
+
+.fi-notice--warn {
+  border-color: transparent;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
+}
+
+.fi-notice a,
+.fi-notice button {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.fi-notice button {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ───────── Empty and loading states ───────── */
+
+.fi-empty {
+  padding: var(--s-7) var(--s-5);
+  color: var(--color-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* ───────── Headings ───────── */
+
+.fi-title {
+  font-family: var(--font-display);
+  font-size: var(--t-title);
+  font-weight: 500;
+  line-height: 1.12;
+  letter-spacing: -0.015em;
+  color: var(--color-ink);
+  text-wrap: balance;
+}
+
+.fi-h2 {
+  font-family: var(--font-display);
+  font-size: var(--t-h2);
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+}
+
+.fi-lead {
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--color-muted);
+  max-width: 62ch;
+  text-wrap: pretty;
+}
+
+/* A headline amount. Urbanist's figures are proportional, so this is
+   for single numbers only; columns of money stay in Inter. */
+.fi-figure {
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  font-variant-numeric: lining-nums;
+  color: var(--color-ink);
+}

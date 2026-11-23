@@ -1,38 +1,49 @@
+/* Sign-in, sign-up, password, email verification and invite screens.
+   One white sheet on the canvas; the same buttons, fields and tags as
+   the app (ui.css), sized up a step because these are the only controls
+   on the page. */
+
 .page {
   min-height: 100vh;
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   background: var(--color-canvas);
 }
 
 .top {
-  padding: 22px 32px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-5) var(--s-6);
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
   color: var(--color-ink);
   cursor: pointer;
-  background: transparent;
-  border: 0;
-  padding: 0;
+}
+
+.brand:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 4px;
 }
 
 .brandLogo {
-  height: 28px;
-  width: auto;
   display: block;
+  width: auto;
+  height: 28px;
 }
 
 .topMeta {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--color-muted);
-  letter-spacing: 0.4px;
 }
 
 .body {
@@ -40,67 +51,55 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 32px 24px 80px;
+  padding: var(--s-5) var(--s-5) var(--s-8);
 }
 
 .card {
   width: 100%;
-  max-width: 420px;
+  max-width: 440px;
+  padding: var(--s-6);
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+}
+
+.cardWide {
+  max-width: 480px;
 }
 
 .title {
-  font-size: 32px;
-  line-height: 1.14;
-  font-weight: 500;
-  letter-spacing: -0.7px;
-  color: var(--color-ink);
-  margin: 0 0 10px;
+  composes: fi-title from global;
+  margin: 0 0 var(--s-2);
+  font-size: 30px;
 }
 
 .sub {
+  margin: 0 0 var(--s-5);
   font-size: 16px;
+  line-height: 1.5;
   color: var(--color-body);
-  margin: 0 0 28px;
   text-wrap: pretty;
 }
 
+/* ───────── Fields ───────── */
+
 .field {
   display: block;
-  margin-bottom: 16px;
+  margin-bottom: var(--s-4);
 }
 
 .fieldLabel {
+  composes: fi-label from global;
   display: block;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  color: var(--color-muted);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
+  font-size: 14px;
 }
 
 .input {
-  width: 100%;
+  composes: fi-input from global;
   height: 48px;
-  padding: 0 16px;
-  border-radius: 12px;
-  background: var(--color-surface-soft);
-  border: 1px solid transparent;
-  color: var(--color-ink);
+  padding: 0 14px;
   font-size: 16px;
-  font-weight: 500;
-  outline: 0;
-  transition: border-color 0.14s, background 0.14s;
-}
-
-.input::placeholder {
-  color: var(--color-muted);
-  font-weight: 400;
-}
-
-.input:focus {
-  background: #ffffff;
-  border-color: var(--color-ink);
 }
 
 .fieldTrail {
@@ -108,27 +107,48 @@
 }
 
 .fieldTrail .input {
-  padding-right: 44px;
+  padding-right: 48px;
 }
 
 .fieldTrailIcon {
   position: absolute;
-  right: 12px;
   top: 50%;
+  right: 6px;
   transform: translateY(-50%);
-  color: var(--color-muted);
-  background: transparent;
-  border: 0;
-  padding: 4px;
-  cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-muted);
+  cursor: pointer;
+}
+
+button.fieldTrailIcon:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+}
+
+button.fieldTrailIcon:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: 0;
+}
+
+.inputLocked,
+.inputLocked:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+  cursor: not-allowed;
 }
 
 .fieldHelper {
-  margin-top: 8px;
+  margin-top: var(--s-2);
   font-size: 13px;
+  line-height: 1.5;
   color: var(--color-muted);
 }
 
@@ -136,17 +156,22 @@
   color: var(--color-down);
 }
 
+.helperRow {
+  margin-top: var(--s-2);
+  text-align: right;
+}
+
 .strengthRow {
-  margin-top: 10px;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--s-3);
+  margin-top: var(--s-2);
 }
 
 .strengthBar {
   flex: 1;
   height: 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-xs);
   background: var(--color-surface-strong);
   overflow: hidden;
 }
@@ -158,63 +183,60 @@
 }
 
 .strengthLabel {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
 }
+
+/* ───────── Buttons ───────── */
 
 .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  height: 52px;
+  composes: fi-btn fi-btn--primary from global;
   width: 100%;
-  padding: 0 28px;
-  border-radius: 999px;
-  border: 0;
-  background: var(--color-primary);
-  color: var(--color-on-primary);
+  height: 48px;
   font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-  letter-spacing: -0.1px;
-  transition: background 0.14s, opacity 0.14s;
 }
 
-.btn:hover:not(:disabled) {
-  background: var(--color-primary-active);
-}
-
-.btn:disabled {
-  background: var(--color-primary-disabled);
-  cursor: not-allowed;
-  opacity: 0.7;
+.btnLg {
+  width: 100%;
+  height: 48px;
+  font-size: 16px;
 }
 
 .btnOutline {
-  background: var(--color-canvas);
+  border-color: var(--color-control-border);
+  background: var(--color-surface);
   color: var(--color-ink);
-  border: 1px solid var(--color-hairline);
 }
 
-.btnOutline:hover:not(:disabled) {
-  background: var(--color-surface-soft);
+@media (hover: hover) and (pointer: fine) {
+  .btnOutline:hover:not(:disabled) {
+    border-color: var(--color-muted);
+    background: var(--color-surface-soft);
+  }
+}
+
+.btnOutlineFull {
+  composes: fi-btn from global;
+  width: 100%;
+  height: 48px;
+  font-size: 16px;
+}
+
+.social {
+  composes: fi-btn from global;
+  width: 100%;
+  height: 48px;
+  gap: 10px;
+  font-size: 16px;
+}
+
+.socialStack {
+  display: grid;
+  gap: var(--s-2);
 }
 
 .link {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  font-weight: 600;
-  color: var(--color-primary);
-  cursor: pointer;
-}
-
-.link:hover {
-  text-decoration: underline;
+  composes: fi-link from global;
 }
 
 .linkMuted {
@@ -226,51 +248,68 @@
   color: var(--color-ink);
 }
 
-.foot {
-  margin-top: 22px;
-  text-align: center;
-  font-size: 14px;
+.divider {
+  display: flex;
+  align-items: center;
+  gap: var(--s-3);
+  margin: var(--s-5) 0;
+  font-size: 13px;
   color: var(--color-muted);
 }
 
-.successGlyph {
-  width: 56px;
-  height: 56px;
-  border-radius: 16px;
-  background: rgba(31, 138, 91, 0.1);
-  color: var(--color-up);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 20px;
+.divider::before,
+.divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--color-hairline);
 }
 
-.helperRow {
-  text-align: right;
-  margin-top: 8px;
+.foot {
+  margin-top: var(--s-5);
+  font-size: 14px;
+  color: var(--color-muted);
+  text-align: center;
 }
+
+.legal {
+  margin-top: var(--s-4);
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-muted);
+  text-align: center;
+}
+
+.legal a {
+  color: var(--color-ink);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* ───────── Banners and status ───────── */
 
 .banner {
   display: flex;
   align-items: flex-start;
-  gap: 12px;
-  padding: 14px 16px;
-  border-radius: 14px;
-  background: var(--color-surface-soft);
+  gap: var(--s-3);
+  margin-bottom: var(--s-5);
+  padding: var(--s-3) var(--s-4);
   border: 1px solid var(--color-hairline);
-  margin-bottom: 22px;
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
 }
 
 .bannerIcon {
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  background: rgba(62, 179, 139, 0.1);
-  color: var(--color-primary);
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--color-brand-tint);
+  color: var(--color-action);
 }
 
 .bannerBody {
@@ -285,249 +324,178 @@
 }
 
 .bannerSub {
-  font-size: 13px;
-  color: var(--color-muted);
   margin-top: 2px;
-}
-
-.inputLocked {
-  background: var(--color-surface-strong);
-  color: var(--color-body);
-  cursor: not-allowed;
-}
-
-.divider {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin: 24px 0;
   font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
   color: var(--color-muted);
+  overflow-wrap: anywhere;
 }
 
-.divider::before,
-.divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: var(--color-hairline);
+.bannerDanger {
+  border-color: #efc4c2;
+  background: var(--color-down-tint);
 }
 
-.socialStack {
-  display: grid;
-  gap: 10px;
+.bannerDanger .bannerIcon {
+  background: rgba(191, 42, 46, 0.12);
+  color: var(--color-down);
 }
 
-.social {
-  width: 100%;
-  height: 48px;
+.successGlyph {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  border-radius: 999px;
-  background: var(--color-canvas);
-  border: 1px solid var(--color-hairline);
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-ink);
-  cursor: pointer;
-  font-family: inherit;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--s-4);
+  border-radius: var(--radius-md);
+  background: var(--color-up-tint);
+  color: var(--color-up);
 }
 
-.social:hover {
-  background: var(--color-surface-soft);
-}
-
-.legal {
-  margin-top: 18px;
-  font-size: 13px;
-  line-height: 1.6;
-  color: var(--color-muted);
-  text-align: center;
-}
-
-.legal a {
-  color: var(--color-ink);
-  font-weight: 600;
-  cursor: pointer;
-}
+/* ───────── One-time code ───────── */
 
 .otpRow {
   display: flex;
-  gap: 8px;
   justify-content: space-between;
-  margin-top: 28px;
+  gap: var(--s-2);
+  margin-top: var(--s-5);
 }
 
 .otpBox {
   flex: 1;
   min-width: 0;
   height: 60px;
-  border-radius: 14px;
-  background: var(--color-surface-soft);
-  border: 1.5px solid transparent;
-  text-align: center;
+  border: 1px solid var(--color-control-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: var(--font-display);
   font-size: 28px;
   font-weight: 500;
-  letter-spacing: -0.6px;
-  color: var(--color-ink);
-  outline: 0;
   font-variant-numeric: tabular-nums lining-nums;
-  font-family: inherit;
-  transition: border-color 0.12s, background 0.12s;
+  text-align: center;
+  outline: 0;
+  transition:
+    border-color 140ms var(--ease),
+    box-shadow 140ms var(--ease);
 }
 
 .otpBox:focus {
-  background: #ffffff;
-  border-color: var(--color-ink);
+  border-color: var(--color-action);
+  box-shadow: var(--ring);
 }
 
 .otpBoxFilled {
-  background: #ffffff;
-  border-color: var(--color-hairline);
-}
-
-.otpBoxFilled:focus {
   border-color: var(--color-ink);
 }
 
-.cardWide {
-  max-width: 480px;
+.otpBoxFilled:focus {
+  border-color: var(--color-action);
 }
 
+/* ───────── Invite ───────── */
+
 .inviteCard {
-  background: var(--color-canvas);
-  border: 1px solid var(--color-hairline);
-  border-radius: 22px;
-  padding: 32px;
   text-align: center;
 }
 
 .inviteIcon {
-  width: 64px;
-  height: 64px;
-  border-radius: 18px;
-  background: rgba(62, 179, 139, 0.1);
-  color: var(--color-primary);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  margin: 0 auto 18px;
+  width: 56px;
+  height: 56px;
+  margin: 0 auto var(--s-4);
+  border-radius: var(--radius-md);
+  background: var(--color-brand-tint);
+  color: var(--color-action);
 }
 
 .inviteIconDanger {
-  background: rgba(207, 32, 47, 0.1);
+  background: var(--color-down-tint);
   color: var(--color-down);
 }
 
 .inviteIconWarn {
-  background: rgba(230, 184, 92, 0.14);
-  color: #8a6a1c;
+  background: var(--color-warn-tint);
+  color: var(--color-warn);
 }
 
 .inviteFrom {
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
+  margin-bottom: var(--s-1);
+  font-size: 14px;
   color: var(--color-muted);
-  margin-bottom: 6px;
 }
 
 .inviteFrom strong {
   color: var(--color-ink);
-  text-transform: none;
-  letter-spacing: 0;
-  font-weight: 500;
-  font-size: 13px;
+  font-weight: 600;
 }
 
 .inviteWsName {
+  composes: fi-title from global;
+  margin: var(--s-1) 0 var(--s-3);
   font-size: 32px;
-  line-height: 1.1;
-  font-weight: 500;
-  letter-spacing: -0.8px;
-  color: var(--color-ink);
-  margin: 6px 0 14px;
 }
 
 .inviteRole {
+  margin-bottom: var(--s-5);
   font-size: 16px;
   color: var(--color-body);
-  margin-bottom: 28px;
 }
 
 .inviteFoot {
-  margin-top: 18px;
-  padding-top: 18px;
-  border-top: 1px solid var(--color-hairline-soft, var(--color-hairline));
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--color-hairline-soft);
   font-size: 13px;
   color: var(--color-muted);
 }
 
 .pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
+  composes: fi-tag from global;
   margin-left: 6px;
   vertical-align: 2px;
 }
 
 .pillEditor {
-  background: var(--color-surface-strong);
-  color: var(--color-body);
+  background: var(--color-brand-tint);
+  color: var(--color-action);
 }
 
 .pillViewer {
   background: var(--color-surface-soft);
-  color: var(--color-muted);
+  color: var(--color-body);
 }
 
 .pillDot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: currentColor;
   opacity: 0.7;
 }
 
-.bannerDanger {
-  background: rgba(207, 32, 47, 0.06);
-  border-color: rgba(207, 32, 47, 0.2);
-}
+@media (max-width: 520px) {
+  .top {
+    padding: var(--s-4);
+  }
 
-.bannerDanger .bannerIcon {
-  background: rgba(207, 32, 47, 0.12);
-  color: var(--color-down);
-}
+  .body {
+    align-items: flex-start;
+    padding: var(--s-2) var(--s-4) var(--s-7);
+  }
 
-.btnLg {
-  height: 52px;
-  font-size: 16px;
-  width: 100%;
-}
+  .card {
+    padding: var(--s-5) var(--s-4);
+  }
 
-.btnOutlineFull {
-  background: var(--color-canvas);
-  color: var(--color-ink);
-  border: 1px solid var(--color-hairline);
-  width: 100%;
-  height: 52px;
-  border-radius: 999px;
-  font-size: 16px;
-  font-weight: 600;
-  cursor: pointer;
-}
+  .title {
+    font-size: 26px;
+  }
 
-.btnOutlineFull:hover:not(:disabled) {
-  background: var(--color-surface-soft);
+  .otpBox {
+    height: 52px;
+    font-size: 24px;
+  }
 }

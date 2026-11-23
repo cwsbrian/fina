@@ -1,4 +1,5 @@
 import "./global.css";
+import "./ui.css";
 import { Inter } from "next/font/google";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { Toaster } from "../components/Toaster.client";

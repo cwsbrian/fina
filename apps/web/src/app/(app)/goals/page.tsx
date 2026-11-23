@@ -239,7 +239,6 @@ export default function GoalsPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Your plans</div>
           <h1 className={styles.title}>Goals</h1>
           <p className={styles.sub}>Track savings and the monthly plan behind each goal.</p>
         </div>
@@ -267,7 +266,10 @@ export default function GoalsPage() {
       )}
 
       {showCreate && (
-        <form className={styles.panel} onSubmit={create} style={{ marginBottom: 22 }}>
+        <form className={`${styles.panel} ${styles.panelGap}`} onSubmit={create}>
+          <div className={styles.panelHead}>
+            <h2 className={styles.panelTitle}>New goal</h2>
+          </div>
           <div className={styles.formGrid}>
             <div className={styles.field}>
               <label htmlFor="goal-title">Goal</label>
@@ -328,7 +330,7 @@ export default function GoalsPage() {
                 onChange={(event) => setColor(event.target.value)}
               />
             </div>
-            <div className={styles.field} style={{ gridColumn: "1 / -1" }}>
+            <div className={`${styles.field} ${styles.fieldWide}`}>
               <label htmlFor="goal-description">Description</label>
               <input
                 className={styles.input}
@@ -351,7 +353,8 @@ export default function GoalsPage() {
       )}
       {!loading && goals.length === 0 && (
         <div className={`${styles.panel} ${styles.empty}`}>
-          No goals yet. Create one to start planning.
+          <span className={styles.emptyTitle}>No goals yet.</span>
+          Create one to start planning.
         </div>
       )}
       <div className={styles.cards}>
@@ -369,7 +372,11 @@ export default function GoalsPage() {
               }}
             >
               <span className={styles.cardTitle}>
-                <span aria-hidden="true" style={{ color: goal.color ?? undefined, marginRight: 8 }}>
+                <span
+                  aria-hidden="true"
+                  className={styles.goalGlyph}
+                  style={{ color: goal.color ?? undefined }}
+                >
                   {GOAL_SYMBOLS[goal.icon ?? "flag-outline"] ?? "⚑"}
                 </span>
                 {goal.title}
@@ -396,10 +403,8 @@ export default function GoalsPage() {
 
       {selected && (
         <section className={styles.section}>
-          <div className={styles.head} style={{ marginBottom: 12 }}>
-            <h2 className={styles.sectionTitle} style={{ marginBottom: 0 }}>
-              {selected.title}
-            </h2>
+          <div className={styles.sectionHead}>
+            <h2 className={styles.sectionTitle}>{selected.title}</h2>
             <div className={styles.actions}>
               <button
                 className={styles.buttonSecondary}
@@ -425,7 +430,7 @@ export default function GoalsPage() {
                 {selected.archivedAt ? "Restore" : "Archive"}
               </button>
               <button
-                className={styles.buttonSecondary}
+                className={styles.buttonDanger}
                 type="button"
                 disabled={busy}
                 onClick={() => void remove(selected)}
@@ -444,9 +449,7 @@ export default function GoalsPage() {
             />
           )}
           {selected.description && (
-            <p className={styles.sub} style={{ marginBottom: 12 }}>
-              {selected.description}
-            </p>
+            <p className={styles.sectionNote}>{selected.description}</p>
           )}
           {selected.strategy?.notice && (
             <div className={styles.error}>{selected.strategy.notice}</div>
@@ -500,12 +503,11 @@ function GoalEditor({
   const [color, setColor] = useState(goal.color ?? "#3eb38b");
   return (
     <form
-      className={styles.panel}
+      className={`${styles.panel} ${styles.panelGap}`}
       onSubmit={(event) => {
         event.preventDefault();
         onSave({ title, description, targetAmount, dueDate, icon, color });
       }}
-      style={{ marginBottom: 16 }}
     >
       <div className={styles.formGrid}>
         <div className={styles.field}>
@@ -568,7 +570,7 @@ function GoalEditor({
             onChange={(event) => setColor(event.target.value)}
           />
         </div>
-        <div className={styles.field} style={{ gridColumn: "1 / -1" }}>
+        <div className={`${styles.field} ${styles.fieldWide}`}>
           <label htmlFor="goal-edit-description">Description</label>
           <input
             className={styles.input}

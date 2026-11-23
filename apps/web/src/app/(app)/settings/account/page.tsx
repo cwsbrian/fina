@@ -81,7 +81,9 @@ export default function AccountPage() {
   if (err) {
     return (
       <div className={styles.container}>
-        <p style={{ color: "var(--color-down)" }}>Could not load: {err}</p>
+        <p className={styles.loadError} role="alert">
+          Could not load: {err}
+        </p>
       </div>
     );
   }
@@ -255,25 +257,11 @@ export default function AccountPage() {
             <div className={styles.profileAvatar}>
               {initials(me.user.name, me.user.email)}
             </div>
-            <div style={{ flex: 1 }}>
-              <div
-                style={{
-                  fontSize: 18,
-                  fontWeight: 600,
-                  color: "var(--color-ink)",
-                }}
-              >
+            <div className={styles.grow}>
+              <div className={styles.profileName}>
                 {me.user.name || me.user.email.split("@")[0]}
               </div>
-              <div
-                style={{
-                  fontSize: 14,
-                  color: "var(--color-body)",
-                  marginTop: 4,
-                }}
-              >
-                {me.user.email}
-              </div>
+              <div className={styles.profileMail}>{me.user.email}</div>
             </div>
             <button
               type="button"
@@ -341,12 +329,7 @@ export default function AccountPage() {
           </div>
 
           {profileErr && (
-            <div
-              className={styles.fieldHelper}
-              style={{ color: "var(--color-down)", marginTop: 12 }}
-            >
-              {profileErr}
-            </div>
+            <div className={`${styles.fieldHelper} ${styles.fieldError}`}>{profileErr}</div>
           )}
 
           {dirty && (
@@ -385,23 +368,9 @@ export default function AccountPage() {
         {!changingPw ? (
           <div className={styles.card}>
             <div className={styles.cardRow}>
-              <div style={{ flex: 1 }}>
-                <div
-                  style={{
-                    fontSize: 15,
-                    fontWeight: 600,
-                    color: "var(--color-ink)",
-                  }}
-                >
-                  Change password
-                </div>
-                <div
-                  style={{
-                    fontSize: 13,
-                    color: "var(--color-muted)",
-                    marginTop: 4,
-                  }}
-                >
+              <div className={styles.grow}>
+                <div className={styles.cardTitle}>Change password</div>
+                <div className={styles.cardText}>
                   Use Forgot password if you don&apos;t remember the current
                   one.
                 </div>
@@ -450,12 +419,7 @@ export default function AccountPage() {
               />
             </div>
             {pwErr && (
-              <div
-                className={styles.fieldHelper}
-                style={{ color: "var(--color-down)" }}
-              >
-                {pwErr}
-              </div>
+              <div className={`${styles.fieldHelper} ${styles.fieldError}`}>{pwErr}</div>
             )}
             <div className={styles.formActions}>
               <button
@@ -508,13 +472,13 @@ export default function AccountPage() {
               <span className={styles.rowGlyph}>
                 <WebIcon name="laptop" size={20} />
               </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className={styles.grow}>
                 <div className={styles.rowMeta}>Loading sessions…</div>
               </div>
             </div>
           ) : sessions.length === 0 ? (
             <div className={styles.row}>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className={styles.grow}>
                 <div className={styles.rowMeta}>No other active sessions.</div>
               </div>
             </div>
@@ -537,7 +501,7 @@ export default function AccountPage() {
                     <span className={styles.rowGlyph}>
                       <WebIcon name="laptop" size={20} />
                     </span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className={styles.grow}>
                       <div className={styles.rowTitle}>
                         {browser ? `${device} · ${browser}` : device}
                         {isCurrent && (

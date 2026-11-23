@@ -21,25 +21,11 @@ export default function ErrorPage({
         color: "var(--color-ink)",
       }}
     >
-      <h1 style={{ fontSize: 32, fontWeight: 500, letterSpacing: -0.8 }}>
-        Something went wrong.
-      </h1>
+      <h1 className="fi-title">Something went wrong.</h1>
       <p style={{ color: "var(--color-muted)" }}>
         We hit a snag. Try again in a moment.
       </p>
-      <button
-        onClick={reset}
-        style={{
-          padding: "10px 20px",
-          borderRadius: 999,
-          background: "var(--color-ink)",
-          color: "#fff",
-          border: 0,
-          font: "14px var(--font-inter)",
-          fontWeight: 600,
-          cursor: "pointer",
-        }}
-      >
+      <button onClick={reset} className="fi-btn fi-btn--primary">
         Try again
       </button>
     </main>

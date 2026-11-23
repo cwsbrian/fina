@@ -1431,3 +1431,21 @@
 .landing :global(.fitem:hover) {
   background: var(--surface);
 }
+
+/* Phones: every button and footer link is a 44px tap target. */
+@media (max-width: 640px) {
+  .landing :global(.pill-btn),
+  .landing :global(.ghost-btn),
+  .landing :global(.nav-cta) {
+    min-height: 44px;
+  }
+  .landing :global(.foot-nav a) {
+    display: inline-flex;
+    align-items: center;
+    min-height: 44px;
+  }
+  .landing :global(.waitlist-form input),
+  .landing :global(.waitlist-form button) {
+    min-height: 44px;
+  }
+}

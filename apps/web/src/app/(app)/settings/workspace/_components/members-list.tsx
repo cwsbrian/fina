@@ -86,7 +86,7 @@ export function MembersList({
             <span className={styles.memberAvatar}>
               {initials(m.name, m.email)}
             </span>
-            <div style={{ flex: 1, minWidth: 0 }}>
+            <div className={styles.grow}>
               <div className={styles.rowTitle}>
                 {displayName}
                 {isSelf && (

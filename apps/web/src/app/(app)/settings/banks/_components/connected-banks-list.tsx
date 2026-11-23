@@ -146,7 +146,7 @@ export function ConnectedBanksList({
               <span className={styles.rowGlyph}>
                 <WebIcon name="bank" size={20} />
               </span>
-              <div style={{ flex: 1, minWidth: 0 }}>
+              <div className={styles.grow}>
                 <div className={styles.rowTitle}>
                   {it.institutionName}
                   <span className={pill.className}>

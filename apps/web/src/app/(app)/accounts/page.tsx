@@ -79,7 +79,6 @@ export default function AccountsPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Money sources</div>
           <h1 className={styles.title}>Accounts</h1>
           <p className={styles.sub}>
             Add manual accounts for transactions or manage existing ones.
@@ -95,6 +94,9 @@ export default function AccountsPage() {
         </div>
       )}
       <form className={styles.panel} onSubmit={create}>
+        <div className={styles.panelHead}>
+          <h2 className={styles.panelTitle}>New manual account</h2>
+        </div>
         <div className={styles.formGrid}>
           <div className={styles.field}>
             <label htmlFor="account-name">Account name</label>
@@ -163,7 +165,7 @@ export default function AccountsPage() {
                 <>
                   <div>
                     <strong>{account.name}</strong>
-                    <div className={styles.muted}>
+                    <div className={`${styles.muted} ${styles.cellCap}`}>
                       {account.type} · {account.currency}
                       {account.archivedAt ? " · Archived" : ""}
                       {account.plaidAccountId ? " · Connected bank" : " · Manual"}
@@ -172,7 +174,7 @@ export default function AccountsPage() {
                   {!account.plaidAccountId && (
                     <div className={styles.actions}>
                       <button
-                        className={styles.buttonSecondary}
+                        className={`${styles.buttonSecondary} ${styles.buttonSmall}`}
                         type="button"
                         onClick={() => {
                           setEditingId(account.id);
@@ -182,7 +184,7 @@ export default function AccountsPage() {
                         Rename
                       </button>
                       <button
-                        className={styles.buttonSecondary}
+                        className={`${styles.buttonSecondary} ${styles.buttonSmall}`}
                         type="button"
                         disabled={busy}
                         onClick={() => void patch(account.id, { archived: !account.archivedAt })}

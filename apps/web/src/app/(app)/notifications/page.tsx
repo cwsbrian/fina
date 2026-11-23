@@ -52,7 +52,6 @@ export default function NotificationsPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Your alerts</div>
           <h1 className={styles.title}>Notifications</h1>
           <p className={styles.sub}>Choose which updates reach your registered mobile devices.</p>
         </div>

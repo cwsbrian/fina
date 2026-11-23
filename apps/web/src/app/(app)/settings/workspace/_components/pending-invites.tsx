@@ -37,7 +37,7 @@ export function PendingInvites({
     return (
       <div className={styles.group}>
         <div className={styles.row}>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div className={styles.grow}>
             <div className={styles.rowMeta}>No pending invites.</div>
           </div>
         </div>
@@ -49,7 +49,7 @@ export function PendingInvites({
     <div className={styles.group}>
       {invites.map((i) => (
         <div key={i.id} className={styles.row}>
-          <div style={{ flex: 1, minWidth: 0 }}>
+          <div className={styles.grow}>
             <div className={styles.rowTitle}>
               {i.invitedEmail}
               <span className={`${styles.pill} ${styles.pillNeutral}`}>

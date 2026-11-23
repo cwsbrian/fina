@@ -68,7 +68,9 @@ export default function WorkspaceSettingsPage() {
   if (err && err !== "no_workspace") {
     return (
       <div className={styles.container}>
-        <p style={{ color: "var(--color-down)" }}>Could not load: {err}</p>
+        <p className={styles.loadError} role="alert">
+          Could not load: {err}
+        </p>
       </div>
     );
   }
@@ -82,33 +84,44 @@ export default function WorkspaceSettingsPage() {
           <p className={styles.sub}>Start a workspace to use Fina.</p>
         </div>
         {actionErr && (
-          <p role="alert" style={{ color: "var(--color-down)" }}>
+          <p role="alert" className={styles.loadError}>
             {actionErr}
           </p>
         )}
         <form
-          className={styles.card}
+          className={`${styles.card} ${styles.inlineForm}`}
           onSubmit={createWorkspace}
-          style={{ padding: 20, display: "flex", flexWrap: "wrap", gap: 10 }}
         >
-          <input
-            className={styles.input}
-            aria-label="New workspace name"
-            placeholder="Workspace name"
-            value={newName}
-            onChange={(event) => setNewName(event.target.value)}
-            required
-            maxLength={80}
-          />
-          <input
-            className={styles.input}
-            aria-label="New workspace currency"
-            placeholder="CAD"
-            value={newCurrency}
-            onChange={(event) => setNewCurrency(event.target.value.toUpperCase())}
-            required
-            maxLength={3}
-          />
+          <div className={`${styles.field} ${styles.inlineFormEmail}`}>
+            <label className={styles.fieldLabel} htmlFor="workspace-new-name">
+              Workspace name
+            </label>
+            <input
+              className={styles.input}
+              id="workspace-new-name"
+              aria-label="New workspace name"
+              placeholder="Workspace name"
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              required
+              maxLength={80}
+            />
+          </div>
+          <div className={`${styles.field} ${styles.inlineFormCode}`}>
+            <label className={styles.fieldLabel} htmlFor="workspace-new-currency">
+              Currency
+            </label>
+            <input
+              className={styles.input}
+              id="workspace-new-currency"
+              aria-label="New workspace currency"
+              placeholder="CAD"
+              value={newCurrency}
+              onChange={(event) => setNewCurrency(event.target.value.toUpperCase())}
+              required
+              maxLength={3}
+            />
+          </div>
           <button
             className={`${styles.btn} ${styles.btnPrimary}`}
             type="submit"
@@ -191,7 +204,7 @@ export default function WorkspaceSettingsPage() {
         </p>
       </div>
       {actionErr && (
-        <p role="alert" style={{ color: "var(--color-down)" }}>
+        <p role="alert" className={styles.loadError}>
           {actionErr}
         </p>
       )}
@@ -204,28 +217,39 @@ export default function WorkspaceSettingsPage() {
           </div>
         </div>
         <form
-          className={styles.card}
+          className={`${styles.card} ${styles.inlineForm}`}
           onSubmit={createWorkspace}
-          style={{ padding: 20, display: "flex", flexWrap: "wrap", gap: 10 }}
         >
-          <input
-            className={styles.input}
-            aria-label="New workspace name"
-            placeholder="Workspace name"
-            value={newName}
-            onChange={(event) => setNewName(event.target.value)}
-            required
-            maxLength={80}
-          />
-          <input
-            className={styles.input}
-            aria-label="New workspace currency"
-            placeholder="CAD"
-            value={newCurrency}
-            onChange={(event) => setNewCurrency(event.target.value.toUpperCase())}
-            required
-            maxLength={3}
-          />
+          <div className={`${styles.field} ${styles.inlineFormEmail}`}>
+            <label className={styles.fieldLabel} htmlFor="workspace-new-name">
+              Workspace name
+            </label>
+            <input
+              className={styles.input}
+              id="workspace-new-name"
+              aria-label="New workspace name"
+              placeholder="Workspace name"
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              required
+              maxLength={80}
+            />
+          </div>
+          <div className={`${styles.field} ${styles.inlineFormCode}`}>
+            <label className={styles.fieldLabel} htmlFor="workspace-new-currency">
+              Currency
+            </label>
+            <input
+              className={styles.input}
+              id="workspace-new-currency"
+              aria-label="New workspace currency"
+              placeholder="CAD"
+              value={newCurrency}
+              onChange={(event) => setNewCurrency(event.target.value.toUpperCase())}
+              required
+              maxLength={3}
+            />
+          </div>
           <button
             className={`${styles.btn} ${styles.btnPrimary}`}
             type="submit"
@@ -247,18 +271,23 @@ export default function WorkspaceSettingsPage() {
             </div>
           </div>
           <form
-            className={styles.card}
+            className={`${styles.card} ${styles.inlineForm}`}
             onSubmit={changeCurrency}
-            style={{ padding: 20, display: "flex", gap: 10 }}
           >
-            <input
-              className={styles.input}
-              aria-label="Workspace currency"
-              value={wsCurrency}
-              onChange={(event) => setWsCurrency(event.target.value.toUpperCase())}
-              required
-              maxLength={3}
-            />
+            <div className={`${styles.field} ${styles.inlineFormCode}`}>
+              <label className={styles.fieldLabel} htmlFor="workspace-currency">
+                Currency
+              </label>
+              <input
+                className={styles.input}
+                id="workspace-currency"
+                aria-label="Workspace currency"
+                value={wsCurrency}
+                onChange={(event) => setWsCurrency(event.target.value.toUpperCase())}
+                required
+                maxLength={3}
+              />
+            </div>
             <button
               className={`${styles.btn} ${styles.btnPrimary}`}
               type="submit"

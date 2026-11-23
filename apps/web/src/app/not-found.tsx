@@ -15,9 +15,7 @@ export default function NotFound() {
         color: "var(--color-ink)",
       }}
     >
-      <h1 style={{ fontSize: 32, fontWeight: 500, letterSpacing: -0.8 }}>
-        Not found
-      </h1>
+      <h1 className="fi-title">Not found</h1>
       <p style={{ color: "var(--color-muted)" }}>
         That page doesn&apos;t exist (yet).
       </p>

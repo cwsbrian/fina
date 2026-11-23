@@ -322,7 +322,6 @@ export default function ActivityPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Your money</div>
           <h1 className={styles.title}>Activity</h1>
           <p className={styles.sub}>Browse income, expenses, refunds, and excluded transactions.</p>
         </div>
@@ -344,7 +343,10 @@ export default function ActivityPage() {
       )}
 
       {showCreate && (
-        <form className={styles.panel} onSubmit={createTransaction} style={{ marginBottom: 20 }}>
+        <form className={`${styles.panel} ${styles.panelGap}`} onSubmit={createTransaction}>
+          <div className={styles.panelHead}>
+            <h2 className={styles.panelTitle}>New transaction</h2>
+          </div>
           <div className={styles.formGrid}>
             <div className={styles.field}>
               <label htmlFor="tx-direction">Type</label>
@@ -427,7 +429,7 @@ export default function ActivityPage() {
                   ))}
               </select>
             </div>
-            <div className={styles.field} style={{ gridColumn: "1 / -1" }}>
+            <div className={`${styles.field} ${styles.fieldWide}`}>
               <label htmlFor="tx-note">Note</label>
               <input
                 className={styles.input}
@@ -584,18 +586,20 @@ export default function ActivityPage() {
 
       <div className={styles.panel} aria-busy={loading}>
         <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Merchant</th>
-                <th>Category</th>
-                <th>Account</th>
-                <th>Type</th>
-                <th style={{ textAlign: "right" }}>Amount</th>
+          <table className={`${styles.table} ${styles.activityTable}`} role="table">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Date</th>
+                <th role="columnheader">Merchant</th>
+                <th role="columnheader">Category</th>
+                <th role="columnheader">Account</th>
+                <th role="columnheader">Type</th>
+                <th role="columnheader" className={styles.num}>
+                  Amount
+                </th>
               </tr>
             </thead>
-            <tbody>
+            <tbody role="rowgroup">
               {rows.map((row) => {
                 const isIncome = Number(row.amount) < 0 && row.budgetImpact === "income";
                 const netExpense = Math.max(0, Number(row.amount) - Number(row.refundedAmount));
@@ -609,9 +613,11 @@ export default function ActivityPage() {
                   ),
                 ];
                 return (
-                  <tr key={row.id}>
-                    <td>{dateLabel(row.occurredAt)}</td>
-                    <td>
+                  <tr key={row.id} role="row">
+                    <td role="cell" className={styles.cellDate}>
+                      {dateLabel(row.occurredAt)}
+                    </td>
+                    <td role="cell">
                       <button
                         className={styles.rowButton}
                         type="button"
@@ -620,23 +626,35 @@ export default function ActivityPage() {
                         <span className={styles.merchant}>
                           {row.merchantNormalized ?? row.merchantRaw}
                         </span>
-                        {row.pending && <span className={styles.muted}> · Pending</span>}
+                        {row.pending && (
+                          <span className={`${styles.pill} ${styles.pillWarn}`}>Pending</span>
+                        )}
                       </button>
                     </td>
-                    <td>
+                    <td role="cell">
                       {categoryNames.length ? (
                         categoryNames.join(", ")
                       ) : (
                         <span className={styles.muted}>Uncategorized</span>
                       )}
                     </td>
-                    <td>{accountById.get(row.accountId) ?? "Archived account"}</td>
-                    <td>
-                      <span className={styles.pill}>{row.budgetImpact}</span>
+                    <td role="cell">{accountById.get(row.accountId) ?? "Archived account"}</td>
+                    <td role="cell">
+                      <span
+                        className={`${styles.pill} ${styles.pillCap} ${
+                          row.budgetImpact === "income"
+                            ? styles.pillUp
+                            : row.budgetImpact === "refund"
+                              ? styles.pillInfo
+                              : ""
+                        }`}
+                      >
+                        {row.budgetImpact}
+                      </span>
                     </td>
                     <td
-                      style={{ textAlign: "right" }}
-                      className={isIncome ? styles.moneyIn : styles.moneyOut}
+                      role="cell"
+                      className={`${styles.num} ${isIncome ? styles.moneyIn : styles.moneyOut}`}
                     >
                       {formatMoney(
                         isIncome
@@ -654,7 +672,10 @@ export default function ActivityPage() {
           </table>
         </div>
         {!loading && rows.length === 0 && (
-          <div className={styles.empty}>No transactions match these filters.</div>
+          <div className={styles.empty}>
+            <span className={styles.emptyTitle}>No transactions match these filters.</span>
+            Change or reset the filters, or add a transaction.
+          </div>
         )}
         {loading && <div className={styles.empty}>Loading transactions…</div>}
         {nextCursor && !loading && (
@@ -707,7 +728,7 @@ export default function ActivityPage() {
                 </div>
               )}
             <div className={`${styles.panel} ${styles.details}`}>
-              <div className={styles.detail}>
+              <div className={`${styles.detail} ${styles.detailLead}`}>
                 <span>Merchant</span>
                 <span>{selected.merchantNormalized ?? selected.merchantRaw}</span>
               </div>
@@ -723,7 +744,7 @@ export default function ActivityPage() {
                 <span>Account</span>
                 <span>{accountById.get(selected.accountId) ?? "Archived account"}</span>
               </div>
-              <div className={styles.detail}>
+              <div className={`${styles.detail} ${styles.detailCap}`}>
                 <span>Cashflow</span>
                 <span>{selected.budgetImpact}</span>
               </div>
@@ -888,7 +909,7 @@ export default function ActivityPage() {
                   )}
                   {selected.source === "manual" && (
                     <button
-                      className={styles.buttonSecondary}
+                      className={styles.buttonDanger}
                       type="button"
                       disabled={busyDetail}
                       onClick={() => {

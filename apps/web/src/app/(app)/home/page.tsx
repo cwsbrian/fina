@@ -140,7 +140,9 @@ export default function HomePage() {
   if (err) {
     return (
       <div className={styles.container}>
-        <p style={{ color: "var(--color-down)" }}>Could not load: {err}</p>
+        <p className={styles.loadError} role="alert">
+          Could not load: {err}
+        </p>
       </div>
     );
   }
@@ -149,13 +151,14 @@ export default function HomePage() {
   const revertsTo = me ? trialRevertsTo(me) : null;
   const isTrial = !!me?.trial.active;
   const isFree = me?.tier === "free" && !me.trial.active;
+  const currency = workspace?.currency ?? "CAD";
+  // Bar lengths for the cashflow card: both drawn against the larger of the two.
+  const cashflowScale = analysis ? Math.max(analysis.current.income, analysis.current.spend, 1) : 1;
 
   return (
     <div className={styles.container}>
       <div className={styles.welcome}>
-        <h1 className={styles.greeting}>
-          Welcome back, <em>{firstName(me)}</em>
-        </h1>
+        <h1 className={styles.greeting}>Welcome back, {firstName(me)}</h1>
         <div className={styles.date}>{formatToday()}</div>
       </div>
 
@@ -171,7 +174,7 @@ export default function HomePage() {
                 className={`${styles.banner} ${styles.bannerInvite}`}
               >
                 <span className={styles.bannerIcon}>
-                  <WebIcon name="users" size={20} strokeWidth={1.8} />
+                  <WebIcon name="users" size={18} strokeWidth={1.8} />
                 </span>
                 <div className={styles.bannerBody}>
                   <div className={styles.bannerTitle}>
@@ -199,7 +202,7 @@ export default function HomePage() {
       {isTrial && (
         <div className={`${styles.banner} ${styles.bannerTrial}`}>
           <span className={styles.bannerIcon}>
-            <WebIcon name="sparkle" size={20} strokeWidth={1.8} />
+            <WebIcon name="sparkle" size={18} strokeWidth={1.8} />
           </span>
           <div className={styles.bannerBody}>
             <div className={styles.bannerTitle}>
@@ -214,7 +217,7 @@ export default function HomePage() {
           </div>
           <button
             type="button"
-            className={styles.bannerBtn}
+            className={styles.bannerBtnQuiet}
             onClick={() => router.push("/settings/plan")}
           >
             {revertsTo ? "Manage plan" : "Stay on Pro"}
@@ -225,7 +228,7 @@ export default function HomePage() {
       {isFree && (
         <div className={`${styles.banner} ${styles.bannerExpired}`}>
           <span className={styles.bannerIcon}>
-            <WebIcon name="alert" size={20} strokeWidth={1.8} />
+            <WebIcon name="alert" size={18} strokeWidth={1.8} />
           </span>
           <div className={styles.bannerBody}>
             <div className={styles.bannerTitle}>Your trial ended</div>
@@ -235,7 +238,7 @@ export default function HomePage() {
           </div>
           <button
             type="button"
-            className={styles.bannerBtn}
+            className={styles.bannerBtnQuiet}
             onClick={() => router.push("/settings/plan")}
           >
             Upgrade
@@ -243,135 +246,193 @@ export default function HomePage() {
         </div>
       )}
 
-      <div className={styles.grid2}>
-        {workspace && (
-          <div className={styles.wsCard}>
-            <div className={styles.eyebrow}>Workspace</div>
-            <div className={styles.wsCardName}>{workspace.name}</div>
-            <div className={styles.wsCardMeta}>
-              <span
-                className={`${styles.pill} ${workspace.role === "owner" ? styles.pillOwner : ""}`}
-              >
-                <span className={styles.pillDot} />
-                {workspace.role}
-              </span>
-              <span>
-                {memberCount === null
-                  ? "…"
-                  : memberCount === 1
-                    ? "Just you"
-                    : `${memberCount} members`}
-              </span>
+      <section className={styles.cashflowCard} aria-labelledby="home-cashflow-title">
+        <div className={styles.cardHead}>
+          <h2 className={styles.cardTitle} id="home-cashflow-title">
+            {analysis?.current.label ?? "Latest month"} cashflow
+          </h2>
+          <button className={styles.link} type="button" onClick={() => router.push("/analysis")}>
+            Open analysis
+            <WebIcon name="arrowRight" size={14} strokeWidth={2} />
+          </button>
+        </div>
+        {analysis ? (
+          <div className={styles.cashflowGrid}>
+            <div className={styles.cashflowNet}>
+              <span>Net</span>
+              <strong className={analysis.current.net < 0 ? styles.negative : ""}>
+                {formatMoney(analysis.current.net, currency)}
+              </strong>
             </div>
-            <div className={styles.wsCardFoot}>
-              <div style={{ fontSize: 13, color: "var(--color-body)" }}>
-                <strong style={{ color: "var(--color-ink)" }}>
-                  {bankCount ?? "…"}
-                </strong>{" "}
-                {bankCount === 1 ? "bank" : "banks"} connected
-              </div>
-              <button
-                type="button"
-                className={styles.link}
-                onClick={() => router.push("/settings/workspace")}
-              >
-                Manage →
-              </button>
+            <div className={styles.cashflowLine}>
+              <span>Income</span>
+              <strong>{formatMoney(analysis.current.income, currency)}</strong>
+              <i className={styles.cashflowBar} aria-hidden="true">
+                <b
+                  className={styles.cashflowBarIncome}
+                  style={{ width: `${(analysis.current.income / cashflowScale) * 100}%` }}
+                />
+              </i>
+            </div>
+            <div className={styles.cashflowLine}>
+              <span>Expenses</span>
+              <strong>{formatMoney(analysis.current.spend, currency)}</strong>
+              <i className={styles.cashflowBar} aria-hidden="true">
+                <b
+                  className={styles.cashflowBarSpend}
+                  style={{ width: `${(analysis.current.spend / cashflowScale) * 100}%` }}
+                />
+              </i>
             </div>
           </div>
+        ) : (
+          <p className={styles.cardEmpty}>
+            Your cashflow will appear here when you add transactions.
+          </p>
         )}
+      </section>
 
-        <div className={styles.cashflowCard}>
-          <div className={styles.eyebrow}>{analysis?.current.label ?? "Latest month"} cashflow</div>
-          {analysis ? (
-            <div className={styles.cashflowGrid}>
-              <div><span>Income</span><strong>{formatMoney(analysis.current.income, workspace?.currency ?? "CAD")}</strong></div>
-              <div><span>Expenses</span><strong>{formatMoney(analysis.current.spend, workspace?.currency ?? "CAD")}</strong></div>
-              <div><span>Net</span><strong>{formatMoney(analysis.current.net, workspace?.currency ?? "CAD")}</strong></div>
+      <div className={styles.columns}>
+        <section className={styles.recentCard} aria-labelledby="home-recent-title">
+          <div className={styles.cardHead}>
+            <div>
+              <h2 className={styles.cardTitle} id="home-recent-title">
+                Recent activity
+              </h2>
+              <div className={styles.sectionSub}>Your latest income and expenses.</div>
             </div>
-          ) : <p className={styles.sectionSub}>Your cashflow will appear here when you add transactions.</p>}
-          <button className={styles.link} type="button" onClick={() => router.push("/analysis")}>Open analysis →</button>
-        </div>
-      </div>
-
-      <div className={styles.section}>
-        <div className={styles.sectionHead}>
-          <div><div className={styles.sectionTitle}>Recent activity</div><div className={styles.sectionSub}>Your latest income and expenses.</div></div>
-          <button className={styles.link} type="button" onClick={() => router.push("/activity")}>View all →</button>
-        </div>
-        <div className={styles.recentCard}>
-          {recent.length === 0 ? <p className={styles.sectionSub}>No transactions yet. Add one in Activity.</p> : recent.map((transaction) => (
-            <div className={styles.recentRow} key={transaction.id}>
-              <div><strong>{transaction.merchantNormalized ?? transaction.merchantRaw}</strong><span>{new Date(transaction.occurredAt).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}</span></div>
-              <strong className={Number(transaction.amount) < 0 ? styles.recentIncome : ""}>{formatMoney(Math.abs(Number(transaction.amount)), transaction.currency)}</strong>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <div className={styles.section}>
-        <div className={styles.sectionHead}>
-          <div>
-            <div className={styles.sectionTitle}>Manage your workspace</div>
-            <div className={styles.sectionSub}>
-              Connections, household access, and your plan.
-            </div>
+            <button className={styles.link} type="button" onClick={() => router.push("/activity")}>
+              View all
+              <WebIcon name="arrowRight" size={14} strokeWidth={2} />
+            </button>
           </div>
-        </div>
-        <div className={styles.grid3}>
-          <button
-            type="button"
-            className={styles.quickLink}
-            onClick={() => router.push("/settings/banks")}
-          >
-            <span className={styles.quickLinkGlyph}>
-              <WebIcon name="bank" size={20} />
-            </span>
-            <div className={styles.quickLinkTitle}>Manage banks</div>
-            <div className={styles.quickLinkSub}>
-              Transactions start syncing the moment you connect.
-            </div>
-            <span className={styles.quickLinkArrow}>
-              Open <WebIcon name="arrowRight" size={14} strokeWidth={2} />
-            </span>
-          </button>
+          {recent.length === 0 ? (
+            <p className={styles.cardEmpty}>No transactions yet. Add one in Activity.</p>
+          ) : (
+            recent.map((transaction) => (
+              <div className={styles.recentRow} key={transaction.id}>
+                <div>
+                  <strong>{transaction.merchantNormalized ?? transaction.merchantRaw}</strong>
+                  <span>
+                    {new Date(transaction.occurredAt).toLocaleDateString("en-CA", {
+                      month: "short",
+                      day: "numeric",
+                    })}
+                  </span>
+                </div>
+                <strong className={Number(transaction.amount) < 0 ? styles.recentIncome : ""}>
+                  {formatMoney(Math.abs(Number(transaction.amount)), transaction.currency)}
+                </strong>
+              </div>
+            ))
+          )}
+        </section>
 
-          <button
-            type="button"
-            className={styles.quickLink}
-            onClick={() => router.push("/settings/workspace")}
-          >
-            <span className={styles.quickLinkGlyph}>
-              <WebIcon name="users" size={20} />
-            </span>
-            <div className={styles.quickLinkTitle}>
-              Invite a household member
-            </div>
-            <div className={styles.quickLinkSub}>
-              Share categories and budgets with the people you live with.
-            </div>
-            <span className={styles.quickLinkArrow}>
-              Open <WebIcon name="arrowRight" size={14} strokeWidth={2} />
-            </span>
-          </button>
+        <div className={styles.side}>
+          {workspace && (
+            <section className={styles.wsCard} aria-labelledby="home-workspace-title">
+              <div className={styles.eyebrow} id="home-workspace-title">
+                Workspace
+              </div>
+              <div className={styles.wsCardName}>{workspace.name}</div>
+              <div className={styles.wsCardMeta}>
+                <span
+                  className={`${styles.pill} ${workspace.role === "owner" ? styles.pillOwner : ""}`}
+                >
+                  {workspace.role}
+                </span>
+                <span>
+                  {memberCount === null
+                    ? "…"
+                    : memberCount === 1
+                      ? "Just you"
+                      : `${memberCount} members`}
+                </span>
+              </div>
+              <div className={styles.wsCardFoot}>
+                <div className={styles.wsCardBanks}>
+                  <strong>{bankCount ?? "…"}</strong> {bankCount === 1 ? "bank" : "banks"}{" "}
+                  connected
+                </div>
+                <button
+                  type="button"
+                  className={styles.link}
+                  onClick={() => router.push("/settings/workspace")}
+                >
+                  Manage
+                  <WebIcon name="arrowRight" size={14} strokeWidth={2} />
+                </button>
+              </div>
+            </section>
+          )}
 
-          <button
-            type="button"
-            className={styles.quickLink}
-            onClick={() => router.push("/settings/plan")}
-          >
-            <span className={styles.quickLinkGlyph}>
-              <WebIcon name="card" size={20} />
-            </span>
-            <div className={styles.quickLinkTitle}>Choose your plan</div>
-            <div className={styles.quickLinkSub}>
-              Free, Pro, or Max. Add a card before your trial ends to stay on
-              Pro.
+          <section className={styles.quickCard} aria-labelledby="home-manage-title">
+            <div className={styles.quickHead}>
+              <h2 className={styles.cardTitle} id="home-manage-title">
+                Manage your workspace
+              </h2>
+              <div className={styles.sectionSub}>
+                Connections, household access, and your plan.
+              </div>
             </div>
-            <span className={styles.quickLinkArrow}>
-              Open <WebIcon name="arrowRight" size={14} strokeWidth={2} />
-            </span>
-          </button>
+            <button
+              type="button"
+              className={styles.quickLink}
+              onClick={() => router.push("/settings/banks")}
+            >
+              <span className={styles.quickLinkGlyph}>
+                <WebIcon name="bank" size={18} />
+              </span>
+              <span className={styles.quickLinkText}>
+                <span className={styles.quickLinkTitle}>Manage banks</span>
+                <span className={styles.quickLinkSub}>
+                  Transactions start syncing the moment you connect.
+                </span>
+              </span>
+              <span className={styles.quickLinkArrow}>
+                <WebIcon name="chevRight" size={16} strokeWidth={2} />
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={styles.quickLink}
+              onClick={() => router.push("/settings/workspace")}
+            >
+              <span className={styles.quickLinkGlyph}>
+                <WebIcon name="users" size={18} />
+              </span>
+              <span className={styles.quickLinkText}>
+                <span className={styles.quickLinkTitle}>Invite a household member</span>
+                <span className={styles.quickLinkSub}>
+                  Share categories and budgets with the people you live with.
+                </span>
+              </span>
+              <span className={styles.quickLinkArrow}>
+                <WebIcon name="chevRight" size={16} strokeWidth={2} />
+              </span>
+            </button>
+
+            <button
+              type="button"
+              className={styles.quickLink}
+              onClick={() => router.push("/settings/plan")}
+            >
+              <span className={styles.quickLinkGlyph}>
+                <WebIcon name="card" size={18} />
+              </span>
+              <span className={styles.quickLinkText}>
+                <span className={styles.quickLinkTitle}>Choose your plan</span>
+                <span className={styles.quickLinkSub}>
+                  Free, Pro, or Max. Add a card before your trial ends to stay on
+                  Pro.
+                </span>
+              </span>
+              <span className={styles.quickLinkArrow}>
+                <WebIcon name="chevRight" size={16} strokeWidth={2} />
+              </span>
+            </button>
+          </section>
         </div>
       </div>
     </div>

@@ -64,7 +64,9 @@ export default function PlanPage() {
   if (err) {
     return (
       <div className={styles.container}>
-        <p style={{ color: "var(--color-down)" }}>Could not load plan: {err}</p>
+        <p className={styles.loadError} role="alert">
+          Could not load plan: {err}
+        </p>
       </div>
     );
   }
@@ -184,9 +186,9 @@ export default function PlanPage() {
         ? "Update your card to keep your subscription active."
         : externalManagementText ?? "Resolve billing with your subscription provider.";
       return (
-        <div className={styles.planCurrent} style={{ borderColor: "var(--color-down)" }}>
+        <div className={`${styles.planCurrent} ${styles.planCurrentLocked}`}>
           <div>
-            <div className={styles.planCurrentLabel} style={{ color: "var(--color-down)" }}>
+            <div className={styles.planCurrentLabel}>
               Payment failed
             </div>
             <div className={styles.planCurrentName}>{tierLabel(sub.tier, false)}</div>
@@ -332,66 +334,68 @@ export default function PlanPage() {
 
       {renderCurrentCard()}
 
-      <div className={styles.section} style={{ marginTop: 48 }}>
+      <div className={`${styles.section} ${styles.planSection}`}>
         <div className={styles.sectionHead}>
           <div>
             <div className={styles.sectionTitle}>Compare plans</div>
           </div>
         </div>
-        <div className={styles.card}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div className={styles.planTableWrap}>
+          <table className={styles.planTable}>
             <thead>
               <tr>
-                <th style={{ textAlign: "left", padding: 12 }}></th>
-                <th style={{ textAlign: "left", padding: 12 }}>Free</th>
-                <th style={{ textAlign: "left", padding: 12 }}>
-                  Pro · {STRIPE_PRICING.pro.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
-                  <span className={`${styles.pill} ${styles.pillActive}`} style={{ marginLeft: 8 }}>
-                    Recommended
-                  </span>
+                <th scope="col">
+                  <span className={styles.srOnly}>Feature</span>
                 </th>
-                <th style={{ textAlign: "left", padding: 12 }}>
-                  Max · {STRIPE_PRICING.max.displayPrice} <span style={{ opacity: 0.6 }}>/ mo</span>
+                <th scope="col">Free</th>
+                <th scope="col">
+                  Pro
+                  <span className={`${styles.pill} ${styles.pillActive}`}>Recommended</span>
+                  <span className={styles.planPrice}>{STRIPE_PRICING.pro.displayPrice} / mo</span>
+                </th>
+                <th scope="col">
+                  Max
+                  <span className={styles.planPrice}>{STRIPE_PRICING.max.displayPrice} / mo</span>
                 </th>
               </tr>
             </thead>
             <tbody>
-              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
-                <td style={{ padding: 12 }}>Bank connections</td>
-                <td style={{ padding: 12 }}>0 (manual / CSV)</td>
-                <td style={{ padding: 12 }}>{TIER_LIMITS.pro.plaidItems}</td>
-                <td style={{ padding: 12 }}>{TIER_LIMITS.max.plaidItems}</td>
+              <tr>
+                <td>Bank connections</td>
+                <td>0 (manual / CSV)</td>
+                <td>{TIER_LIMITS.pro.plaidItems}</td>
+                <td>{TIER_LIMITS.max.plaidItems}</td>
               </tr>
-              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
-                <td style={{ padding: 12 }}>AI advisor chat</td>
-                <td style={{ padding: 12 }}>—</td>
-                <td style={{ padding: 12 }}>Full two-way</td>
-                <td style={{ padding: 12 }}>Full two-way</td>
+              <tr>
+                <td>AI advisor chat</td>
+                <td>—</td>
+                <td>Full two-way</td>
+                <td>Full two-way</td>
               </tr>
-              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
-                <td style={{ padding: 12 }}>AI usage</td>
-                <td style={{ padding: 12 }}>—</td>
-                <td style={{ padding: 12 }}>Standard</td>
-                <td style={{ padding: 12 }}>Expanded</td>
+              <tr>
+                <td>AI usage</td>
+                <td>—</td>
+                <td>Standard</td>
+                <td>Expanded</td>
               </tr>
-              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
-                <td style={{ padding: 12 }}>Workspace sharing</td>
-                <td style={{ padding: 12 }}>✓</td>
-                <td style={{ padding: 12 }}>✓</td>
-                <td style={{ padding: 12 }}>✓</td>
+              <tr>
+                <td>Workspace sharing</td>
+                <td>✓</td>
+                <td>✓</td>
+                <td>✓</td>
               </tr>
-              <tr style={{ borderTop: "1px solid var(--color-hairline-soft)" }}>
-                <td style={{ padding: 12 }}></td>
-                <td style={{ padding: 12 }}></td>
-                <td style={{ padding: 12 }}>{renderUpgradeButton("pro")}</td>
-                <td style={{ padding: 12 }}>{renderUpgradeButton("max")}</td>
+              <tr>
+                <td></td>
+                <td></td>
+                <td>{renderUpgradeButton("pro")}</td>
+                <td>{renderUpgradeButton("max")}</td>
               </tr>
             </tbody>
           </table>
         </div>
       </div>
 
-      <p className={styles.sectionSub} style={{ marginTop: 24 }}>
+      <p className={styles.planFootnote}>
         Subscriptions purchased through the iOS or Android app are managed in
         the App Store / Google Play, not here.
       </p>

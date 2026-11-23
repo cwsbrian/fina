@@ -115,7 +115,6 @@ export default function SubscriptionsPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Recurring expenses</div>
           <h1 className={styles.title}>Subscriptions</h1>
           <p className={styles.sub}>Track upcoming payments and their monthly cost.</p>
         </div>
@@ -125,43 +124,55 @@ export default function SubscriptionsPage() {
           {error}
         </div>
       )}
-      <div className={`${styles.panel} ${styles.summaryCard}`} style={{ marginBottom: 22 }}>
+      <div className={`${styles.panel} ${styles.summaryCard} ${styles.panelGap}`}>
         <div className={styles.summaryLabel}>Monthly equivalent</div>
         <div className={styles.summaryValue}>{formatMoney(monthly, currency)}</div>
         <div className={styles.sub}>{rows.length} recurring expenses</div>
       </div>
       <div className={styles.panel}>
         <div className={styles.tableWrap}>
-          <table className={styles.table}>
-            <thead>
-              <tr>
-                <th>Name</th>
-                <th>Frequency</th>
-                <th>Next payment</th>
-                <th>Category</th>
-                <th>Amount</th>
-                <th>Actions</th>
+          <table className={`${styles.table} ${styles.stackTable}`} role="table">
+            <thead role="rowgroup">
+              <tr role="row">
+                <th role="columnheader">Name</th>
+                <th role="columnheader">Frequency</th>
+                <th role="columnheader">Next payment</th>
+                <th role="columnheader">Category</th>
+                <th role="columnheader" className={styles.num}>
+                  Amount
+                </th>
+                <th role="columnheader">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody role="rowgroup">
               {rows.map((row) => (
-                <tr key={row.id}>
-                  <td className={styles.merchant}>{row.name}</td>
-                  <td>{row.cadence}</td>
-                  <td>{row.nextOccurrenceDate}</td>
-                  <td>{row.categoryName ?? "—"}</td>
-                  <td>{formatMoney(Number(row.amount), row.currency)}</td>
-                  <td>
+                <tr key={row.id} role="row">
+                  <td role="cell" className={`${styles.merchant} ${styles.cellLead}`}>
+                    {row.name}
+                  </td>
+                  <td role="cell" data-label="Frequency" className={styles.cellCap}>
+                    {row.cadence}
+                  </td>
+                  <td role="cell" data-label="Next payment" className={styles.cellDate}>
+                    {row.nextOccurrenceDate}
+                  </td>
+                  <td role="cell" data-label="Category">
+                    {row.categoryName ?? "—"}
+                  </td>
+                  <td role="cell" data-label="Amount" className={styles.num}>
+                    {formatMoney(Number(row.amount), row.currency)}
+                  </td>
+                  <td role="cell" className={styles.cellActions}>
                     <div className={styles.actions}>
                       <button
-                        className={styles.buttonSecondary}
+                        className={`${styles.buttonSecondary} ${styles.buttonSmall}`}
                         type="button"
                         onClick={() => edit(row)}
                       >
                         Edit
                       </button>
                       <button
-                        className={styles.buttonSecondary}
+                        className={`${styles.buttonDanger} ${styles.buttonSmall}`}
                         type="button"
                         disabled={busy}
                         onClick={() => void remove(row)}
@@ -176,7 +187,12 @@ export default function SubscriptionsPage() {
           </table>
         </div>
         {loading && <div className={styles.empty}>Loading subscriptions…</div>}
-        {!loading && rows.length === 0 && <div className={styles.empty}>No subscriptions yet.</div>}
+        {!loading && rows.length === 0 && (
+          <div className={styles.empty}>
+            <span className={styles.emptyTitle}>No subscriptions yet.</span>
+            Add one below to see its monthly cost here.
+          </div>
+        )}
       </div>
       <section className={styles.section}>
         <h2 className={styles.sectionTitle}>

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { AnalysisResponse, WorkspaceSummary } from "@fina/shared";
 import { apiFetch, useActiveWorkspaceId } from "../../../lib/api";
 import { formatMoney } from "../../../lib/money";
+import { WebIcon } from "../../../components/WebIcon";
 import styles from "../finance.module.css";
 
 type Period = { year: number; month: number };
@@ -65,7 +66,6 @@ export default function AnalysisPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Your money</div>
           <h1 className={styles.title}>Analysis</h1>
           <p className={styles.sub}>Income, spending, and the categories behind them.</p>
         </div>
@@ -77,7 +77,7 @@ export default function AnalysisPage() {
             onClick={() => current && setPeriod(adjacent(current, -1))}
             disabled={!current}
           >
-            ←
+            <WebIcon name="chevLeft" size={18} strokeWidth={2} />
           </button>
           <span className={styles.monthLabel}>{current?.label ?? "Loading…"}</span>
           <button
@@ -87,7 +87,7 @@ export default function AnalysisPage() {
             onClick={() => current && setPeriod(adjacent(current, 1))}
             disabled={!current || isCurrentOrFuture(current)}
           >
-            →
+            <WebIcon name="chevRight" size={18} strokeWidth={2} />
           </button>
         </div>
       </div>
@@ -125,11 +125,20 @@ export default function AnalysisPage() {
           </div>
 
           <section className={styles.section}>
-            <h2 className={styles.sectionTitle}>Monthly history</h2>
+            <div className={styles.sectionHead}>
+              <h2 className={styles.sectionTitle}>Monthly history</h2>
+              <div className={styles.legend} aria-hidden="true">
+                <span className={styles.legendKey}>Income</span>
+                <span className={`${styles.legendKey} ${styles.legendSpend}`}>Expenses</span>
+              </div>
+            </div>
             <div className={styles.panel}>
               <div className={styles.history}>
                 {analysis?.monthlyHistory.map((point) => (
-                  <div className={styles.historyItem} key={`${point.year}-${point.month}`}>
+                  <div
+                    className={`${styles.historyItem} ${point.year === current.year && point.month === current.month ? styles.historyCurrent : ""}`}
+                    key={`${point.year}-${point.month}`}
+                  >
                     <div
                       className={styles.historyBars}
                       aria-label={`${point.label}: income ${formatMoney(point.income, currency)}, expenses ${formatMoney(point.spend, currency)}`}

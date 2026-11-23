@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { PatchMeBody, type CategorizationMode, type MeDTO } from "@fina/shared";
 import { apiFetch } from "../../../lib/api";
+import { WebIcon } from "../../../components/WebIcon";
 import styles from "../finance.module.css";
 
 const modes: Array<{ key: CategorizationMode; title: string; description: string }> = [
@@ -57,7 +58,6 @@ export default function CategorizationPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Activity settings</div>
           <h1 className={styles.title}>Categorization style</h1>
           <p className={styles.sub}>Choose how Fina confirms transaction categories.</p>
         </div>
@@ -73,12 +73,17 @@ export default function CategorizationPage() {
             key={mode.key}
             type="button"
             className={`${styles.cardButton} ${me?.user.categorizationMode === mode.key ? styles.cardSelected : ""}`}
+            aria-pressed={me?.user.categorizationMode === mode.key}
             disabled={busy || !me}
             onClick={() => void choose(mode.key)}
           >
             <strong className={styles.cardTitle}>
               {mode.title}
-              {me?.user.categorizationMode === mode.key ? " ✓" : ""}
+              {me?.user.categorizationMode === mode.key && (
+                <span className={styles.cardCheck}>
+                  <WebIcon name="check" size={18} strokeWidth={2.4} />
+                </span>
+              )}
             </strong>
             <span className={styles.cardMeta}>{mode.description}</span>
           </button>

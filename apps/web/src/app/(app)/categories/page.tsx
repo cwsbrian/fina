@@ -116,7 +116,6 @@ export default function CategoriesPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Organize activity</div>
           <h1 className={styles.title}>Categories</h1>
           <p className={styles.sub}>
             Create and edit categories used in transactions, budgets, and goals.
@@ -129,6 +128,9 @@ export default function CategoriesPage() {
         </div>
       )}
       <form className={styles.panel} onSubmit={create}>
+        <div className={styles.panelHead}>
+          <h2 className={styles.panelTitle}>New category</h2>
+        </div>
         <div className={styles.formGrid}>
           <div className={styles.field}>
             <label htmlFor="category-name">Name</label>
@@ -258,7 +260,7 @@ export default function CategoriesPage() {
                       </span>
                       <div className={styles.actions}>
                         <button
-                          className={styles.buttonSecondary}
+                          className={`${styles.buttonSecondary} ${styles.buttonSmall}`}
                           type="button"
                           onClick={() => {
                             setEditId(category.id);
@@ -270,7 +272,7 @@ export default function CategoriesPage() {
                           Edit
                         </button>
                         <button
-                          className={styles.buttonSecondary}
+                          className={`${styles.buttonSecondary} ${styles.buttonSmall}`}
                           type="button"
                           disabled={busy}
                           onClick={() => {

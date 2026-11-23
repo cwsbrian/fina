@@ -62,7 +62,6 @@ export default function BriefPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Morning updates</div>
           <h1 className={styles.title}>Brief</h1>
           <p className={styles.sub}>
             Choose when Fina prepares your spending update. Weekly and monthly reports appear in
@@ -76,7 +75,7 @@ export default function BriefPage() {
         </div>
       )}
       {notice && (
-        <div className={styles.panel} role="status" style={{ padding: 14, marginBottom: 16 }}>
+        <div className={styles.notice} role="status">
           {notice}
         </div>
       )}
@@ -122,7 +121,7 @@ export default function BriefPage() {
             </div>
             <div className={styles.field}>
               <label>Time zone</label>
-              <span>{me.user.tz}</span>
+              <span className={styles.fieldValue}>{me.user.tz}</span>
               <a href="/settings/account">Change in Account</a>
             </div>
             <div className={styles.formActions}>

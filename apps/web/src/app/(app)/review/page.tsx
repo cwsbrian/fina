@@ -73,7 +73,6 @@ export default function ReviewPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Inbox</div>
           <h1 className={styles.title}>Review categories</h1>
           <p className={styles.sub}>Confirm or correct Fina’s suggested transaction categories.</p>
         </div>
@@ -151,7 +150,12 @@ export default function ReviewPage() {
           </div>
         ))}
         {loading && <div className={styles.empty}>Loading reviews…</div>}
-        {!loading && rows.length === 0 && <div className={styles.empty}>All caught up.</div>}
+        {!loading && rows.length === 0 && (
+          <div className={styles.empty}>
+            <span className={styles.emptyTitle}>All caught up.</span>
+            New category suggestions will show up here.
+          </div>
+        )}
         {nextCursor && !loading && (
           <div className={styles.foot}>
             <button

@@ -42,7 +42,7 @@ export default function BanksPage() {
   if (meErr) {
     return (
       <div className={styles.container}>
-        <p style={{ color: "var(--color-down)" }}>
+        <p className={styles.loadError} role="alert">
           Could not load profile: {meErr}
         </p>
       </div>
@@ -51,7 +51,9 @@ export default function BanksPage() {
   if (err) {
     return (
       <div className={styles.container}>
-        <p style={{ color: "var(--color-down)" }}>Could not load: {err}</p>
+        <p className={styles.loadError} role="alert">
+          Could not load: {err}
+        </p>
       </div>
     );
   }
@@ -96,7 +98,7 @@ export default function BanksPage() {
           </div>
         </div>
         {graceEndsAt && (
-          <div className={styles.card} style={{ marginBottom: 12 }}>
+          <div className={`${styles.card} ${styles.cardGap}`}>
             <div className={styles.sectionTitle}>Bank connection in 30-day grace period</div>
             <div className={styles.sectionSub} style={{ marginTop: 6 }}>
               New transactions are saved securely but hidden on Free. Upgrade by{" "}
@@ -113,7 +115,7 @@ export default function BanksPage() {
           </div>
         )}
         {reconnectRequired && (
-          <div className={styles.card} style={{ marginBottom: 12 }}>
+          <div className={`${styles.card} ${styles.cardGap}`}>
             <div className={styles.sectionTitle}>Bank reconnect required</div>
             <div className={styles.sectionSub} style={{ marginTop: 6 }}>
               {hasPaidPlaidEntitlement

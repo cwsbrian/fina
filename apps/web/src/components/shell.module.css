@@ -1,193 +1,489 @@
+/* App shell.
+   Wide screens: a spruce sidebar holds every destination, grouped.
+   Below 1080px: a compact spruce bar with the five main tabs and a
+   "More" menu for the rest. */
+
 .shell {
+  --sidebar-w: 248px;
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
+  min-height: 100dvh;
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
   background: var(--color-canvas);
 }
 
-.nav {
+/* ───────── Sidebar ───────── */
+
+.sidebar {
   position: sticky;
   top: 0;
   z-index: 20;
-  background: var(--color-canvas);
-  border-bottom: 1px solid var(--color-hairline);
+  height: 100vh;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px 12px 12px;
+  background: var(--color-surface-dark);
+  color: var(--color-on-dark);
 }
 
-.navInner {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 0 24px;
-  height: 64px;
+.sideTop {
   display: flex;
   align-items: center;
-  gap: 16px;
+  justify-content: space-between;
+  gap: var(--s-2);
+  padding: 0 4px 0 8px;
 }
 
 .brand {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  color: var(--color-ink);
+  padding: 4px 0;
   background: transparent;
   border: 0;
-  padding: 0;
+  border-radius: var(--radius-xs);
   cursor: pointer;
 }
 
 .brandLogo {
-  height: 28px;
+  height: 26px;
   width: auto;
   display: block;
 }
 
-.links {
+.sideScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 2px 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+}
+
+.sideGroup + .sideGroup {
+  margin-top: 14px;
+}
+
+.sideGroupLabel {
+  padding: 0 10px 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.58);
+}
+
+.sideLink {
+  position: relative;
+  width: 100%;
   display: flex;
   align-items: center;
-  gap: 2px;
-  margin-left: 8px;
-}
-
-.moreWrap { position: relative; }
-.menu.moreMenu { right: auto; left: 0; max-height: min(70vh, 560px); overflow-y: auto; }
-
-.link {
-  padding: 7px 14px;
-  border-radius: 999px;
-  background: transparent;
+  gap: 11px;
+  height: 32px;
+  padding: 0 10px;
   border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-on-dark-soft);
   font-size: 14px;
   font-weight: 500;
-  color: var(--color-body);
+  text-align: left;
   cursor: pointer;
-  font-family: inherit;
 }
 
-.link:hover {
-  background: var(--color-surface-soft);
-  color: var(--color-ink);
+.sideLink:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-on-dark);
 }
 
-.linkActive {
-  background: var(--color-surface-strong);
-  color: var(--color-ink);
+.sideLinkActive,
+.sideLinkActive:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-on-dark);
   font-weight: 600;
+}
+
+/* The horizon mark: a short mint rule at the edge of the active row. */
+.sideLinkActive::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--color-mint);
+}
+
+.sideLinkActive svg {
+  color: var(--color-mint);
+}
+
+.sideFoot {
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.sidebar :focus-visible,
+.nav :focus-visible {
+  outline: 2px solid var(--color-mint);
+  outline-offset: 2px;
+}
+
+/* ───────── Compact bar (hidden on wide screens) ───────── */
+
+.nav {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--color-surface-dark);
+  color: var(--color-on-dark);
+}
+
+.navInner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 16px;
+}
+
+.moreLabel,
+.moreChevron,
+.moreGlyph {
+  display: inline-flex;
+  align-items: center;
+}
+
+.moreGlyph {
+  display: none;
 }
 
 .right {
   margin-left: auto;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  min-width: 0;
 }
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  padding: 0 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.links {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.links::-webkit-scrollbar {
+  display: none;
+}
+
+.link {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 42px;
+  padding: 0 11px;
+  border: 0;
+  background: transparent;
+  color: var(--color-on-dark-soft);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.link:hover {
+  color: var(--color-on-dark);
+}
+
+.linkActive {
+  color: var(--color-on-dark);
+  font-weight: 600;
+}
+
+.linkActive::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  right: 11px;
+  bottom: 0;
+  height: 3px;
+  border-radius: 3px 3px 0 0;
+  background: var(--color-mint);
+}
+
+.moreWrap {
+  position: relative;
+  flex: none;
+  display: flex;
+}
+
+.moreBtn {
+  padding-left: 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ───────── Plan badge ───────── */
 
 .tierBadge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: var(--color-surface-strong);
-  color: var(--color-body);
+  gap: 7px;
+  height: 24px;
+  padding: 0 8px;
   border: 0;
-  font-size: 12px;
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-on-dark-soft);
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.2px;
+  white-space: nowrap;
   cursor: pointer;
-  font-family: inherit;
 }
 
-.tierBadge:hover { background: var(--color-hairline); }
+.tierBadge:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
 
 .tierBadgeTrial {
-  background: rgba(230, 184, 92, 0.14);
-  color: #8a6a1c;
+  background: rgba(230, 184, 92, 0.18);
+  color: #f0cf8c;
 }
 
-.tierBadgeTrial:hover { background: rgba(230, 184, 92, 0.22); }
+.tierBadgeTrial:hover {
+  background: rgba(230, 184, 92, 0.26);
+}
 
 .tierBadgePro {
-  background: rgba(62, 179, 139, 0.1);
-  color: var(--color-primary);
+  background: rgba(125, 216, 184, 0.16);
+  color: var(--color-mint);
 }
 
-.tierBadgePro:hover { background: rgba(62, 179, 139, 0.18); }
+.tierBadgePro:hover {
+  background: rgba(125, 216, 184, 0.24);
+}
 
 .tierDot {
   width: 6px;
   height: 6px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: currentColor;
 }
 
-.wsBtn,
-.avatarBtn {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: var(--color-surface-soft);
-  border: 0;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--color-ink);
-  cursor: pointer;
-  font-family: inherit;
+/* ───────── Workspace + account buttons ───────── */
+
+.wsWrap {
+  position: relative;
+  min-width: 0;
 }
 
-.wsBtn:hover, .avatarBtn:hover { background: var(--color-surface-strong); }
+.wsBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 10px 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-on-dark);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.wsBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.wsBtn svg {
+  flex: none;
+  color: var(--color-on-dark-soft);
+  stroke: currentColor;
+}
+
+.wsBtnName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
 
 .wsBtnRole {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
+  flex: none;
+  font-size: 13px;
+  font-weight: 500;
+  text-transform: capitalize;
+  color: var(--color-on-dark-soft);
+}
+
+.menu .wsBtnRole {
   color: var(--color-muted);
 }
 
+.avatar,
 .avatarBtn {
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border-radius: 999px;
-  background: var(--color-ink);
-  color: #fff;
+  flex: none;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  letter-spacing: 0.3px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-pill);
+  background: var(--color-mint);
+  color: var(--color-surface-dark);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
+
+.avatarBtn {
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
+.avatarBtn:hover {
+  filter: brightness(1.08);
+}
+
+.userWrap {
+  width: 100%;
+}
+
+.userBtn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-on-dark);
+  text-align: left;
+  cursor: pointer;
+}
+
+.userBtn:hover {
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.userBtn svg {
+  flex: none;
+  color: var(--color-on-dark-soft);
+  transform: rotate(180deg);
+}
+
+.userText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+
+.userName {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.userMail {
+  font-size: 13px;
+  color: var(--color-on-dark-soft);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ───────── Menus ───────── */
 
 .menu {
   position: absolute;
-  top: 100%;
+  top: calc(100% + 6px);
   right: 0;
-  margin-top: 8px;
-  min-width: 240px;
-  background: var(--color-canvas);
-  border: 1px solid var(--color-hairline);
-  border-radius: 14px;
-  box-shadow: 0 12px 32px rgba(11, 15, 23, 0.08);
-  padding: 8px;
   z-index: 50;
+  min-width: 240px;
+  padding: 6px;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  box-shadow: var(--shadow-pop);
+  animation: menu-in var(--m-panel) var(--ease);
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+}
+
+.wsMenu {
+  min-width: 264px;
+}
+
+.sidebar .menu {
+  left: 0;
+  right: auto;
+}
+
+.sidebar .wsMenu {
+  min-width: 100%;
+  width: 264px;
+}
+
+.sidebar .userWrap .menu {
+  top: auto;
+  bottom: calc(100% + 6px);
+  width: 100%;
+  min-width: 0;
+}
+
+.menu.moreMenu {
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
 }
 
 .menuHead {
-  padding: 8px 12px 10px;
-  border-bottom: 1px solid var(--color-hairline-soft, var(--color-hairline));
+  padding: 8px 10px 10px;
   margin-bottom: 4px;
+  border-bottom: 1px solid var(--color-hairline-soft);
 }
 
 .menuHeadName {
   font-size: 14px;
   font-weight: 600;
   color: var(--color-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .menuHeadMail {
-  font-size: 12px;
-  color: var(--color-muted);
   margin-top: 1px;
+  font-size: 13px;
+  color: var(--color-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .menuItem {
@@ -195,18 +491,26 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: transparent;
+  min-height: 36px;
+  padding: 6px 10px;
   border: 0;
-  text-align: left;
-  font-size: 14px;
+  border-radius: var(--radius-xs);
+  background: transparent;
   color: var(--color-body);
+  font-size: 14px;
+  text-align: left;
   cursor: pointer;
-  font-family: inherit;
 }
 
-.menuItem:hover { background: var(--color-surface-soft); color: var(--color-ink); }
+.menuItem:hover {
+  background: var(--color-surface-soft);
+  color: var(--color-ink);
+}
+
+.menu .menuItem:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: -2px;
+}
 
 .menuItemActive {
   background: var(--color-surface-soft);
@@ -214,18 +518,27 @@
   font-weight: 600;
 }
 
+.menuItemGrow {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .menuItemDanger {
   color: var(--color-down);
 }
 
 .menuItemDanger:hover {
-  background: rgba(207, 32, 47, 0.08);
+  background: var(--color-down-tint);
+  color: var(--color-down);
 }
 
 .menuDivider {
   height: 1px;
-  background: var(--color-hairline-soft, var(--color-hairline));
   margin: 6px 0;
+  background: var(--color-hairline-soft);
 }
 
 .scrim {
@@ -234,16 +547,205 @@
   z-index: 40;
 }
 
-.wsWrap {
-  position: relative;
-}
+/* ───────── Content ───────── */
 
 .page {
-  flex: 1;
+  min-width: 0;
+  /* Page layouts respond to this column's width, not the window's, so
+     they behave the same with and without the sidebar. */
+  container-type: inline-size;
 }
 
-@media (max-width: 1120px) {
-  .navInner { height: auto; min-height: 64px; flex-wrap: wrap; padding: 10px 16px; }
-  .links { order: 3; width: 100%; margin-left: 0; overflow-x: auto; padding-bottom: 2px; }
-  .link { flex: 0 0 auto; }
+.loadError {
+  margin: 32px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-down-tint);
+  color: var(--color-down);
+  font-size: 14px;
+}
+
+/* ───────── Fina chat ───────── */
+
+.chatDock {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 60;
+}
+
+.chatLauncher {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 0 20px 0 16px;
+  border: 0;
+  border-radius: var(--radius-lg);
+  background: var(--color-action);
+  color: #fff;
+  box-shadow: 0 1px 2px rgba(17, 35, 28, 0.2), 0 12px 28px -8px rgba(17, 60, 44, 0.5);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.14s, transform 0.14s;
+}
+
+.chatLauncher:hover {
+  background: var(--color-action-hover);
+}
+
+.chatLauncher:active {
+  transform: scale(0.97);
+}
+
+.chatLauncher:focus-visible {
+  outline: 3px solid var(--color-ink);
+  outline-offset: 3px;
+}
+
+.chatPopover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 12px);
+  display: flex;
+  flex-direction: column;
+  width: min(420px, calc(100vw - 32px));
+  height: min(640px, calc(100dvh - 112px));
+  overflow: hidden;
+  border: 1px solid var(--color-hairline);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-dialog);
+}
+
+.chatPopover[hidden] {
+  display: none;
+}
+
+/* ───────── Narrow screens ───────── */
+
+@media (max-width: 1079px) {
+  .shell {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .sidebar {
+    display: none;
+  }
+
+  .nav {
+    display: block;
+  }
+
+  .page {
+    flex: 1;
+  }
+
+  .nav .wsBtn {
+    width: auto;
+    max-width: 220px;
+    height: 34px;
+  }
+
+  .nav .wsMenu {
+    position: fixed;
+    top: 52px;
+    left: 12px;
+    right: 12px;
+    min-width: 0;
+  }
+
+  .nav .moreMenu {
+    position: fixed;
+    top: 104px;
+    left: auto;
+    right: 12px;
+    width: min(320px, calc(100vw - 24px));
+    max-height: calc(100dvh - 124px);
+  }
+}
+
+@media (max-width: 620px) {
+  .nav .wsBtnRole {
+    display: none;
+  }
+
+  .nav .wsBtn {
+    max-width: 150px;
+  }
+
+  .nav .tierBadge {
+    display: none;
+  }
+
+  .links {
+    justify-content: space-between;
+  }
+
+  .link {
+    padding: 0 9px;
+  }
+
+  .linkActive::after {
+    left: 9px;
+    right: 9px;
+  }
+
+  /* "More" keeps its name for assistive tech; on a phone it shows as
+     a menu glyph so the five main tabs fit. */
+  .moreLabel {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .moreChevron {
+    display: none;
+  }
+
+  .moreGlyph {
+    display: inline-flex;
+  }
+
+  .moreBtn {
+    width: 44px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .moreBtn.linkActive::after {
+    left: 10px;
+    right: 10px;
+  }
+
+  .chatLauncher {
+    width: 52px;
+    min-height: 52px;
+    padding: 0;
+  }
+
+  .chatLauncher > span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .chatDock {
+    right: 12px;
+    bottom: max(12px, env(safe-area-inset-bottom));
+  }
+
+  .chatPopover {
+    height: calc(100dvh - 88px - env(safe-area-inset-bottom));
+    min-height: 0;
+  }
 }

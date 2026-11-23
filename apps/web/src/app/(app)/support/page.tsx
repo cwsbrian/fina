@@ -61,7 +61,6 @@ export default function SupportPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Help</div>
           <h1 className={styles.title}>Contact support</h1>
           <p className={styles.sub}>Tell us what happened. We’ll reply by email.</p>
         </div>
@@ -72,13 +71,13 @@ export default function SupportPage() {
         </div>
       )}
       {sent && (
-        <div className={styles.panel} role="status" style={{ padding: 16, marginBottom: 16 }}>
+        <div className={styles.notice} role="status">
           Request sent. We’ll reply by email.
         </div>
       )}
       <form className={styles.panel} onSubmit={submit}>
         <div className={styles.formGrid}>
-          <div className={styles.field} style={{ gridColumn: "1 / -1" }}>
+          <div className={`${styles.field} ${styles.fieldWide}`}>
             <label htmlFor="support-subject">Subject</label>
             <input
               className={styles.input}
@@ -89,7 +88,7 @@ export default function SupportPage() {
               required
             />
           </div>
-          <div className={styles.field} style={{ gridColumn: "1 / -1" }}>
+          <div className={`${styles.field} ${styles.fieldWide}`}>
             <label htmlFor="support-message">Message</label>
             <textarea
               className={styles.input}
@@ -101,7 +100,7 @@ export default function SupportPage() {
               required
             />
           </div>
-          <div className={styles.field} style={{ gridColumn: "1 / -1" }}>
+          <div className={`${styles.field} ${styles.fieldWide}`}>
             <label htmlFor="support-files">
               Attachments (up to 3 files, 5 MB each, 10 MB total)
             </label>

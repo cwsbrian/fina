@@ -252,7 +252,6 @@ export default function BudgetPage() {
     <div className={styles.page}>
       <div className={styles.head}>
         <div>
-          <div className={styles.eyebrow}>Spending plan</div>
           <h1 className={styles.title}>Budget</h1>
           <p className={styles.sub}>
             {current?.yearMonth ?? "This month"} spending and category limits.
@@ -273,7 +272,7 @@ export default function BudgetPage() {
         </div>
       )}
       {notice && (
-        <div className={styles.panel} role="status" style={{ padding: 14, marginBottom: 16 }}>
+        <div className={styles.notice} role="status">
           {notice}
         </div>
       )}
@@ -300,7 +299,7 @@ export default function BudgetPage() {
               </div>
             </div>
           </div>
-          <div className={styles.panel} style={{ padding: 20 }}>
+          <div className={`${styles.panel} ${styles.progressPanel}`}>
             <div className={styles.progress}>
               <span style={{ width: `${cap > 0 ? Math.min(100, (spent / cap) * 100) : 0}%` }} />
             </div>
@@ -334,7 +333,7 @@ export default function BudgetPage() {
                   </div>
                   <div className={styles.barTrack}>
                     <div
-                      className={styles.bar}
+                      className={`${styles.bar} ${row.budget > 0 && row.spent > row.budget ? styles.barOver : ""}`}
                       style={{
                         width: `${row.budget ? Math.min(100, (row.spent / row.budget) * 100) : 0}%`,
                       }}

@@ -1,6 +1,6 @@
 "use client";
 
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useRef, useState } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import {
   initials,
@@ -16,9 +16,44 @@ import {
   setActiveWorkspaceId,
 } from "../lib/active-workspace";
 import { syncDeviceTz } from "../lib/tz-sync";
-import { WebIcon } from "./WebIcon";
+import { WebIcon, type IconName } from "./WebIcon";
 import { NAV_ITEMS } from "./shell-nav";
+import { FinaChat } from "./FinaChat";
 import styles from "./shell.module.css";
+
+const PRIMARY_IDS = ["home", "activity", "analysis", "budget", "goals"];
+
+/** How the sidebar groups NAV_ITEMS. Presentation only: the items, their
+ *  order inside a group, and their paths all come from shell-nav. */
+const NAV_GROUPS: Array<{ label: string | null; ids: string[] }> = [
+  { label: null, ids: PRIMARY_IDS },
+  { label: "Planning", ids: ["review", "scheduled", "subscriptions", "categories", "accounts"] },
+  {
+    label: "Settings",
+    ids: ["banks", "workspace", "brief", "notifications", "categorization", "plan", "account", "support"],
+  },
+];
+
+const NAV_ICONS: Record<string, IconName> = {
+  home: "home",
+  activity: "list",
+  analysis: "chart",
+  budget: "wallet",
+  goals: "target",
+  review: "inbox",
+  categories: "tag",
+  scheduled: "calendar",
+  subscriptions: "repeat",
+  accounts: "layers",
+  banks: "bank",
+  workspace: "users",
+  brief: "sunrise",
+  notifications: "bell",
+  categorization: "sliders",
+  plan: "card",
+  account: "user",
+  support: "help",
+};
 
 export type ShellState = {
   me: MeDTO | null;
@@ -29,7 +64,12 @@ export type ShellState = {
 
 export function AppShell({ children }: { children: ReactNode }) {
   const router = useRouter();
-  const pathname = usePathname() ?? "";
+  const routePath = usePathname() ?? "";
+  // Marking the current nav item from the path directly gave a hydration
+  // mismatch in dev (server markup had no active item), and the highlight
+  // then never appeared on first load. Apply the path after mount instead.
+  const [pathname, setPathname] = useState("");
+  useEffect(() => setPathname(routePath), [routePath]);
   const { data: session } = useSession();
 
   const [me, setMe] = useState<MeDTO | null>(null);
@@ -37,6 +77,16 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatMounted, setChatMounted] = useState(false);
+  const chatLauncherRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("chat") === "open") {
+      setChatMounted(true);
+      setChatOpen(true);
+    }
+  }, [routePath]);
 
   useEffect(() => {
     (async () => {
@@ -75,6 +125,16 @@ export function AppShell({ children }: { children: ReactNode }) {
     router.push(path);
   }
 
+  function closeChat() {
+    setChatOpen(false);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("chat") === "open") {
+      url.searchParams.delete("chat");
+      window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    }
+    chatLauncherRef.current?.focus();
+  }
+
   function isActive(path: string) {
     if (path === "/home") return pathname === "/home";
     return pathname.startsWith(path);
@@ -97,9 +157,75 @@ export function AppShell({ children }: { children: ReactNode }) {
     : initials(undefined, session?.user?.email ?? "?");
   const trialDays = me ? trialDaysLeft(me.trial.endsAt) : null;
   const tierTag = me ? tierLabel(me.tier, me.trial.active) : "Free";
+  const tierBadge = me && (
+    <button
+      type="button"
+      className={`${styles.tierBadge} ${me.trial.active ? styles.tierBadgeTrial : me.tier === "pro" ? styles.tierBadgePro : ""}`}
+      onClick={() => navigate("/settings/plan")}
+      title={`${tierTag} plan`}
+    >
+      <span className={styles.tierDot} />
+      {me.trial.active && trialDays !== null
+        ? `Trial · ${trialDays}d left`
+        : tierTag}
+    </button>
+  );
+  const userEmail = me?.user.email ?? session?.user?.email ?? "";
+
   return (
     <div className={styles.shell}>
-      <nav className={styles.nav}>
+      <nav className={styles.sidebar} aria-label="Main">
+        <div className={styles.sideTop}>
+          <button
+            type="button"
+            className={styles.brand}
+            onClick={() => navigate("/home")}
+            aria-label="Fina home"
+          >
+            <img src="/branding/fina-wordmark-white.png" alt="Fina" className={styles.brandLogo} />
+          </button>
+          {tierBadge}
+        </div>
+
+        <WorkspaceMenu
+          active={activeWs}
+          workspaces={workspaces}
+          onSwitch={switchWorkspace}
+        />
+
+        <div className={styles.sideScroll}>
+          {NAV_GROUPS.map((group) => (
+            <div className={styles.sideGroup} key={group.label ?? "main"}>
+              {group.label && <div className={styles.sideGroupLabel}>{group.label}</div>}
+              {NAV_ITEMS.filter((it) => group.ids.includes(it.id)).map((it) => (
+                <button
+                  key={it.id}
+                  type="button"
+                  className={`${styles.sideLink} ${isActive(it.path) ? styles.sideLinkActive : ""}`}
+                  aria-current={isActive(it.path) ? "page" : undefined}
+                  onClick={() => navigate(it.path)}
+                >
+                  <WebIcon name={NAV_ICONS[it.id] ?? "chevRight"} size={17} strokeWidth={1.7} />
+                  {it.label}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+
+        <div className={styles.sideFoot}>
+          <UserMenu
+            email={userEmail}
+            name={me?.user.name}
+            initialsText={userInitials}
+            onNavigate={navigate}
+            onSignOut={onSignOut}
+            showIdentity
+          />
+        </div>
+      </nav>
+
+      <nav className={styles.nav} aria-label="Main">
         <div className={styles.navInner}>
           <button
             type="button"
@@ -107,42 +233,11 @@ export function AppShell({ children }: { children: ReactNode }) {
             onClick={() => navigate("/home")}
             aria-label="Fina home"
           >
-            <img src="/branding/fina-wordmark.png" alt="Fina" className={styles.brandLogo} />
+            <img src="/branding/fina-wordmark-white.png" alt="Fina" className={styles.brandLogo} />
           </button>
 
-          <div className={styles.links}>
-            {NAV_ITEMS.filter((it) => ["home", "chat", "activity", "analysis", "budget", "goals"].includes(it.id)).map((it) => (
-              <button
-                key={it.id}
-                type="button"
-                className={`${styles.link} ${isActive(it.path) ? styles.linkActive : ""}`}
-                onClick={() => navigate(it.path)}
-              >
-                {it.label}
-              </button>
-            ))}
-            <div className={styles.moreWrap}>
-              <button type="button" className={`${styles.link} ${NAV_ITEMS.some((it) => !["home", "chat", "activity", "analysis", "budget", "goals"].includes(it.id) && isActive(it.path)) ? styles.linkActive : ""}`} onClick={() => setMoreOpen((value) => !value)} aria-expanded={moreOpen} aria-haspopup="menu">More ▾</button>
-              {moreOpen && <><div className={styles.scrim} onClick={() => setMoreOpen(false)} /><div className={`${styles.menu} ${styles.moreMenu}`} role="menu">
-                {NAV_ITEMS.filter((it) => !["home", "chat", "activity", "analysis", "budget", "goals"].includes(it.id)).map((it) => <button key={it.id} type="button" role="menuitem" className={`${styles.menuItem} ${isActive(it.path) ? styles.menuItemActive : ""}`} onClick={() => { setMoreOpen(false); navigate(it.path); }}>{it.label}</button>)}
-              </div></>}
-            </div>
-          </div>
-
           <div className={styles.right}>
-            {me && (
-              <button
-                type="button"
-                className={`${styles.tierBadge} ${me.trial.active ? styles.tierBadgeTrial : me.tier === "pro" ? styles.tierBadgePro : ""}`}
-                onClick={() => navigate("/settings/plan")}
-                title={`${tierTag} plan`}
-              >
-                <span className={styles.tierDot} />
-                {me.trial.active && trialDays !== null
-                  ? `Trial · ${trialDays}d left`
-                  : tierTag}
-              </button>
-            )}
+            {tierBadge}
 
             <WorkspaceMenu
               active={activeWs}
@@ -151,7 +246,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             />
 
             <UserMenu
-              email={me?.user.email ?? session?.user?.email ?? ""}
+              email={userEmail}
               name={me?.user.name}
               initialsText={userInitials}
               onNavigate={navigate}
@@ -159,17 +254,107 @@ export function AppShell({ children }: { children: ReactNode }) {
             />
           </div>
         </div>
+
+        <div className={styles.tabs}>
+          <div className={styles.links}>
+            {NAV_ITEMS.filter((it) => PRIMARY_IDS.includes(it.id)).map((it) => (
+              <button
+                key={it.id}
+                type="button"
+                className={`${styles.link} ${isActive(it.path) ? styles.linkActive : ""}`}
+                aria-current={isActive(it.path) ? "page" : undefined}
+                onClick={() => navigate(it.path)}
+              >
+                {it.label}
+              </button>
+            ))}
+          </div>
+          <div className={styles.moreWrap}>
+            <button
+              type="button"
+              className={`${styles.link} ${styles.moreBtn} ${NAV_ITEMS.some((it) => !PRIMARY_IDS.includes(it.id) && isActive(it.path)) ? styles.linkActive : ""}`}
+              onClick={() => setMoreOpen((value) => !value)}
+              aria-expanded={moreOpen}
+              aria-haspopup="menu"
+            >
+              <span className={styles.moreLabel}>More</span>
+              <span className={styles.moreChevron}>
+                <WebIcon name="chevDown" size={14} strokeWidth={2} />
+              </span>
+              <span className={styles.moreGlyph}>
+                <WebIcon name="menu" size={20} strokeWidth={1.8} />
+              </span>
+            </button>
+            {moreOpen && (
+              <>
+                <div className={styles.scrim} onClick={() => setMoreOpen(false)} />
+                <div className={`${styles.menu} ${styles.moreMenu}`} role="menu">
+                  {NAV_ITEMS.filter((it) => !PRIMARY_IDS.includes(it.id)).map((it) => (
+                    <button
+                      key={it.id}
+                      type="button"
+                      role="menuitem"
+                      className={`${styles.menuItem} ${isActive(it.path) ? styles.menuItemActive : ""}`}
+                      onClick={() => {
+                        setMoreOpen(false);
+                        navigate(it.path);
+                      }}
+                    >
+                      <WebIcon name={NAV_ICONS[it.id] ?? "chevRight"} size={16} color="var(--color-muted)" />
+                      {it.label}
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </nav>
 
       <main className={styles.page}>
         {error ? (
-          <div style={{ padding: 24, color: "var(--color-down)" }}>
+          <div className={styles.loadError} role="alert">
             Could not load: {error}
           </div>
         ) : (
           children
         )}
       </main>
+      <div className={styles.chatDock}>
+        {chatMounted && (
+          <aside
+            id="fina-chat-popover"
+            className={styles.chatPopover}
+            role="dialog"
+            aria-modal="false"
+            aria-labelledby="fina-chat-title"
+            hidden={!chatOpen}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") closeChat();
+            }}
+          >
+            <FinaChat open={chatOpen} workspaceId={activeWsId} onClose={closeChat} />
+          </aside>
+        )}
+        <button
+          ref={chatLauncherRef}
+          className={styles.chatLauncher}
+          type="button"
+          aria-label={chatOpen ? "Close Fina chat" : "Open Fina chat"}
+          aria-expanded={chatOpen}
+          aria-controls={chatMounted ? "fina-chat-popover" : undefined}
+          onClick={() => {
+            if (chatOpen) closeChat();
+            else {
+              setChatMounted(true);
+              setChatOpen(true);
+            }
+          }}
+        >
+          <WebIcon name={chatOpen ? "x" : "sparkle"} size={19} strokeWidth={2} />
+          <span>{chatOpen ? "Close" : "Ask Fina"}</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -192,7 +377,7 @@ function WorkspaceMenu({
         className={styles.wsBtn}
         onClick={() => setOpen((o) => !o)}
       >
-        <span>{active.name}</span>
+        <span className={styles.wsBtnName}>{active.name}</span>
         <span className={styles.wsBtnRole}>{active.role}</span>
         <WebIcon
           name="chevDown"
@@ -204,7 +389,7 @@ function WorkspaceMenu({
       {open && (
         <>
           <div className={styles.scrim} onClick={() => setOpen(false)} />
-          <div className={styles.menu} style={{ minWidth: 280 }}>
+          <div className={`${styles.menu} ${styles.wsMenu}`}>
             <div className={styles.menuHead}>
               <div className={styles.menuHeadName}>Workspaces</div>
               <div className={styles.menuHeadMail}>
@@ -222,7 +407,7 @@ function WorkspaceMenu({
                   if (w.id !== active.id) onSwitch(w.id);
                 }}
               >
-                <span style={{ flex: 1 }}>{w.name}</span>
+                <span className={styles.menuItemGrow}>{w.name}</span>
                 <span className={styles.wsBtnRole}>{w.role}</span>
                 {w.id === active.id && (
                   <WebIcon
@@ -247,23 +432,37 @@ function UserMenu({
   initialsText,
   onNavigate,
   onSignOut,
+  showIdentity = false,
 }: {
   email: string;
   name?: string | null | undefined;
   initialsText: string;
   onNavigate: (path: string) => void;
   onSignOut: () => void;
+  /** Sidebar footer: show the name and email beside the avatar. */
+  showIdentity?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <div className={styles.wsWrap}>
+    <div className={`${styles.wsWrap} ${showIdentity ? styles.userWrap : ""}`}>
       <button
         type="button"
-        className={styles.avatarBtn}
+        className={showIdentity ? styles.userBtn : styles.avatarBtn}
         onClick={() => setOpen((o) => !o)}
         title={name ?? email}
       >
-        {initialsText}
+        {showIdentity ? (
+          <>
+            <span className={styles.avatar}>{initialsText}</span>
+            <span className={styles.userText}>
+              <span className={styles.userName}>{name || email}</span>
+              {name && <span className={styles.userMail}>{email}</span>}
+            </span>
+            <WebIcon name="chevDown" size={14} strokeWidth={2} />
+          </>
+        ) : (
+          initialsText
+        )}
       </button>
       {open && (
         <>

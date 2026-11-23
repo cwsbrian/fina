@@ -1,99 +1,81 @@
+/* Home. One wide cashflow card, then recent activity beside the
+   workspace summary. Parts come from ui.css. */
+
 .container {
-  max-width: 1200px;
+  max-width: 1184px;
   margin: 0 auto;
-  padding: 48px 24px 80px;
+  padding: var(--s-7) var(--s-6) 112px;
 }
 
 .welcome {
-  margin-bottom: 32px;
+  margin-bottom: var(--s-6);
 }
 
 .greeting {
-  font-size: 44px;
-  line-height: 1.1;
-  font-weight: 500;
-  letter-spacing: -1px;
-  color: var(--color-ink);
-}
-
-.greeting em {
-  font-style: italic;
-  font-weight: 500;
-  color: var(--color-accent);
+  composes: fi-title from global;
 }
 
 .date {
-  margin-top: 6px;
-  font-size: 14px;
-  color: var(--color-muted);
-  letter-spacing: 0.2px;
+  composes: fi-lead from global;
+  margin-top: var(--s-2);
 }
+
+.loadError {
+  composes: fi-notice fi-notice--error from global;
+}
+
+/* ───────── Banners ───────── */
 
 .banner {
   display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 18px 20px;
-  border-radius: 16px;
-  background: var(--color-surface-soft);
+  align-items: center;
+  gap: var(--s-4);
+  margin-bottom: var(--s-4);
+  padding: var(--s-3) var(--s-4);
   border: 1px solid var(--color-hairline);
-  margin-bottom: 32px;
-}
-
-.bannerTrial {
-  background: rgba(230, 184, 92, 0.08);
-  border-color: rgba(230, 184, 92, 0.24);
-}
-
-.bannerExpired {
-  background: rgba(207, 32, 47, 0.06);
-  border-color: rgba(207, 32, 47, 0.2);
-}
-
-.bannerInvite {
-  background: rgba(62, 179, 139, 0.08);
-  border-color: rgba(62, 179, 139, 0.24);
-}
-
-.bannerInvite .bannerIcon {
-  background: rgba(62, 179, 139, 0.16);
-  color: var(--color-primary);
-}
-
-.bannerBtn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
 }
 
 .inviteBanners {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-.inviteBanners > .banner {
-  margin-bottom: 0;
 }
 
 .bannerIcon {
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: var(--color-surface-strong);
-  color: var(--color-body);
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  color: var(--color-body);
+}
+
+.bannerInvite .bannerIcon {
+  background: var(--color-brand-tint);
+  color: var(--color-action);
+}
+
+.bannerTrial {
+  border-color: #ecd9ae;
+  background: var(--color-warn-tint);
 }
 
 .bannerTrial .bannerIcon {
-  background: rgba(230, 184, 92, 0.18);
-  color: #8a6a1c;
+  background: rgba(134, 89, 10, 0.12);
+  color: var(--color-warn);
+}
+
+.bannerExpired {
+  border-color: #efc4c2;
+  background: var(--color-down-tint);
 }
 
 .bannerExpired .bannerIcon {
-  background: rgba(207, 32, 47, 0.14);
+  background: rgba(191, 42, 46, 0.12);
   color: var(--color-down);
 }
 
@@ -103,339 +85,423 @@
 }
 
 .bannerTitle {
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--color-ink);
-  letter-spacing: -0.1px;
 }
 
 .bannerSub {
+  margin-top: 1px;
   font-size: 14px;
   color: var(--color-body);
-  margin-top: 2px;
 }
 
 .bannerBtn {
-  height: 40px;
-  padding: 0 18px;
-  border-radius: 999px;
-  background: var(--color-primary);
-  color: #fff;
-  border: 0;
-  font-size: 14px;
-  font-weight: 600;
-  cursor: pointer;
-  flex-shrink: 0;
-  font-family: inherit;
+  composes: fi-btn fi-btn--primary from global;
+  flex: none;
 }
 
-.bannerBtn:hover { background: var(--color-primary-active); }
-
-.grid2 {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 16px;
-  margin-bottom: 40px;
+.bannerBtnQuiet {
+  composes: fi-btn from global;
+  flex: none;
 }
 
-@media (min-width: 900px) {
-  .grid2 {
-    grid-template-columns: 1fr 1.4fr;
-  }
-}
+/* ───────── Cards ───────── */
 
-.wsCard {
-  background: var(--color-canvas);
+.cashflowCard,
+.recentCard,
+.wsCard,
+.quickCard {
   border: 1px solid var(--color-hairline);
-  border-radius: 18px;
-  padding: 22px;
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+
+.cardHead {
   display: flex;
-  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--s-4);
+  padding: var(--s-5) var(--s-5) 0;
 }
 
-.cashflowCard, .recentCard {
-  background: var(--color-canvas);
-  border: 1px solid var(--color-hairline);
-  border-radius: 18px;
-  padding: 22px;
+.cardTitle {
+  composes: fi-h2 from global;
 }
 
-.cashflowCard { display: flex; flex-direction: column; justify-content: space-between; gap: 22px; }
-.cashflowGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.cashflowGrid > div { min-width: 0; }
-.cashflowGrid span { display: block; color: var(--color-muted); font-size: 12px; margin-bottom: 5px; }
-.cashflowGrid strong { font-size: clamp(17px, 2vw, 24px); letter-spacing: -.03em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.cashflowCard .link { align-self: flex-start; }
-.recentCard { padding: 4px 22px; }
-.recentCard > p { padding: 20px 0; }
-.recentRow { display: flex; justify-content: space-between; gap: 15px; padding: 14px 0; border-bottom: 1px solid var(--color-hairline-soft); }
-.recentRow:last-child { border-bottom: 0; }
-.recentRow > div { display: flex; flex-direction: column; min-width: 0; }
-.recentRow strong { font-size: 14px; font-variant-numeric: tabular-nums; }
-.recentRow span { color: var(--color-muted); font-size: 12px; }
-.recentIncome { color: var(--color-up); }
-
-@media (max-width: 620px) {
-  .cashflowGrid { grid-template-columns: 1fr; }
-}
-
-.eyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
+.cardEmpty {
+  padding: var(--s-5);
   color: var(--color-muted);
-  margin-bottom: 10px;
-}
-
-.wsCardName {
-  font-size: 24px;
-  font-weight: 600;
-  color: var(--color-ink);
-  letter-spacing: -0.4px;
-}
-
-.wsCardMeta {
-  margin-top: 8px;
   font-size: 14px;
-  color: var(--color-body);
-  display: flex;
-  align-items: center;
-}
-
-.wsCardFoot {
-  margin-top: auto;
-  padding-top: 16px;
-  border-top: 1px solid var(--color-hairline-soft, var(--color-hairline));
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.link {
-  background: transparent;
-  border: 0;
-  padding: 0;
-  font: inherit;
-  font-weight: 600;
-  color: var(--color-primary);
-  cursor: pointer;
-}
-
-.link:hover { text-decoration: underline; }
-
-.pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.2px;
-  text-transform: uppercase;
-  background: var(--color-surface-strong);
-  color: var(--color-body);
-  margin-right: 8px;
-}
-
-.pillOwner {
-  background: rgba(62, 179, 139, 0.1);
-  color: var(--color-primary);
-}
-
-.pillDot {
-  width: 5px;
-  height: 5px;
-  border-radius: 999px;
-  background: currentColor;
-  opacity: 0.7;
-}
-
-.mobileCta {
-  background: var(--color-ink);
-  color: #fff;
-  border-radius: 18px;
-  padding: 28px;
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 24px;
-}
-
-@media (min-width: 700px) {
-  .mobileCta {
-    grid-template-columns: 1fr auto;
-    align-items: center;
-  }
-}
-
-.mobileCtaEyebrow {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.6px;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.5);
-  margin-bottom: 8px;
-}
-
-.mobileCtaTitle {
-  font-size: 26px;
-  line-height: 1.2;
-  font-weight: 500;
-  color: #fff;
-  letter-spacing: -0.6px;
-  margin-bottom: 8px;
-}
-
-.mobileCtaSub {
-  font-size: 14px;
-  color: rgba(255, 255, 255, 0.65);
-  margin-bottom: 18px;
-  max-width: 36em;
-}
-
-.mobileCtaBadges {
-  display: flex;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.mobileQr {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 10px;
-  justify-self: end;
-}
-
-.mobileQrInner {
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 10px;
-  /* Subtle inner glow so the white tile reads as a deliberate panel
-   * against the dark card, not a print-error. */
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.15);
-}
-
-.mobileQrCaption {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.7);
-  letter-spacing: 0.2px;
-}
-
-.mobileCtaBadge {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #fff;
-  text-decoration: none;
-  font-family: inherit;
-}
-
-.mobileCtaBadge:hover { background: rgba(255, 255, 255, 0.1); }
-
-.mobileCtaBadgeLine1 {
-  font-size: 10px;
-  letter-spacing: 0.4px;
-  text-transform: uppercase;
-  color: rgba(255, 255, 255, 0.5);
-}
-
-.mobileCtaBadgeLine2 {
-  font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.2px;
-  margin-top: 1px;
-}
-
-.section {
-  margin-top: 8px;
-}
-
-.sectionHead {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 18px;
-}
-
-.sectionTitle {
-  font-size: 20px;
-  font-weight: 600;
-  color: var(--color-ink);
-  letter-spacing: -0.3px;
 }
 
 .sectionSub {
+  margin-top: 2px;
   font-size: 14px;
   color: var(--color-muted);
-  margin-top: 2px;
 }
 
-.grid3 {
+.link {
+  composes: fi-link from global;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.link svg {
+  transition: transform var(--m-out) var(--ease);
+}
+
+.link:hover svg {
+  transform: translateX(3px);
+  transition-duration: var(--m-in);
+}
+
+/* ───────── Cashflow ─────────
+   The net figure is the page's one large number. Income and expenses
+   sit beside it on a shared scale, so the bars compare honestly. */
+
+.cashflowCard {
+  margin-bottom: var(--s-4);
+}
+
+.cashflowGrid {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
+  grid-template-columns: minmax(220px, 1.1fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: end;
+  gap: var(--s-6);
+  padding: var(--s-5);
 }
 
-@media (min-width: 700px) {
-  .grid3 { grid-template-columns: repeat(3, 1fr); }
+.cashflowGrid span {
+  display: block;
+  color: var(--color-muted);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.cashflowNet strong {
+  font-family: var(--font-display);
+  font-weight: 500;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  color: var(--color-ink);
+  display: block;
+  margin-top: var(--s-1);
+  font-size: var(--t-figure);
+  overflow-wrap: anywhere;
+}
+
+.cashflowNet strong.negative {
+  color: var(--color-down);
+}
+
+.cashflowLine strong {
+  display: block;
+  margin-top: var(--s-1);
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.cashflowBar {
+  display: block;
+  height: 8px;
+  margin-top: var(--s-3);
+  border-radius: var(--radius-xs);
+  background: var(--color-surface-soft);
+  overflow: hidden;
+}
+
+.cashflowBar b {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-xs);
+}
+
+.cashflowBarIncome {
+  background: var(--color-primary);
+}
+
+.cashflowBarSpend {
+  background: var(--color-surface-dark-elevated);
+}
+
+/* ───────── Two columns ───────── */
+
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--s-4);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-4);
+}
+
+.recentCard .cardHead {
+  padding-bottom: var(--s-3);
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.recentRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-4);
+  margin: 0 var(--s-5);
+  padding: var(--s-3) 0;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.recentRow:last-child {
+  border-bottom: 0;
+}
+
+.recentRow > div {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.recentRow strong {
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recentRow span {
+  color: var(--color-muted);
+  font-size: 13px;
+}
+
+.recentIncome {
+  color: var(--color-up);
+}
+
+/* ───────── Workspace ───────── */
+
+.wsCard {
+  display: flex;
+  flex-direction: column;
+  padding: var(--s-5);
+}
+
+.eyebrow {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--color-muted);
+}
+
+.wsCardName {
+  margin-top: var(--s-1);
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
+  color: var(--color-ink);
+  overflow-wrap: anywhere;
+}
+
+.wsCardMeta {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  font-size: 14px;
+  color: var(--color-body);
+}
+
+.pill {
+  composes: fi-tag from global;
+  text-transform: capitalize;
+}
+
+.pillOwner {
+  composes: fi-tag--up from global;
+}
+
+.wsCardFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s-3);
+  margin-top: var(--s-4);
+  padding-top: var(--s-4);
+  border-top: 1px solid var(--color-hairline-soft);
+}
+
+.wsCardBanks {
+  font-size: 14px;
+  color: var(--color-body);
+}
+
+.wsCardBanks strong {
+  color: var(--color-ink);
+  font-weight: 600;
+}
+
+/* ───────── Shortcuts ───────── */
+
+.quickHead {
+  padding: var(--s-5) var(--s-5) var(--s-3);
+  border-bottom: 1px solid var(--color-hairline-soft);
 }
 
 .quickLink {
-  text-align: left;
-  background: var(--color-canvas);
-  border: 1px solid var(--color-hairline);
-  border-radius: 16px;
-  padding: 22px;
+  width: 100%;
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  cursor: pointer;
+  align-items: center;
+  gap: var(--s-3);
+  padding: var(--s-3) var(--s-5);
+  border: 0;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  background: transparent;
   font-family: inherit;
-  transition: border-color 0.14s, background 0.14s;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--m-out) var(--ease);
+}
+
+.quickLink:last-child {
+  border-bottom: 0;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
 }
 
 .quickLink:hover {
-  border-color: var(--color-ink);
-  background: var(--color-canvas);
+  background: #f7f9f6;
+  transition-duration: var(--m-in);
+}
+
+.quickLink:focus-visible {
+  outline: 2px solid var(--color-action);
+  outline-offset: -2px;
 }
 
 .quickLinkGlyph {
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  background: rgba(62, 179, 139, 0.1);
-  color: var(--color-primary);
+  flex: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  background: var(--color-brand-tint);
+  color: var(--color-action);
+}
+
+.quickLinkText {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .quickLinkTitle {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--color-ink);
 }
 
 .quickLinkSub {
   font-size: 13px;
+  line-height: 1.45;
   color: var(--color-muted);
-  line-height: 1.5;
 }
 
 .quickLinkArrow {
-  margin-top: auto;
-  padding-top: 6px;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--color-primary);
+  flex: none;
   display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  color: var(--color-muted-soft);
+  transition: transform var(--m-out) var(--ease);
+}
+
+.quickLink:hover .quickLinkArrow {
+  color: var(--color-ink);
+  transform: translateX(3px);
+  transition-duration: var(--m-in);
+}
+
+/* ───────── Narrower content column ───────── */
+
+@container (max-width: 900px) {
+  .container {
+    padding: var(--s-6) var(--s-5) 112px;
+  }
+
+  .columns {
+    grid-template-columns: 1fr;
+  }
+
+  .cashflowGrid {
+    grid-template-columns: 1fr 1fr;
+    gap: var(--s-5);
+  }
+
+  .cashflowNet {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 640px) {
+  .container {
+    padding: var(--s-5) var(--s-4) 104px;
+  }
+
+  .welcome {
+    margin-bottom: var(--s-5);
+  }
+
+  .banner {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .bannerBody {
+    flex: 1 1 0;
+  }
+
+  .bannerBtn,
+  .bannerBtnQuiet {
+    flex: 1 1 100%;
+  }
+
+  .cardHead,
+  .cardEmpty {
+    padding-left: var(--s-4);
+    padding-right: var(--s-4);
+  }
+
+  .cashflowGrid {
+    grid-template-columns: 1fr;
+    gap: var(--s-4);
+    padding: var(--s-4);
+  }
+
+  .recentRow {
+    margin: 0 var(--s-4);
+  }
+
+  .wsCard {
+    padding: var(--s-4);
+  }
+
+  .quickHead,
+  .quickLink {
+    padding-left: var(--s-4);
+    padding-right: var(--s-4);
+  }
 }
