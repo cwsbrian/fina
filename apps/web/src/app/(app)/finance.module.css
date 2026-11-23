@@ -140,7 +140,7 @@
   accent-color: var(--color-primary);
 }
 .transactionDialog {
-  width: min(940px, calc(100vw - 32px));
+  width: min(1040px, calc(100vw - 32px));
   max-height: calc(100dvh - 40px);
   margin: auto;
   padding: 0;
@@ -155,6 +155,10 @@
   background: rgba(15, 27, 24, 0.55);
 }
 .dialogContent {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.9fr) minmax(0, 1.7fr);
+  align-items: start;
+  gap: 14px;
   padding: 20px;
 }
 .dialogHeader {
@@ -162,7 +166,21 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  grid-column: 1 / -1;
+}
+.dialogContent > .error {
+  grid-column: 1 / -1;
+  margin-bottom: 0;
+}
+.dialogContent > .details {
+  grid-column: 1;
+  grid-template-columns: 1fr;
+}
+.dialogContent > form {
+  grid-column: 2;
+}
+.dialogContent .formGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 .dialogHeader .sectionTitle {
   margin: 0;
@@ -682,6 +700,21 @@
 }
 .reviewRow .input {
   min-width: 150px;
+}
+@media (max-width: 760px) {
+  .dialogContent {
+    grid-template-columns: 1fr;
+  }
+  .dialogContent > .details,
+  .dialogContent > form {
+    grid-column: 1;
+  }
+  .dialogContent > .details {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dialogContent .formGrid {
+    grid-template-columns: 1fr;
+  }
 }
 @media (max-width: 900px) {
   .filters {

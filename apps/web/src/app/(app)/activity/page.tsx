@@ -744,7 +744,7 @@ export default function ActivityPage() {
                 </div>
               )}
             </div>
-            <form className={styles.panel} onSubmit={saveDetail} style={{ marginTop: 14 }}>
+            <form className={styles.panel} onSubmit={saveDetail}>
               <div className={styles.formGrid}>
                 {selected.source === "manual" && (
                   <>
