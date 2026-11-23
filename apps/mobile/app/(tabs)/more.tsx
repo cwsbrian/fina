@@ -26,6 +26,7 @@ import {
   trialRevertsTo,
   formatShortDate,
   type MeDTO as Me,
+  type PlaidItemDTO,
   type TransactionDTO,
 } from "@fina/shared";
 import { authClient, useSession, signOut } from "../../src/auth/client";
@@ -47,12 +48,6 @@ import {
   getAccountSettingsActions,
   type AccountSettingsActionKey,
 } from "../../src/settings/account-actions";
-
-type PlaidItemSummary = {
-  status: string;
-  errorCode: string | null;
-  billingGraceEndsAt: string | null;
-};
 
 type ActiveWorkspace = {
   id: string;
@@ -103,7 +98,8 @@ export default function More() {
   const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
   const [activeWs, setActiveWs] = useState<ActiveWorkspace | null>(null);
-  const [banks, setBanks] = useState<PlaidItemSummary[] | null>(null);
+  const [banks, setBanks] = useState<PlaidItemDTO[] | null>(null);
+  const [bankReconnectRequired, setBankReconnectRequired] = useState(false);
   const [needsReviewCount, setNeedsReviewCount] = useState(0);
   const [nativeDebug, setNativeDebug] = useState<NativeDebugState | null>(null);
 
@@ -143,10 +139,11 @@ export default function More() {
     try {
       const wsId = (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) return;
-      const data = await apiFetch<{ plaidItems: PlaidItemSummary[] }>(
+      const data = await apiFetch<{ plaidItems: PlaidItemDTO[]; reconnectRequired: boolean }>(
         `/workspaces/${wsId}/plaid-items`,
       );
       setBanks(data.plaidItems);
+      setBankReconnectRequired(data.reconnectRequired);
     } catch {
       // Non-fatal — banks subtitle just renders a dash.
     }
@@ -315,14 +312,17 @@ export default function More() {
   const pendingTierAt = pendingTier
     ? formatShortDate(me?.subscription?.pendingTierAt ?? me?.subscription?.currentPeriodEnd)
     : null;
+  const connectedBanks = banks?.filter((bank) => bank.status !== "disconnected") ?? [];
   const bankSubtitle = banks
-    ? banks.length === 0
-      ? "Optional · No banks connected"
-      : banks.some((b) => b.billingGraceEndsAt)
-        ? `${banks.length} connected · grace period`
-        : `${banks.length} connected${
-            banks.some((b) => b.status === "error" || b.errorCode) ? " · needs attention" : ""
-          }`
+    ? bankReconnectRequired
+      ? "Reconnect bank · needs attention"
+      : connectedBanks.length === 0
+        ? "Optional · No banks connected"
+        : connectedBanks.some((bank) => bank.billingGraceEndsAt)
+          ? `${connectedBanks.length} connected · grace period`
+          : `${connectedBanks.length} connected${
+              connectedBanks.some((bank) => bank.status === "error" || bank.errorCode) ? " · needs attention" : ""
+            }`
     : "—";
 
   const insets = useSafeAreaInsets();
@@ -506,7 +506,7 @@ export default function More() {
             icon="card-outline"
             title="Banks"
             subtitle={bankSubtitle}
-            warn={banks ? banks.some((b) => b.status === "error" || b.errorCode) : false}
+            warn={bankReconnectRequired || (banks ? banks.some((b) => b.status === "error" || b.errorCode) : false)}
             onPress={() => router.push("/banks" as never)}
             last
           />

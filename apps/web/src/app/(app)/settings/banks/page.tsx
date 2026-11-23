@@ -11,6 +11,7 @@ export default function BanksPage() {
   const wsId = useActiveWorkspaceId();
   const { me, err: meErr } = useMe();
   const [items, setItems] = useState<PlaidItemDTO[] | null>(null);
+  const [reconnectRequired, setReconnectRequired] = useState(false);
   const [members, setMembers] = useState<Member[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -19,12 +20,13 @@ export default function BanksPage() {
     setErr(null);
     try {
       const [itemsRes, membersRes] = await Promise.all([
-        apiFetch<{ plaidItems: PlaidItemDTO[] }>(
+        apiFetch<{ plaidItems: PlaidItemDTO[]; reconnectRequired: boolean }>(
           `/workspaces/${wsId}/plaid-items`,
         ),
         apiFetch<{ members: Member[] }>(`/workspaces/${wsId}/members`),
       ]);
       setItems(itemsRes.plaidItems);
+      setReconnectRequired(itemsRes.reconnectRequired);
       setMembers(membersRes.members);
     } catch (e) {
       setErr((e as { code?: string }).code ?? "error");
@@ -61,7 +63,7 @@ export default function BanksPage() {
   // the affordance so non-owners don't trigger 403s.
   const isOwner =
     members.find((m) => m.userId === me.user.id)?.role === "owner";
-  const bankCount = items?.length ?? 0;
+  const bankCount = (items ?? []).filter((item) => item.status !== "disconnected").length;
   const ownedBankCount = (items ?? []).filter(
     (item) => item.connectedByUserId === me.user.id && item.status !== "disconnected",
   ).length;
@@ -108,6 +110,21 @@ export default function BanksPage() {
             >
               View plans
             </a>
+          </div>
+        )}
+        {reconnectRequired && (
+          <div className={styles.card} style={{ marginBottom: 12 }}>
+            <div className={styles.sectionTitle}>Bank reconnect required</div>
+            <div className={styles.sectionSub} style={{ marginTop: 6 }}>
+              {hasPaidPlaidEntitlement
+                ? "A previous bank connection ended. Link it again below to resume automatic imports."
+                : "A previous bank connection ended. Choose a paid plan to reconnect your bank."}
+            </div>
+            {!hasPaidPlaidEntitlement && (
+              <a href="/settings/plan" className={`${styles.btn} ${styles.btnOutline} ${styles.btnSm}`} style={{ display: "inline-flex", marginTop: 12 }}>
+                View plans
+              </a>
+            )}
           </div>
         )}
         <ConnectedBanksList

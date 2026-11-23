@@ -44,7 +44,7 @@ const SECTIONS: Section[] = [
       {
         key: "morningBrief",
         title: "Morning brief",
-        sub: "Daily spending on every plan. Weekly and monthly chat reports on Pro and Max.",
+        sub: "Daily spending and weekly or monthly chat reports on Pro and Max.",
       },
     ],
   },

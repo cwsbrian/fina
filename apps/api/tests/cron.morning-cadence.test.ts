@@ -44,8 +44,8 @@ async function setup(paid = false) {
   return { user, ws, seed };
 }
 
-it.each([false, true])("daily is DB-only, opens Home and is deduplicated (paid=%s)", async (paid) => {
-  const { seed, user } = await setup(paid);
+it("paid daily summary is DB-only, opens Home and is deduplicated", async () => {
+  const { seed, user } = await setup(true);
   await seed(42.80, "2026-09-15T20:00:00Z");
   await seed(100, "2026-09-16T07:00:00Z"); // Today, excluded from yesterday
   await seed(50, "2026-09-15T06:59:59Z"); // Before yesterday
@@ -80,18 +80,19 @@ it.each(["2026-09-14", "2026-10-01", "2026-06-01"])("report day %s appends one r
   expect(mocks.send.mock.calls[0]?.[0]).toEqual([expect.objectContaining({ data: { type: "daily-brief", threadId: thread.id } })]);
 });
 
-it("Free gets only the simple summary even on a monthly report day", async () => {
+it("Free receives neither a daily summary nor a report on a monthly report day", async () => {
   vi.setSystemTime(new Date("2026-10-01T15:00:00Z"));
   const { seed } = await setup();
   await seed(10, "2026-09-30T20:00:00Z");
   await runDailyBrief(testEnv());
   expect(mocks.generate).not.toHaveBeenCalled();
   expect(await prisma.chatThread.count()).toBe(0);
-  expect(mocks.send).toHaveBeenCalledTimes(1);
+  expect(mocks.send).not.toHaveBeenCalled();
+  expect(await prisma.membership.findFirst()).toMatchObject({ lastDailySummaryDate: null });
 });
 
 it.each(["paused", "snoozed", "disabled"])("respects %s daily notifications", async (setting) => {
-  const { seed, user } = await setup();
+  const { seed, user } = await setup(true);
   await seed(10, "2026-09-15T20:00:00Z");
   await prisma.user.update({ where: { id: user.id }, data: setting === "paused" ? { pauseEnabled: true }
     : setting === "snoozed" ? { snoozeUntil: new Date("2026-10-01") } : { notificationPrefs: { morningBrief: false } } });

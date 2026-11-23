@@ -99,7 +99,7 @@ export default function HomePage() {
             setMemberCount(membersRes.value.members.length);
           }
           if (plaidRes.status === "fulfilled") {
-            setBankCount(plaidRes.value.plaidItems.length);
+            setBankCount(plaidRes.value.plaidItems.filter((item) => item.status !== "disconnected").length);
           }
         }
       } catch (e) {

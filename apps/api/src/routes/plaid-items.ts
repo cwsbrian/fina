@@ -15,30 +15,48 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
       if (ctx.membership.workspaceId !== params.id) {
         return reply.code(400).send({ error: "workspace_mismatch" });
       }
-      const [items, reconnectAccountCount, tier] = await Promise.all([
+      const [items, tier] = await Promise.all([
         prisma.plaidItem.findMany({
           where: { workspaceId: ctx.membership.workspaceId },
           orderBy: { createdAt: "desc" },
           select: {
             id: true,
+            institutionId: true,
             institutionName: true,
             status: true,
             errorCode: true,
             lastSyncAt: true,
             billingGraceEndsAt: true,
+            bankAccounts: { select: { mask: true, type: true, currency: true } },
             user: { select: { id: true, name: true, email: true } },
-            _count: { select: { bankAccounts: true } },
-          },
-        }),
-        prisma.bankAccount.count({
-          where: {
-            workspaceId: ctx.membership.workspaceId,
-            archivedAt: { not: null },
-            plaidReconnectRequired: true,
           },
         }),
         effectiveTier(ctx.session.userId),
       ]);
+      const activeItems = items.filter((item) => item.status !== "disconnected");
+      const disconnectedIds = items
+        .filter((item) => item.status === "disconnected" && !(
+          item.bankAccounts.length > 0 && item.bankAccounts.every((oldAccount) =>
+            oldAccount.mask !== null && activeItems.some((activeItem) =>
+              activeItem.institutionId === item.institutionId &&
+              activeItem.bankAccounts.some((activeAccount) =>
+                activeAccount.mask === oldAccount.mask &&
+                activeAccount.type === oldAccount.type &&
+                activeAccount.currency === oldAccount.currency,
+              ),
+            ),
+          )
+        ))
+        .map((item) => item.id);
+      const reconnectAccountCount = await prisma.bankAccount.count({
+        where: {
+          workspaceId: ctx.membership.workspaceId,
+          OR: [
+            { archivedAt: { not: null }, plaidReconnectRequired: true },
+            { plaidItemId: { in: disconnectedIds } },
+          ],
+        },
+      });
       return {
         plaidItems: items.map((i) => ({
           id: i.id,
@@ -47,11 +65,11 @@ export async function plaidItemsRoutes(app: FastifyInstance): Promise<void> {
           errorCode: i.errorCode,
           lastSyncAt: i.lastSyncAt?.toISOString() ?? null,
           billingGraceEndsAt: i.billingGraceEndsAt?.toISOString() ?? null,
-          accountCount: i._count.bankAccounts,
+          accountCount: i.bankAccounts.length,
           connectedByUserId: i.user?.id ?? null,
           connectedByName: i.user?.name ?? i.user?.email ?? null,
         })),
-        reconnectRequired: reconnectAccountCount > 0,
+        reconnectRequired: reconnectAccountCount > 0 || disconnectedIds.length > 0,
         reconnectAccountCount,
         canConnectBank: tier.plaidItemLimit > 0,
         billingGraceActive: items.some(
