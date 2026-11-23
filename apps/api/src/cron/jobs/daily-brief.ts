@@ -20,8 +20,7 @@ const MORNING_BRIEF_ACTIVITY_WINDOW_MS =
   MORNING_BRIEF_ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const pad2 = (n: number) => String(n).padStart(2, "0");
 
-/** Daily spending pushes are available to everyone, without LLM or chat writes.
- * Paid users receive a weekly/monthly report in their thread on report days. */
+/** Paid users receive daily spending pushes and weekly/monthly chat reports. */
 export async function runDailyBrief(env: Env): Promise<void> {
   const candidates = await prisma.user.findMany({
     where: {
@@ -56,7 +55,8 @@ export async function runDailyBrief(env: Env): Promise<void> {
   for (const u of timeMatched) {
     try {
       const tier = await effectiveTier(u.id);
-      const briefType = isPaidFeatureTier(tier.tier) ? determineBriefType(u.localDate) : "daily";
+      if (!isPaidFeatureTier(tier.tier)) continue;
+      const briefType = determineBriefType(u.localDate);
       const memberships = await prisma.membership.findMany({
         where: { userId: u.id },
         select: { workspaceId: true },

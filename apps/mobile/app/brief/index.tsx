@@ -154,7 +154,7 @@ export default function MorningBriefSettings() {
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={styles.heroTitle}>Morning updates</Text>
             <Text style={styles.heroSub}>
-              Yesterday's spending, without AI, on every plan. Tap to open Home.
+              Yesterday's spending, without AI, on Pro and Max. Tap to open Home.
               Pro and Max include a weekly report on Mondays and a monthly report on the 1st, delivered to your chat instead.
             </Text>
           </View>

@@ -17,19 +17,10 @@ import { getActiveWorkspaceId } from "../src/workspace/active";
 import { colors, space, type as type$ } from "../src/design/tokens";
 import { HeaderIconButton } from "../src/design/HeaderIconButton";
 import { ConnectBankButton } from "../src/plaid/ConnectBankButton";
-
-type PlaidItem = {
-  id: string;
-  institutionName: string;
-  status: string;
-  errorCode: string | null;
-  lastSyncAt: string | null;
-  billingGraceEndsAt: string | null;
-  accountCount: number;
-};
+import type { PlaidItemDTO } from "@fina/shared";
 
 export default function BanksScreen() {
-  const [items, setItems] = useState<PlaidItem[] | null>(null);
+  const [items, setItems] = useState<PlaidItemDTO[] | null>(null);
   const [reconnectRequired, setReconnectRequired] = useState(false);
   const [canConnectBank, setCanConnectBank] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -41,7 +32,7 @@ export default function BanksScreen() {
         (await getActiveWorkspaceId()) ?? (await bootstrapActiveWorkspace());
       if (!wsId) throw new Error("no_workspace");
       const data = await apiFetch<{
-        plaidItems: PlaidItem[];
+        plaidItems: PlaidItemDTO[];
         reconnectRequired: boolean;
         canConnectBank: boolean;
       }>(
@@ -219,7 +210,9 @@ export default function BanksScreen() {
                   {item.lastSyncAt
                     ? ` · synced ${new Date(item.lastSyncAt).toLocaleDateString()}`
                     : ""}
-                  {item.status === "error" || item.errorCode
+                  {item.status === "disconnected"
+                    ? " · disconnected"
+                    : item.status === "error" || item.errorCode
                     ? ` · ${item.errorCode ?? "needs attention"}`
                     : ""}
                   {item.billingGraceEndsAt
@@ -227,7 +220,7 @@ export default function BanksScreen() {
                     : ""}
                 </Text>
               </View>
-              {!item.billingGraceEndsAt && (
+              {!item.billingGraceEndsAt && item.status !== "disconnected" && (
                 <Pressable
                   style={({ pressed }) => [
                     styles.rowAction,
@@ -251,28 +244,52 @@ export default function BanksScreen() {
           )}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
           ListHeaderComponent={
-            graceEndsAt ? (
-              <View style={styles.graceBanner}>
-                <Ionicons name="time-outline" size={20} color={colors.accentYellow} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.graceTitle}>Bank connection in 30-day grace period</Text>
-                  <Text style={styles.graceBody}>
-                    New transactions are saved securely but hidden on Free. Upgrade by{" "}
-                    {new Date(graceEndsAt).toLocaleDateString()} to restore them without
-                    reconnecting your bank.
-                  </Text>
-                  <Pressable
-                    style={styles.graceCta}
-                    onPress={() => router.push("/plan" as never)}
-                  >
-                    <Text style={styles.graceCtaText}>View plans</Text>
-                  </Pressable>
-                </View>
-              </View>
+            reconnectRequired || graceEndsAt ? (
+              <>
+                {reconnectRequired && (
+                  <View style={styles.graceBanner}>
+                    <Ionicons name="alert-circle-outline" size={20} color={colors.accentYellow} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.graceTitle}>Bank reconnect required</Text>
+                      <Text style={styles.graceBody}>
+                        {canConnectBank
+                          ? "A previous bank connection ended. Link it again to resume automatic imports."
+                          : "A previous bank connection ended. Upgrade to reconnect your bank."}
+                      </Text>
+                      {canConnectBank ? (
+                        <ConnectBankButton label="Reconnect bank" onConnected={load} />
+                      ) : (
+                        <Pressable style={styles.graceCta} onPress={() => router.push("/plan" as never)}>
+                          <Text style={styles.graceCtaText}>View plans</Text>
+                        </Pressable>
+                      )}
+                    </View>
+                  </View>
+                )}
+                {graceEndsAt && (
+                  <View style={styles.graceBanner}>
+                    <Ionicons name="time-outline" size={20} color={colors.accentYellow} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.graceTitle}>Bank connection in 30-day grace period</Text>
+                      <Text style={styles.graceBody}>
+                        New transactions are saved securely but hidden on Free. Upgrade by{" "}
+                        {new Date(graceEndsAt).toLocaleDateString()} to restore them without
+                        reconnecting your bank.
+                      </Text>
+                      <Pressable
+                        style={styles.graceCta}
+                        onPress={() => router.push("/plan" as never)}
+                      >
+                        <Text style={styles.graceCtaText}>View plans</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )}
+              </>
             ) : null
           }
           ListFooterComponent={
-            canConnectBank ? (
+            canConnectBank && !reconnectRequired ? (
               <View style={{ padding: space.lg }}>
                 <ConnectBankButton onConnected={load} label="Connect another bank" />
               </View>

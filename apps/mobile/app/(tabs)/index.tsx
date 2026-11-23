@@ -138,6 +138,7 @@ export default function Home() {
   const [categories, setCategories] = useState<Record<string, CategoryDTO>>({});
   const [goals, setGoals] = useState<GoalSummary[]>([]);
   const [plaidItems, setPlaidItems] = useState<PlaidItemDTO[] | null>(null);
+  const [bankReconnectRequired, setBankReconnectRequired] = useState(false);
   const [unreadFina, setUnreadFina] = useState(0);
   const [latestUnreadThreadId, setLatestUnreadThreadId] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState(0);
@@ -207,14 +208,17 @@ export default function Home() {
           }),
         apiFetch<{
           plaidItems: PlaidItemDTO[];
+          reconnectRequired: boolean;
         }>(`/workspaces/${wsId}/plaid-items`)
           .then((r) => {
             if (runId !== loadRunId.current) return;
             setPlaidItems(r.plaidItems);
+            setBankReconnectRequired(r.reconnectRequired);
           })
           .catch(() => {
             if (runId !== loadRunId.current) return;
             setPlaidItems([]);
+            setBankReconnectRequired(false);
           }),
         apiFetch<{ invites: unknown[] }>("/me/incoming-invites")
           .then((r) => {
@@ -358,7 +362,7 @@ export default function Home() {
   // Effective tier: trial active grants Pro features regardless of base tier.
   const effectiveTier: Tier = me?.trial?.active ? "pro" : (me?.tier ?? "free");
   const canUseGoals = tierAtLeast(effectiveTier, "pro");
-  const hasNoBank = plaidItems !== null && plaidItems.length === 0;
+  const hasNoBank = plaidItems !== null && plaidItems.every((item) => item.status === "disconnected");
   const goalsSavedTotal = goals.reduce((sum, goal) => sum + Number(goal.savedAmount), 0);
   const goalsTargetTotal = goals.reduce((sum, goal) => sum + Number(goal.targetAmount), 0);
   const goalsOverallPct =
@@ -376,11 +380,13 @@ export default function Home() {
   const actionItems: ActionItem[] = [];
   const bankGraceDeadline =
     bankGraceItems.map((item) => item.billingGraceEndsAt!).sort()[0] ?? null;
-  const bankToolbarVisible = bankGraceItems.length > 0 && bankGraceDeadline !== null;
-  const bankToolbarTitle = "Bank connection grace period";
-  const bankToolbarSubtitle = bankGraceDeadline
-    ? `Ends ${formatMonthDay(new Date(bankGraceDeadline))} · upgrade to stay linked.`
-    : "";
+  const bankToolbarVisible = bankReconnectRequired || (bankGraceItems.length > 0 && bankGraceDeadline !== null);
+  const bankToolbarTitle = bankReconnectRequired ? "Bank reconnect required" : "Bank connection grace period";
+  const bankToolbarSubtitle = bankReconnectRequired
+    ? canUseGoals ? "Link your bank again to resume imports." : "Upgrade to reconnect your bank."
+    : bankGraceDeadline
+      ? `Ends ${formatMonthDay(new Date(bankGraceDeadline))} · upgrade to stay linked.`
+      : "";
   const bankToolbarHeight = bankToolbarVisible ? BANK_GRACE_TOOLBAR_HEIGHT : 0;
 
   if (unreadFina > 0) {
@@ -827,7 +833,7 @@ export default function Home() {
           onPress={() => router.push("/banks" as never)}
         >
           <View style={styles.bankToolbarIcon}>
-            <Ionicons name="time-outline" size={27} color="#f47b61" />
+            <Ionicons name={bankReconnectRequired ? "alert-circle-outline" : "time-outline"} size={27} color="#f47b61" />
           </View>
           <View style={styles.bankToolbarCopy}>
             <Text style={styles.bankToolbarTitle} numberOfLines={1}>

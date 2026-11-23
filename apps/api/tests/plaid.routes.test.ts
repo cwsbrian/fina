@@ -185,6 +185,83 @@ describe("GET /workspaces/:id/plaid-items", () => {
     await app.close();
   });
 
+  it("flags a disconnected Plaid row until the same institution is linked again", async () => {
+    const app = await buildApp(env);
+    const owner = await signUpAndGetCookie(app, {
+      email: "disconnected-reconnect@x.com",
+      name: "Reconnect",
+    });
+    await prisma.user.update({
+      where: { id: owner.userId },
+      data: { trialEndsAt: null, trialConsumed: true },
+    });
+    const wsId = await getOwnerWorkspaceId(owner.userId);
+    await seedPlaidItem({
+      workspaceId: wsId,
+      connectedBy: owner.userId,
+      itemId: "item_disconnected_reconnect",
+      status: "disconnected",
+    });
+    const oldItem = await prisma.plaidItem.findUniqueOrThrow({
+      where: { itemId: "item_disconnected_reconnect" },
+    });
+    await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        plaidItemId: oldItem.id,
+        name: "Old checking",
+        mask: "0001",
+        type: "depository",
+      },
+    });
+    const read = () => app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/plaid-items`,
+      headers: { cookie: owner.cookie, "x-workspace-id": wsId },
+    });
+
+    const disconnected = await read();
+    expect(disconnected.statusCode).toBe(200);
+    expect(disconnected.json()).toMatchObject({
+      reconnectRequired: true,
+      reconnectAccountCount: 1,
+      canConnectBank: false,
+      plaidItems: [{ status: "disconnected" }],
+    });
+
+    await seedPlaidItem({
+      workspaceId: wsId,
+      connectedBy: owner.userId,
+      itemId: "item_relinked_same_institution",
+    });
+    const newItem = await prisma.plaidItem.findUniqueOrThrow({
+      where: { itemId: "item_relinked_same_institution" },
+    });
+    const newAccount = await prisma.bankAccount.create({
+      data: {
+        workspaceId: wsId,
+        plaidItemId: newItem.id,
+        name: "Another checking",
+        mask: "9999",
+        type: "depository",
+      },
+    });
+    const differentAccount = await read();
+    expect(differentAccount.json()).toMatchObject({ reconnectRequired: true });
+
+    await prisma.bankAccount.update({
+      where: { id: newAccount.id },
+      data: { mask: "0001" },
+    });
+    const relinked = await read();
+    expect(relinked.statusCode).toBe(200);
+    expect(relinked.json()).toMatchObject({
+      reconnectRequired: false,
+      reconnectAccountCount: 0,
+    });
+    await app.close();
+  });
+
   it("surfaces an active Free-plan grace deadline without requiring reconnect", async () => {
     const app = await buildApp(env);
     const owner = await signUpAndGetCookie(app, {
