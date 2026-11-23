@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AMOUNT_RE,
   ManualTransactionBody,
@@ -68,6 +68,8 @@ export default function ActivityPage() {
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [selected, setSelected] = useState<TransactionDTO | null>(null);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const categoryFilterRef = useRef<HTMLDetailsElement>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [direction, setDirection] = useState<"expense" | "income">("expense");
   const [merchant, setMerchant] = useState("");
@@ -86,6 +88,22 @@ export default function ActivityPage() {
   const [editImpact, setEditImpact] = useState<TransactionDTO["budgetImpact"]>("expense");
   const [editImpactScope, setEditImpactScope] = useState<"transaction" | "merchant">("transaction");
   const [busyDetail, setBusyDetail] = useState(false);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (selected && !dialog.open) dialog.showModal();
+    if (!selected && dialog.open) dialog.close();
+  }, [selected]);
+
+  useEffect(() => {
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      const filter = categoryFilterRef.current;
+      if (filter && !filter.contains(event.target as Node)) filter.open = false;
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    return () => document.removeEventListener("pointerdown", closeOnOutsideClick);
+  }, []);
 
   useEffect(() => {
     const query = new URLSearchParams(window.location.search);
@@ -173,6 +191,7 @@ export default function ActivityPage() {
   );
 
   function selectTransaction(row: TransactionDTO) {
+    setError(null);
     setSelected(row);
     setEditMerchant(row.merchantRaw);
     setEditAmount(row.amount);
@@ -251,6 +270,7 @@ export default function ActivityPage() {
 
   function applyFilters(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (categoryFilterRef.current) categoryFilterRef.current.open = false;
     setRows([]);
     setNextCursor(null);
     setCursor(null);
@@ -317,7 +337,7 @@ export default function ActivityPage() {
         </div>
       </div>
 
-      {error && (
+      {error && !selected && (
         <div className={styles.error} role="alert">
           {error}
         </div>
@@ -459,38 +479,52 @@ export default function ActivityPage() {
           </select>
         </div>
         <div className={styles.field}>
-          <label htmlFor="activity-category">Categories (multiple)</label>
-          <select
-            className={styles.input}
-            id="activity-category"
-            multiple
-            size={3}
-            value={draft.categoryIds}
-            onChange={(event) =>
-              setDraft({
-                ...draft,
-                categoryIds: Array.from(event.target.selectedOptions, (option) => option.value),
-              })
-            }
-          >
-            {categories
-              .filter((category) => !category.archivedAt)
-              .map((category) => (
-                <option key={category.id} value={category.id}>
-                  {category.name}
-                </option>
-              ))}
-          </select>
-          <label className={styles.checkboxLabel}>
-            <input
-              type="checkbox"
-              checked={draft.includeUncategorized}
-              onChange={(event) =>
-                setDraft({ ...draft, includeUncategorized: event.target.checked })
-              }
-            />
-            Include uncategorized
-          </label>
+          <span className={styles.fieldLabel} id="activity-category-label">
+            Categories
+          </span>
+          <details className={styles.filterDropdown} ref={categoryFilterRef}>
+            <summary className={styles.input} aria-describedby="activity-category-label">
+              {draft.categoryIds.length === 0
+                ? draft.includeUncategorized
+                  ? "Uncategorized"
+                  : "All categories"
+                : `${draft.categoryIds.length + Number(draft.includeUncategorized)} selected`}
+            </summary>
+            <div className={styles.filterDropdownMenu}>
+              {categories
+                .filter((category) => !category.archivedAt)
+                .map((category) => (
+                  <label className={styles.filterOption} key={category.id}>
+                    <input
+                      type="checkbox"
+                      checked={draft.categoryIds.includes(category.id)}
+                      onChange={(event) =>
+                        setDraft((current) => ({
+                          ...current,
+                          categoryIds: event.target.checked
+                            ? [...current.categoryIds, category.id]
+                            : current.categoryIds.filter((id) => id !== category.id),
+                        }))
+                      }
+                    />
+                    {category.name}
+                  </label>
+                ))}
+              <label className={styles.filterOption}>
+                <input
+                  type="checkbox"
+                  checked={draft.includeUncategorized}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      includeUncategorized: event.target.checked,
+                    }))
+                  }
+                />
+                Include uncategorized
+              </label>
+            </div>
+          </details>
         </div>
         <div className={styles.field}>
           <label htmlFor="activity-account">Account</label>
@@ -536,6 +570,7 @@ export default function ActivityPage() {
             className={styles.buttonSecondary}
             type="button"
             onClick={() => {
+              if (categoryFilterRef.current) categoryFilterRef.current.open = false;
               setDraft(emptyFilters);
               setFilters(emptyFilters);
               setCursor(null);
@@ -635,226 +670,241 @@ export default function ActivityPage() {
         )}
       </div>
 
-      {selected && (
-        <section className={styles.section}>
-          <div className={styles.head} style={{ marginBottom: 12 }}>
-            <h2 className={styles.sectionTitle} style={{ marginBottom: 0 }}>
-              Transaction details
-            </h2>
-            <button
-              className={styles.buttonSecondary}
-              type="button"
-              onClick={() => setSelected(null)}
-            >
-              Close
-            </button>
-          </div>
-          {selected.budgetImpact === "refund" &&
-            !selected.refundOfTransactionId &&
-            !selected.pending && (
-              <div className={styles.error}>
-                Refund needs review. Fina could not match it to a purchase, so it is not counted as
-                income or applied to spending.
+      <dialog
+        ref={dialogRef}
+        className={styles.transactionDialog}
+        aria-labelledby="transaction-dialog-title"
+        onClose={() => setSelected(null)}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) setSelected(null);
+        }}
+      >
+        {selected && (
+          <div className={styles.dialogContent}>
+            <div className={styles.dialogHeader}>
+              <h2 className={styles.sectionTitle} id="transaction-dialog-title">
+                Transaction details
+              </h2>
+              <button
+                className={styles.buttonSecondary}
+                type="button"
+                onClick={() => setSelected(null)}
+              >
+                Close
+              </button>
+            </div>
+            {error && (
+              <div className={styles.error} role="alert">
+                {error}
               </div>
             )}
-          <div className={`${styles.panel} ${styles.details}`}>
-            <div className={styles.detail}>
-              <span>Merchant</span>
-              <span>{selected.merchantNormalized ?? selected.merchantRaw}</span>
-            </div>
-            <div className={styles.detail}>
-              <span>Amount</span>
-              <span>{formatMoney(Number(selected.amount), selected.currency)}</span>
-            </div>
-            <div className={styles.detail}>
-              <span>Date</span>
-              <span>{dateLabel(selected.occurredAt)}</span>
-            </div>
-            <div className={styles.detail}>
-              <span>Account</span>
-              <span>{accountById.get(selected.accountId) ?? "Archived account"}</span>
-            </div>
-            <div className={styles.detail}>
-              <span>Cashflow</span>
-              <span>{selected.budgetImpact}</span>
-            </div>
-            <div className={styles.detail}>
-              <span>Note</span>
-              <span>{selected.note || "No note"}</span>
-            </div>
-            {selected.refundOfTransactionId && (
-              <div className={styles.detail}>
-                <span>Refund for</span>
-                <span>{selected.refundOfTransactionId}</span>
-              </div>
-            )}
-            {Number(selected.refundedAmount) > 0 && (
-              <div className={styles.detail}>
-                <span>Refunded</span>
-                <span>{formatMoney(Number(selected.refundedAmount), selected.currency)}</span>
-              </div>
-            )}
-          </div>
-          <form className={styles.panel} onSubmit={saveDetail} style={{ marginTop: 14 }}>
-            <div className={styles.formGrid}>
-              {selected.source === "manual" && (
-                <>
-                  <div className={styles.field}>
-                    <label htmlFor="edit-merchant">Merchant</label>
-                    <input
-                      className={styles.input}
-                      id="edit-merchant"
-                      value={editMerchant}
-                      onChange={(event) => setEditMerchant(event.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className={styles.field}>
-                    <label htmlFor="edit-amount">Signed amount</label>
-                    <input
-                      className={styles.input}
-                      id="edit-amount"
-                      type="number"
-                      step="0.01"
-                      value={editAmount}
-                      onChange={(event) => setEditAmount(event.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className={styles.field}>
-                    <label htmlFor="edit-date">Date</label>
-                    <input
-                      className={styles.input}
-                      id="edit-date"
-                      type="date"
-                      value={editDate}
-                      onChange={(event) => setEditDate(event.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className={styles.field}>
-                    <label htmlFor="edit-account">Account</label>
-                    <select
-                      className={styles.input}
-                      id="edit-account"
-                      value={editAccountId}
-                      onChange={(event) => setEditAccountId(event.target.value)}
-                    >
-                      {manualAccounts.map((account) => (
-                        <option key={account.id} value={account.id}>
-                          {account.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className={styles.field}>
-                    <label htmlFor="edit-note">Note</label>
-                    <input
-                      className={styles.input}
-                      id="edit-note"
-                      value={editNote}
-                      onChange={(event) => setEditNote(event.target.value)}
-                    />
-                  </div>
-                </>
+            {selected.budgetImpact === "refund" &&
+              !selected.refundOfTransactionId &&
+              !selected.pending && (
+                <div className={styles.error}>
+                  Refund needs review. Fina could not match it to a purchase, so it is not counted
+                  as income or applied to spending.
+                </div>
               )}
-              <div className={styles.field}>
-                <label htmlFor="edit-category">Category</label>
-                <select
-                  className={styles.input}
-                  id="edit-category"
-                  value={editCategoryId}
-                  onChange={(event) => setEditCategoryId(event.target.value)}
-                >
-                  {editCategoryId === "__keep__" && (
-                    <option value="__keep__">Keep current split</option>
-                  )}
-                  <option value="">Uncategorized</option>
-                  {categories
-                    .filter(
-                      (category) =>
-                        category.type === (Number(selected.amount) < 0 ? "income" : "expense") &&
-                        !category.archivedAt,
-                    )
-                    .map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.name}
-                      </option>
-                    ))}
-                </select>
+            <div className={`${styles.panel} ${styles.details}`}>
+              <div className={styles.detail}>
+                <span>Merchant</span>
+                <span>{selected.merchantNormalized ?? selected.merchantRaw}</span>
               </div>
-              <div className={styles.field}>
-                <label htmlFor="edit-impact">Cashflow</label>
-                <select
-                  className={styles.input}
-                  id="edit-impact"
-                  value={editImpact}
-                  onChange={(event) =>
-                    setEditImpact(event.target.value as TransactionDTO["budgetImpact"])
-                  }
-                >
-                  <option value="expense">Expense</option>
-                  <option value="income">Income</option>
-                  <option value="refund">Refund</option>
-                  <option value="excluded">Excluded</option>
-                </select>
+              <div className={styles.detail}>
+                <span>Amount</span>
+                <span>{formatMoney(Number(selected.amount), selected.currency)}</span>
               </div>
-              <div className={styles.field}>
-                <label htmlFor="edit-impact-scope">Apply cashflow change to</label>
-                <select
-                  className={styles.input}
-                  id="edit-impact-scope"
-                  value={editImpactScope}
-                  onChange={(event) =>
-                    setEditImpactScope(event.target.value as "transaction" | "merchant")
-                  }
-                >
-                  <option value="transaction">This transaction</option>
-                  <option value="merchant">This merchant going forward</option>
-                </select>
+              <div className={styles.detail}>
+                <span>Date</span>
+                <span>{dateLabel(selected.occurredAt)}</span>
               </div>
-              <div className={styles.formActions}>
-                <button className={styles.button} type="submit" disabled={busyDetail}>
-                  {busyDetail ? "Saving…" : "Save changes"}
-                </button>
-                {selected.allocations.some((allocation) => allocation.needsConfirmation) && (
+              <div className={styles.detail}>
+                <span>Account</span>
+                <span>{accountById.get(selected.accountId) ?? "Archived account"}</span>
+              </div>
+              <div className={styles.detail}>
+                <span>Cashflow</span>
+                <span>{selected.budgetImpact}</span>
+              </div>
+              <div className={styles.detail}>
+                <span>Note</span>
+                <span>{selected.note || "No note"}</span>
+              </div>
+              {selected.refundOfTransactionId && (
+                <div className={styles.detail}>
+                  <span>Refund for</span>
+                  <span>{selected.refundOfTransactionId}</span>
+                </div>
+              )}
+              {Number(selected.refundedAmount) > 0 && (
+                <div className={styles.detail}>
+                  <span>Refunded</span>
+                  <span>{formatMoney(Number(selected.refundedAmount), selected.currency)}</span>
+                </div>
+              )}
+            </div>
+            <form className={styles.panel} onSubmit={saveDetail} style={{ marginTop: 14 }}>
+              <div className={styles.formGrid}>
+                {selected.source === "manual" && (
                   <>
-                    <button
-                      className={styles.buttonSecondary}
-                      type="button"
-                      disabled={busyDetail}
-                      onClick={() => void updateDetail({}, "POST", "/confirm-category")}
-                    >
-                      Confirm category
-                    </button>
-                    <button
-                      className={styles.buttonSecondary}
-                      type="button"
-                      disabled={busyDetail}
-                      onClick={() => void updateDetail({}, "POST", "/snooze-category")}
-                    >
-                      Remind in 7 days
-                    </button>
+                    <div className={styles.field}>
+                      <label htmlFor="edit-merchant">Merchant</label>
+                      <input
+                        className={styles.input}
+                        id="edit-merchant"
+                        value={editMerchant}
+                        onChange={(event) => setEditMerchant(event.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <label htmlFor="edit-amount">Signed amount</label>
+                      <input
+                        className={styles.input}
+                        id="edit-amount"
+                        type="number"
+                        step="0.01"
+                        value={editAmount}
+                        onChange={(event) => setEditAmount(event.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <label htmlFor="edit-date">Date</label>
+                      <input
+                        className={styles.input}
+                        id="edit-date"
+                        type="date"
+                        value={editDate}
+                        onChange={(event) => setEditDate(event.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className={styles.field}>
+                      <label htmlFor="edit-account">Account</label>
+                      <select
+                        className={styles.input}
+                        id="edit-account"
+                        value={editAccountId}
+                        onChange={(event) => setEditAccountId(event.target.value)}
+                      >
+                        {manualAccounts.map((account) => (
+                          <option key={account.id} value={account.id}>
+                            {account.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className={styles.field}>
+                      <label htmlFor="edit-note">Note</label>
+                      <input
+                        className={styles.input}
+                        id="edit-note"
+                        value={editNote}
+                        onChange={(event) => setEditNote(event.target.value)}
+                      />
+                    </div>
                   </>
                 )}
-                {selected.source === "manual" && (
-                  <button
-                    className={styles.buttonSecondary}
-                    type="button"
-                    disabled={busyDetail}
-                    onClick={() => {
-                      if (window.confirm("Delete this transaction?"))
-                        void updateDetail({}, "DELETE");
-                    }}
+                <div className={styles.field}>
+                  <label htmlFor="edit-category">Category</label>
+                  <select
+                    className={styles.input}
+                    id="edit-category"
+                    value={editCategoryId}
+                    onChange={(event) => setEditCategoryId(event.target.value)}
                   >
-                    Delete
+                    {editCategoryId === "__keep__" && (
+                      <option value="__keep__">Keep current split</option>
+                    )}
+                    <option value="">Uncategorized</option>
+                    {categories
+                      .filter(
+                        (category) =>
+                          category.type === (Number(selected.amount) < 0 ? "income" : "expense") &&
+                          !category.archivedAt,
+                      )
+                      .map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.name}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label htmlFor="edit-impact">Cashflow</label>
+                  <select
+                    className={styles.input}
+                    id="edit-impact"
+                    value={editImpact}
+                    onChange={(event) =>
+                      setEditImpact(event.target.value as TransactionDTO["budgetImpact"])
+                    }
+                  >
+                    <option value="expense">Expense</option>
+                    <option value="income">Income</option>
+                    <option value="refund">Refund</option>
+                    <option value="excluded">Excluded</option>
+                  </select>
+                </div>
+                <div className={styles.field}>
+                  <label htmlFor="edit-impact-scope">Apply cashflow change to</label>
+                  <select
+                    className={styles.input}
+                    id="edit-impact-scope"
+                    value={editImpactScope}
+                    onChange={(event) =>
+                      setEditImpactScope(event.target.value as "transaction" | "merchant")
+                    }
+                  >
+                    <option value="transaction">This transaction</option>
+                    <option value="merchant">This merchant going forward</option>
+                  </select>
+                </div>
+                <div className={styles.formActions}>
+                  <button className={styles.button} type="submit" disabled={busyDetail}>
+                    {busyDetail ? "Saving…" : "Save changes"}
                   </button>
-                )}
+                  {selected.allocations.some((allocation) => allocation.needsConfirmation) && (
+                    <>
+                      <button
+                        className={styles.buttonSecondary}
+                        type="button"
+                        disabled={busyDetail}
+                        onClick={() => void updateDetail({}, "POST", "/confirm-category")}
+                      >
+                        Confirm category
+                      </button>
+                      <button
+                        className={styles.buttonSecondary}
+                        type="button"
+                        disabled={busyDetail}
+                        onClick={() => void updateDetail({}, "POST", "/snooze-category")}
+                      >
+                        Remind in 7 days
+                      </button>
+                    </>
+                  )}
+                  {selected.source === "manual" && (
+                    <button
+                      className={styles.buttonSecondary}
+                      type="button"
+                      disabled={busyDetail}
+                      onClick={() => {
+                        if (window.confirm("Delete this transaction?"))
+                          void updateDetail({}, "DELETE");
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
-          </form>
-        </section>
-      )}
+            </form>
+          </div>
+        )}
+      </dialog>
     </div>
   );
 }
