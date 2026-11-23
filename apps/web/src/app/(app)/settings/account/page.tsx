@@ -87,12 +87,13 @@ export default function AccountPage() {
   }
   if (!me) return <div className={styles.container} />;
 
-  const dirty = name !== (me.user.name ?? "") || email !== me.user.email;
+  const dirty = name !== (me.user.name ?? "") || email !== me.user.email || tz !== me.user.tz;
   const emailChanging = email !== me.user.email;
 
   const onDiscard = () => {
     setName(me.user.name ?? "");
     setEmail(me.user.email);
+    setTz(me.user.tz);
     setProfileErr(null);
   };
 
@@ -105,11 +106,14 @@ export default function AccountPage() {
       // separate verification flow we haven't wired). If/when email change
       // lands we'll branch on emailChanging.
       const trimmedName = name.trim();
-      const res = await authClient.updateUser({ name: trimmedName });
-      if (res.error) {
-        throw new Error(res.error.message ?? "Could not save profile");
+      if (trimmedName !== (me.user.name ?? "")) {
+        const res = await authClient.updateUser({ name: trimmedName });
+        if (res.error) throw new Error(res.error.message ?? "Could not save profile");
       }
-      setMe({ ...me, user: { ...me.user, name: trimmedName } });
+      const updated = tz !== me.user.tz
+        ? await apiFetch<Me>("/me", { method: "PATCH", body: JSON.stringify({ tz }) })
+        : me;
+      setMe({ ...updated, user: { ...updated.user, name: trimmedName } });
     } catch (e) {
       setProfileErr(e instanceof Error ? e.message : "Could not save profile");
     } finally {

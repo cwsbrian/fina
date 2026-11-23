@@ -1,43 +1,11 @@
 import { prisma } from "../db.js";
 import { cashflowEntries, effectiveExpenseAllocations } from "../transactions/cashflow.js";
+import type { AnalysisResponse, CategorySpendDTO, MonthAnalysisDTO } from "@fina/shared";
 
-export type CategorySpend = {
-  categoryId: string;
-  categoryName: string;
-  icon: string | null;
-  color: string | null;
-  amount: number;
-};
-
-export type MonthAnalysis = {
-  year: number;
-  month: number;
-  /** "May 2026". */
-  label: string;
-  /** Sum of incoming money this month (negative tx.amount * -1). */
-  income: number;
-  /** Sum of outgoing money this month (positive tx.amount). */
-  spend: number;
-  /** income - spend. */
-  net: number;
-  spendByCategory: CategorySpend[];
-};
-
-export type CashflowPoint = {
-  year: number;
-  month: number;
-  /** Short month label e.g. "May". */
-  label: string;
-  income: number;
-  spend: number;
-};
-
-export type AnalysisResult = {
-  current: MonthAnalysis;
-  previous: MonthAnalysis | null;
-  /** Five most recent months ending at `current`, oldest → newest. */
-  monthlyHistory: CashflowPoint[];
-};
+export type CategorySpend = CategorySpendDTO;
+export type MonthAnalysis = MonthAnalysisDTO;
+export type CashflowPoint = AnalysisResponse["monthlyHistory"][number];
+export type AnalysisResult = AnalysisResponse;
 
 const MONTH_SHORT = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",

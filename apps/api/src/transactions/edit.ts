@@ -287,6 +287,40 @@ export async function editTransactionService(
         if (e instanceof AllocationError) throw new EditTxError(e.code as EditTxErrorCode);
         throw e;
       }
+    } else if (input.amount !== undefined && row.allocations.length > 0) {
+      // An amount-only edit must keep allocations in sync with the transaction.
+      // Reserve one cent per split, then distribute the remaining cents in the
+      // original proportions. This preserves categories and review metadata.
+      const totalCents = effectiveAmount.abs().times(100).toNumber();
+      const count = row.allocations.length;
+      if (totalCents < count) throw new EditTxError("invalid_allocation_amount");
+      const oldTotal = row.allocations.reduce(
+        (sum, allocation) => sum.plus(allocation.amount.abs()),
+        new Prisma.Decimal(0),
+      );
+      if (oldTotal.isZero()) throw new EditTxError("invalid_allocation_amount");
+      const distributable = totalCents - count;
+      const shares = row.allocations.map((allocation, index) => {
+        const raw = allocation.amount.abs().div(oldTotal).times(distributable);
+        return { index, cents: Math.floor(raw.toNumber()) + 1, fraction: raw.mod(1).toNumber() };
+      });
+      let remaining = totalCents - shares.reduce((sum, share) => sum + share.cents, 0);
+      for (const share of [...shares].sort(
+        (a, b) => b.fraction - a.fraction || a.index - b.index,
+      )) {
+        if (remaining-- <= 0) break;
+        share.cents += 1;
+      }
+      for (const share of shares) {
+        await tx.transactionAllocation.update({
+          where: { id: row.allocations[share.index]!.id },
+          data: {
+            amount: new Prisma.Decimal(share.cents)
+              .div(100)
+              .times(effectiveAmount.isNegative() ? -1 : 1),
+          },
+        });
+      }
     }
 
     if (Object.keys(data).length > 0) {

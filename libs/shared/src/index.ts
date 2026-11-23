@@ -20,6 +20,9 @@ export * from "./dto/me.js";
 export * from "./dto/workspace.js";
 export * from "./dto/chat.js";
 export * from "./dto/transactions.js";
+export * from "./dto/analysis.js";
+export * from "./dto/budget-plans.js";
+export * from "./dto/planned-spend.js";
 export * from "./dto/accounts.js";
 export * from "./dto/plaid.js";
 export * from "./dto/health.js";
@@ -49,6 +52,7 @@ export * from "./schemas/me.js";
 export * from "./schemas/recurring.js";
 export * from "./schemas/schedules.js";
 export * from "./schemas/workspaces.js";
+export * from "./schemas/transactions.js";
 
 // HTTP client factory
 export * from "./http/api-client.js";

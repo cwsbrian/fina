@@ -112,6 +112,38 @@ describe("GET /workspaces/:id/transactions", () => {
     expect(rows.find((tx) => tx.id === refund.id)?.refundOfTransactionId).toBe(expense.id);
   });
 
+  it("keeps the merchant search filter on later cursor pages", async () => {
+    const { cookie, wsId } = await setup("tl-search-pages@t.co");
+    const account = await prisma.bankAccount.create({
+      data: { workspaceId: wsId, name: "Checking", type: "depository" },
+    });
+    for (const [merchantRaw, day] of [["Coffee latest", 3], ["Other", 2], ["Coffee first", 1]] as const) {
+      await prisma.transaction.create({
+        data: {
+          workspaceId: wsId,
+          accountId: account.id,
+          amount: "10.00",
+          merchantRaw,
+          occurredAt: new Date(`2026-05-0${day}T12:00:00Z`),
+          source: "manual",
+          rawData: {},
+        },
+      });
+    }
+    const first = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?q=Coffee&limit=1`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(first.json().transactions[0].merchantRaw).toBe("Coffee latest");
+    const next = await app.inject({
+      method: "GET",
+      url: `/workspaces/${wsId}/transactions?q=Coffee&limit=1&cursor=${encodeURIComponent(first.json().nextCursor)}`,
+      headers: { cookie, "x-workspace-id": wsId },
+    });
+    expect(next.json().transactions.map((row: { merchantRaw: string }) => row.merchantRaw)).toEqual(["Coffee first"]);
+  });
+
   it("split tx returns multiple allocations", async () => {
     const { cookie, wsId } = await setup("tl2@t.co");
     const c1 = await prisma.category.create({ data: { workspaceId: wsId, name: "C1-tl2" } });

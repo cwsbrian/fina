@@ -243,22 +243,37 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
       const oldest = page.at(-1);
       const messages = page.reverse();
 
-      // Action cards (confirm_card / *_form_card / plan_proposal_card) persist
-      // an accept_intent in their block. The client's "already resolved"
-      // dismissal is in-memory, so on reload a tapped/expired card would
-      // re-open (and re-tapping hits intent_gone). Surface which of those
-      // intents are already consumed OR expired so the client keeps the
-      // resolved cards closed across re-entry.
+      // Surface consumed or expired action ids for every actionable card,
+      // including forms and row actions, so they stay closed after reload.
       const intentIds = new Set<string>();
+      const rejectByAccept = new Map<string, string>();
       for (const m of messages) {
         const blocks = Array.isArray(m.blocks)
-          ? (m.blocks as Array<{ accept_intent?: unknown }>)
+          ? (m.blocks as Array<{
+              accept_intent?: unknown;
+              reject_intent?: unknown;
+              intent_id?: unknown;
+              rows?: unknown;
+            }>)
           : [];
         for (const b of blocks) {
-          if (b && typeof b.accept_intent === "string") intentIds.add(b.accept_intent);
+          if (!b) continue;
+          if (typeof b.accept_intent === "string") intentIds.add(b.accept_intent);
+          if (typeof b.accept_intent === "string" && typeof b.reject_intent === "string") {
+            intentIds.add(b.reject_intent);
+            rejectByAccept.set(b.accept_intent, b.reject_intent);
+          }
+          if (typeof b.intent_id === "string") intentIds.add(b.intent_id);
+          if (Array.isArray(b.rows))
+            for (const row of b.rows) {
+              if (!row || typeof row !== "object") continue;
+              const action = row as { add_form_intent?: unknown; dismiss_intent?: unknown };
+              if (typeof action.add_form_intent === "string") intentIds.add(action.add_form_intent);
+              if (typeof action.dismiss_intent === "string") intentIds.add(action.dismiss_intent);
+            }
         }
       }
-      const resolvedIntentIds =
+      const resolvedIds =
         intentIds.size === 0
           ? []
           : (
@@ -270,6 +285,11 @@ export async function chatRoutes(app: FastifyInstance): Promise<void> {
                 select: { id: true },
               })
             ).map((r) => r.id);
+      const resolvedSet = new Set(resolvedIds);
+      for (const [acceptId, rejectId] of rejectByAccept) {
+        if (resolvedSet.has(rejectId)) resolvedSet.add(acceptId);
+      }
+      const resolvedIntentIds = [...resolvedSet];
 
       return {
         thread: serializeThread(thread),

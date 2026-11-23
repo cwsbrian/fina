@@ -17,6 +17,7 @@ import { notifyTransactionAdded } from "../push/transaction-added.js";
 import { emitCategorizeConfirmed } from "../telemetry/categorize.js";
 import { ensureRefundLinks } from "../transactions/refunds.js";
 import { normalizeMerchant } from "../categorize/normalize.js";
+import { ManualTransactionBody } from "@fina/shared";
 
 // `?from`/`?to` arrive as ISO date strings. We validate them as parseable
 // dates BEFORE handing them to `new Date(...)` — otherwise an invalid input
@@ -62,21 +63,6 @@ const PatchTxBody = z
   })
   .strict()
   .refine((body) => body.budgetImpactScope === undefined || body.budgetImpact !== undefined);
-
-const ManualTxBody = z.object({
-  merchantRaw: z.string(),
-  amount: z.number(),
-  currency: z
-    .string()
-    .trim()
-    .transform((value) => value.toUpperCase())
-    .pipe(z.string().regex(/^[A-Z]{3}$/))
-    .optional(),
-  occurredAt: z.string().optional(),
-  categoryId: z.string().optional(),
-  note: z.string().optional(),
-  accountId: z.string().optional(),
-});
 
 const QuerySchema = z.object({
   cursor: z.string().optional(),
@@ -174,14 +160,6 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         })(),
         ...(q.includeRemoved ? {} : { removedAt: null }),
         budgetImpact: q.budgetImpact ?? { in: ["expense", "income", "refund"] as const },
-        ...(q.q
-          ? {
-              OR: [
-                { merchantRaw: { contains: q.q, mode: "insensitive" as const } },
-                { merchantNormalized: { contains: q.q, mode: "insensitive" as const } },
-              ],
-            }
-          : {}),
         ...(() => {
           if (q.needsReview) {
             return {
@@ -212,19 +190,25 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
           }
           return {};
         })(),
-        ...(cursor
-          ? {
-              OR: [
-                { occurredAt: { lt: new Date(cursor.occurredAtMs) } },
-                {
-                  AND: [
-                    { occurredAt: new Date(cursor.occurredAtMs) },
-                    { id: { lt: cursor.id } }, // tie-breaker by id
-                  ],
-                },
-              ],
-            }
-          : {}),
+        AND: [
+          ...(q.q ? [{
+            OR: [
+              { merchantRaw: { contains: q.q, mode: "insensitive" as const } },
+              { merchantNormalized: { contains: q.q, mode: "insensitive" as const } },
+            ],
+          }] : []),
+          ...(cursor ? [{
+            OR: [
+              { occurredAt: { lt: new Date(cursor.occurredAtMs) } },
+              {
+                AND: [
+                  { occurredAt: new Date(cursor.occurredAtMs) },
+                  { id: { lt: cursor.id } },
+                ],
+              },
+            ],
+          }] : []),
+        ],
       };
       const rows = await prisma.transaction.findMany({
         where,
@@ -572,7 +556,7 @@ export async function transactionsRoutes(app: FastifyInstance): Promise<void> {
         if (req.params.id !== ctx.membership.workspaceId) {
           return reply.code(400).send({ error: "workspace_mismatch" });
         }
-        const parsed = ManualTxBody.safeParse(req.body);
+        const parsed = ManualTransactionBody.safeParse(req.body);
         if (!parsed.success) {
           return reply.code(400).send({ error: "invalid_body" });
         }

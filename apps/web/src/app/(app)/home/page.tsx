@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { QRCodeSVG } from "qrcode.react";
 import {
   displayName,
   STRIPE_PRICING,
@@ -14,14 +13,16 @@ import {
   type WorkspaceSummary as Workspace,
   type Member,
   type PlaidItemDTO,
+  type AnalysisResponse,
+  type TransactionsResponse,
 } from "@fina/shared";
-import { useSession } from "../../../auth/client";
 import { apiFetch, bootstrapActiveWorkspace } from "../../../lib/api";
 import {
   getActiveWorkspaceId,
   setActiveWorkspaceId,
 } from "../../../lib/active-workspace";
 import { WebIcon } from "../../../components/WebIcon";
+import { formatMoney } from "../../../lib/money";
 import styles from "./home.module.css";
 
 type IncomingInvite = {
@@ -49,11 +50,12 @@ function firstName(me: Me | null): string {
 
 export default function HomePage() {
   const router = useRouter();
-  const { data: session } = useSession();
   const [me, setMe] = useState<Me | null>(null);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
   const [memberCount, setMemberCount] = useState<number | null>(null);
   const [bankCount, setBankCount] = useState<number | null>(null);
+  const [analysis, setAnalysis] = useState<AnalysisResponse | null>(null);
+  const [recent, setRecent] = useState<TransactionsResponse["transactions"]>([]);
   const [incoming, setIncoming] = useState<IncomingInvite[]>([]);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -89,11 +91,13 @@ export default function HomePage() {
         if (active) {
           // Pull member + bank counts in parallel; tolerate either failing
           // (the card just falls back to its loading state).
-          const [membersRes, plaidRes] = await Promise.allSettled([
+          const [membersRes, plaidRes, analysisRes, transactionsRes] = await Promise.allSettled([
             apiFetch<{ members: Member[] }>(`/workspaces/${active.id}/members`),
             apiFetch<{ plaidItems: PlaidItemDTO[] }>(
               `/workspaces/${active.id}/plaid-items`,
             ),
+            apiFetch<AnalysisResponse>(`/workspaces/${active.id}/analysis`),
+            apiFetch<TransactionsResponse>(`/workspaces/${active.id}/transactions?limit=5`),
           ]);
           if (membersRes.status === "fulfilled") {
             setMemberCount(membersRes.value.members.length);
@@ -101,6 +105,8 @@ export default function HomePage() {
           if (plaidRes.status === "fulfilled") {
             setBankCount(plaidRes.value.plaidItems.filter((item) => item.status !== "disconnected").length);
           }
+          if (analysisRes.status === "fulfilled") setAnalysis(analysisRes.value);
+          if (transactionsRes.status === "fulfilled") setRecent(transactionsRes.value.transactions);
         }
       } catch (e) {
         setErr((e as { code?: string }).code ?? "load_error");
@@ -275,58 +281,40 @@ export default function HomePage() {
           </div>
         )}
 
-        <div className={styles.mobileCta}>
-          <div>
-            <div className={styles.mobileCtaEyebrow}>
-              Where Fina really lives
+        <div className={styles.cashflowCard}>
+          <div className={styles.eyebrow}>{analysis?.current.label ?? "Latest month"} cashflow</div>
+          {analysis ? (
+            <div className={styles.cashflowGrid}>
+              <div><span>Income</span><strong>{formatMoney(analysis.current.income, workspace?.currency ?? "CAD")}</strong></div>
+              <div><span>Expenses</span><strong>{formatMoney(analysis.current.spend, workspace?.currency ?? "CAD")}</strong></div>
+              <div><span>Net</span><strong>{formatMoney(analysis.current.net, workspace?.currency ?? "CAD")}</strong></div>
             </div>
-            <h2 className={styles.mobileCtaTitle}>
-              Open the app every morning for your brief.
-            </h2>
-            <p className={styles.mobileCtaSub}>
-              Chat, daily ritual, and one-tap categorize live on your phone.
-              Web is for setup and billing.
-            </p>
-            <div className={styles.mobileCtaBadges}>
-              <a className={styles.mobileCtaBadge} href="#">
-                <div>
-                  <div className={styles.mobileCtaBadgeLine1}>
-                    Download on the
-                  </div>
-                  <div className={styles.mobileCtaBadgeLine2}>App Store</div>
-                </div>
-              </a>
-              <a className={styles.mobileCtaBadge} href="#">
-                <div>
-                  <div className={styles.mobileCtaBadgeLine1}>Get it on</div>
-                  <div className={styles.mobileCtaBadgeLine2}>Google Play</div>
-                </div>
-              </a>
+          ) : <p className={styles.sectionSub}>Your cashflow will appear here when you add transactions.</p>}
+          <button className={styles.link} type="button" onClick={() => router.push("/analysis")}>Open analysis →</button>
+        </div>
+      </div>
+
+      <div className={styles.section}>
+        <div className={styles.sectionHead}>
+          <div><div className={styles.sectionTitle}>Recent activity</div><div className={styles.sectionSub}>Your latest income and expenses.</div></div>
+          <button className={styles.link} type="button" onClick={() => router.push("/activity")}>View all →</button>
+        </div>
+        <div className={styles.recentCard}>
+          {recent.length === 0 ? <p className={styles.sectionSub}>No transactions yet. Add one in Activity.</p> : recent.map((transaction) => (
+            <div className={styles.recentRow} key={transaction.id}>
+              <div><strong>{transaction.merchantNormalized ?? transaction.merchantRaw}</strong><span>{new Date(transaction.occurredAt).toLocaleDateString("en-CA", { month: "short", day: "numeric" })}</span></div>
+              <strong className={Number(transaction.amount) < 0 ? styles.recentIncome : ""}>{formatMoney(Math.abs(Number(transaction.amount)), transaction.currency)}</strong>
             </div>
-          </div>
-          <div className={styles.mobileQr}>
-            <div className={styles.mobileQrInner}>
-              <QRCodeSVG
-                value="https://withfina.com/download"
-                size={104}
-                bgColor="#ffffff"
-                fgColor="#0b0f17"
-                level="M"
-              />
-            </div>
-            <div className={styles.mobileQrCaption}>
-              Scan with your phone
-            </div>
-          </div>
+          ))}
         </div>
       </div>
 
       <div className={styles.section}>
         <div className={styles.sectionHead}>
           <div>
-            <div className={styles.sectionTitle}>Set up your account</div>
+            <div className={styles.sectionTitle}>Manage your workspace</div>
             <div className={styles.sectionSub}>
-              Three things to do before you open the mobile app.
+              Connections, household access, and your plan.
             </div>
           </div>
         </div>
@@ -339,9 +327,7 @@ export default function HomePage() {
             <span className={styles.quickLinkGlyph}>
               <WebIcon name="bank" size={20} />
             </span>
-            <div className={styles.quickLinkTitle}>
-              Connect your first bank
-            </div>
+            <div className={styles.quickLinkTitle}>Manage banks</div>
             <div className={styles.quickLinkSub}>
               Transactions start syncing the moment you connect.
             </div>

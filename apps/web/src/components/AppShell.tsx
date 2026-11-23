@@ -36,6 +36,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [moreOpen, setMoreOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -110,7 +111,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </button>
 
           <div className={styles.links}>
-            {NAV_ITEMS.map((it) => (
+            {NAV_ITEMS.filter((it) => ["home", "chat", "activity", "analysis", "budget", "goals"].includes(it.id)).map((it) => (
               <button
                 key={it.id}
                 type="button"
@@ -120,6 +121,12 @@ export function AppShell({ children }: { children: ReactNode }) {
                 {it.label}
               </button>
             ))}
+            <div className={styles.moreWrap}>
+              <button type="button" className={`${styles.link} ${NAV_ITEMS.some((it) => !["home", "chat", "activity", "analysis", "budget", "goals"].includes(it.id) && isActive(it.path)) ? styles.linkActive : ""}`} onClick={() => setMoreOpen((value) => !value)} aria-expanded={moreOpen} aria-haspopup="menu">More ▾</button>
+              {moreOpen && <><div className={styles.scrim} onClick={() => setMoreOpen(false)} /><div className={`${styles.menu} ${styles.moreMenu}`} role="menu">
+                {NAV_ITEMS.filter((it) => !["home", "chat", "activity", "analysis", "budget", "goals"].includes(it.id)).map((it) => <button key={it.id} type="button" role="menuitem" className={`${styles.menuItem} ${isActive(it.path) ? styles.menuItemActive : ""}`} onClick={() => { setMoreOpen(false); navigate(it.path); }}>{it.label}</button>)}
+              </div></>}
+            </div>
           </div>
 
           <div className={styles.right}>

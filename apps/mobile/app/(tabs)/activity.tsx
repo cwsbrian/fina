@@ -15,7 +15,7 @@ import {
 import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import { router, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import type { CategoryDTO, TransactionDTO, Cadence } from "@fina/shared";
+import type { CategoryDTO, TransactionDTO, TransactionsResponse, Cadence } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { useWorkspaceCurrency } from "../../src/workspace/useWorkspaceCurrency";
@@ -44,10 +44,7 @@ const HEADER_HEIGHT = 84;
 const FILTER_BADGE_BAR_HEIGHT = 46;
 const activityFiltersByWorkspace = new Map<string, ActivityFilters>();
 
-type TxListResp = {
-  transactions: TransactionDTO[];
-  nextCursor: string | null;
-};
+type TxListResp = TransactionsResponse;
 
 type Schedule = {
   id: string;

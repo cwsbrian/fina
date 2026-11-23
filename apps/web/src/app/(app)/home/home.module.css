@@ -153,6 +153,32 @@
   flex-direction: column;
 }
 
+.cashflowCard, .recentCard {
+  background: var(--color-canvas);
+  border: 1px solid var(--color-hairline);
+  border-radius: 18px;
+  padding: 22px;
+}
+
+.cashflowCard { display: flex; flex-direction: column; justify-content: space-between; gap: 22px; }
+.cashflowGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.cashflowGrid > div { min-width: 0; }
+.cashflowGrid span { display: block; color: var(--color-muted); font-size: 12px; margin-bottom: 5px; }
+.cashflowGrid strong { font-size: clamp(17px, 2vw, 24px); letter-spacing: -.03em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.cashflowCard .link { align-self: flex-start; }
+.recentCard { padding: 4px 22px; }
+.recentCard > p { padding: 20px 0; }
+.recentRow { display: flex; justify-content: space-between; gap: 15px; padding: 14px 0; border-bottom: 1px solid var(--color-hairline-soft); }
+.recentRow:last-child { border-bottom: 0; }
+.recentRow > div { display: flex; flex-direction: column; min-width: 0; }
+.recentRow strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.recentRow span { color: var(--color-muted); font-size: 12px; }
+.recentIncome { color: var(--color-up); }
+
+@media (max-width: 620px) {
+  .cashflowGrid { grid-template-columns: 1fr; }
+}
+
 .eyebrow {
   font-size: 11px;
   font-weight: 600;

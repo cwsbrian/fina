@@ -86,6 +86,39 @@ describe("editTransactionService", () => {
     expect(after.occurredAt.toISOString()).toBe(before.occurredAt.toISOString());
     expect(after.note).toBe(before.note);
     expect(afterAlloc?.categoryId).toBe(beforeAlloc?.categoryId);
+    expect(afterAlloc?.amount.toString()).toBe("99.99");
+  });
+
+  it("amount-only edit keeps split allocation proportions and sum", async () => {
+    const { wsId, userId } = await setupEditor("e2-split@t.co");
+    const txId = await seedManual(wsId, userId);
+    const first = await prisma.category.create({ data: { workspaceId: wsId, name: "First" } });
+    const second = await prisma.category.create({ data: { workspaceId: wsId, name: "Second" } });
+    await editTransactionService(
+      { workspaceId: wsId },
+      txId,
+      {
+        allocations: [
+          { categoryId: first.id, amount: 3 },
+          { categoryId: second.id, amount: 7 },
+        ],
+      },
+      { allocationsProvided: true },
+    );
+    const result = await editTransactionService(
+      { workspaceId: wsId },
+      txId,
+      { amount: 20.01 },
+      { manualOnlyFieldProvided: true },
+    );
+    expect(result.transaction.allocations.map((allocation) => allocation.amount)).toEqual([
+      "6.01",
+      "14",
+    ]);
+    expect(result.transaction.allocations.map((allocation) => allocation.categoryId)).toEqual([
+      first.id,
+      second.id,
+    ]);
   });
 
   it("clear categoryId to null clears allocation categoryId and source", async () => {

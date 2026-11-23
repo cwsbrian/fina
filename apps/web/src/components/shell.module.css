@@ -47,6 +47,9 @@
   margin-left: 8px;
 }
 
+.moreWrap { position: relative; }
+.menu.moreMenu { right: auto; left: 0; max-height: min(70vh, 560px); overflow-y: auto; }
+
 .link {
   padding: 7px 14px;
   border-radius: 999px;
@@ -237,4 +240,10 @@
 
 .page {
   flex: 1;
+}
+
+@media (max-width: 1120px) {
+  .navInner { height: auto; min-height: 64px; flex-wrap: wrap; padding: 10px 16px; }
+  .links { order: 3; width: 100%; margin-left: 0; overflow-x: auto; padding-bottom: 2px; }
+  .link { flex: 0 0 auto; }
 }

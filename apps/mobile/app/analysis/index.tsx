@@ -12,7 +12,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Stack, router, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Circle, Text as SvgText } from "react-native-svg";
-import type { CategoryDTO } from "@fina/shared";
+import type { AnalysisResponse, CategoryDTO, CategorySpendDTO, MonthAnalysisDTO } from "@fina/shared";
 import { apiFetch, bootstrapActiveWorkspace } from "../../src/api/client";
 import { getActiveWorkspaceId } from "../../src/workspace/active";
 import { colors, space, type as type$ } from "../../src/design/tokens";
@@ -27,37 +27,9 @@ import {
 } from "../../src/analysis/request";
 import { analysisCategoryRoute } from "../../src/analysis/category-route";
 
-type CategorySpend = {
-  categoryId: string;
-  categoryName: string;
-  icon: string | null;
-  color: string | null;
-  amount: number;
-};
-
-type MonthAnalysis = {
-  year: number;
-  month: number;
-  label: string;
-  income: number;
-  spend: number;
-  net: number;
-  spendByCategory: CategorySpend[];
-};
-
-type CashflowPoint = {
-  year: number;
-  month: number;
-  label: string;
-  income: number;
-  spend: number;
-};
-
-type AnalysisResp = {
-  current: MonthAnalysis;
-  previous: MonthAnalysis | null;
-  monthlyHistory: CashflowPoint[];
-};
+type CategorySpend = CategorySpendDTO;
+type MonthAnalysis = MonthAnalysisDTO;
+type AnalysisResp = AnalysisResponse;
 
 type PeriodQuery = {
   year?: string | string[];

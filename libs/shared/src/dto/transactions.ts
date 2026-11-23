@@ -46,6 +46,11 @@ export type TransactionDTO = {
   allocations: AllocationDTO[];
 };
 
+export type TransactionsResponse = {
+  transactions: TransactionDTO[];
+  nextCursor: string | null;
+};
+
 export type CategoryDTO = {
   id: string;
   name: string;

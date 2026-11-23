@@ -5,6 +5,7 @@ export type WorkspaceSummary = {
   id: string;
   name: string;
   role: Role;
+  currency: string;
 };
 
 /** A row in `GET /workspaces/:id/members`. */
